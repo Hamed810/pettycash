@@ -1,0 +1,8 @@
+/node_modules/
+/vendor/
+/js/
+/css/
+/build/
+.DS_Store
+.idea/
+.vscode/

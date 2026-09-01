@@ -1,0 +1,22 @@
+{
+  "name": "project/pettycash",
+  "description": "Project Petty Cash for Nextcloud",
+  "license": "AGPL-3.0-or-later",
+  "autoload": {
+    "psr-4": {
+      "OCA\\PettyCash\\": "lib/"
+    }
+  },
+  "scripts": {
+    "lint": "find . -name \\*.php -not -path './vendor/*' -not -path './build/*' -print0 | xargs -0 -n1 php -l"
+  },
+  "require": {
+    "php": ">=8.3 <8.6",
+    "ext-fileinfo": "*",
+    "ext-intl": "*"
+  },
+  "config": {
+    "optimize-autoloader": true,
+    "sort-packages": true
+  }
+}
