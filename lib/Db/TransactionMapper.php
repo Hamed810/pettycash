@@ -8,6 +8,22 @@ use OCP\IDBConnection;
 /** @template-extends QBMapper<Transaction> */
 final class TransactionMapper extends QBMapper {
     public function __construct(IDBConnection $db){parent::__construct($db,'pcash_txn',Transaction::class);}
+
+    public function find(int $id): Transaction {
+        $qb = $this->db->getQueryBuilder();
+
+        $qb->select('*')
+            ->from($this->getTableName())
+            ->where(
+                $qb->expr()->eq(
+                    'id',
+                    $qb->createNamedParameter($id, IQueryBuilder::PARAM_INT)
+                )
+            );
+
+        return $this->findEntity($qb);
+    }
+
     public function findByUuid(string $uuid):Transaction{$qb=$this->db->getQueryBuilder();$qb->select('*')->from($this->getTableName())->where($qb->expr()->eq('uuid',$qb->createNamedParameter($uuid)));return $this->findEntity($qb);}
     /** @return list<Transaction> */
     public function findByList(int $listId):array{$qb=$this->db->getQueryBuilder();$qb->select('*')->from($this->getTableName())->where($qb->expr()->eq('list_id',$qb->createNamedParameter($listId,IQueryBuilder::PARAM_INT)))->orderBy('purchase_date','DESC')->addOrderBy('id','DESC');return $this->findEntities($qb);}

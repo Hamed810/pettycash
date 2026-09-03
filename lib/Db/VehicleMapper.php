@@ -7,11 +7,27 @@ namespace OCA\PettyCash\Db;
 use OCP\AppFramework\Db\QBMapper;
 use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\IDBConnection;
+use OCP\AppFramework\Db\DoesNotExistException;
 
 /** @template-extends QBMapper<Vehicle> */
 final class VehicleMapper extends QBMapper {
     public function __construct(IDBConnection $db) {
         parent::__construct($db, 'pcash_vehicle', Vehicle::class);
+    }
+
+    public function find(int $id): Vehicle {
+    $qb = $this->db->getQueryBuilder();
+
+    $qb->select('*')
+        ->from('pcash_vehicle')
+        ->where(
+            $qb->expr()->eq(
+                'id',
+                $qb->createNamedParameter($id)
+            )
+        );
+
+    return $this->findEntity($qb);
     }
 
     /** @return list<Vehicle> */

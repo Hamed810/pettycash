@@ -14,6 +14,22 @@ final class ExpenseCategoryMapper extends QBMapper {
         parent::__construct($db, 'pcash_category', ExpenseCategory::class);
     }
 
+    public function find(int $id): ExpenseCategory {
+        $qb = $this->db->getQueryBuilder();
+
+        $qb->select('*')
+            ->from($this->getTableName())
+            ->where(
+                $qb->expr()->eq(
+                    'id',
+                    $qb->createNamedParameter($id, IQueryBuilder::PARAM_INT)
+                )
+            );
+
+        return $this->findEntity($qb);
+    }
+
+
     /** @return list<ExpenseCategory> */
     public function findAll(bool $includeInactive = true): array {
         $qb = $this->db->getQueryBuilder();

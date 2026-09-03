@@ -8,6 +8,22 @@ use OCP\IDBConnection;
 /** @template-extends QBMapper<Attachment> */
 final class AttachmentMapper extends QBMapper {
     public function __construct(IDBConnection $db){parent::__construct($db,'pcash_attach',Attachment::class);}
+
+    public function find(int $id): Attachment {
+        $qb = $this->db->getQueryBuilder();
+
+        $qb->select('*')
+            ->from($this->getTableName())
+            ->where(
+                $qb->expr()->eq(
+                    'id',
+                    $qb->createNamedParameter($id, IQueryBuilder::PARAM_INT)
+                )
+            );
+
+        return $this->findEntity($qb);
+    }
+
     public function findByUuid(string $uuid):Attachment{$qb=$this->db->getQueryBuilder();$qb->select('*')->from($this->getTableName())->where($qb->expr()->eq('uuid',$qb->createNamedParameter($uuid)));return $this->findEntity($qb);}
     /** @return list<Attachment> */
     public function findByTransaction(int $txnId,bool $activeOnly=true):array{$qb=$this->db->getQueryBuilder();$qb->select('*')->from($this->getTableName())->where($qb->expr()->eq('txn_id',$qb->createNamedParameter($txnId,IQueryBuilder::PARAM_INT)))->orderBy('created_at','ASC');if($activeOnly)$qb->andWhere($qb->expr()->eq('active',$qb->createNamedParameter(true,IQueryBuilder::PARAM_BOOL)));return $this->findEntities($qb);}

@@ -8,6 +8,22 @@ use OCP\IDBConnection;
 /** @template-extends QBMapper<CostList> */
 final class CostListMapper extends QBMapper {
     public function __construct(IDBConnection $db){parent::__construct($db,'pcash_list',CostList::class);}
+
+    public function find(int $id): CostList {
+        $qb = $this->db->getQueryBuilder();
+
+        $qb->select('*')
+            ->from($this->getTableName())
+            ->where(
+                $qb->expr()->eq(
+                    'id',
+                    $qb->createNamedParameter($id, IQueryBuilder::PARAM_INT)
+                )
+            );
+
+        return $this->findEntity($qb);
+    }
+
     public function findByUuid(string $uuid):CostList{$qb=$this->db->getQueryBuilder();$qb->select('*')->from($this->getTableName())->where($qb->expr()->eq('uuid',$qb->createNamedParameter($uuid)));return $this->findEntity($qb);}
     public function findOpenForPurchaserProject(string $userId,int $projectId):CostList{$qb=$this->db->getQueryBuilder();$qb->select('*')->from($this->getTableName())->where($qb->expr()->eq('purchaser_id',$qb->createNamedParameter($userId)))->andWhere($qb->expr()->eq('project_id',$qb->createNamedParameter($projectId,IQueryBuilder::PARAM_INT)))->andWhere($qb->expr()->eq('status',$qb->createNamedParameter('OPEN')));return $this->findEntity($qb);}
     /** @return list<CostList> */
