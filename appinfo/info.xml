@@ -9,7 +9,7 @@
         manager approvals, accounting reporting, Persian/Jalali support, and a future
         asynchronous Persian/English OCR pipeline.
     </description>
-    <version>0.4.0</version>
+    <version>0.4.3</version>
     <licence>AGPL-3.0-or-later</licence>
     <author>Project Petty Cash Team</author>
     <namespace>PettyCash</namespace>

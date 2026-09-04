@@ -1,0 +1,52 @@
+<?php
+
+declare(strict_types=1);
+
+namespace OCA\PettyCash\Controller;
+
+use OCA\PettyCash\Service\AdminSettingsService;
+use OCP\AppFramework\Controller;
+use OCP\AppFramework\Http\DataResponse;
+use OCP\IRequest;
+
+final class AdminController extends Controller {
+
+    public function __construct(
+        string $appName,
+        IRequest $request,
+        private AdminSettingsService $settings
+    ) {
+        parent::__construct(
+            $appName,
+            $request
+        );
+    }
+
+
+    /**
+     * @NoAdminRequired
+     * @NoCSRFRequired
+     */
+    public function index(): DataResponse {
+
+        return new DataResponse(
+            $this->settings->getSettings()
+        );
+    }
+
+
+    /**
+     * @NoAdminRequired
+     * @NoCSRFRequired
+     *
+     * @param array<string,mixed> $settings
+     */
+    public function save(
+        array $settings
+    ): DataResponse {
+
+        return new DataResponse(
+            $this->settings->saveSettings($settings)
+        );
+    }
+}

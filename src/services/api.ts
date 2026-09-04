@@ -48,3 +48,36 @@ export async function getApprovalList(stage: 'MANAGER1'|'MANAGER2', uuid:string)
 export async function decideTransaction(stage:'MANAGER1'|'MANAGER2', uuid:string, action:'APPROVE'|'REJECT'|'RETURN', version:number, comment?:string|null): Promise<Transaction> { return unwrap(await axios.post(url(`/api/v1/approvals/${stage}/transactions/${uuid}/${action}`), { version, comment:comment || null })) }
 export async function editTransactionAsManager(stage:'MANAGER1'|'MANAGER2', uuid:string, version:number, data:Record<string,unknown>, reason:string): Promise<Transaction> { return unwrap(await axios.patch(url(`/api/v1/approvals/${stage}/transactions/${uuid}`), { version, data, reason })) }
 export function evidenceUrl(uuid:string): string { return generateUrl(`/apps/pettycash/evidence/${encodeURIComponent(uuid)}`) }
+
+export type AdminSettings = {
+    allowMultipleOpenCostLists: boolean
+    allowUserDeleteOpenCostLists: boolean
+    requireVehicleKilometer: boolean
+    requireHiringPermit: boolean
+    requireFingerprint: boolean
+    ocrEnabled: boolean
+    ocrLanguage: string
+    timezone: string
+    defaultCurrency: string
+}
+
+
+export async function getAdminSettings(): Promise<AdminSettings> {
+    return unwrap(
+        await axios.get(
+            url('/api/v1/admin/settings')
+        )
+    )
+}
+
+
+export async function saveAdminSettings(
+    data: Partial<AdminSettings>
+): Promise<AdminSettings> {
+    return unwrap(
+        await axios.put(
+            url('/api/v1/admin/settings'),
+            data
+        )
+    )
+}
