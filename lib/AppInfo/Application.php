@@ -8,8 +8,11 @@ use OCP\AppFramework\App;
 use OCP\AppFramework\Bootstrap\IBootContext;
 use OCP\AppFramework\Bootstrap\IBootstrap;
 use OCP\AppFramework\Bootstrap\IRegistrationContext;
+use OCP\INavigationManager;
+use OCP\IURLGenerator;
 
 final class Application extends App implements IBootstrap {
+
     public const APP_ID = 'pettycash';
 
     public function __construct() {
@@ -17,11 +20,26 @@ final class Application extends App implements IBootstrap {
     }
 
     public function register(IRegistrationContext $context): void {
-        // Services and controllers currently rely on Nextcloud autowiring.
-        // Background OCR jobs and activity/notification providers are registered in later phases.
     }
 
     public function boot(IBootContext $context): void {
-        // No global boot work is required for the current workflow modules.
+
+        $server = $context->getServerContainer();
+
+        $navigation = $server->get(INavigationManager::class);
+        $urlGenerator = $server->get(IURLGenerator::class);
+
+        $navigation->add([
+            'id' => self::APP_ID,
+            'order' => 50,
+            'href' => $urlGenerator->linkToRoute(
+                'pettycash.page.index'
+            ),
+            'icon' => $urlGenerator->imagePath(
+                self::APP_ID,
+                'app.svg'
+            ),
+            'name' => 'Project Petty Cash',
+        ]);
     }
 }

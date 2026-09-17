@@ -17,6 +17,11 @@ final class Project extends Entity {
     protected int $createdAt = 0;
     protected int $updatedAt = 0;
 
+    // v2.0.0: the "destination" concept now lives on this table rather
+    // than a separate one (see Domain\DestinationType). Existing rows
+    // default to PROJECT via the migration.
+    protected string $type = 'PROJECT';
+
     public function __construct() {
         $this->addType('defaultCurrencyId', 'integer');
         $this->addType('active', 'boolean');

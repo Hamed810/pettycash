@@ -11,7 +11,6 @@ final class CostList extends Entity {
     protected string $uuid = '';
     protected ?string $reference = null;
 
-    protected int $projectId = 0;
     protected string $purchaserId = '';
     protected int $currencyId = 0;
 
@@ -33,9 +32,22 @@ final class CostList extends Entity {
 
     protected int $version = 1;
 
+    /**
+     * v2.0.0:
+     *
+     * Cost Lists are owned by a purchaser.
+     * Destination/project routing happens at transaction level
+     * through Transaction::destinationId.
+     *
+     * REGULAR or BUSINESS_TRIP.
+     * Chosen at creation and locked once transactions exist.
+     */
+    protected string $listType = 'REGULAR';
 
-    // v0.4.1 soft delete support
 
+    /**
+     * Soft delete support.
+     */
     protected bool $deleted = false;
     protected ?int $deletedAt = null;
     protected ?string $deletedBy = null;
@@ -44,8 +56,9 @@ final class CostList extends Entity {
     public function __construct() {
 
         foreach ([
-            'projectId',
+
             'currencyId',
+
             'jalaliYear',
             'jalaliMonth',
 

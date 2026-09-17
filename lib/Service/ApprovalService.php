@@ -2,9 +2,6 @@
 
 declare(strict_types=1);
 namespace OCA\PettyCash\Service;
-
-use OCA\PettyCash\Db\ApprovalActionEntity;
-use OCA\PettyCash\Db\ApprovalActionMapper;
 use OCA\PettyCash\Db\CostList;
 use OCA\PettyCash\Db\CostListMapper;
 use OCA\PettyCash\Db\ProjectMapper;
@@ -14,78 +11,254 @@ use OCA\PettyCash\Db\TransactionRevisionMapper;
 use OCA\PettyCash\Domain\ApprovalAction;
 use OCA\PettyCash\Domain\ApprovalStage;
 use OCA\PettyCash\Domain\CostListStatus;
+use OCA\PettyCash\Domain\DecisionRole;
 use OCA\PettyCash\Domain\Exception\ConflictException;
 use OCA\PettyCash\Domain\Exception\ForbiddenException;
 use OCA\PettyCash\Domain\Exception\NotFoundException;
 use OCA\PettyCash\Domain\Exception\ValidationException;
-use OCA\PettyCash\Domain\ProjectRole;
+use OCA\PettyCash\Domain\ListType;
 use OCA\PettyCash\Domain\TransactionStatus;
 use OCP\AppFramework\Db\DoesNotExistException;
+use OCA\PettyCash\Domain\ProjectRole;
 
+/**
+ * v2.0.0: approval queues and decisions are transaction-level, not
+ * list/project-level -- routing is resolved per transaction (see
+ * TransactionService::resolveAndApplyRouting), so a single Cost List
+ * can have transactions sitting with different Manager 2s
+ * simultaneously. "Stage" here still means MANAGER1/MANAGER2 (see
+ * Domain\ApprovalStage) and maps 1:1 to Domain\DecisionRole M1/M2.
+ */
 final class ApprovalService {
     public function __construct(
-        private CostListMapper $listMapper,
         private TransactionMapper $txnMapper,
+        private CostListMapper $listMapper,
         private ProjectMapper $projectMapper,
         private TransactionRevisionMapper $revisionMapper,
-        private ApprovalActionMapper $actionMapper,
-        private CostListService $costLists,
         private TransactionService $transactions,
+        private DecisionService $decisions,
         private AuthorizationService $auth,
         private AuditService $audit,
     ) {}
 
     /** @return list<array<string,mixed>> */
-    public function queue(string $stage):array{
-        [$role,$status]=$this->stageConfig($stage);$uid=$this->auth->currentUserId();if($uid===null)return[];
-        $lists=$this->auth->isAdmin($uid)?$this->listMapper->findByStatus($status):$this->listMapper->findForReviewer($uid,$role,$status);
-        return array_map(fn(CostList $l)=>$this->summary($l),$lists);
+    public function queue(string $stage): array {
+        $role = $this->roleForStage($stage);
+        $uid = $this->auth->currentUserId();
+        if ($uid === null) return [];
+
+        $status = match ($role) {
+    DecisionRole::M1 => TransactionStatus::PENDING_M1,
+    DecisionRole::M2 => TransactionStatus::PENDING_M2,
+    DecisionRole::ACCOUNTANT => TransactionStatus::PENDING_ACCOUNTANT,
+    default => throw new ValidationException('Unknown approval role.'),
+    };
+
+    $txns = $this->auth->isAdmin($uid)
+    ? $this->txnMapper->findAllPendingByStatus($status)
+    : match ($role) {
+        DecisionRole::M1 => $this->txnMapper->findPendingForManager1($uid),
+        DecisionRole::M2 => $this->txnMapper->findPendingForManager2($uid),
+        DecisionRole::ACCOUNTANT => $this->txnMapper->findPendingForAccountant($uid),
+        default => [],
+    };
+
+            return array_map(fn(Transaction $t) => $this->queueSummary($t, $role), $txns);
     }
 
     /** @return array<string,mixed> */
-    public function detail(string $listUuid,string $stage):array{
-        $data=$this->costLists->detail($listUuid);$projectId=(int)($data['project']['id']??0);[$role,$status]=$this->stageConfig($stage);$uid=$this->auth->currentUserId();if($uid===null||(!$this->auth->isAdmin($uid)&&!$this->auth->hasAnyProjectRole($projectId,[$role],$uid)))throw new ForbiddenException('You are not assigned to this approval stage.');if($data['status']!==$status)throw new ValidationException('This Cost List is not currently at your approval stage.');return $data;
+    public function detail(string $txnUuid, string $stage): array {
+        [$txn, ,] = $this->assertTransactionStage($txnUuid, $stage, null, true);
+        return $this->transactions->serialize($txn);
     }
 
     /** @return array<string,mixed> */
-    public function decide(string $txnUuid,string $stage,string $action,int $version,?string $comment):array{
-        $action=strtoupper($action);if(!in_array($action,[ApprovalAction::APPROVE,ApprovalAction::REJECT,ApprovalAction::RETURN],true))throw new ValidationException('Unsupported approval action.');if(in_array($action,[ApprovalAction::REJECT,ApprovalAction::RETURN],true)&&trim((string)$comment)==='')throw new ValidationException('A reason/comment is required for reject or return.');
-        [$txn,$list,$uid]=$this->assertTransactionStage($txnUuid,$stage,$version);
-        if($stage===ApprovalStage::MANAGER1){$txn->setStatus(match($action){ApprovalAction::APPROVE=>TransactionStatus::APPROVED_M1,ApprovalAction::REJECT=>TransactionStatus::REJECTED_M1,default=>TransactionStatus::RETURNED_M1});}
-        else{$txn->setStatus(match($action){ApprovalAction::APPROVE=>TransactionStatus::FINAL_APPROVED,ApprovalAction::REJECT=>TransactionStatus::REJECTED_M2,default=>TransactionStatus::RETURNED_M2});}
-        $txn->setVersion($txn->getVersion()+1);$txn->setUpdatedAt(time());$this->txnMapper->update($txn);$this->recordAction($txn,$stage,$action,$uid,$comment);$this->recalculateTotals($list);
-        if($stage===ApprovalStage::MANAGER1){if($action!==ApprovalAction::RETURN)$this->advanceManager1IfReady($list);}
-        else{if($action===ApprovalAction::RETURN){$list->setStatus(CostListStatus::M1_REVIEW);$list->setManager1CompletedAt(null);$list->setManager2CompletedAt(null);$list->setVersion($list->getVersion()+1);$this->listMapper->update($list);}else{$this->advanceManager2IfReady($list);}}
-        $this->audit->record('TRANSACTION',(int)$txn->getId(),$stage.'_'.$action,$uid,['comment'=>$comment,'revision'=>$txn->getCurrentRevision()]);
+    public function decide(string $txnUuid, string $stage, string $action, int $version, ?string $comment): array {
+        $action = strtoupper($action);
+        if (!in_array($action, [ApprovalAction::APPROVE, ApprovalAction::REJECT, ApprovalAction::RETURN], true)) {
+            throw new ValidationException('Unsupported approval action.');
+        }
+
+        [$txn, $list, $uid, $role] = $this->assertTransactionStage($txnUuid, $stage, $version, false);
+        $revisionId = $this->currentRevisionRowId($txn);
+
+        $this->decisions->record($txn, $role, $action, $comment, $uid);
+
+        $skipManager1 = $list->getListType() === ListType::BUSINESS_TRIP;
+        $newStatus = $this->decisions->computeEffectiveStatus((int)$txn->getId(), $revisionId, $skipManager1);
+
+        $txn->setStatus($newStatus);
+        $txn->setVersion($txn->getVersion() + 1);
+        $txn->setUpdatedAt(time());
+        $txn = $this->txnMapper->update($txn);
+
+        $this->audit->record('TRANSACTION', (int)$txn->getId(), $role . '_' . $action, $uid, [
+            'comment' => $comment,
+            'revision' => $txn->getCurrentRevision(),
+        ]);
+
+            if (in_array($newStatus, [
+                TransactionStatus::FINAL_APPROVED,
+                TransactionStatus::REJECTED_M2,
+                TransactionStatus::RETURNED_M2,
+                TransactionStatus::REJECTED_ACCOUNTANT,
+                TransactionStatus::RETURNED_ACCOUNTANT,
+            ], true)) {            
+            $this->maybeAdvanceListToAccounting($list);
+        }
+
         return $this->transactions->serialize($txn);
     }
 
     /** @param array<string,mixed> $data @return array<string,mixed> */
-    public function edit(string $txnUuid,string $stage,int $version,array $data,?string $reason):array{
-        if(trim((string)$reason)==='')throw new ValidationException('A reason is required when a manager edits financial data.');[$txn,$list,$uid]=$this->assertTransactionStage($txnUuid,$stage,$version);$data['changeReason']=$reason;$updated=$this->transactions->updateAsApprover($txnUuid,$version,$data,$stage,$uid);$this->audit->record('COST_LIST',(int)$list->getId(),'APPROVAL_RESET_TO_MANAGER1',$uid,['transactionUuid'=>$txnUuid,'stage'=>$stage]);return $updated;
+    public function edit(string $txnUuid, string $stage, int $version, array $data, ?string $reason): array {
+        if (trim((string)$reason) === '') {
+            throw new ValidationException('A reason is required when a manager edits financial data.');
+        }
+        [$txn, $list, $uid, ] = $this->assertTransactionStage($txnUuid, $stage, $version, false);
+        $data['changeReason'] = $reason;
+        $updated = $this->transactions->updateAsApprover($txnUuid, $version, $data, $stage, $uid);
+        $this->audit->record('COST_LIST', (int)$list->getId(), 'APPROVAL_RESET_AFTER_EDIT', $uid, [
+            'transactionUuid' => $txnUuid,
+            'stage' => $stage,
+        ]);
+        return $updated;
     }
 
-    /** @return array{0:Transaction,1:CostList,2:string} */
-    private function assertTransactionStage(string $txnUuid,string $stage,int $version):array{
-        try{$txn=$this->txnMapper->findByUuid($txnUuid);$list=$this->listMapper->find((int)$txn->getListId());}catch(DoesNotExistException){throw new NotFoundException('Transaction or Cost List not found.');}
-        [$role,$listStatus]=$this->stageConfig($stage);$expected=$stage===ApprovalStage::MANAGER1?TransactionStatus::PENDING_M1:TransactionStatus::PENDING_M2;$uid=$this->auth->currentUserId();if($uid===null)throw new ForbiddenException('Login is required.');if(!$this->auth->isAdmin($uid)&&!$this->auth->hasAnyProjectRole((int)$list->getProjectId(),[$role],$uid))throw new ForbiddenException('You are not assigned to this approval stage.');if($txn->getPurchaserId()===$uid)throw new ForbiddenException('A purchaser cannot approve or edit their own transaction.');if($list->getStatus()!==$listStatus)throw new ValidationException('The Cost List is not currently at this approval stage.');if($txn->getStatus()!==$expected)throw new ValidationException('This transaction is not pending at this approval stage.');if($txn->getVersion()!==$version)throw new ConflictException('This transaction changed after you opened it. Review the latest revision.');return[$txn,$list,$uid];
+    private function roleForStage(string $stage): string {
+    return match (strtoupper($stage)) {
+        ApprovalStage::MANAGER1 => DecisionRole::M1,
+        ApprovalStage::MANAGER2 => DecisionRole::M2,
+        ApprovalStage::ACCOUNTANT => DecisionRole::ACCOUNTANT,
+        default => throw new ValidationException('Unknown approval stage.'),
+        };
     }
 
-    /** @return array{0:string,1:string} */
-    private function stageConfig(string $stage):array{return match(strtoupper($stage)){ApprovalStage::MANAGER1=>[ProjectRole::MANAGER1,CostListStatus::M1_REVIEW],ApprovalStage::MANAGER2=>[ProjectRole::MANAGER2,CostListStatus::M2_REVIEW],default=>throw new ValidationException('Unknown approval stage.')};}
+    /**
+     * @return array{0:Transaction,1:CostList,2:string,3:string}
+     */
+    private function assertTransactionStage(string $txnUuid, string $stage, ?int $version, bool $readOnly): array {
+        $role = $this->roleForStage($stage);
 
-    private function advanceManager1IfReady(CostList $list):void{
-        if($this->txnMapper->countByListStatuses((int)$list->getId(),[TransactionStatus::PENDING_M1,TransactionStatus::RETURNED_M1,TransactionStatus::RETURNED_M2])>0)return;
-        $hasM2=false;foreach($this->txnMapper->findByList((int)$list->getId()) as $txn){if($txn->getStatus()===TransactionStatus::APPROVED_M1){$txn->setStatus(TransactionStatus::PENDING_M2);$txn->setVersion($txn->getVersion()+1);$txn->setUpdatedAt(time());$this->txnMapper->update($txn);$hasM2=true;}elseif($txn->getStatus()===TransactionStatus::PENDING_M2){$hasM2=true;}}
-        $list->setManager1CompletedAt(time());if($hasM2){$list->setStatus(CostListStatus::M2_REVIEW);}else{$list->setStatus(CostListStatus::ACCOUNTING);$list->setManager2CompletedAt(time());}$list->setVersion($list->getVersion()+1);$this->recalculateTotals($list,false);$this->listMapper->update($list);
+        try {
+            $txn = $this->txnMapper->findByUuid($txnUuid);
+            $list = $this->listMapper->find((int)$txn->getListId());
+        } catch (DoesNotExistException) {
+            throw new NotFoundException('Transaction or Cost List not found.');
+        }
+
+        $uid = $this->auth->currentUserId();
+        if ($uid === null) throw new ForbiddenException('Login is required.');
+
+        if ($txn->getPurchaserId() === $uid) {
+            throw new ForbiddenException('A purchaser cannot approve, edit, or review their own transaction.');
+        }
+
+        if (!$this->auth->isAdmin($uid)) {
+            if ($role === DecisionRole::M1) {
+
+    if ($txn->getManager1Id() !== $uid) {
+        throw new ForbiddenException(
+            'You are not the assigned Manager 1 reviewer.'
+        );
     }
 
-    private function advanceManager2IfReady(CostList $list):void{if($this->txnMapper->countByListStatuses((int)$list->getId(),[TransactionStatus::PENDING_M2])>0)return;$list->setStatus(CostListStatus::ACCOUNTING);$list->setManager2CompletedAt(time());$list->setVersion($list->getVersion()+1);$this->recalculateTotals($list,false);$this->listMapper->update($list);}
+        } elseif ($role === DecisionRole::M2) {
 
-    private function recalculateTotals(CostList $list,bool $save=true):void{$m1Statuses=[TransactionStatus::APPROVED_M1,TransactionStatus::PENDING_M2,TransactionStatus::FINAL_APPROVED,TransactionStatus::REJECTED_M2,TransactionStatus::RETURNED_M2];$list->setManager1Total($this->txnMapper->sumByListStatuses((int)$list->getId(),$m1Statuses));$list->setFinalTotal($this->txnMapper->sumByListStatuses((int)$list->getId(),[TransactionStatus::FINAL_APPROVED]));if($save){$list->setVersion($list->getVersion()+1);$this->listMapper->update($list);}}
+            if ($txn->getManager2Id() !== $uid) {
+                throw new ForbiddenException(
+                    'You are not the assigned Manager 2 reviewer.'
+                );
+            }
 
-    private function recordAction(Transaction $txn,string $stage,string $action,string $actorId,?string $comment):void{try{$rev=$this->revisionMapper->findRevision((int)$txn->getId(),$txn->getCurrentRevision());$revisionId=(int)$rev->getId();}catch(DoesNotExistException){$revisionId=null;}$a=new ApprovalActionEntity();$a->setTxnId((int)$txn->getId());$a->setRevisionId($revisionId);$a->setStage($stage);$a->setAction($action);$a->setActorId($actorId);$a->setComment($comment);$a->setCreatedAt(time());$this->actionMapper->insert($a);}
+        } elseif ($role === DecisionRole::ACCOUNTANT) {
+
+        if (
+              $txn->getDestinationId() === null
+    ||
+    !$this->auth->hasAnyProjectRole(
+        (int)$txn->getDestinationId(),
+        [ProjectRole::ACCOUNTANT],
+        $uid
+    )
+) {
+                throw new ForbiddenException(
+                    'You are not assigned as accountant for this project.'
+                );
+            }
+        }
+        }
+
+        $expected = match ($role) {
+            DecisionRole::M1 => TransactionStatus::PENDING_M1,
+            DecisionRole::M2 => TransactionStatus::PENDING_M2,
+            DecisionRole::ACCOUNTANT => TransactionStatus::PENDING_ACCOUNTANT,
+            default => throw new ValidationException('Unknown approval role.'),
+        };   
+         if (!$readOnly && $txn->getStatus() !== $expected) {
+            throw new ValidationException('This transaction is not currently pending at this approval stage.');
+        }
+
+        if (!$readOnly && $version !== null && $txn->getVersion() !== $version) {
+            throw new ConflictException('This transaction changed after you opened it. Review the latest revision.');
+        }
+
+        return [$txn, $list, $uid, $role];
+    }
+
+    private function currentRevisionRowId(Transaction $txn): ?int {
+        try {
+            return (int)$this->revisionMapper->findRevision((int)$txn->getId(), $txn->getCurrentRevision())->getId();
+        } catch (DoesNotExistException) {
+            return null;
+        }
+    }
+
+    /**
+     * Moves the Cost List to ACCOUNTING once every transaction in it
+     * has reached a terminal M2 outcome. Since routing is per
+     * transaction, this is a simple "are we all done" check, not a
+     * stage transition tied to a single manager pair.
+     */
+    private function maybeAdvanceListToAccounting(CostList $list): void {
+        $pending = $this->txnMapper->countByListStatuses((int)$list->getId(), [TransactionStatus::PENDING_M1, TransactionStatus::PENDING_M2]);
+        if ($pending > 0) return;
+
+        $list->setFinalTotal($this->txnMapper->sumByListStatuses((int)$list->getId(), [TransactionStatus::FINAL_APPROVED]));
+        $list->setStatus(CostListStatus::ACCOUNTING);
+        $list->setManager2CompletedAt(time());
+        $list->setVersion($list->getVersion() + 1);
+        $this->listMapper->update($list);
+        $this->audit->record('COST_LIST', (int)$list->getId(), 'LIST_REACHED_ACCOUNTING', 'system', [
+            'finalTotal' => $list->getFinalTotal(),
+        ]);
+    }
 
     /** @return array<string,mixed> */
-    private function summary(CostList $l):array{try{$p=$this->projectMapper->find((int)$l->getProjectId());$project=['uuid'=>$p->getUuid(),'code'=>$p->getCode(),'name'=>$p->getName()];}catch(DoesNotExistException){$project=null;}return['uuid'=>$l->getUuid(),'reference'=>$l->getReference(),'project'=>$project,'purchaserId'=>$l->getPurchaserId(),'jalaliYear'=>$l->getJalaliYear(),'jalaliMonth'=>$l->getJalaliMonth(),'status'=>$l->getStatus(),'submittedTotal'=>$l->getSubmittedTotal(),'manager1Total'=>$l->getManager1Total(),'finalTotal'=>$l->getFinalTotal(),'transactionCount'=>count($this->txnMapper->findByList((int)$l->getId())),'submittedAt'=>$l->getSubmittedAt()];}
+    private function queueSummary(Transaction $txn, string $role): array {
+        $destination = null;
+        if ($txn->getDestinationId() !== null) {
+            try {
+                $d = $this->projectMapper->find((int)$txn->getDestinationId());
+                $destination = ['uuid' => $d->getUuid(), 'code' => $d->getCode(), 'name' => $d->getName(), 'type' => $d->getType()];
+            } catch (DoesNotExistException) {
+            }
+        }
+
+        $revisionId = $this->currentRevisionRowId($txn);
+        $priorM1 = $role === DecisionRole::M2 ? $this->decisions->latestForRole((int)$txn->getId(), DecisionRole::M1, $revisionId) : null;
+
+        return [
+            'uuid' => $txn->getUuid(),
+            'destination' => $destination,
+            'purchaserId' => $txn->getPurchaserId(),
+            'amountMinor' => $txn->getAmountMinor(),
+            'status' => $txn->getStatus(),
+            'sameManagerFlag' => $this->decisions->sameManagerFlag($txn),
+            // Surfaced directly on the queue row so M2 sees a
+            // disagreement before opening the transaction, not after.
+            'manager1Decision' => $priorM1,
+            'version' => $txn->getVersion(),
+        ];
+    }
 }

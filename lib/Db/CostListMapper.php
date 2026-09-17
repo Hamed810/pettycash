@@ -68,48 +68,12 @@ final class CostListMapper extends QBMapper {
     }
 
 
-    public function findOpenForPurchaserProject(
-        string $userId,
-        int $projectId
-    ): CostList {
-
-        $qb = $this->db->getQueryBuilder();
-
-        $qb->select('*')
-            ->from($this->getTableName())
-            ->where(
-                $qb->expr()->eq(
-                    'purchaser_id',
-                    $qb->createNamedParameter($userId)
-                )
-            )
-            ->andWhere(
-                $qb->expr()->eq(
-                    'project_id',
-                    $qb->createNamedParameter(
-                        $projectId,
-                        IQueryBuilder::PARAM_INT
-                    )
-                )
-            )
-            ->andWhere(
-                $qb->expr()->eq(
-                    'status',
-                    $qb->createNamedParameter('OPEN')
-                )
-            );
-
-        $this->notDeleted($qb);
-
-        return $this->findEntity($qb);
-    }
-
-
     /**
-     * New v0.4.1 feature
-     * Find all open lists of a purchaser
+     * v2.0.0: all open lists for a purchaser, regardless of type.
+     * Callers filter by listType themselves (see CostListService) --
+     * Business Trip lists are exempt from the single-open-list rule.
      *
-     * Used when multiple open lists are disabled.
+     * @return list<CostList>
      */
     public function findOpenForPurchaser(
         string $userId
@@ -190,90 +154,18 @@ final class CostListMapper extends QBMapper {
 
 
     /**
+     * v2.0.0: admin-wide visibility. Replaces the old
+     * iterate-every-project-then-union approach, since lists are no
+     * longer project-scoped.
+     *
      * @return list<CostList>
      */
-    public function findForReviewer(
-        string $userId,
-        string $role,
-        string $status
-    ): array {
-
-        $qb = $this->db->getQueryBuilder();
-
-        $qb->selectDistinct('l.*')
-            ->from($this->getTableName(),'l')
-            ->innerJoin(
-                'l',
-                'pcash_member',
-                'm',
-                $qb->expr()->eq(
-                    'm.project_id',
-                    'l.project_id'
-                )
-            )
-            ->where(
-                $qb->expr()->eq(
-                    'm.user_id',
-                    $qb->createNamedParameter($userId)
-                )
-            )
-            ->andWhere(
-                $qb->expr()->eq(
-                    'm.role',
-                    $qb->createNamedParameter($role)
-                )
-            )
-            ->andWhere(
-                $qb->expr()->eq(
-                    'm.active',
-                    $qb->createNamedParameter(
-                        true,
-                        IQueryBuilder::PARAM_BOOL
-                    )
-                )
-            )
-            ->andWhere(
-                $qb->expr()->eq(
-                    'l.status',
-                    $qb->createNamedParameter($status)
-                )
-            )
-            ->andWhere(
-                $qb->expr()->eq(
-                    'l.deleted',
-                    $qb->createNamedParameter(
-                        false,
-                        IQueryBuilder::PARAM_BOOL
-                    )
-                )
-            )
-            ->orderBy('l.submitted_at','ASC')
-            ->addOrderBy('l.id','ASC');
-
-        return $this->findEntities($qb);
-    }
-
-
-    /**
-     * @return list<CostList>
-     */
-    public function findForProject(
-        int $projectId
-    ): array {
+    public function findAll(): array {
 
         $qb = $this->db->getQueryBuilder();
 
         $qb->select('*')
             ->from($this->getTableName())
-            ->where(
-                $qb->expr()->eq(
-                    'project_id',
-                    $qb->createNamedParameter(
-                        $projectId,
-                        IQueryBuilder::PARAM_INT
-                    )
-                )
-            )
             ->orderBy('created_at','DESC');
 
         $this->notDeleted($qb);

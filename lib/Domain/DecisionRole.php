@@ -4,18 +4,18 @@ declare(strict_types=1);
 
 namespace OCA\PettyCash\Domain;
 
-final class ApprovalStage {
+final class DecisionRole {
 
-    public const MANAGER1 = 'MANAGER1';
+    public const M1 = 'M1';
 
-    public const MANAGER2 = 'MANAGER2';
+    public const M2 = 'M2';
 
     public const ACCOUNTANT = 'ACCOUNTANT';
 
 
     public const ALL = [
-        self::MANAGER1,
-        self::MANAGER2,
+        self::M1,
+        self::M2,
         self::ACCOUNTANT,
     ];
 

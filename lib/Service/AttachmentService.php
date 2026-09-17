@@ -55,8 +55,69 @@ final class AttachmentService {
     }
 
 
-    /** @return array{content:string,mimeType:string,originalName:string} */
-    public function content(string $uuid):array{try{$a=$this->mapper->findByUuid($uuid);$txn=$this->txnMapper->find((int)$a->getTxnId());$list=$this->listMapper->find((int)$txn->getListId());}catch(DoesNotExistException){throw new NotFoundException('Attachment not found.');}$uid=$this->auth->currentUserId();if($uid===null)throw new ForbiddenException('Login is required.');$allowed=$this->auth->isAdmin($uid)||$txn->getPurchaserId()===$uid||$this->auth->hasAnyProjectRole((int)$list->getProjectId(),[ProjectRole::MANAGER1,ProjectRole::MANAGER2,ProjectRole::ACCOUNTANT],$uid);if(!$allowed)throw new ForbiddenException('You cannot view this financial evidence.');[$folderName,$fileName]=explode('/',$a->getStorageKey(),2);try{$content=$this->appData->getFolder($folderName)->getFile($fileName)->getContent();}catch(FileNotFoundException){throw new NotFoundException('Attachment file is missing.');}return['content'=>$content,'mimeType'=>$a->getMimeType(),'originalName'=>$a->getOriginalName()];}
+   /** @return array{content:string,mimeType:string,originalName:string} */
+public function content(string $uuid):array
+{
+    try {
+        $a = $this->mapper->findByUuid($uuid);
+        $txn = $this->txnMapper->find((int)$a->getTxnId());
+    } catch (DoesNotExistException) {
+        throw new NotFoundException('Attachment not found.');
+    }
+
+    $uid = $this->auth->currentUserId();
+
+    if ($uid === null) {
+        throw new ForbiddenException('Login is required.');
+    }
+
+    $allowed =
+        $this->auth->isAdmin($uid)
+        || $txn->getPurchaserId() === $uid
+        || (
+            $txn->getDestinationId() !== null
+            && $this->auth->hasAnyProjectRole(
+                (int)$txn->getDestinationId(),
+                [
+                    ProjectRole::MANAGER1,
+                    ProjectRole::MANAGER2,
+                    ProjectRole::ACCOUNTANT
+                ],
+                $uid
+            )
+        );
+
+    if (!$allowed) {
+        throw new ForbiddenException(
+            'You cannot view this financial evidence.'
+        );
+    }
+
+    [$folderName,$fileName] = explode(
+        '/',
+        $a->getStorageKey(),
+        2
+    );
+
+    try {
+        $content = $this->appData
+            ->getFolder($folderName)
+            ->getFile($fileName)
+            ->getContent();
+    } catch (FileNotFoundException) {
+        throw new NotFoundException(
+            'Attachment file is missing.'
+        );
+    }
+
+    return [
+        'content'=>$content,
+        'mimeType'=>$a->getMimeType(),
+        'originalName'=>$a->getOriginalName()
+    ];
+}
+    
+    
     private function purchaserCanModify(\OCA\PettyCash\Db\Transaction $txn,\OCA\PettyCash\Db\CostList $list):bool{if($list->getStatus()===CostListStatus::OPEN&&$txn->getStatus()===TransactionStatus::DRAFT)return true;return $list->getStatus()===CostListStatus::M1_REVIEW&&in_array($txn->getStatus(),[TransactionStatus::RETURNED_M1,TransactionStatus::RETURNED_M2],true);}
 
 
