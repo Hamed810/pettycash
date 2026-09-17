@@ -1,0 +1,27 @@
+# Nextcloud
+data/
+config/
+
+# Node
+node_modules/
+dist/
+npm-debug.log
+
+# PHP
+vendor/
+
+# Composer
+composer.lock
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+
+# Environment
+.env
+
+# Build
+*.log

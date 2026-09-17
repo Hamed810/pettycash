@@ -1,0 +1,14 @@
+{
+    "name": "pettycash",
+    "version": "1.0.0",
+    "private": true,
+    "scripts": {
+        "build": "echo Build Vue 3 + TypeScript later"
+    },
+    "dependencies": {
+        "vue": "^3.0.0"
+    },
+    "devDependencies": {
+        "typescript": "^5.0.0"
+    }
+}

@@ -1,0 +1,14 @@
+{
+    "name": "pettycash/pettycash",
+    "description": "PettyCash Nextcloud App",
+    "type": "project",
+    "license": "AGPL-3.0-or-later",
+    "autoload": {
+        "psr-4": {
+            "OCA\\PettyCash\\": "lib/"
+        }
+    },
+    "require": {
+        "php": "^8.1"
+    }
+}
