@@ -1,29 +1,35 @@
 <?xml version="1.0"?>
+
 <info xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
       xsi:noNamespaceSchemaLocation="https://apps.nextcloud.com/schema/apps/info.xsd">
 
     <id>pettycash</id>
 
-    <name>PettyCash</name>
+    <name>Petty Cash</name>
 
-    <summary>Petty Cash Management System</summary>
+    <summary>
+        Petty Cash management and approval workflow system
+    </summary>
 
-    <description>
-        PettyCash Nextcloud App V1
-    </description>
+    <description><![CDATA[
+        Nextcloud application for managing petty cash expenses,
+        approval workflows, documents, revisions and audit trails.
+    ]]></description>
 
     <version>1.0.0</version>
 
-    <licence>AGPL</licence>
+    <licence>agpl</licence>
 
-    <author>PettyCash Team</author>
+    <author>
+        Hamed
+    </author>
 
     <namespace>PettyCash</namespace>
 
-    <category>finance</category>
+    <category>office</category>
 
     <dependencies>
-        <nextcloud min-version="34" max-version="35"/>
+        <nextcloud min-version="34"/>
     </dependencies>
 
 </info>
