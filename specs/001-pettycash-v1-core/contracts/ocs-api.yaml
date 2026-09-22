@@ -1,0 +1,1279 @@
+openapi: 3.0.3
+info:
+  title: PettyCash V1 OCS API
+  version: 1.0.0-draft
+  description: |
+    Versioned JSON contract for the PettyCash Nextcloud application. The deployed base path is
+    /ocs/v2.php/apps/pettycash/api/v1. JSON responses use the standard OCS envelope; schemas below
+    describe the value carried in ocs.data unless an operation streams a file.
+servers:
+  - url: /ocs/v2.php/apps/pettycash/api/v1
+security:
+  - nextcloudSession: []
+tags:
+  - name: Session
+  - name: Configuration
+  - name: Accounts
+  - name: Sheets
+  - name: Transactions
+  - name: Workflow
+  - name: Evidence
+  - name: Audit
+  - name: Reports
+  - name: Exports
+
+paths:
+  /me:
+    get:
+      tags: [Session]
+      summary: Return the current user and effective capabilities
+      responses:
+        '200':
+          description: Current user context
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionContext'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /dashboard:
+    get:
+      tags: [Session]
+      summary: Return role-scoped dashboard cards and work summaries
+      responses:
+        '200':
+          description: Dashboard projection for all active roles
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Dashboard'
+
+  /configuration/currencies:
+    get:
+      tags: [Configuration]
+      summary: List currencies visible to the current administrative context
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          $ref: '#/components/responses/CurrencyPage'
+    post:
+      tags: [Configuration]
+      summary: Create a currency
+      parameters:
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CurrencyWrite'
+      responses:
+        '201':
+          description: Currency created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Currency'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /configuration/currencies/{currencyId}:
+    patch:
+      tags: [Configuration]
+      summary: Update or activate/deactivate a currency
+      parameters:
+        - $ref: '#/components/parameters/CurrencyId'
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/CurrencyWrite'
+                - $ref: '#/components/schemas/ExpectedVersion'
+      responses:
+        '200':
+          description: Updated currency
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Currency'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /configuration/cost-centers:
+    get:
+      tags: [Configuration]
+      summary: List cost centers within the caller's view scope
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: active
+          in: query
+          schema: { type: boolean }
+      responses:
+        '200':
+          $ref: '#/components/responses/CostCenterPage'
+    post:
+      tags: [Configuration]
+      summary: Create a cost center and current manager assignments
+      parameters:
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CostCenterWrite'
+      responses:
+        '201':
+          description: Cost center created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CostCenter'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /configuration/cost-centers/{costCenterId}:
+    patch:
+      tags: [Configuration]
+      summary: Update a cost center or its current assignments
+      parameters:
+        - $ref: '#/components/parameters/CostCenterId'
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/CostCenterWrite'
+                - $ref: '#/components/schemas/ExpectedVersion'
+      responses:
+        '200':
+          description: Updated cost center
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CostCenter'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /configuration/expense-types:
+    get:
+      tags: [Configuration]
+      summary: List expense types
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          $ref: '#/components/responses/ExpenseTypePage'
+    post:
+      tags: [Configuration]
+      summary: Create an expense type
+      parameters:
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExpenseTypeWrite'
+      responses:
+        '201':
+          description: Expense type created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExpenseType'
+
+  /configuration/expense-types/{expenseTypeId}:
+    patch:
+      tags: [Configuration]
+      summary: Update or activate/deactivate an expense type
+      parameters:
+        - $ref: '#/components/parameters/ExpenseTypeId'
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/ExpenseTypeWrite'
+                - $ref: '#/components/schemas/ExpectedVersion'
+      responses:
+        '200':
+          description: Updated expense type
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExpenseType'
+
+  /configuration/finance-assignments:
+    get:
+      tags: [Configuration]
+      summary: List shared-queue finance officers
+      responses:
+        '200':
+          description: Active and historical finance assignments
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/RoleAssignment' }
+    post:
+      tags: [Configuration]
+      summary: Add or update a shared-queue finance assignment
+      parameters:
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FinanceAssignmentWrite'
+      responses:
+        '201':
+          description: Assignment created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleAssignment'
+
+  /accounts:
+    get:
+      tags: [Accounts]
+      summary: List accounts permitted for the caller
+      parameters:
+        - name: userId
+          in: query
+          schema: { type: string }
+        - name: active
+          in: query
+          schema: { type: boolean }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          $ref: '#/components/responses/AccountPage'
+    post:
+      tags: [Accounts]
+      summary: Create a user account for a supported currency
+      parameters:
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountCreate'
+      responses:
+        '201':
+          description: Account created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Account' }
+
+  /accounts/{accountId}/charges:
+    post:
+      tags: [Accounts]
+      summary: Charge a petty-cash account
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountCharge'
+      responses:
+        '201':
+          description: Charge movement and updated account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountMutationResult'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /accounts/{accountId}/movements:
+    get:
+      tags: [Accounts]
+      summary: List permitted account movements
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          $ref: '#/components/responses/MovementPage'
+
+  /sheets:
+    get:
+      tags: [Sheets]
+      summary: List role-scoped sheets
+      parameters:
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/SheetStatus' }
+        - name: ownerId
+          in: query
+          schema: { type: string }
+        - name: currency
+          in: query
+          schema: { type: string, minLength: 3, maxLength: 3 }
+        - name: from
+          in: query
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          schema: { type: string, format: date }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          $ref: '#/components/responses/SheetPage'
+    post:
+      tags: [Sheets]
+      summary: Create an open sheet
+      parameters:
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SheetCreate'
+      responses:
+        '201':
+          description: Sheet created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SheetDetail' }
+
+  /sheets/{sheetId}:
+    get:
+      tags: [Sheets]
+      summary: Return a role-scoped sheet detail projection
+      parameters:
+        - $ref: '#/components/parameters/SheetId'
+      responses:
+        '200':
+          description: Sheet detail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SheetDetail' }
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [Sheets]
+      summary: Update an open sheet
+      parameters:
+        - $ref: '#/components/parameters/SheetId'
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/SheetCreate'
+                - $ref: '#/components/schemas/ExpectedVersion'
+      responses:
+        '200':
+          description: Updated sheet
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SheetDetail' }
+
+  /sheets/{sheetId}/submit:
+    post:
+      tags: [Workflow]
+      summary: Validate and submit an open sheet
+      parameters:
+        - $ref: '#/components/parameters/SheetId'
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExpectedVersion' }
+      responses:
+        '200':
+          description: Submitted sheet and routed transactions
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SheetDetail' }
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /sheets/{sheetId}/transactions:
+    post:
+      tags: [Transactions]
+      summary: Add a draft transaction to an open sheet
+      parameters:
+        - $ref: '#/components/parameters/SheetId'
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TransactionDraftWrite' }
+      responses:
+        '201':
+          description: Draft transaction created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TransactionDetail' }
+
+  /transactions/{transactionId}:
+    get:
+      tags: [Transactions]
+      summary: Return transaction detail and allowed actions
+      parameters:
+        - $ref: '#/components/parameters/TransactionId'
+      responses:
+        '200':
+          description: Transaction detail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TransactionDetail' }
+    patch:
+      tags: [Transactions]
+      summary: Update a draft transaction or correction draft
+      parameters:
+        - $ref: '#/components/parameters/TransactionId'
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/TransactionDraftWrite'
+                - $ref: '#/components/schemas/ExpectedVersion'
+      responses:
+        '200':
+          description: Updated transaction
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TransactionDetail' }
+        '409':
+          $ref: '#/components/responses/Conflict'
+    delete:
+      tags: [Transactions]
+      summary: Delete a transaction from an open sheet
+      parameters:
+        - $ref: '#/components/parameters/TransactionId'
+        - $ref: '#/components/parameters/CommandId'
+      responses:
+        '204': { description: Draft transaction deleted }
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /transactions/{transactionId}/decisions:
+    post:
+      tags: [Workflow]
+      summary: Record the actor's permitted decision for the current stage
+      parameters:
+        - $ref: '#/components/parameters/TransactionId'
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DecisionWrite' }
+      responses:
+        '201':
+          description: Decision, updated transaction, and any account effect
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DecisionResult' }
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /transactions/{transactionId}/correction:
+    post:
+      tags: [Transactions]
+      summary: Create a correction draft from the active returned revision
+      parameters:
+        - $ref: '#/components/parameters/TransactionId'
+        - $ref: '#/components/parameters/CommandId'
+      responses:
+        '201':
+          description: Correction draft revision
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Revision' }
+
+  /transactions/{transactionId}/resubmit:
+    post:
+      tags: [Workflow]
+      summary: Validate and activate a correction revision
+      parameters:
+        - $ref: '#/components/parameters/TransactionId'
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExpectedVersion' }
+      responses:
+        '200':
+          description: New active revision routed to cost-center review
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TransactionDetail' }
+
+  /transactions/{transactionId}/revisions:
+    get:
+      tags: [Audit]
+      summary: List authorized immutable revisions
+      parameters:
+        - $ref: '#/components/parameters/TransactionId'
+      responses:
+        '200':
+          description: Revision history
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Revision' }
+
+  /transactions/{transactionId}/audit:
+    get:
+      tags: [Audit]
+      summary: List authorized business history
+      parameters:
+        - $ref: '#/components/parameters/TransactionId'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          $ref: '#/components/responses/AuditPage'
+
+  /queues/{stage}:
+    get:
+      tags: [Workflow]
+      summary: Return the caller's cost-center, senior, or shared finance queue
+      parameters:
+        - name: stage
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [cost-center, senior, finance]
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          $ref: '#/components/responses/TransactionPage'
+
+  /returns:
+    get:
+      tags: [Workflow]
+      summary: Return the current purchaser's correction queue
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          $ref: '#/components/responses/TransactionPage'
+
+  /transactions/{transactionId}/evidence:
+    post:
+      tags: [Evidence]
+      summary: Upload evidence for a draft or permitted transaction state
+      parameters:
+        - $ref: '#/components/parameters/TransactionId'
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '201':
+          description: Evidence metadata
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Evidence' }
+
+  /evidence/{evidenceId}:
+    delete:
+      tags: [Evidence]
+      summary: Delete draft evidence or deactivate submitted evidence
+      parameters:
+        - $ref: '#/components/parameters/EvidenceId'
+        - $ref: '#/components/parameters/CommandId'
+      responses:
+        '200':
+          description: Deactivated evidence metadata
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Evidence' }
+        '204': { description: Draft evidence deleted }
+
+  /evidence/{evidenceId}/content:
+    get:
+      tags: [Evidence]
+      summary: Stream authorized evidence content or preview
+      parameters:
+        - $ref: '#/components/parameters/EvidenceId'
+        - name: disposition
+          in: query
+          schema:
+            type: string
+            enum: [inline, attachment]
+            default: inline
+      responses:
+        '200':
+          description: Evidence byte stream
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+
+  /evidence/{evidenceId}/links:
+    post:
+      tags: [Evidence]
+      summary: Create an administrator-controlled public link
+      parameters:
+        - $ref: '#/components/parameters/EvidenceId'
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                expiresAt: { type: string, format: date-time, nullable: true }
+      responses:
+        '201':
+          description: Public link; raw token is returned only at creation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EvidenceLink' }
+
+  /evidence-links/{linkId}/deactivate:
+    post:
+      tags: [Evidence]
+      summary: Deactivate a public evidence link
+      parameters:
+        - name: linkId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/CommandId'
+      responses:
+        '200':
+          description: Deactivated link metadata
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EvidenceLink' }
+
+  /reports/{reportType}:
+    get:
+      tags: [Reports]
+      summary: Return a role-scoped paged report
+      parameters:
+        - name: reportType
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [sheets, transactions, cost-centers, accounts, process, evidence, audit]
+        - name: filters
+          in: query
+          description: Report-specific filter object encoded as query parameters by the client
+          schema: { type: string }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Report projection
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReportPage' }
+
+  /exports:
+    post:
+      tags: [Exports]
+      summary: Generate and stream a role-scoped export
+      parameters:
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExportRequest' }
+      responses:
+        '200':
+          description: CSV, XLSX, PDF, or ZIP stream
+          content:
+            text/csv:
+              schema: { type: string }
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema: { type: string, format: binary }
+            application/pdf:
+              schema: { type: string, format: binary }
+            application/zip:
+              schema: { type: string, format: binary }
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+components:
+  securitySchemes:
+    nextcloudSession:
+      type: apiKey
+      in: cookie
+      name: session
+      description: Existing authenticated Nextcloud browser session and standard request token
+
+  parameters:
+    CommandId:
+      name: X-PettyCash-Command-ID
+      in: header
+      required: true
+      description: Client-generated UUID used for idempotent command replay
+      schema: { type: string, format: uuid }
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    PageSize:
+      name: pageSize
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 25 }
+    CurrencyId:
+      name: currencyId
+      in: path
+      required: true
+      schema: { type: string, minLength: 3, maxLength: 3 }
+    CostCenterId:
+      name: costCenterId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ExpenseTypeId:
+      name: expenseTypeId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    AccountId:
+      name: accountId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    SheetId:
+      name: sheetId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    TransactionId:
+      name: transactionId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    EvidenceId:
+      name: evidenceId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+
+  responses:
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: The caller lacks role, ownership, scope, stage, or state authority
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Resource does not exist or is intentionally hidden from the caller
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Conflict:
+      description: Stale version, duplicate/conflicting command, invalid state, or concurrency conflict
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    ValidationError:
+      description: Business validation failed
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    CurrencyPage:
+      description: Paged currencies
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/PageMeta'
+              - type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Currency' } }
+    CostCenterPage:
+      description: Paged cost centers
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/PageMeta'
+              - type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/CostCenter' } }
+    ExpenseTypePage:
+      description: Paged expense types
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/PageMeta'
+              - type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ExpenseType' } }
+    AccountPage:
+      description: Paged accounts
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/PageMeta'
+              - type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Account' } }
+    MovementPage:
+      description: Paged account movements
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/PageMeta'
+              - type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Movement' } }
+    SheetPage:
+      description: Paged sheet summaries
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/PageMeta'
+              - type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/SheetSummary' } }
+    TransactionPage:
+      description: Paged transaction summaries
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/PageMeta'
+              - type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/TransactionSummary' } }
+    AuditPage:
+      description: Paged audit events
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/PageMeta'
+              - type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/AuditEvent' } }
+
+  schemas:
+    ExpectedVersion:
+      type: object
+      required: [expectedVersion]
+      properties:
+        expectedVersion: { type: integer, minimum: 0 }
+    PageMeta:
+      type: object
+      required: [page, pageSize, total]
+      properties:
+        page: { type: integer }
+        pageSize: { type: integer }
+        total: { type: integer }
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string }
+        message: { type: string }
+        fieldErrors:
+          type: object
+          additionalProperties:
+            type: array
+            items: { type: string }
+        commandId: { type: string, format: uuid, nullable: true }
+    Money:
+      type: object
+      required: [amountMinor, currency, minorUnit]
+      properties:
+        amountMinor: { type: integer, format: int64 }
+        currency: { type: string, minLength: 3, maxLength: 3 }
+        minorUnit: { type: integer, minimum: 0, maximum: 4 }
+    CapabilitySet:
+      type: object
+      additionalProperties: { type: boolean }
+    SessionContext:
+      type: object
+      required: [userId, displayName, roles, capabilities]
+      properties:
+        userId: { type: string }
+        displayName: { type: string }
+        roles:
+          type: array
+          items: { type: string, enum: [PURCHASER, COST_CENTER_MANAGER, SENIOR_MANAGER, FINANCE, ADMIN] }
+        capabilities: { $ref: '#/components/schemas/CapabilitySet' }
+    Dashboard:
+      type: object
+      properties:
+        purchaser: { type: object, additionalProperties: true }
+        costCenter: { type: object, additionalProperties: true }
+        senior: { type: object, additionalProperties: true }
+        finance: { type: object, additionalProperties: true }
+        admin: { type: object, additionalProperties: true }
+    CurrencyWrite:
+      type: object
+      required: [code, name, minorUnit, active]
+      properties:
+        code: { type: string, pattern: '^[A-Z]{3}$' }
+        name: { type: string, minLength: 1, maxLength: 100 }
+        minorUnit: { type: integer, minimum: 0, maximum: 4 }
+        active: { type: boolean }
+    Currency:
+      allOf:
+        - $ref: '#/components/schemas/CurrencyWrite'
+        - type: object
+          required: [version]
+          properties:
+            version: { type: integer }
+    CostCenterWrite:
+      type: object
+      required: [code, name, validFrom, active, managerUserId, seniorManagerUserId]
+      properties:
+        code: { type: string, minLength: 1, maxLength: 64 }
+        name: { type: string, minLength: 1, maxLength: 255 }
+        description: { type: string, nullable: true }
+        validFrom: { type: string, format: date }
+        validTo: { type: string, format: date, nullable: true }
+        active: { type: boolean }
+        managerUserId: { type: string }
+        seniorManagerUserId: { type: string }
+        changeReason: { type: string, minLength: 1 }
+    CostCenter:
+      allOf:
+        - $ref: '#/components/schemas/CostCenterWrite'
+        - type: object
+          required: [id, version]
+          properties:
+            id: { type: string, format: uuid }
+            version: { type: integer }
+    ExpenseTypeWrite:
+      type: object
+      required: [title, evidenceRequired, active]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 255 }
+        description: { type: string, nullable: true }
+        evidenceRequired: { type: boolean }
+        active: { type: boolean }
+        changeReason: { type: string, minLength: 1 }
+    ExpenseType:
+      allOf:
+        - $ref: '#/components/schemas/ExpenseTypeWrite'
+        - type: object
+          required: [id, version]
+          properties:
+            id: { type: string, format: uuid }
+            version: { type: integer }
+    FinanceAssignmentWrite:
+      type: object
+      required: [userId, validFrom, active, changeReason]
+      properties:
+        userId: { type: string }
+        validFrom: { type: string, format: date }
+        validTo: { type: string, format: date, nullable: true }
+        active: { type: boolean }
+        changeReason: { type: string, minLength: 1 }
+    RoleAssignment:
+      allOf:
+        - $ref: '#/components/schemas/FinanceAssignmentWrite'
+        - type: object
+          required: [id, role]
+          properties:
+            id: { type: string, format: uuid }
+            role: { type: string, enum: [FINANCE] }
+    AccountCreate:
+      type: object
+      required: [userId, currency]
+      properties:
+        userId: { type: string }
+        currency: { type: string, pattern: '^[A-Z]{3}$' }
+    Account:
+      type: object
+      required: [id, userId, balance, active, version]
+      properties:
+        id: { type: string, format: uuid }
+        userId: { type: string }
+        balance: { $ref: '#/components/schemas/Money' }
+        active: { type: boolean }
+        version: { type: integer }
+    AccountCharge:
+      type: object
+      required: [amountMinor, description, occurredAt, expectedVersion]
+      properties:
+        amountMinor: { type: integer, format: int64, minimum: 1 }
+        description: { type: string, minLength: 1, maxLength: 1000 }
+        occurredAt: { type: string, format: date-time }
+        expectedVersion: { type: integer, minimum: 0 }
+    Movement:
+      type: object
+      required: [id, type, amount, balanceAfter, occurredAt]
+      properties:
+        id: { type: string, format: uuid }
+        type: { type: string, enum: [CHARGE, CONSUMPTION] }
+        amount: { $ref: '#/components/schemas/Money' }
+        balanceAfter: { $ref: '#/components/schemas/Money' }
+        description: { type: string }
+        sourceRevisionId: { type: string, format: uuid, nullable: true }
+        occurredAt: { type: string, format: date-time }
+    AccountMutationResult:
+      type: object
+      required: [account, movement]
+      properties:
+        account: { $ref: '#/components/schemas/Account' }
+        movement: { $ref: '#/components/schemas/Movement' }
+    SheetStatus:
+      type: string
+      enum: [OPEN, AWAITING_COST_CENTER_REVIEW, AWAITING_SENIOR_REVIEW, AWAITING_FINANCE_REVIEW, COMPLETED, COMPLETED_WITH_REJECTIONS]
+    SheetCreate:
+      type: object
+      required: [title, accountId]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 255 }
+        accountId: { type: string, format: uuid }
+    SheetTotals:
+      type: object
+      properties:
+        current: { $ref: '#/components/schemas/Money' }
+        submitted: { $ref: '#/components/schemas/Money' }
+        effectiveApproved: { $ref: '#/components/schemas/Money' }
+        effectiveRejected: { $ref: '#/components/schemas/Money' }
+        effectivePending: { $ref: '#/components/schemas/Money' }
+        costCenterApproved: { $ref: '#/components/schemas/Money' }
+        seniorApproved: { $ref: '#/components/schemas/Money' }
+        financeApproved: { $ref: '#/components/schemas/Money' }
+    SheetSummary:
+      type: object
+      required: [id, title, ownerId, currency, status, transactionCount, totals, version]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        ownerId: { type: string }
+        ownerDisplayName: { type: string }
+        currency: { type: string }
+        status: { $ref: '#/components/schemas/SheetStatus' }
+        transactionCount: { type: integer }
+        totals: { $ref: '#/components/schemas/SheetTotals' }
+        createdAt: { type: string, format: date-time }
+        submittedAt: { type: string, format: date-time, nullable: true }
+        completedAt: { type: string, format: date-time, nullable: true }
+        firstExpenseDate: { type: string, format: date, nullable: true }
+        lastExpenseDate: { type: string, format: date, nullable: true }
+        version: { type: integer }
+    SheetDetail:
+      allOf:
+        - $ref: '#/components/schemas/SheetSummary'
+        - type: object
+          properties:
+            allowedActions: { $ref: '#/components/schemas/CapabilitySet' }
+            transactions:
+              type: array
+              items: { $ref: '#/components/schemas/TransactionSummary' }
+    TransactionStage:
+      type: string
+      enum: [DRAFT, COST_CENTER, CORRECTION, SENIOR, FINANCE, FINAL]
+    TransactionStatus:
+      type: string
+      enum: [DRAFT, AWAITING_COST_CENTER_REVIEW, COST_CENTER_APPROVED, COST_CENTER_REJECTED, AWAITING_SENIOR_REVIEW, SENIOR_APPROVED, SENIOR_REJECTED, AWAITING_FINANCE_REVIEW, AWAITING_PURCHASER_CORRECTION, COMPLETED_APPROVED, COMPLETED_REJECTED]
+    TransactionDraftWrite:
+      type: object
+      required: [expenseDate, amountMinor]
+      properties:
+        expenseDate: { type: string, format: date }
+        amountMinor: { type: integer, format: int64, minimum: 1 }
+        description: { type: string, nullable: true }
+        costCenterId: { type: string, format: uuid, nullable: true }
+        expenseTypeId: { type: string, format: uuid, nullable: true }
+    TransactionSummary:
+      type: object
+      required: [id, sheetId, activeRevision, stage, status, evidenceCount, version]
+      properties:
+        id: { type: string, format: uuid }
+        sheetId: { type: string, format: uuid }
+        activeRevision: { $ref: '#/components/schemas/Revision' }
+        stage: { $ref: '#/components/schemas/TransactionStage' }
+        status: { $ref: '#/components/schemas/TransactionStatus' }
+        finalOutcome: { type: string, enum: [APPROVED, REJECTED], nullable: true }
+        latestDecision: { $ref: '#/components/schemas/Decision' }
+        evidenceCount: { type: integer }
+        version: { type: integer }
+    TransactionDetail:
+      allOf:
+        - $ref: '#/components/schemas/TransactionSummary'
+        - type: object
+          properties:
+            allowedActions: { $ref: '#/components/schemas/CapabilitySet' }
+            decisions: { type: array, items: { $ref: '#/components/schemas/Decision' } }
+            evidence: { type: array, items: { $ref: '#/components/schemas/Evidence' } }
+    Revision:
+      type: object
+      required: [id, number, expenseDate, amount, createdBy, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        number: { type: integer, minimum: 1 }
+        expenseDate: { type: string, format: date }
+        amount: { $ref: '#/components/schemas/Money' }
+        description: { type: string, nullable: true }
+        costCenter: { $ref: '#/components/schemas/EntitySnapshot' }
+        expenseType: { $ref: '#/components/schemas/EntitySnapshot' }
+        createdBy: { type: string }
+        createdAt: { type: string, format: date-time }
+        active: { type: boolean }
+    EntitySnapshot:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string, nullable: true }
+        name: { type: string }
+    DecisionWrite:
+      type: object
+      required: [decision, expectedVersion]
+      properties:
+        decision: { type: string, enum: [APPROVE, REJECT, RETURN] }
+        explanation: { type: string, nullable: true }
+        expectedVersion: { type: integer, minimum: 0 }
+    Decision:
+      type: object
+      required: [id, stage, decision, actor, decidedAt]
+      properties:
+        id: { type: string, format: uuid }
+        stage: { type: string, enum: [COST_CENTER, SENIOR, FINANCE] }
+        decision: { type: string, enum: [APPROVE, REJECT, RETURN] }
+        explanation: { type: string, nullable: true }
+        actor: { $ref: '#/components/schemas/ActorSnapshot' }
+        decidedAt: { type: string, format: date-time }
+    DecisionResult:
+      type: object
+      required: [decision, transaction]
+      properties:
+        decision: { $ref: '#/components/schemas/Decision' }
+        transaction: { $ref: '#/components/schemas/TransactionDetail' }
+        accountMutation: { $ref: '#/components/schemas/AccountMutationResult' }
+    ActorSnapshot:
+      type: object
+      required: [userId, displayName, role]
+      properties:
+        userId: { type: string }
+        displayName: { type: string }
+        role: { type: string }
+    Evidence:
+      type: object
+      required: [id, transactionId, revisionId, name, mediaType, sizeBytes, active, uploadedBy, uploadedAt]
+      properties:
+        id: { type: string, format: uuid }
+        transactionId: { type: string, format: uuid }
+        revisionId: { type: string, format: uuid }
+        name: { type: string }
+        mediaType: { type: string }
+        sizeBytes: { type: integer, format: int64 }
+        active: { type: boolean }
+        uploadedBy: { type: string }
+        uploadedAt: { type: string, format: date-time }
+        deactivatedAt: { type: string, format: date-time, nullable: true }
+    EvidenceLink:
+      type: object
+      required: [id, evidenceId, active, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        evidenceId: { type: string, format: uuid }
+        url: { type: string, nullable: true, description: Returned only at creation }
+        active: { type: boolean }
+        expiresAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+    AuditEvent:
+      type: object
+      required: [id, eventType, actor, occurredAt]
+      properties:
+        id: { type: string, format: uuid }
+        eventType: { type: string }
+        stage: { type: string, nullable: true }
+        decision: { type: string, nullable: true }
+        explanation: { type: string, nullable: true }
+        actor: { $ref: '#/components/schemas/ActorSnapshot' }
+        before: { type: object, nullable: true, additionalProperties: true }
+        after: { type: object, nullable: true, additionalProperties: true }
+        occurredAt: { type: string, format: date-time }
+    ReportPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          properties:
+            columns: { type: array, items: { type: string } }
+            rows: { type: array, items: { type: object, additionalProperties: true } }
+            summary: { type: object, additionalProperties: true }
+    ExportRequest:
+      type: object
+      required: [resource, format]
+      properties:
+        resource:
+          type: string
+          enum: [sheet, sheets, transactions, report, audit, evidence]
+        format:
+          type: string
+          enum: [csv, xlsx, pdf, zip]
+        ids:
+          type: array
+          items: { type: string, format: uuid }
+        reportType:
+          type: string
+          nullable: true
+        filters:
+          type: object
+          additionalProperties: true

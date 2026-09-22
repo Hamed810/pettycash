@@ -1,0 +1,11 @@
+@use './rtl';
+@use './responsive';
+
+.pettycash-shell {
+	box-sizing: border-box;
+	max-inline-size: 1200px;
+	margin-inline: auto;
+	padding: 24px;
+	color: var(--color-main-text);
+	background: var(--color-main-background);
+}

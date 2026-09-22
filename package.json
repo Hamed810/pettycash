@@ -2,13 +2,51 @@
     "name": "pettycash",
     "version": "1.0.0",
     "private": true,
+    "type": "module",
+    "engines": {
+        "node": ">=20.11 <25"
+    },
     "scripts": {
-        "build": "echo Build Vue 3 + TypeScript later"
+        "build": "vite build",
+        "dev": "vite build --watch",
+        "typecheck": "vue-tsc --noEmit",
+        "lint": "eslint src tests/Frontend",
+        "stylelint": "stylelint 'src/**/*.{css,scss,vue}'",
+        "test": "vitest run",
+        "test:unit": "vitest run",
+        "test:e2e": "playwright test",
+        "check": "npm run typecheck && npm run lint && npm run stylelint && npm run test && npm run build"
     },
     "dependencies": {
-        "vue": "^3.0.0"
+        "@nextcloud/axios": "2.6.0",
+        "@nextcloud/dialogs": "7.5.0",
+        "@nextcloud/initial-state": "3.0.0",
+        "@nextcloud/l10n": "3.4.1",
+        "@nextcloud/router": "3.2.0",
+        "@nextcloud/vue": "9.12.0",
+        "pinia": "3.0.4",
+        "vue": "3.5.25",
+        "vue-router": "4.6.3"
     },
     "devDependencies": {
-        "typescript": "^5.0.0"
+        "@nextcloud/vite-config": "2.4.0",
+        "@playwright/test": "1.57.0",
+        "@types/node": "24.10.1",
+        "@vitejs/plugin-vue": "6.0.7",
+        "@vue/test-utils": "2.4.6",
+        "eslint": "9.39.1",
+        "eslint-plugin-vue": "10.6.2",
+        "jsdom": "27.2.0",
+        "sass": "1.94.2",
+        "stylelint": "16.26.0",
+        "stylelint-config-standard-scss": "16.0.0",
+        "typescript": "5.9.3",
+        "vite": "7.3.6",
+        "vitest": "4.0.14",
+        "vue-tsc": "3.1.5"
+    },
+    "overrides": {
+        "@nextcloud/files": "3.12.2",
+        "rollup-plugin-node-externals": "8.1.2"
     }
 }

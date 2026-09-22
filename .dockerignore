@@ -1,0 +1,14 @@
+.git
+.github
+.idea
+.vscode
+node_modules
+vendor
+coverage
+playwright-report
+test-results
+.env*
+*.log
+*.tmp
+js/*.map
+css/*.map
