@@ -15,8 +15,13 @@ Nextcloud-mounted Vue application.
 
 Delivery follows vertical slices: platform foundation; configuration and accounts; purchaser
 capture; management review; correction/revisions; finance settlement; audit and visibility; then
-reports, exports, and compatibility hardening. New V1 tables use the `pc_` family and MUST neither
-drop nor reinterpret the legacy `oc_pcash_*` tables found in the shared environment.
+reports, exports, and compatibility hardening. V1 tables use the logical app-scoped `pettycash_`
+prefix, with indexes and constraints named `pettycash_<table>_<subject>_<kind>`; the instance
+database prefix is applied by the Nextcloud database abstraction and is never hardcoded. V1 is a
+fresh application, so legacy database import, schema migration, and table preservation are out of
+scope, prototype tables in the shared environment are left untouched and unmanaged, and the
+current `pc_*` development tables are treated as provisional V1 development schema that is renamed
+into the app-scoped namespace and reset by design.
 
 ## Technical Context
 
@@ -66,8 +71,12 @@ CSV, PDF, and grouped-evidence export
   and testing decisions before tasks are generated.
 - **II. Preserve Contracts and Existing Behavior — PASS**: The plan retains the application ID,
   namespace, Nextcloud boundary, PHP/Vue split, and existing shared environment. Migrations are
-  forward-only, use new `pc_*` tables, and explicitly leave legacy tables and other applications
-  untouched.
+  forward-only, use the app-scoped `pettycash_*` namespace, and explicitly leave prototype tables
+  and other applications untouched. The development-only reset discards never-released V1
+  development schema and data under explicit approval; it is not a migration, rewrites no
+  historical or audit record, and preserves every V1 business invariant, so it does not conflict
+  with the prohibition on destructive migrations and history rewriting. The legacy backup remains
+  reference material only, and no constitutional amendment is required.
 - **III. Nextcloud-Native Architecture — PASS**: Authentication, users, files, technical logging,
   routing, dependency injection, database access, localization, and security remain on supported
   Nextcloud services. The PHP floor is corrected to 8.2 because that is the minimum compatible
@@ -195,7 +204,12 @@ or served assets rather than a second frontend project.
 
 1. **Foundation**: Correct the PHP compatibility declaration, establish locked build/test tools,
    register the page shell and OCS conventions, add shared IDs/money/time types, and prove clean
-   installation beside any legacy migration history.
+   installation on an empty database. The `pc_*` tables already created by the current development
+   migrations are rewritten in place to the `pettycash_*` namespace (no rename migration, no mixed
+   namespace), and an approval-gated development-only reset clears the PettyCash tables and the
+   `pettycash` app-ID migration state so the rewritten baseline executes from scratch. The reset
+   affects PettyCash only and MUST NOT delete Docker volumes, the shared Nextcloud database, or any
+   unrelated application data.
 2. **Configuration and accounts**: Add currencies, cost centers, role assignments, expense types,
    default rial accounts, charges, authorization policies, and configuration audit.
 3. **Purchaser vertical slice**: Add sheets, draft transactions, evidence storage, validation,
@@ -214,6 +228,57 @@ or served assets rather than a second frontend project.
 9. **Hardening**: Run migration, failure-injection, concurrency, target-volume, browser, RTL,
    responsive, accessibility, and recovery checks; update operational and release documentation.
 
+**Database Portability (FR-077)**: The supported V1 backends are the Nextcloud database types
+`mysql` (MySQL 8.0/8.4, MariaDB 10.6/10.11/11.4/11.8), `pgsql` (PostgreSQL 14–18), and `sqlite`
+(SQLite 3.24+, declared for compatibility verification only). This set was verified from the
+Nextcloud 34 Administration Manual *System requirements* and *Developer Manual — Database access*,
+not inferred, and is recorded with the adopted portable rules in `research.md` Decision 16.
+MariaDB 11.4 is the local development backend only; the existing MariaDB development and Docker
+infrastructure is not replaced or modified, and any additional databases exist solely as CI-only
+ephemeral test services.
+
+Persistence goes through the Nextcloud database abstractions — `OCP\IDBConnection`,
+`OCP\DB\QueryBuilder\IQueryBuilder`, `OCP\AppFramework\Db\QBMapper`, `OCP\DB\Types` — plus the
+Nextcloud forward-only migration and schema APIs. Raw SQL, `Doctrine\DBAL\Types` constants,
+delete-`LIMIT`, non-aggregated `GROUP BY` projections, and any other vendor-specific construct are
+prohibited in application code and migrations.
+
+`appinfo/info.xml` declares the supported set explicitly in its `<dependencies>` block so it is
+never left implied:
+
+```xml
+<dependencies>
+    <nextcloud min-version="34"/>
+    <database>mysql</database>
+    <database>pgsql</database>
+    <database>sqlite</database>
+</dependencies>
+```
+
+Verification runs as a four-job CI matrix of ephemeral database services — **MySQL**, **MariaDB**,
+**PostgreSQL**, and **SQLite** — because the `mysql` type covers two distinct concrete engines and
+a MariaDB pass is never treated as evidence for MySQL. Each job runs the forward-only migrations and
+schema creation, the persistence/repository integration tests, representative transaction/workflow
+queries, and the migration/schema compatibility checks. On top of those per-backend execution
+passes, static portability checks run on every build and reject the constructs catalogued in
+`research.md` Decision 16 (raw SQL, `Doctrine\DBAL\Types` constants, delete-`LIMIT`, non-aggregated
+`GROUP BY` projections, and out-of-budget schema assumptions). A green MariaDB run alone is not
+accepted as proof of portability. None of this touches the local development environment: MariaDB
+11.4 there remains the only database, and the additional engines exist solely as CI-only ephemeral
+test services.
+
+**Deferred architecture constraint — Oracle / Enterprise compatibility**: `oci` is explicitly
+outside V1 scope and MUST NOT be declared in `appinfo/info.xml`. Oracle-specific identifier and
+schema limits (table names ≤ 27 including the instance prefix, boolean columns never `NOT NULL`, string
+columns ≤ 4,000 characters, and the 30-character index/column/sequence limits that Nextcloud applies
+when Oracle is supported) are **not** V1 requirements and are **not** adopted as blanket constraints.
+No schema is reshaped and no migration is added in anticipation of Oracle support; the
+`pettycash_*` namespace already satisfies every limit required by the declared V1 backends. If Oracle
+support is proposed later it MUST first re-verify the exact requirements against the targeted
+Nextcloud and Oracle versions — the limits above reflect Nextcloud 34 documentation and may change —
+and MUST be accompanied by an explicit compatibility and migration plan approved before any schema
+change.
+
 ## Complexity Tracking
 
 No constitution violations or exceptional architecture components require justification. The
@@ -224,7 +289,8 @@ authorization, audit, persistence, and export invariants that must remain indepe
 configurable policy with a hard-coded floor of 7 years. The policy governs archival (moving to cold
 storage) and availability (query scope) but never permits deletion or rewriting of business audit
 records. Implementation touches:
-- Persistence: `pc_audit_event` and `pc_config_audit_event` tables retain all records indefinitely;
+- Persistence: the `pettycash_transaction_audit` and `pettycash_configuration_audit` tables retain
+  all records indefinitely;
   retention policy metadata stored in configuration
 - Domain: `AuditRetentionPolicy` value object with minimum 7-year floor
 - Application: `RetentionPolicyService` for policy configuration and compliance verification

@@ -28,7 +28,7 @@ final readonly class NextcloudTransactionManager implements TransactionManager
     /** @param array{sheet?:int,transaction?:int,revision?:int,account?:int} $ids */
     public function lockInSettlementOrder(array $ids): void
     {
-        foreach (['sheet' => 'pc_sheets', 'transaction' => 'pc_transactions', 'revision' => 'pc_transaction_revisions', 'account' => 'pc_accounts'] as $key => $table) {
+        foreach (['sheet' => 'pettycash_sheets', 'transaction' => 'pettycash_transactions', 'revision' => 'pettycash_transaction_revisions', 'account' => 'pettycash_accounts'] as $key => $table) {
             if (!isset($ids[$key])) { continue; }
             $qb = $this->connection->getQueryBuilder();
             $qb->select('id')->from($table)->where($qb->expr()->eq('id', $qb->createNamedParameter($ids[$key], \OCP\DB\Types::BIGINT)))->forUpdate()->executeQuery()->closeCursor();

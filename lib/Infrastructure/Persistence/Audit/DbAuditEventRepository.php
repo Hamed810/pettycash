@@ -25,7 +25,7 @@ final class DbAuditEventRepository implements AuditEventRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_transaction_audit')
+            ->from('pettycash_transaction_audit')
             ->where($qb->expr()->eq('id', $qb->createNamedParameter($id)))
             ->setMaxResults(1);
         $row = $qb->executeQuery()->fetchAssociative();
@@ -36,7 +36,7 @@ final class DbAuditEventRepository implements AuditEventRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_transaction_audit')
+            ->from('pettycash_transaction_audit')
             ->where($qb->expr()->eq('public_id', $qb->createNamedParameter($publicId)))
             ->setMaxResults(1);
         $row = $qb->executeQuery()->fetchAssociative();
@@ -48,7 +48,7 @@ final class DbAuditEventRepository implements AuditEventRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_transaction_audit')
+            ->from('pettycash_transaction_audit')
             ->where($qb->expr()->eq('transaction_id', $qb->createNamedParameter($transactionId)))
             ->orderBy('occurred_at', 'DESC')
             ->setFirstResult($offset)
@@ -62,7 +62,7 @@ final class DbAuditEventRepository implements AuditEventRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_transaction_audit')
+            ->from('pettycash_transaction_audit')
             ->where($qb->expr()->eq('sheet_id', $qb->createNamedParameter($sheetId)))
             ->orderBy('occurred_at', 'DESC')
             ->setFirstResult($offset)
@@ -76,7 +76,7 @@ final class DbAuditEventRepository implements AuditEventRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_transaction_audit')
+            ->from('pettycash_transaction_audit')
             ->where($qb->expr()->eq('actor_uid', $qb->createNamedParameter($actorUid)))
             ->orderBy('occurred_at', 'DESC')
             ->setFirstResult($offset)
@@ -90,7 +90,7 @@ final class DbAuditEventRepository implements AuditEventRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_transaction_audit')
+            ->from('pettycash_transaction_audit')
             ->where($qb->expr()->gte('occurred_at', $qb->createNamedParameter($from->format('Y-m-d H:i:s'))))
             ->andWhere($qb->expr()->lte('occurred_at', $qb->createNamedParameter($to->format('Y-m-d H:i:s'))))
             ->orderBy('occurred_at', 'DESC')
@@ -109,7 +109,7 @@ final class DbAuditEventRepository implements AuditEventRepository
             // Audit events are immutable - should not be updated
             return;
         } else {
-            $qb->insert('pc_transaction_audit')
+            $qb->insert('pettycash_transaction_audit')
                 ->values([
                     'public_id' => $qb->createNamedParameter($event->id),
                     'sheet_id' => $event->sheetId ? $qb->createNamedParameter($event->sheetId) : $qb->createNamedParameter(null),

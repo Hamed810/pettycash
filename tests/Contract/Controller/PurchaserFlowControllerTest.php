@@ -6,6 +6,7 @@ namespace OCA\PettyCash\Tests\Contract\Controller;
 
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\ClientException;
+use OCA\PettyCash\Tests\Contract\Fixture\ContractFixtures;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -22,30 +23,22 @@ final class PurchaserFlowControllerTest extends TestCase
 
     protected function setUp(): void
     {
-        // Inside the Nextcloud container, the web server runs on port 80
-        $this->baseUrl = 'http://localhost/ocs/v2.php/apps/pettycash/api/v1';
-        $this->client = new Client([
-            'base_uri' => $this->baseUrl,
-            'headers' => [
-                'Accept' => 'application/json',
-                'OCS-APIRequest' => 'true',
-            ],
-            'http_errors' => false,
-            'verify' => false,
-        ]);
+        $this->baseUrl = 'http://localhost';
+        $this->client = OcsTestClient::create();
+        ContractFixtures::prepare('draft');
     }
 
     // ===== SHEETS =====
 
     public function testCreateSheetReturns201WithSheetDetail(): void
     {
-        $response = $this->client->request('POST', '/sheets', [
+        $response = $this->client->request('POST', '/ocs/v2.php/apps/pettycash/api/v1/sheets', [
             'headers' => [
-                'X-PettyCash-Command-ID' => '11111111-1111-1111-1111-111111111111',
+                'X-PettyCash-Command-ID' => ContractFixtures::commandId(),
             ],
             'json' => [
                 'title' => 'Test Sheet',
-                'accountId' => '00000000-0000-0000-0000-000000000000',
+                'accountId' => ContractFixtures::accountId(),
             ],
         ]);
 
@@ -56,7 +49,7 @@ final class PurchaserFlowControllerTest extends TestCase
 
     public function testListSheetsReturns200WithPagedSheets(): void
     {
-        $response = $this->client->request('GET', '/sheets');
+        $response = $this->client->request('GET', '/ocs/v2.php/apps/pettycash/api/v1/sheets');
 
         // Contract: GET /sheets returns 200 with paged SheetSummary array
         $this->assertEquals(200, $response->getStatusCode(), 'GET /sheets should return 200 OK');
@@ -65,7 +58,7 @@ final class PurchaserFlowControllerTest extends TestCase
 
     public function testGetSheetDetailReturns200WithSheetDetail(): void
     {
-        $response = $this->client->request('GET', '/sheets/00000000-0000-0000-0000-000000000000');
+        $response = $this->client->request('GET', '/ocs/v2.php/apps/pettycash/api/v1/sheets/' . ContractFixtures::sheetId());
 
         // Contract: GET /sheets/{id} returns 200 with SheetDetail, or 403/404
         $this->assertEquals(200, $response->getStatusCode(), 'GET /sheets/{id} should return 200 OK');
@@ -74,14 +67,14 @@ final class PurchaserFlowControllerTest extends TestCase
 
     public function testUpdateSheetReturns200WithUpdatedSheetDetail(): void
     {
-        $response = $this->client->request('PATCH', '/sheets/00000000-0000-0000-0000-000000000000', [
+        $response = $this->client->request('PATCH', '/ocs/v2.php/apps/pettycash/api/v1/sheets/' . ContractFixtures::sheetId(), [
             'headers' => [
-                'X-PettyCash-Command-ID' => '22222222-2222-2222-2222-222222222222',
+                'X-PettyCash-Command-ID' => ContractFixtures::commandId(),
             ],
             'json' => [
                 'title' => 'Updated Title',
-                'accountId' => '00000000-0000-0000-0000-000000000000',
-                'expectedVersion' => 1,
+                'accountId' => ContractFixtures::accountId(),
+                'expectedVersion' => ContractFixtures::sheetVersion(),
             ],
         ]);
 
@@ -92,12 +85,12 @@ final class PurchaserFlowControllerTest extends TestCase
 
     public function testSubmitSheetReturns200WithSubmittedSheetDetail(): void
     {
-        $response = $this->client->request('POST', '/sheets/00000000-0000-0000-0000-000000000000/submit', [
+        $response = $this->client->request('POST', '/ocs/v2.php/apps/pettycash/api/v1/sheets/' . ContractFixtures::sheetId() . '/submit', [
             'headers' => [
-                'X-PettyCash-Command-ID' => '33333333-3333-3333-3333-333333333333',
+                'X-PettyCash-Command-ID' => ContractFixtures::commandId(),
             ],
             'json' => [
-                'expectedVersion' => 1,
+                'expectedVersion' => ContractFixtures::sheetVersion(),
             ],
         ]);
 
@@ -110,9 +103,9 @@ final class PurchaserFlowControllerTest extends TestCase
 
     public function testCreateTransactionReturns201WithTransactionDetail(): void
     {
-        $response = $this->client->request('POST', '/sheets/00000000-0000-0000-0000-000000000000/transactions', [
+        $response = $this->client->request('POST', '/ocs/v2.php/apps/pettycash/api/v1/sheets/' . ContractFixtures::sheetId() . '/transactions', [
             'headers' => [
-                'X-PettyCash-Command-ID' => '44444444-4444-4444-4444-444444444444',
+                'X-PettyCash-Command-ID' => ContractFixtures::commandId(),
             ],
             'json' => [
                 'expenseDate' => '2026-09-20',
@@ -127,7 +120,7 @@ final class PurchaserFlowControllerTest extends TestCase
 
     public function testGetTransactionDetailReturns200WithTransactionDetail(): void
     {
-        $response = $this->client->request('GET', '/transactions/00000000-0000-0000-0000-000000000000');
+        $response = $this->client->request('GET', '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId());
 
         // Contract: GET /transactions/{id} returns 200 with TransactionDetail
         $this->assertEquals(200, $response->getStatusCode(), 'GET /transactions/{id} should return 200 OK');
@@ -136,14 +129,14 @@ final class PurchaserFlowControllerTest extends TestCase
 
     public function testUpdateTransactionReturns200WithUpdatedTransactionDetail(): void
     {
-        $response = $this->client->request('PATCH', '/transactions/00000000-0000-0000-0000-000000000000', [
+        $response = $this->client->request('PATCH', '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId(), [
             'headers' => [
-                'X-PettyCash-Command-ID' => '55555555-5555-5555-5555-555555555555',
+                'X-PettyCash-Command-ID' => ContractFixtures::commandId(),
             ],
             'json' => [
                 'expenseDate' => '2026-09-21',
                 'amountMinor' => 2000,
-                'expectedVersion' => 1,
+                'expectedVersion' => ContractFixtures::transactionVersion(),
             ],
         ]);
 
@@ -154,9 +147,12 @@ final class PurchaserFlowControllerTest extends TestCase
 
     public function testDeleteTransactionReturns204(): void
     {
-        $response = $this->client->request('DELETE', '/transactions/00000000-0000-0000-0000-000000000000', [
+        $response = $this->client->request('DELETE', '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId(), [
             'headers' => [
-                'X-PettyCash-Command-ID' => '66666666-6666-6666-6666-666666666666',
+                'X-PettyCash-Command-ID' => ContractFixtures::commandId(),
+            ],
+            'json' => [
+                'expectedVersion' => ContractFixtures::transactionVersion(),
             ],
         ]);
 
@@ -166,13 +162,15 @@ final class PurchaserFlowControllerTest extends TestCase
 
     public function testRecordDecisionReturns201WithDecisionResult(): void
     {
-        $response = $this->client->request('POST', '/transactions/00000000-0000-0000-0000-000000000000/decisions', [
+        ContractFixtures::prepare('submitted');
+
+        $response = $this->client->request('POST', '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId() . '/decisions', [
             'headers' => [
-                'X-PettyCash-Command-ID' => '77777777-7777-7777-7777-777777777777',
+                'X-PettyCash-Command-ID' => ContractFixtures::commandId(),
             ],
             'json' => [
                 'decision' => 'APPROVE',
-                'expectedVersion' => 1,
+                'expectedVersion' => ContractFixtures::transactionVersion(),
             ],
         ]);
 
@@ -183,9 +181,14 @@ final class PurchaserFlowControllerTest extends TestCase
 
     public function testCreateCorrectionReturns201WithRevision(): void
     {
-        $response = $this->client->request('POST', '/transactions/00000000-0000-0000-0000-000000000000/correction', [
+        ContractFixtures::prepare('correction');
+
+        $response = $this->client->request('POST', '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId() . '/correction', [
             'headers' => [
-                'X-PettyCash-Command-ID' => '88888888-8888-8888-8888-888888888888',
+                'X-PettyCash-Command-ID' => ContractFixtures::commandId(),
+            ],
+            'json' => [
+                'expectedVersion' => ContractFixtures::transactionVersion(),
             ],
         ]);
 
@@ -196,12 +199,14 @@ final class PurchaserFlowControllerTest extends TestCase
 
     public function testResubmitCorrectionReturns200WithTransactionDetail(): void
     {
-        $response = $this->client->request('POST', '/transactions/00000000-0000-0000-0000-000000000000/resubmit', [
+        ContractFixtures::prepare('correction');
+
+        $response = $this->client->request('POST', '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId() . '/resubmit', [
             'headers' => [
-                'X-PettyCash-Command-ID' => '99999999-9999-9999-9999-999999999999',
+                'X-PettyCash-Command-ID' => ContractFixtures::commandId(),
             ],
             'json' => [
-                'expectedVersion' => 2,
+                'expectedVersion' => ContractFixtures::transactionVersion(),
             ],
         ]);
 
@@ -212,7 +217,7 @@ final class PurchaserFlowControllerTest extends TestCase
 
     public function testListRevisionsReturns200WithRevisions(): void
     {
-        $response = $this->client->request('GET', '/transactions/00000000-0000-0000-0000-000000000000/revisions');
+        $response = $this->client->request('GET', '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId() . '/revisions');
 
         // Contract: GET /transactions/{id}/revisions returns 200 with array of Revision
         $this->assertEquals(200, $response->getStatusCode(), 'GET /transactions/{id}/revisions should return 200 OK');
@@ -221,7 +226,7 @@ final class PurchaserFlowControllerTest extends TestCase
 
     public function testListAuditReturns200WithAuditPage(): void
     {
-        $response = $this->client->request('GET', '/transactions/00000000-0000-0000-0000-000000000000/audit', [
+        $response = $this->client->request('GET', '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId() . '/audit', [
             'query' => ['page' => 1, 'pageSize' => 25],
         ]);
 
@@ -239,9 +244,9 @@ final class PurchaserFlowControllerTest extends TestCase
         file_put_contents($tempFile, str_repeat('x', 1024)); // 1KB test file
 
         try {
-            $response = $this->client->request('POST', '/transactions/00000000-0000-0000-0000-000000000000/evidence', [
+            $response = $this->client->request('POST', '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId() . '/evidence', [
                 'headers' => [
-                    'X-PettyCash-Command-ID' => 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+                    'X-PettyCash-Command-ID' => ContractFixtures::commandId(),
                 ],
                 'multipart' => [
                     [
@@ -262,9 +267,11 @@ final class PurchaserFlowControllerTest extends TestCase
 
     public function testDeleteEvidenceReturns200WithDeactivatedMetadata(): void
     {
-        $response = $this->client->request('DELETE', '/evidence/00000000-0000-0000-0000-000000000000', [
+        $evidenceId = $this->uploadEvidence();
+
+        $response = $this->client->request('DELETE', '/ocs/v2.php/apps/pettycash/api/v1/evidence/' . $evidenceId, [
             'headers' => [
-                'X-PettyCash-Command-ID' => 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+                'X-PettyCash-Command-ID' => ContractFixtures::commandId(),
             ],
         ]);
 
@@ -275,7 +282,9 @@ final class PurchaserFlowControllerTest extends TestCase
 
     public function testGetEvidenceContentReturns200WithStream(): void
     {
-        $response = $this->client->request('GET', '/evidence/00000000-0000-0000-0000-000000000000/content', [
+        $evidenceId = $this->uploadEvidence();
+
+        $response = $this->client->request('GET', '/ocs/v2.php/apps/pettycash/api/v1/evidence/' . $evidenceId . '/content', [
             'query' => ['disposition' => 'inline'],
         ]);
 
@@ -295,9 +304,9 @@ final class PurchaserFlowControllerTest extends TestCase
         fclose($handle);
 
         try {
-            $response = $this->client->request('POST', '/transactions/00000000-0000-0000-0000-000000000000/evidence', [
+            $response = $this->client->request('POST', '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId() . '/evidence', [
                 'headers' => [
-                    'X-PettyCash-Command-ID' => 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+                    'X-PettyCash-Command-ID' => ContractFixtures::commandId(),
                 ],
                 'multipart' => [
                     [
@@ -324,9 +333,9 @@ final class PurchaserFlowControllerTest extends TestCase
         file_put_contents($tempFile, 'test content');
 
         try {
-            $response = $this->client->request('POST', '/transactions/00000000-0000-0000-0000-000000000000/evidence', [
+            $response = $this->client->request('POST', '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId() . '/evidence', [
                 'headers' => [
-                    'X-PettyCash-Command-ID' => 'dddddddd-dddd-dddd-dddd-dddddddddddd',
+                    'X-PettyCash-Command-ID' => ContractFixtures::commandId(),
                 ],
                 'multipart' => [
                     [
@@ -348,6 +357,44 @@ final class PurchaserFlowControllerTest extends TestCase
     }
 
     // ===== HELPER METHODS =====
+
+    /**
+     * Upload a small file to the fixture transaction and return its public id.
+     *
+     * The evidence assertions have to address a record that really exists: a
+     * well-formed UUID that matches nothing only ever proves the 404 branch, so
+     * each of them uploads its own evidence first.
+     */
+    private function uploadEvidence(): string
+    {
+        $tempFile = tempnam(sys_get_temp_dir(), 'evidence_');
+        file_put_contents($tempFile, str_repeat('x', 1024));
+
+        try {
+            $response = $this->client->request('POST', '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId() . '/evidence', [
+                'headers' => [
+                    'X-PettyCash-Command-ID' => ContractFixtures::commandId(),
+                ],
+                'multipart' => [
+                    [
+                        'name' => 'file',
+                        'contents' => fopen($tempFile, 'r'),
+                        'filename' => 'contract-fixture-receipt.pdf',
+                    ],
+                ],
+            ]);
+
+            $this->assertEquals(201, $response->getStatusCode(), 'Evidence upload must succeed before its id can be addressed');
+
+            $body = json_decode((string) $response->getBody(), true);
+            $this->assertIsArray($body, 'Evidence upload should return valid JSON');
+            $this->assertArrayHasKey('id', $body['ocs']['data'] ?? [], 'Evidence upload should return the evidence id');
+
+            return (string) $body['ocs']['data']['id'];
+        } finally {
+            @unlink($tempFile);
+        }
+    }
 
     /**
      * Assert that the response follows the OCS standard envelope structure.
@@ -374,7 +421,9 @@ final class PurchaserFlowControllerTest extends TestCase
         $this->assertArrayHasKey('meta', $ocs, 'OCS envelope should have "meta"');
         $meta = $ocs['meta'];
         $this->assertArrayHasKey('status', $meta, 'OCS meta should have "status"');
-        $this->assertEquals('ok', $meta['status'], 'OCS meta.status should be "ok" for success responses');
+        // Nextcloud reports "ok" only for 2xx; every error status is "failure".
+        $expectedMetaStatus = $expectedStatus >= 400 ? 'failure' : 'ok';
+        $this->assertEquals($expectedMetaStatus, $meta['status'], 'OCS meta.status should match the HTTP status class');
         $this->assertArrayHasKey('statuscode', $meta, 'OCS meta should have "statuscode"');
         $this->assertEquals((string)$expectedStatus, $meta['statuscode'], 'OCS meta.statuscode should match HTTP status');
 

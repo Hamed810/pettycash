@@ -50,6 +50,25 @@ You **MUST** consider the user input before proceeding (if not empty).
 
 - If no hooks are registered or `.specify/extensions.yml` does not exist, skip silently
 
+## Project Convergence Context (PettyCash)
+
+Convergence is the primary repository-understanding phase for PettyCash.
+
+Before assessing implementation state:
+
+- **REQUIRED**: Read `AGENTS.md` from the project root for operational/runtime,
+  Docker ownership, safety, and tool-execution rules. `AGENTS.md` is operational context,
+  not a source of feature intent.
+- Use `codebase-memory` when available to establish architecture relationships,
+  component dependencies, and existing implementation patterns before broad text search.
+- Prefer LSP/symbol navigation and targeted file inspection to verify findings.
+- Bound assessment to the scope defined by `spec.md`, `plan.md`, `tasks.md`, and the
+  constitution. Do not perform an unbounded repository audit.
+- Do not use git history, branch comparison, or diff-based reasoning; convergence assesses
+  the present repository state.
+- Any verification command executed during convergence must follow the host/container
+  execution boundaries in `AGENTS.md`.
+
 ## Goal
 
 Close the gap between what a feature's specification, plan, and tasks call for and what the
@@ -57,9 +76,12 @@ codebase currently implements. Read `spec.md`, `plan.md`, and `tasks.md` as the 
 source of intent** (with the constitution as governing constraints), assess the current
 state of the code, determine which requirements, acceptance criteria, plan decisions, and
 existing tasks are unmet, incomplete, or only partially satisfied, and **append each piece
-of remaining work as a new, traceable task** at the bottom of `tasks.md` so that
-`/speckit.implement` can complete it. This command MUST run only after
-`/speckit.implement` has run on the current `tasks.md`, and after `/speckit.tasks` has produced a complete `tasks.md`.
+of remaining work that is not already covered by an existing incomplete task as a new,
+traceable task** at the bottom of `tasks.md` so that `/speckit.implement` can complete it.
+
+This command requires a complete `tasks.md` produced by `/speckit.tasks`. It MAY run
+before an implementation pass to reconcile repository reality with the planned work, and
+it MAY be run again after implementation as a verification/convergence pass.
 
 This is **not** a diff tool and does **not** track changes. It assesses the present state
 of the code relative to the feature's artifacts — no git, no branch comparison, no history.
@@ -93,6 +115,7 @@ Run `.specify/scripts/bash/check-prerequisites.sh --json --require-spec --requir
 - PLAN = FEATURE_DIR/plan.md
 - TASKS = FEATURE_DIR/tasks.md
 - CONSTITUTION = `.specify/memory/constitution.md` (if present)
+- AGENTS = `AGENTS.md` at repository root (operational/runtime context)
 If `spec.md`, `plan.md`, or `tasks.md` is missing, STOP with a clear, actionable message naming the
 prerequisite command to run (`/speckit.specify` for a missing spec, `/speckit.plan` for a missing plan,
 `/speckit.tasks` for missing tasks). Do not produce partial output.
@@ -126,6 +149,12 @@ Load only the minimal necessary context from each artifact:
 
 - Principle names and MUST/SHOULD normative statements
 
+**From AGENTS.md:**
+
+- Load only operational/runtime, Docker ownership, safety, investigation, and execution
+  boundaries needed to assess the repository safely.
+- Do **not** treat `AGENTS.md` as feature intent and do not derive new product requirements from it.
+
 ### 3. Build the Intent Inventory
 
 Create an internal model (do not echo raw artifacts):
@@ -133,15 +162,37 @@ Create an internal model (do not echo raw artifacts):
 - **Requirements inventory**: one stable key per FR-### / SC-### / user-story acceptance
   scenario (e.g. `US1/AC2`), plus the plan decisions and constitution principles that
   impose buildable obligations.
-- **Code-scope map**: from the file paths named in `plan.md` and `tasks.md`, plus a keyword
-  search for the concepts each requirement describes, derive the set of source files and
-  components in scope for assessment. Bound the assessment to these — do **not** infer
-  scope beyond what the artifacts define.
+- **Code-scope map**: from the file paths named in `plan.md` and `tasks.md`, use
+  `codebase-memory` when available to identify relevant architecture/dependency relationships,
+  then use targeted keyword/LSP/file inspection for the concepts each requirement describes.
+  Derive the set of source files and components in scope for assessment. Bound the assessment
+  to these — do **not** infer scope beyond what the artifacts define and do not fall back to
+  an unbounded full-repository scan.
 
 ### 4. Assess the Codebase and Classify Findings
 
 For each item in the intent inventory, inspect the current code in scope and produce a
-`Finding` only where there is a gap. Classify every finding by **gap type**:
+`Finding` only where there is a gap.
+
+#### Frontend Architecture Verification
+
+When assessing frontend implementation:
+
+- Verify that UI components follow the frontend stack approved by `plan.md`,
+  `research.md`, `tasks.md`, and `package.json`.
+- Do not treat an unapproved UI framework as an implicit or missing dependency.
+- If source code uses components from a UI framework that is not part of the
+  approved stack, classify it as implementation drift.
+- Do not recommend installing an unapproved framework merely to make existing
+  code or tests pass.
+- For PettyCash, `@nextcloud/vue` 9.x is the approved component library unless
+  the active Spec Kit artifacts explicitly state otherwise.
+- Existing Vuetify-style `v-*` components must therefore be treated as a
+  convergence finding unless the active feature artifacts explicitly approve Vuetify.
+- When this drift conflicts with an explicit stack decision in the active artifacts,
+  classify the finding as `contradicts` rather than as a missing dependency.
+
+Classify every finding by **gap type**:
 
 - **`missing`**: the required work is absent from the code entirely.
 - **`partial`**: the work exists but does not yet fully satisfy the requirement /
@@ -153,7 +204,18 @@ For each item in the intent inventory, inspect the current code in scope and pro
   review/justify or remove it).
 
 Each `Finding` records: a stable id, the `source-ref` it traces to, the `gap-type`, a
-severity, and a short human-readable description with the evidence (the file/area observed).
+severity, a short human-readable description with the evidence (the file/area observed),
+and whether an existing incomplete task already covers the remaining work.
+
+Before treating a gap as appendable work:
+
+- Compare the gap with existing incomplete tasks in `tasks.md`.
+- If an existing incomplete task already fully and traceably covers the gap, do **not**
+  append a duplicate convergence task. Mark the finding internally as `covered_by_existing_task`
+  and record the relevant task ID(s) for the summary.
+- An unchecked task is not evidence that implementation is missing. If targeted inspection
+  shows the task is already satisfied by the current code/tests, record a task-state mismatch
+  for awareness, but do not rewrite the old checkbox and do not append duplicate work.
 
 **Edge cases:**
 
@@ -177,9 +239,9 @@ Before appending anything, output a compact, severity-graded summary (no file wr
 
 ## Convergence Findings
 
-| ID | Gap Type | Severity | Source | Evidence | Remaining Work |
-|----|----------|----------|--------|----------|----------------|
-| F1 | missing  | HIGH     | FR-008 | Example: no append-only guard detected in path/to/module.py when writing tasks.md | Add append-only enforcement |
+| ID | Gap Type | Severity | Source | Evidence | Existing Task | Remaining Work |
+|----|----------|----------|--------|----------|---------------|----------------|
+| F1 | missing  | HIGH     | FR-008 | Example: no append-only guard detected in path/to/module.py when writing tasks.md | T041 or — | Add append-only enforcement |
 
 **Summary metrics:**
 
@@ -188,10 +250,13 @@ Before appending anything, output a compact, severity-graded summary (no file wr
 - Constitution principles checked (or "skipped — template")
 - Findings by gap type (missing / partial / contradicts / unrequested)
 - Findings by severity
+- Findings already covered by existing incomplete tasks
+- Task-state mismatches observed (informational only)
 
-### 7. Append Convergence Tasks (or report converged)
+### 7. Append Convergence Tasks (or report current convergence state)
 
-**If there are one or more actionable findings** (`tasks_appended` outcome):
+**If there are one or more actionable findings not already covered by existing incomplete
+tasks** (`tasks_appended` outcome):
 
 Append to the **end** of `tasks.md`, per the append contract:
 
@@ -214,8 +279,18 @@ Append to the **end** of `tasks.md`, per the append contract:
    `CRITICAL`.
 4. Never reuse or renumber existing IDs. If a prior Convergence phase exists, add a new,
    separately-numbered one below it — do not touch the old one.
+5. Never append a convergence task when the same remaining work is already fully covered
+   by an existing incomplete task in `tasks.md`.
 
-**If there are no actionable findings** (`converged` outcome):
+**If gaps remain but every gap is already covered by existing incomplete tasks**
+(`existing_tasks_remaining` outcome):
+
+- Do **not** modify `tasks.md`.
+- Report: **"No new convergence tasks appended — remaining gaps are already represented by existing tasks."**
+- List the relevant existing task IDs and recommend `/speckit.implement`.
+- Do not report the repository as converged.
+
+**If there are no implementation gaps** (`converged` outcome):
 
 - Do **not** modify `tasks.md` at all — no empty phase header.
 - Report: **"✅ Converged — the implementation satisfies the spec, plan, and tasks."**
@@ -226,6 +301,9 @@ Append to the **end** of `tasks.md`, per the append contract:
 - On `tasks_appended`: state how many tasks were appended under which phase, and recommend
   running `/speckit.implement` to complete them; note that a follow-up converge
   run will find fewer or no remaining items.
+- On `existing_tasks_remaining`: state that no duplicate tasks were appended, identify the
+  existing incomplete task IDs that already cover the gaps, and recommend running
+  `/speckit.implement`.
 - On `converged`: recommend proceeding to review / opening a PR. No further implement pass
   is needed for this feature's specified scope.
 
@@ -239,8 +317,9 @@ After producing the result, check if `.specify/extensions.yml` exists in the pro
 - For each remaining hook, do **not** attempt to interpret or evaluate hook `condition` expressions:
   - If the hook has no `condition` field, or it is null/empty, treat the hook as executable
   - If the hook defines a non-empty `condition`, skip the hook and leave condition evaluation to the HookExecutor implementation
-- Report the convergence outcome (`converged` or `tasks_appended`) in-session before listing
-  any hooks, so users can decide whether to run optional follow-up commands.
+- Report the convergence outcome (`converged`, `existing_tasks_remaining`, or
+  `tasks_appended`) in-session before listing any hooks, so users can decide whether to run
+  optional follow-up commands.
 - For each executable hook, output the following based on its `optional` flag:
   - **Optional hook** (`optional: true`):
 

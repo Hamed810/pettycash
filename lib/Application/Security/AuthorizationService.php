@@ -14,10 +14,29 @@ final class AuthorizationService
         return $context->actorUid === $context->ownerUid || $context->administrator || $context->roles !== [];
     }
 
-    public function canReview(AuthorizationContext $context, WorkflowStage $stage, string $costCenterId): bool
+    public function canReview(AuthorizationContext $context, WorkflowStage $stage, string $costCenterCode): bool
     {
-        if ($stage === WorkflowStage::Finance) { return in_array(Role::Finance, $context->roles, true); }
-        $role = $stage === WorkflowStage::CostCenter ? Role::CostCenterManager : Role::SeniorManager;
-        return in_array($role, $context->roles, true) && in_array($costCenterId, $context->costCenterIds, true);
+        // Finance stage: only Finance role (shared queue, no scope check needed)
+        if ($stage === WorkflowStage::Finance) {
+            return in_array(Role::Finance, $context->roles, true);
+        }
+
+        // Correction stage: only the transaction owner (purchaser) can correct
+        if ($stage === WorkflowStage::Correction) {
+            return $context->actorUid === $context->ownerUid;
+        }
+
+        // CostCenter and Senior stages: require role + scope
+        $requiredRole = $stage === WorkflowStage::CostCenter ? Role::CostCenterManager : Role::SeniorManager;
+        
+        // Multi-role self-review: if actor is the owner AND holds the required role + scope + stage permission, allow
+        if ($context->actorUid === $context->ownerUid) {
+            return in_array($requiredRole, $context->roles, true)
+                && in_array($costCenterCode, $context->costCenterCodes, true);
+        }
+
+        // Normal review: require role + scope (not owner)
+        return in_array($requiredRole, $context->roles, true)
+            && in_array($costCenterCode, $context->costCenterCodes, true);
     }
 }

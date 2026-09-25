@@ -25,6 +25,25 @@ final class WorkflowDecision
         public ?string $publicId = null
     ) {}
 
+    public function decision(): Decision
+    {
+        return $this->decision;
+    }
+
+    public function explanation(): ?string
+    {
+        return $this->explanation;
+    }
+
+    public function actor(): \OCA\PettyCash\Domain\Shared\ActorSnapshot
+    {
+        return new \OCA\PettyCash\Domain\Shared\ActorSnapshot(
+            $this->actorUid ?? '',
+            $this->actorName ?? '',
+            $this->actorRole ?? ''
+        );
+    }
+
     public static function create(
         string $id,
         string $transactionId,
@@ -35,7 +54,7 @@ final class WorkflowDecision
         string $commandId
     ): self {
         if (in_array($decision, [Decision::Reject, Decision::Return], true) && trim((string) $explanation) === '') {
-            throw new InvalidArgumentException('Explanation is required');
+            throw new InvalidArgumentException('Explanation required');
         }
         return new self($id, $transactionId, $revisionId, $stage, $decision, $explanation, $commandId);
     }

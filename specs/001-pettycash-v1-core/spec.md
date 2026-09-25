@@ -27,6 +27,16 @@ specifications from them. Do not implement anything. Only create specs."
 - Q: What TTL/expiry and access logging should public evidence links (FR-031) enforce? → A: configurable TTL (default 30 days, max 1 year) + per-access audit logging (viewer UID, timestamp, IP) in configuration audit
 - Q: What constitutes a "reporting period" for group exports in FR-068? → A: predefined calendar periods (month, quarter, year) plus custom date range
 
+### Session 2026-09-25
+
+- Q: Which database backends should PettyCash V1 formally declare as supported for application use? → A: MySQL 8.0/8.4, MariaDB 10.6/10.11/11.4/11.8, and PostgreSQL 14/15/16/17/18, verified from the Nextcloud 34 Administration Manual system requirements; MariaDB 11.4 remains the local development backend only; Oracle and SQLite are outside V1 scope as non-recommended for application use. **Superseded later in this session:** the second answer below adds `sqlite` to the declared set for compatibility verification. The final declared set is `mysql`, `pgsql`, and `sqlite`.
+- Q: What evidence should satisfy the cross-database compatibility requirement during V1 acceptance, given the MariaDB development environment must stay unchanged? → A: provision ephemeral CI database backends for every declared database family and run forward migrations/schema creation, persistence/repository integration tests, representative transaction/workflow queries, and migration/schema compatibility checks on each; additionally run static portability checks on every build that reject vendor-specific SQL and schema assumptions; keep the existing local MariaDB 11.4 Docker environment unmodified, with additional databases as CI-only ephemeral test services. The answer also fixes the declared set to the three Nextcloud types `mysql`, `pgsql`, and `sqlite`, and requires that because `mysql` covers two concrete engines CI must run one MySQL job and one separate MariaDB job rather than assuming MariaDB proves MySQL compatibility, with Oracle/`oci` outside V1 scope unless explicitly added later as an Enterprise compatibility target
+- Q: Should PettyCash adopt Oracle's strictest identifier limits as a blanket rule, even though Oracle is explicitly outside V1 scope? → A: no; keep the schema within the limits required by the declared V1 targets (mysql/MariaDB, PostgreSQL, SQLite), do not rename existing tables or add migrations for hypothetical future Oracle support, and do not treat Oracle-specific identifier or schema limits as current V1 requirements; Oracle/Enterprise compatibility is recorded in `plan.md` as a deferred architecture constraint that must first be re-verified against the targeted Nextcloud and Oracle versions and given an explicit compatibility and migration plan before support is added
+- Q: The repository already has four migration files that create `pc_*` tables and about nineteen repositories that reference those names; since V1 is unshipped and its data is disposable, how should those migrations be converted to an app-scoped `pettycash_*` namespace? → A: edit Version0100–0103 and every repository, test, fixture, and schema assertion in place, so the clean V1 baseline creates the logical `pettycash_*` namespace from the start; do not add a rename migration and do not keep a mixed namespace; because these migrations have already run in the shared development instance, follow the repository change with an approval-gated development-only reset of PettyCash state so the rewritten baseline executes from scratch, affecting PettyCash only, preserving all unrelated apps and data, and never deleting Docker volumes or the shared Nextcloud database; current `pc_*` development data is disposable by design and MUST NOT be preserved
+- Q: Nextcloud records applied migrations per app ID and the discarded prototype used the same `pettycash` app ID, so residual migration-version rows could make Nextcloud skip the rewritten `pettycash_*` baseline migrations; how should the artifacts handle that? → A: replace the legacy framing with an explicit development-environment precondition that clearing the `pettycash` app-ID migration state is part of the development reset, so the rewritten baseline always executes; treat it as a development-environment step only, not a production or data concern
+- Q: What should the artifacts say about residual `oc_pcash_*` prototype tables that remain in the shared development database? → A: leave them untouched and record them as unmanaged artifacts; V1 MUST NOT read, write, migrate, import, rename, or drop them, and their presence is not a V1 defect or a trigger for any cleanup action
+- Q: Index and constraint names are global per database schema, so which app-scoped naming form should the V1 schema use? → A: `pettycash_<table>_<subject>_<kind>` where kind is `idx`, `uniq`, `fk`, or `chk` (for example `pettycash_transactions_status_idx`, `pettycash_transaction_revisions_number_uniq`); the old generic `pc_` prefix MUST NOT be used for indexes or constraints, and identifiers MUST stay comfortably below the PostgreSQL 63-byte and MySQL 64-character limits, abbreviating only when a full descriptive name would exceed the portable limit
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Capture and Submit Expenses (Priority: P1)
@@ -279,6 +289,33 @@ of all primary workflow actions.
   automatically.
 - A multi-role user may review their own transaction when the user independently has the required
   review role, responsibility scope, and workflow-stage permission.
+- A query or schema change that runs correctly on MariaDB but depends on MariaDB/MySQL-specific SQL,
+  functions, types, auto-increment assumptions, `GROUP BY` leniency, or delete-`LIMIT` behavior is a
+  defect, not a passing result, and must be reworked so that it behaves identically on every declared
+  V1 backend before it can satisfy FR-077.
+- A schema element whose name, type, nullability, or default exceeds the limits required by the
+  declared V1 backends (MySQL/MariaDB, PostgreSQL, SQLite) must be rejected at review time even when
+  the target database accepts it, so that the schema does not become coupled to a single backend.
+  Oracle-specific identifier and schema limits are not V1 requirements and MUST NOT be used to
+  justify a rename or a migration of an existing table.
+- Passing the full test suite against MariaDB alone does not demonstrate FR-077 compliance; the
+  cross-database verification defined in the plan is the evidence of record.
+- A statement that works on MariaDB and fails on any other declared V1 backend is a defect against
+  FR-077, even though MariaDB is the development backend.
+- Declaring MySQL/MariaDB compatibility as a single supported backend does not by itself prove
+  MySQL compatibility, because MySQL and MariaDB are distinct engines that must each be verified
+  independently.
+- A migration that only runs because one backend tolerates a permissive default, an implicit
+  `NOT NULL`, or an unenforced identifier rule is a defect against FR-077 even when it succeeds.
+- A V1 table, index, or constraint whose name is not app-scoped, or that could collide with another
+  application's object in the shared database, is a defect against FR-078 and FR-079.
+- An application query, repository, or test that references a `pc_` table or index name is a defect
+  against FR-078; the development schema is provisional V1 schema, not a preserved prior version.
+- Discovering residual prototype tables such as `oc_pcash_*` in a shared development database is
+  not a V1 defect and MUST NOT cause V1 to attempt any import, migration, rename, or cleanup.
+- A rewritten or corrected V1 baseline migration that is skipped because stale migration-state rows
+  remain for the `pettycash` application ID is an environment defect to be cleared through the
+  approved development reset, never a reason to reintroduce a compatibility path.
 
 ## Requirements *(mandatory)*
 
@@ -477,6 +514,47 @@ of all primary workflow actions.
   automatically resume interrupted operations.
 - **FR-076**: Independent application backup and restore, active multilingual UI, a standalone
   mobile application, and advanced dashboard shortcuts MUST remain outside V1.
+- **FR-077**: PettyCash MUST remain database-portable across the declared V1 database backends:
+  MySQL/MariaDB, PostgreSQL, and SQLite. The MariaDB development environment is not an
+  application-level dependency, and behavior MUST remain equivalent across the declared backends.
+  The declared V1 backends are the Nextcloud database types `mysql` (MySQL 8.0/8.4 and MariaDB
+  10.6/10.11/11.4/11.8), `pgsql` (PostgreSQL 14/15/16/17/18), and `sqlite` (SQLite 3.24+, declared
+  for compatibility verification rather than as a production recommendation), verified against the
+  Nextcloud 34 supported-backend documentation. Oracle/`oci` is outside V1 scope and MUST NOT be
+  declared as supported unless it is explicitly added later as an Enterprise compatibility target.
+  Application persistence and schema change MUST NOT depend on backend-specific SQL, functions,
+  types, identifier-length or auto-increment assumptions, `GROUP BY` leniency, row-limiting delete
+  behavior, or any other vendor-specific extension, so that equivalent behavior is achievable on
+  every declared backend. The declared backend set MUST be declared explicitly rather than left
+  implied, and the existing MariaDB development and Docker infrastructure MUST remain unchanged
+  while any additional backends used for verification remain independent of it. A passing result on
+  MariaDB alone MUST NOT be treated as evidence of cross-database compatibility. The verification
+  mechanism, supported-backend declaration, and portability rules are decided in the plan.
+
+#### Schema Ownership and Migration Scope
+
+- **FR-078**: Every V1 persistent table MUST use the logical app-scoped name prefix `pettycash_`.
+  The instance database prefix is applied by the Nextcloud database abstraction, and application
+  code, migrations, tests, fixtures, and documentation MUST NOT hardcode a specific instance prefix
+  such as `oc_`. Tables already present in the development schema under a non-app-scoped `pc_` name
+  are provisional V1 development schema rather than legacy data, and MUST be renamed into the
+  `pettycash_` namespace; they MUST NOT remain part of the V1 baseline.
+- **FR-079**: Every V1 index, unique constraint, foreign key, and check constraint MUST be named
+  `pettycash_<table>_<subject>_<kind>`, where kind is one of `idx`, `uniq`, `fk`, or `chk`, so that
+  no schema object can collide with another application in the shared database. Identifiers MUST
+  remain within the portable identifier limits of the declared V1 backends and MUST be abbreviated
+  only when a full descriptive name would exceed those limits.
+- **FR-080**: V1 storage MUST be created from scratch on a clean installation. PettyCash MUST
+  provide no import, migration, table preservation, or data-compatibility contract for any previous
+  PettyCash installation or database. Tables left behind by a discarded prototype in a shared
+  development database are unmanaged artifacts that V1 MUST NOT read, write, migrate, import, rename,
+  or drop, and their presence MUST NOT be treated as a V1 defect or a trigger for any V1 action.
+- **FR-081**: Schema-change acceptance MUST cover clean installation on an empty database and the
+  forward application of future V1 migrations in version order. It MUST NOT require, and MUST NOT be
+  evidenced by, an upgrade path from any pre-V1 database. Resetting the migration state recorded for
+  the `pettycash` application ID is development-environment work only: it requires explicit human
+  approval, affects PettyCash only, and MUST NOT delete Docker volumes, the shared Nextcloud
+  database, or any unrelated application data.
 
 ### Key Entities
 
@@ -534,6 +612,13 @@ of all primary workflow actions.
   business records while remaining fully available for authorized viewing and reporting.
 - **SC-012**: Disabling a test user leaves 100% of that user's historical actor identity, roles,
   decisions, revisions, and audit events unchanged and accessible to authorized reviewers.
+- **SC-013**: V1 database-portability acceptance succeeds only when the schema/migrations and the
+  defined persistence/workflow compatibility suite complete successfully against every declared V1
+  database backend, with no backend-specific functional deviation.
+- **SC-014**: A clean installation on an empty database creates 100% of V1 tables under the
+  `pettycash_` prefix with 0 non-app-scoped PettyCash tables remaining, 100% of V1 indexes, unique
+  constraints, foreign keys, and check constraints carry `pettycash_*` names, and applying the full
+  V1 migration chain in version order on a clean database succeeds on every declared V1 backend.
 
 ## Assumptions
 
@@ -561,6 +646,9 @@ of all primary workflow actions.
   application, independent backup/restore product, or active multilingual interface.
 - The 3-second routine-view target is a planning baseline chosen to make the documented requirement
   for acceptable normal-use performance measurable.
+- PettyCash V1 is a fresh application. Any previous PettyCash installation, its database, and any
+  development data produced by the discarded prototype are reference material only; no supported
+  import, migration, or data-compatibility path from them exists or is planned (FR-080).
 
 ## Dependencies
 

@@ -25,7 +25,7 @@ final class DbCurrencyRepository implements CurrencyRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_currencies')
+            ->from('pettycash_currencies')
             ->where($qb->expr()->eq('code', $qb->createNamedParameter($code)))
             ->setMaxResults(1);
         $row = $qb->executeQuery()->fetchAssociative();
@@ -36,7 +36,7 @@ final class DbCurrencyRepository implements CurrencyRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_currencies')
+            ->from('pettycash_currencies')
             ->where($qb->expr()->eq('code', $qb->createNamedParameter($code)))
             ->andWhere($qb->expr()->eq('active', $qb->createNamedParameter(true, IQueryBuilder::PARAM_BOOL)))
             ->setMaxResults(1);
@@ -49,7 +49,7 @@ final class DbCurrencyRepository implements CurrencyRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_currencies')
+            ->from('pettycash_currencies')
             ->where($qb->expr()->eq('active', $qb->createNamedParameter(true, IQueryBuilder::PARAM_BOOL)));
         $rows = $qb->executeQuery()->fetchAllAssociative();
         return array_map([$this, 'mapRow'], $rows);
@@ -63,26 +63,26 @@ final class DbCurrencyRepository implements CurrencyRepository
         $currentUser = $this->getCurrentUser();
 
         if ($existing) {
-            $qb->update('pc_currencies')
+            $qb->update('pettycash_currencies')
                 ->set('name', $qb->createNamedParameter($currency->name))
                 ->set('minor_unit', $qb->createNamedParameter($currency->minorUnit))
                 ->set('active', $qb->createNamedParameter($currency->active, IQueryBuilder::PARAM_BOOL))
-                ->set('updated_at', $qb->createNamedParameter($now))
+                ->set('updated_at', $qb->createNamedParameter($now, IQueryBuilder::PARAM_DATETIME_IMMUTABLE))
                 ->set('updated_by', $qb->createNamedParameter($currentUser))
                 ->set('lock_version', $qb->createNamedParameter($existing->lockVersion + 1))
                 ->where($qb->expr()->eq('code', $qb->createNamedParameter($currency->code())))
                 ->andWhere($qb->expr()->eq('lock_version', $qb->createNamedParameter($existing->lockVersion)))
                 ->executeStatement();
         } else {
-            $qb->insert('pc_currencies')
+            $qb->insert('pettycash_currencies')
                 ->values([
                     'code' => $qb->createNamedParameter($currency->code()),
                     'name' => $qb->createNamedParameter($currency->name),
                     'minor_unit' => $qb->createNamedParameter($currency->minorUnit),
                     'active' => $qb->createNamedParameter($currency->active, IQueryBuilder::PARAM_BOOL),
-                    'created_at' => $qb->createNamedParameter($now),
+                    'created_at' => $qb->createNamedParameter($now, IQueryBuilder::PARAM_DATETIME_IMMUTABLE),
                     'created_by' => $qb->createNamedParameter($currentUser),
-                    'updated_at' => $qb->createNamedParameter($now),
+                    'updated_at' => $qb->createNamedParameter($now, IQueryBuilder::PARAM_DATETIME_IMMUTABLE),
                     'updated_by' => $qb->createNamedParameter($currentUser),
                     'lock_version' => $qb->createNamedParameter(0),
                 ])

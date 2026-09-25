@@ -25,7 +25,7 @@ final class DbEvidenceRepository implements EvidenceRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_evidence')
+            ->from('pettycash_evidence')
             ->where($qb->expr()->eq('id', $qb->createNamedParameter($id)))
             ->setMaxResults(1);
         $row = $qb->executeQuery()->fetchAssociative();
@@ -36,7 +36,7 @@ final class DbEvidenceRepository implements EvidenceRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_evidence')
+            ->from('pettycash_evidence')
             ->where($qb->expr()->eq('public_id', $qb->createNamedParameter($publicId)))
             ->setMaxResults(1);
         $row = $qb->executeQuery()->fetchAssociative();
@@ -48,7 +48,7 @@ final class DbEvidenceRepository implements EvidenceRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_evidence')
+            ->from('pettycash_evidence')
             ->where($qb->expr()->eq('transaction_id', $qb->createNamedParameter($transactionId)));
         if ($activeOnly) {
             $qb->andWhere($qb->expr()->eq('active', $qb->createNamedParameter(true, IQueryBuilder::PARAM_BOOL)));
@@ -63,7 +63,7 @@ final class DbEvidenceRepository implements EvidenceRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_evidence')
+            ->from('pettycash_evidence')
             ->where($qb->expr()->eq('origin_revision_id', $qb->createNamedParameter($revisionId)))
             ->orderBy('uploaded_at', 'DESC');
         $rows = $qb->executeQuery()->fetchAllAssociative();
@@ -78,17 +78,17 @@ final class DbEvidenceRepository implements EvidenceRepository
         $currentUser = $this->currentUser->uid();
 
         if ($existing) {
-            $qb->update('pc_evidence')
+            $qb->update('pettycash_evidence')
                 ->set('active', $qb->createNamedParameter($evidence->active, IQueryBuilder::PARAM_BOOL))
                 ->set('deactivated_by', $evidence->deactivatedBy ? $qb->createNamedParameter($evidence->deactivatedBy) : $qb->createNamedParameter(null))
                 ->set('deactivated_at', $evidence->deactivatedAt ? $qb->createNamedParameter($evidence->deactivatedAt->format('Y-m-d H:i:s')) : $qb->createNamedParameter(null))
                 ->set('deactivation_reason', $evidence->deactivationReason ? $qb->createNamedParameter($evidence->deactivationReason) : $qb->createNamedParameter(null))
-                ->set('updated_at', $qb->createNamedParameter($now))
+                ->set('updated_at', $qb->createNamedParameter($now, IQueryBuilder::PARAM_DATETIME_IMMUTABLE))
                 ->set('updated_by', $qb->createNamedParameter($currentUser))
                 ->where($qb->expr()->eq('id', $qb->createNamedParameter($existing->dbId)))
                 ->executeStatement();
         } else {
-            $insertId = $qb->insert('pc_evidence')
+            $qb->insert('pettycash_evidence')
                 ->values([
                     'public_id' => $qb->createNamedParameter($evidence->id),
                     'transaction_id' => $qb->createNamedParameter($evidence->transactionId),
@@ -100,14 +100,14 @@ final class DbEvidenceRepository implements EvidenceRepository
                     'checksum' => $qb->createNamedParameter($evidence->checksum),
                     'active' => $qb->createNamedParameter($evidence->active, IQueryBuilder::PARAM_BOOL),
                     'uploaded_by' => $qb->createNamedParameter($evidence->uploadedBy ?? $currentUser),
-                    'uploaded_at' => $evidence->uploadedAt ? $qb->createNamedParameter($evidence->uploadedAt->format('Y-m-d H:i:s')) : $qb->createNamedParameter($now),
+                    'uploaded_at' => $evidence->uploadedAt ? $qb->createNamedParameter($evidence->uploadedAt->format('Y-m-d H:i:s')) : $qb->createNamedParameter($now, IQueryBuilder::PARAM_DATETIME_IMMUTABLE),
                     'deactivated_by' => $qb->createNamedParameter(null),
                     'deactivated_at' => $qb->createNamedParameter(null),
                     'deactivation_reason' => $qb->createNamedParameter(null),
                 ])
                 ->executeStatement();
             
-            $evidence->dbId = (int) $insertId;
+            $evidence->dbId = $qb->getLastInsertId();
         }
     }
 

@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Run a command inside the Nextcloud container at the canonical app path.
+#
+# Supports passing environment variables into the container without building a
+# raw `docker exec` at the call site:
+#   scripts/dev/in-container --env FOO=bar --env BAZ=qux <command> [args...]
+# Each `--env KEY=VALUE` is translated to a `docker exec -e KEY=VALUE`.
+
+declare -a DOCKER_ENV=()
+declare -a CMD=()
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --env)
+      if [ $# -lt 2 ]; then
+        echo "in-container: --env requires KEY=VALUE" >&2
+        exit 2
+      fi
+      DOCKER_ENV+=(-e "$2")
+      shift 2
+      ;;
+    --env=*)
+      DOCKER_ENV+=(-e "${1#--env=}")
+      shift
+      ;;
+    *)
+      CMD+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [ ${#CMD[@]} -eq 0 ]; then
+  echo "in-container: no command given" >&2
+  exit 2
+fi
+
+exec docker exec \
+  "${DOCKER_ENV[@]+"${DOCKER_ENV[@]}"}" \
+  --user www-data \
+  --workdir /var/www/html/custom_apps/pettycash \
+  docker-nextcloud-1 \
+  "${CMD[@]}"

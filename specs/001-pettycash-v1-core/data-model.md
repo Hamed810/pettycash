@@ -4,7 +4,15 @@
 
 ## Modeling Conventions
 
-- Database tables use the `pc_` prefix. The host adds its configured database prefix separately.
+- Database tables use the logical app-scoped `pettycash_` prefix. The Nextcloud database abstraction
+  adds its configured instance prefix separately; it MUST NOT be hardcoded as `oc_` or any other
+  instance value.
+- Indexes, unique constraints, foreign keys, and check constraints are named
+  `pettycash_<table>_<subject>_<kind>`, where kind is `idx`, `uniq`, `fk`, or `chk`, so no schema
+  object can collide with another application in the shared database.
+- The `pc_*` tables already created by the current development migrations are provisional V1
+  development schema, not legacy data. They are renamed into the `pettycash_*` namespace by
+  rewriting the baseline migrations in place, and their data is discarded by design.
 - Every externally addressable aggregate uses an immutable UUID `public_id`; numeric `id` values
   remain internal join keys.
 - Amounts use signed 64-bit integer minor units plus a currency code. Floating-point money is
@@ -15,27 +23,29 @@
 - Mutable aggregates include `lock_version` for optimistic checks; finance settlement also uses
   database row locks and uniqueness constraints.
 - Historical and audit records have no update or delete application operation.
-- Legacy `oc_pcash_*` tables are outside this model and are never migrated in place.
+- Legacy database import, schema migration, table preservation, and data compatibility are outside
+  V1 scope. Prototype tables that may remain in a shared development database are unmanaged
+  artifacts: this model never reads, writes, migrates, renames, or drops them.
 
 ## Entity Overview
 
 | Entity | Table | Purpose |
 |--------|-------|---------|
-| Currency | `pc_currencies` | Supported currency and minor-unit configuration |
-| Cost Center | `pc_cost_centers` | Organizational routing and reporting scope |
-| Expense Type | `pc_expense_types` | Expense classification and evidence rule |
-| Role Assignment | `pc_role_assignments` | Effective-dated manager, senior, and finance roles |
-| Petty-Cash Account | `pc_accounts` | User balance for one currency |
-| Account Movement | `pc_account_movements` | Immutable charge or approved consumption |
-| Expense Sheet | `pc_sheets` | Purchaser grouping and aggregate workflow projection |
-| Expense Transaction | `pc_transactions` | Smallest decision unit and current-state projection |
-| Transaction Revision | `pc_transaction_revisions` | Immutable business-data version |
-| Workflow Decision | `pc_workflow_decisions` | Immutable stage opinion or return request |
-| Evidence | `pc_evidence` | Evidence metadata and private AppData reference |
-| Evidence Public Link | `pc_evidence_links` | Optional administrator-managed public access token |
-| Transaction Audit Event | `pc_transaction_audit` | Append-only official business history |
-| Configuration Audit Event | `pc_configuration_audit` | Append-only administrative history |
-| Command Result | `pc_command_results` | Idempotency key, payload hash, and replay result |
+| Currency | `pettycash_currencies` | Supported currency and minor-unit configuration |
+| Cost Center | `pettycash_cost_centers` | Organizational routing and reporting scope |
+| Expense Type | `pettycash_expense_types` | Expense classification and evidence rule |
+| Role Assignment | `pettycash_role_assignments` | Effective-dated manager, senior, and finance roles |
+| Petty-Cash Account | `pettycash_accounts` | User balance for one currency |
+| Account Movement | `pettycash_account_movements` | Immutable charge or approved consumption |
+| Expense Sheet | `pettycash_sheets` | Purchaser grouping and aggregate workflow projection |
+| Expense Transaction | `pettycash_transactions` | Smallest decision unit and current-state projection |
+| Transaction Revision | `pettycash_transaction_revisions` | Immutable business-data version |
+| Workflow Decision | `pettycash_workflow_decisions` | Immutable stage opinion or return request |
+| Evidence | `pettycash_evidence` | Evidence metadata and private AppData reference |
+| Evidence Public Link | `pettycash_evidence_links` | Optional administrator-managed public access token |
+| Transaction Audit Event | `pettycash_transaction_audit` | Append-only official business history |
+| Configuration Audit Event | `pettycash_configuration_audit` | Append-only administrative history |
+| Command Result | `pettycash_command_results` | Idempotency key, payload hash, and replay result |
 
 ## Currency
 

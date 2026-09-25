@@ -25,7 +25,7 @@ final class DbEvidenceLinkRepository implements EvidenceLinkRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_evidence_links')
+            ->from('pettycash_evidence_links')
             ->where($qb->expr()->eq('id', $qb->createNamedParameter($id)))
             ->setMaxResults(1);
         $row = $qb->executeQuery()->fetchAssociative();
@@ -36,7 +36,7 @@ final class DbEvidenceLinkRepository implements EvidenceLinkRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_evidence_links')
+            ->from('pettycash_evidence_links')
             ->where($qb->expr()->eq('public_id', $qb->createNamedParameter($publicId)))
             ->setMaxResults(1);
         $row = $qb->executeQuery()->fetchAssociative();
@@ -47,7 +47,7 @@ final class DbEvidenceLinkRepository implements EvidenceLinkRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_evidence_links')
+            ->from('pettycash_evidence_links')
             ->where($qb->expr()->eq('token_hash', $qb->createNamedParameter($tokenHash)))
             ->setMaxResults(1);
         $row = $qb->executeQuery()->fetchAssociative();
@@ -59,7 +59,7 @@ final class DbEvidenceLinkRepository implements EvidenceLinkRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_evidence_links')
+            ->from('pettycash_evidence_links')
             ->where($qb->expr()->eq('evidence_id', $qb->createNamedParameter($evidenceId)))
             ->orderBy('created_at', 'DESC');
         $rows = $qb->executeQuery()->fetchAllAssociative();
@@ -74,16 +74,16 @@ final class DbEvidenceLinkRepository implements EvidenceLinkRepository
         $currentUser = $this->currentUser->uid();
 
         if ($existing) {
-            $qb->update('pc_evidence_links')
+            $qb->update('pettycash_evidence_links')
                 ->set('active', $qb->createNamedParameter($link->active, IQueryBuilder::PARAM_BOOL))
                 ->set('deactivated_by', $link->deactivatedBy ? $qb->createNamedParameter($link->deactivatedBy) : $qb->createNamedParameter(null))
                 ->set('deactivated_at', $link->deactivatedAt ? $qb->createNamedParameter($link->deactivatedAt->format('Y-m-d H:i:s')) : $qb->createNamedParameter(null))
-                ->set('updated_at', $qb->createNamedParameter($now))
+                ->set('updated_at', $qb->createNamedParameter($now, IQueryBuilder::PARAM_DATETIME_IMMUTABLE))
                 ->set('updated_by', $qb->createNamedParameter($currentUser))
                 ->where($qb->expr()->eq('id', $qb->createNamedParameter($existing->dbId)))
                 ->executeStatement();
         } else {
-            $insertId = $qb->insert('pc_evidence_links')
+            $qb->insert('pettycash_evidence_links')
                 ->values([
                     'public_id' => $qb->createNamedParameter($link->id),
                     'evidence_id' => $qb->createNamedParameter($link->evidenceId),
@@ -91,13 +91,13 @@ final class DbEvidenceLinkRepository implements EvidenceLinkRepository
                     'active' => $qb->createNamedParameter($link->active, IQueryBuilder::PARAM_BOOL),
                     'expires_at' => $link->expiresAt ? $qb->createNamedParameter($link->expiresAt->format('Y-m-d H:i:s')) : $qb->createNamedParameter(null),
                     'created_by' => $qb->createNamedParameter($link->createdBy ?? $currentUser),
-                    'created_at' => $link->createdAt ? $qb->createNamedParameter($link->createdAt->format('Y-m-d H:i:s')) : $qb->createNamedParameter($now),
+                    'created_at' => $link->createdAt ? $qb->createNamedParameter($link->createdAt->format('Y-m-d H:i:s')) : $qb->createNamedParameter($now, IQueryBuilder::PARAM_DATETIME_IMMUTABLE),
                     'deactivated_by' => $qb->createNamedParameter(null),
                     'deactivated_at' => $qb->createNamedParameter(null),
                 ])
                 ->executeStatement();
             
-            $link->dbId = (int) $insertId;
+            $link->dbId = $qb->getLastInsertId();
         }
     }
 

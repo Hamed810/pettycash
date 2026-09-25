@@ -6,6 +6,7 @@ namespace OCA\PettyCash\Infrastructure\Persistence\Account;
 
 use DateTimeImmutable;
 use DateTimeZone;
+use InvalidArgumentException;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Application\Port\UserDirectory;
 use OCA\PettyCash\Domain\Account\AccountMovement;
@@ -26,7 +27,7 @@ final class DbAccountMovementRepository implements AccountMovementRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_account_movements')
+            ->from('pettycash_account_movements')
             ->where($qb->expr()->eq('id', $qb->createNamedParameter($id)))
             ->setMaxResults(1);
         $row = $qb->executeQuery()->fetchAssociative();
@@ -37,7 +38,7 @@ final class DbAccountMovementRepository implements AccountMovementRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_account_movements')
+            ->from('pettycash_account_movements')
             ->where($qb->expr()->eq('command_id', $qb->createNamedParameter($commandId)))
             ->setMaxResults(1);
         $row = $qb->executeQuery()->fetchAssociative();
@@ -48,7 +49,7 @@ final class DbAccountMovementRepository implements AccountMovementRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_account_movements')
+            ->from('pettycash_account_movements')
             ->where($qb->expr()->eq('source_revision_id', $qb->createNamedParameter($sourceRevisionId)))
             ->setMaxResults(1);
         $row = $qb->executeQuery()->fetchAssociative();
@@ -60,7 +61,7 @@ final class DbAccountMovementRepository implements AccountMovementRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_account_movements')
+            ->from('pettycash_account_movements')
             ->where($qb->expr()->eq('account_id', $qb->createNamedParameter($accountId)));
         if ($from) {
             $qb->andWhere($qb->expr()->gte('occurred_at', $qb->createNamedParameter($from->format('Y-m-d H:i:s'))));
@@ -78,7 +79,7 @@ final class DbAccountMovementRepository implements AccountMovementRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_account_movements')
+            ->from('pettycash_account_movements')
             ->where($qb->expr()->eq('account_id', $qb->createNamedParameter($accountId)))
             ->orderBy('occurred_at', 'DESC')
             ->setFirstResult($offset)
@@ -96,14 +97,21 @@ final class DbAccountMovementRepository implements AccountMovementRepository
         }
         $now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
         $currentUser = $this->currentUser->uid();
-        
-        $qb->insert('pc_account_movements')
+
+        // A movement is a row in one account's ledger, so the owning account must
+        // be resolved from the aggregate. The surrogate key is looked up from the
+        // account's public UUID; guessing an id would attach the movement to an
+        // arbitrary account and corrupt that account's balance history.
+        $accountId = $this->resolveAccountDbId($movement);
+
+        $qb->insert('pettycash_account_movements')
             ->values([
                 'public_id' => $qb->createNamedParameter($movement->id),
-                'account_id' => $qb->createNamedParameter($this->getAccountIdFromMovement($movement)),
+                'account_id' => $qb->createNamedParameter($accountId),
                 'movement_type' => $qb->createNamedParameter($movement->type->value),
-                'amount_minor' => $qb->createNamedParameter($movement->amountMinor),
-                'balance_after_minor' => $qb->createNamedParameter($movement->balanceAfterMinor),
+                'amount_minor' => $qb->createNamedParameter($movement->amount->minorUnits()),
+                'balance_after_minor' => $qb->createNamedParameter($movement->balanceAfter->minorUnits()),
+                'currency_code' => $qb->createNamedParameter((string)$movement->amount->currency()),
                 'description' => $qb->createNamedParameter($movement->description ?? ''),
                 'source_revision_id' => $movement->sourceRevisionId ? $qb->createNamedParameter((int) $movement->sourceRevisionId) : $qb->createNamedParameter(null),
                 'source_decision_id' => $qb->createNamedParameter(null),
@@ -111,20 +119,41 @@ final class DbAccountMovementRepository implements AccountMovementRepository
                 'actor_uid' => $qb->createNamedParameter($currentUser),
                 'actor_name' => $qb->createNamedParameter($this->userDirectory->displayName($currentUser)),
                 'actor_role' => $qb->createNamedParameter('FINANCE'),
-                'occurred_at' => $qb->createNamedParameter($now),
+                'occurred_at' => $qb->createNamedParameter($now, IQueryBuilder::PARAM_DATETIME_IMMUTABLE),
             ])
             ->executeStatement();
     }
 
-    private function getAccountIdFromMovement(AccountMovement $movement): int
+    /**
+     * Resolve the `pettycash_accounts` surrogate key for a movement's owning account.
+     *
+     * Fails loudly rather than defaulting to a placeholder id: a movement written
+     * against the wrong account is an unrecoverable ledger corruption, so the
+     * transaction must abort instead.
+     */
+    private function resolveAccountDbId(AccountMovement $movement): int
     {
+        $accountPublicId = $movement->accountPublicId;
+        if ($accountPublicId === null || trim($accountPublicId) === '') {
+            throw new InvalidArgumentException(
+                'Account movement is missing its owning account reference'
+            );
+        }
+
         $qb = $this->connection->getQueryBuilder();
         $qb->select('id')
-            ->from('pc_accounts')
-            ->where($qb->expr()->eq('public_id', $qb->createNamedParameter($movement->id)))
+            ->from('pettycash_accounts')
+            ->where($qb->expr()->eq('public_id', $qb->createNamedParameter($accountPublicId)))
             ->setMaxResults(1);
         $row = $qb->executeQuery()->fetchAssociative();
-        return $row ? (int) $row['id'] : 0;
+
+        if ($row === false || !isset($row['id'])) {
+            throw new InvalidArgumentException(
+                'Account not found for movement: ' . $accountPublicId
+            );
+        }
+
+        return (int) $row['id'];
     }
 
     private function mapRow(array $row): AccountMovement
@@ -132,10 +161,12 @@ final class DbAccountMovementRepository implements AccountMovementRepository
         return new AccountMovement(
             $row['public_id'],
             MovementType::from($row['movement_type']),
-            (int) $row['amount_minor'],
-            (int) $row['balance_after_minor'],
+            \OCA\PettyCash\Domain\Shared\Money::of((int) $row['amount_minor'], \OCA\PettyCash\Domain\Shared\CurrencyCode::fromString($row['currency_code'])),
+            \OCA\PettyCash\Domain\Shared\Money::of((int) $row['balance_after_minor'], \OCA\PettyCash\Domain\Shared\CurrencyCode::fromString($row['currency_code'])),
+            $row['description'],
             $row['command_id'],
-            $row['source_revision_id'] ? (string) $row['source_revision_id'] : null
+            $row['source_revision_id'] ? (string) $row['source_revision_id'] : null,
+            $row['occurred_at'] ? new DateTimeImmutable($row['occurred_at']) : null
         );
     }
 }

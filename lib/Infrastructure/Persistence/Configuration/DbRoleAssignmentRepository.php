@@ -26,7 +26,7 @@ final class DbRoleAssignmentRepository implements RoleAssignmentRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_role_assignments')
+            ->from('pettycash_role_assignments')
             ->where($qb->expr()->eq('id', $qb->createNamedParameter($id)))
             ->setMaxResults(1);
         $row = $qb->executeQuery()->fetchAssociative();
@@ -38,7 +38,7 @@ final class DbRoleAssignmentRepository implements RoleAssignmentRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_role_assignments')
+            ->from('pettycash_role_assignments')
             ->where($qb->expr()->eq('user_uid', $qb->createNamedParameter($userUid)))
             ->andWhere($qb->expr()->eq('active', $qb->createNamedParameter(true, IQueryBuilder::PARAM_BOOL)))
             ->andWhere($qb->expr()->lte('valid_from', $qb->createNamedParameter($date->format('Y-m-d'))))
@@ -55,7 +55,7 @@ final class DbRoleAssignmentRepository implements RoleAssignmentRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_role_assignments')
+            ->from('pettycash_role_assignments')
             ->where($qb->expr()->eq('role', $qb->createNamedParameter($role->value)))
             ->andWhere($qb->expr()->eq('cost_center_id', $qb->createNamedParameter($costCenterId)))
             ->andWhere($qb->expr()->eq('active', $qb->createNamedParameter(true, IQueryBuilder::PARAM_BOOL)))
@@ -73,7 +73,7 @@ final class DbRoleAssignmentRepository implements RoleAssignmentRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_role_assignments')
+            ->from('pettycash_role_assignments')
             ->where($qb->expr()->eq('user_uid', $qb->createNamedParameter($userUid)))
             ->andWhere($qb->expr()->eq('role', $qb->createNamedParameter($role->value)))
             ->andWhere($qb->expr()->eq('active', $qb->createNamedParameter(true, IQueryBuilder::PARAM_BOOL)))
@@ -94,21 +94,21 @@ final class DbRoleAssignmentRepository implements RoleAssignmentRepository
         $currentUser = $this->currentUser->uid();
 
         if ($existing) {
-            $qb->update('pc_role_assignments')
+            $qb->update('pettycash_role_assignments')
                 ->set('user_uid', $qb->createNamedParameter($roleAssignment->userUid))
                 ->set('role', $qb->createNamedParameter($roleAssignment->role->value))
                 ->set('cost_center_id', $roleAssignment->costCenterId ? $qb->createNamedParameter($roleAssignment->costCenterId) : $qb->createNamedParameter(null))
                 ->set('valid_from', $qb->createNamedParameter($roleAssignment->validFrom->format('Y-m-d')))
                 ->set('valid_to', $roleAssignment->validTo ? $qb->createNamedParameter($roleAssignment->validTo->format('Y-m-d')) : $qb->createNamedParameter(null))
                 ->set('active', $qb->createNamedParameter($roleAssignment->active, IQueryBuilder::PARAM_BOOL))
-                ->set('updated_at', $qb->createNamedParameter($now))
+                ->set('updated_at', $qb->createNamedParameter($now, IQueryBuilder::PARAM_DATETIME_IMMUTABLE))
                 ->set('updated_by', $qb->createNamedParameter($currentUser))
                 ->set('lock_version', $qb->createNamedParameter($existing->lockVersion + 1))
                 ->where($qb->expr()->eq('id', $qb->createNamedParameter($existing->id)))
                 ->andWhere($qb->expr()->eq('lock_version', $qb->createNamedParameter($existing->lockVersion)))
                 ->executeStatement();
         } else {
-            $qb->insert('pc_role_assignments')
+            $qb->insert('pettycash_role_assignments')
                 ->values([
                     'user_uid' => $qb->createNamedParameter($roleAssignment->userUid),
                     'role' => $qb->createNamedParameter($roleAssignment->role->value),
@@ -116,9 +116,9 @@ final class DbRoleAssignmentRepository implements RoleAssignmentRepository
                     'valid_from' => $qb->createNamedParameter($roleAssignment->validFrom->format('Y-m-d')),
                     'valid_to' => $roleAssignment->validTo ? $qb->createNamedParameter($roleAssignment->validTo->format('Y-m-d')) : $qb->createNamedParameter(null),
                     'active' => $qb->createNamedParameter($roleAssignment->active, IQueryBuilder::PARAM_BOOL),
-                    'created_at' => $qb->createNamedParameter($now),
+                    'created_at' => $qb->createNamedParameter($now, IQueryBuilder::PARAM_DATETIME_IMMUTABLE),
                     'created_by' => $qb->createNamedParameter($currentUser),
-                    'updated_at' => $qb->createNamedParameter($now),
+                    'updated_at' => $qb->createNamedParameter($now, IQueryBuilder::PARAM_DATETIME_IMMUTABLE),
                     'updated_by' => $qb->createNamedParameter($currentUser),
                     'lock_version' => $qb->createNamedParameter(0),
                 ])

@@ -16,7 +16,11 @@
         approval workflows, documents, revisions and audit trails.
     ]]></description>
 
-    <version>1.0.0</version>
+    <!--
+      Must stay at or above the highest lib/Migration/VersionNNNNNN prefix (010300 -> 1.3.0),
+      because Nextcloud only applies migrations whose version is <= the app version.
+    -->
+    <version>1.3.0</version>
 
     <licence>agpl</licence>
 
@@ -29,6 +33,16 @@
     <category>office</category>
 
     <dependencies>
+        <!--
+          Declared V1 database backends (FR-077). Order is significant: the Nextcloud
+          info.xsd defines <dependencies> as an xs:sequence in which <database> must
+          precede <nextcloud>. The schema permits only sqlite, mysql, and pgsql, so
+          Oracle/oci is structurally not declarable here — see the deferred
+          Oracle/Enterprise constraint in plan.md.
+        -->
+        <database>mysql</database>
+        <database>pgsql</database>
+        <database>sqlite</database>
         <nextcloud min-version="34"/>
     </dependencies>
 

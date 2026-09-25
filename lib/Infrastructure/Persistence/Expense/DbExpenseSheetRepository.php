@@ -26,7 +26,7 @@ final class DbExpenseSheetRepository implements ExpenseSheetRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_sheets')
+            ->from('pettycash_sheets')
             ->where($qb->expr()->eq('id', $qb->createNamedParameter($id)))
             ->setMaxResults(1);
         $row = $qb->executeQuery()->fetchAssociative();
@@ -37,7 +37,7 @@ final class DbExpenseSheetRepository implements ExpenseSheetRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_sheets')
+            ->from('pettycash_sheets')
             ->where($qb->expr()->eq('public_id', $qb->createNamedParameter($publicId)))
             ->setMaxResults(1);
         $row = $qb->executeQuery()->fetchAssociative();
@@ -49,7 +49,7 @@ final class DbExpenseSheetRepository implements ExpenseSheetRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_sheets')
+            ->from('pettycash_sheets')
             ->where($qb->expr()->eq('owner_uid', $qb->createNamedParameter($ownerUid)));
         if ($status) {
             $qb->andWhere($qb->expr()->eq('status', $qb->createNamedParameter($status->value)));
@@ -66,7 +66,7 @@ final class DbExpenseSheetRepository implements ExpenseSheetRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_sheets')
+            ->from('pettycash_sheets')
             ->where($qb->expr()->eq('status', $qb->createNamedParameter($status->value)))
             ->orderBy('created_at', 'DESC')
             ->setFirstResult($offset)
@@ -83,7 +83,7 @@ final class DbExpenseSheetRepository implements ExpenseSheetRepository
         $currentUser = $this->currentUser->uid();
 
         if ($existing) {
-            $qb->update('pc_sheets')
+            $qb->update('pettycash_sheets')
                 ->set('title', $qb->createNamedParameter($sheet->title ?? ''))
                 ->set('owner_uid', $qb->createNamedParameter($sheet->ownerUid))
                 ->set('account_id', $qb->createNamedParameter($this->getAccountDbId($sheet->accountId)))
@@ -94,15 +94,13 @@ final class DbExpenseSheetRepository implements ExpenseSheetRepository
                 ->set('management_completed_at', $sheet->managementCompletedAt ? $qb->createNamedParameter($sheet->managementCompletedAt->format('Y-m-d H:i:s')) : $qb->createNamedParameter(null))
                 ->set('finance_started_at', $sheet->financeStartedAt ? $qb->createNamedParameter($sheet->financeStartedAt->format('Y-m-d H:i:s')) : $qb->createNamedParameter(null))
                 ->set('completed_at', $sheet->completedAt ? $qb->createNamedParameter($sheet->completedAt->format('Y-m-d H:i:s')) : $qb->createNamedParameter(null))
-                ->set('updated_at', $qb->createNamedParameter($now))
-                ->set('updated_by', $qb->createNamedParameter($currentUser))
                 ->set('lock_version', $qb->createNamedParameter($existing->lockVersion + 1))
                 ->where($qb->expr()->eq('id', $qb->createNamedParameter($existing->dbId)))
                 ->andWhere($qb->expr()->eq('lock_version', $qb->createNamedParameter($existing->lockVersion)))
                 ->executeStatement();
             $sheet->lockVersion = $existing->lockVersion + 1;
         } else {
-            $insertId = $qb->insert('pc_sheets')
+            $qb->insert('pettycash_sheets')
                 ->values([
                     'public_id' => $qb->createNamedParameter($sheet->id),
                     'title' => $qb->createNamedParameter($sheet->title ?? ''),
@@ -111,8 +109,7 @@ final class DbExpenseSheetRepository implements ExpenseSheetRepository
                     'currency_id' => $qb->createNamedParameter($this->getCurrencyDbId($sheet->currency)),
                     'status' => $qb->createNamedParameter($sheet->status->value),
                     'submitted_total_minor' => $sheet->submittedTotalMinor ? $qb->createNamedParameter($sheet->submittedTotalMinor) : $qb->createNamedParameter(null),
-                    'created_at' => $qb->createNamedParameter($now),
-                    'created_by' => $qb->createNamedParameter($currentUser),
+                    'created_at' => $qb->createNamedParameter($now, IQueryBuilder::PARAM_DATETIME_IMMUTABLE),
                     'first_submitted_at' => $sheet->firstSubmittedAt ? $qb->createNamedParameter($sheet->firstSubmittedAt->format('Y-m-d H:i:s')) : $qb->createNamedParameter(null),
                     'management_completed_at' => $qb->createNamedParameter(null),
                     'finance_started_at' => $qb->createNamedParameter(null),
@@ -121,7 +118,7 @@ final class DbExpenseSheetRepository implements ExpenseSheetRepository
                 ])
                 ->executeStatement();
             
-            $sheet->dbId = (int) $insertId;
+            $sheet->dbId = $qb->getLastInsertId();
             $sheet->lockVersion = 0;
         }
     }
@@ -130,7 +127,7 @@ final class DbExpenseSheetRepository implements ExpenseSheetRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('id')
-            ->from('pc_accounts')
+            ->from('pettycash_accounts')
             ->where($qb->expr()->eq('public_id', $qb->createNamedParameter($publicId)))
             ->setMaxResults(1);
         $row = $qb->executeQuery()->fetchAssociative();
@@ -141,7 +138,7 @@ final class DbExpenseSheetRepository implements ExpenseSheetRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('id')
-            ->from('pc_currencies')
+            ->from('pettycash_currencies')
             ->where($qb->expr()->eq('code', $qb->createNamedParameter((string) $currencyCode)))
             ->setMaxResults(1);
         $row = $qb->executeQuery()->fetchAssociative();
@@ -167,7 +164,6 @@ final class DbExpenseSheetRepository implements ExpenseSheetRepository
         $sheet->financeStartedAt = $row['finance_started_at'] ? new DateTimeImmutable($row['finance_started_at']) : null;
         $sheet->completedAt = $row['completed_at'] ? new DateTimeImmutable($row['completed_at']) : null;
         $sheet->createdAt = $row['created_at'] ? new DateTimeImmutable($row['created_at']) : null;
-        $sheet->updatedAt = $row['updated_at'] ? new DateTimeImmutable($row['updated_at']) : null;
         $sheet->lockVersion = (int) ($row['lock_version'] ?? 0);
         $sheet->dbId = (int) $row['id'];
         $sheet->publicId = $row['public_id'];
@@ -178,7 +174,7 @@ final class DbExpenseSheetRepository implements ExpenseSheetRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('code')
-            ->from('pc_currencies')
+            ->from('pettycash_currencies')
             ->where($qb->expr()->eq('id', $qb->createNamedParameter($currencyId)))
             ->setMaxResults(1);
         $row = $qb->executeQuery()->fetchAssociative();
@@ -189,7 +185,7 @@ final class DbExpenseSheetRepository implements ExpenseSheetRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('public_id')
-            ->from('pc_accounts')
+            ->from('pettycash_accounts')
             ->where($qb->expr()->eq('id', $qb->createNamedParameter($accountId)))
             ->setMaxResults(1);
         $row = $qb->executeQuery()->fetchAssociative();

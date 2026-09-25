@@ -4,10 +4,63 @@ declare(strict_types=1);
 
 namespace OCA\PettyCash\AppInfo;
 
+use OCA\PettyCash\Application\Command\CommandResultRepository;
+use OCA\PettyCash\Application\Command\IdempotencyService;
+use OCA\PettyCash\Application\Expense\SheetService;
+use OCA\PettyCash\Application\Expense\TransactionService;
+use OCA\PettyCash\Application\Evidence\EvidenceService;
+use OCA\PettyCash\Application\Port\AuditWriter;
+use OCA\PettyCash\Application\Port\CurrentUser;
+use OCA\PettyCash\Application\Port\PrivateFileStore;
+use OCA\PettyCash\Application\Port\TransactionManager;
+use OCA\PettyCash\Application\Port\UserDirectory;
+use OCA\PettyCash\Application\Security\AuthorizationService;
+use OCA\PettyCash\Application\Workflow\FinanceQueue;
+use OCA\PettyCash\Application\Workflow\FinanceSettlementService;
+use OCA\PettyCash\Application\Workflow\ManagementReviewService;
+use OCA\PettyCash\Application\Workflow\SubmitSheet;
+use OCA\PettyCash\Domain\Account\Repository\AccountMovementRepository;
+use OCA\PettyCash\Domain\Account\Repository\AccountRepository;
+use OCA\PettyCash\Domain\Audit\Repository\AuditEventRepository;
+use OCA\PettyCash\Domain\Configuration\Repository\CostCenterRepository;
+use OCA\PettyCash\Domain\Configuration\Repository\CurrencyRepository;
+use OCA\PettyCash\Domain\Configuration\Repository\ExpenseTypeRepository;
+use OCA\PettyCash\Domain\Configuration\Repository\RoleAssignmentRepository;
+use OCA\PettyCash\Domain\Expense\Repository\ExpenseSheetRepository;
+use OCA\PettyCash\Domain\Expense\Repository\ExpenseTransactionRepository;
+use OCA\PettyCash\Domain\Expense\Repository\TransactionRevisionRepository;
+use OCA\PettyCash\Domain\Evidence\Repository\EvidenceRepository;
+use OCA\PettyCash\Domain\Workflow\Repository\WorkflowDecisionRepository;
+use OCA\PettyCash\Infrastructure\Nextcloud\AppDataEvidenceStore;
+use OCA\PettyCash\Infrastructure\Nextcloud\NextcloudAdministratorCheck;
+use OCA\PettyCash\Infrastructure\Nextcloud\NextcloudCurrentUser;
+use OCA\PettyCash\Infrastructure\Nextcloud\NextcloudUserDirectory;
+use OCA\PettyCash\Infrastructure\Nextcloud\SystemClock;
+use OCA\PettyCash\Infrastructure\Nextcloud\TechnicalLogger;
+use OCA\PettyCash\Infrastructure\Persistence\Account\DbAccountMovementRepository;
+use OCA\PettyCash\Infrastructure\Persistence\Account\DbAccountRepository;
+use OCA\PettyCash\Infrastructure\Persistence\Audit\DbAuditEventRepository;
+use OCA\PettyCash\Infrastructure\Persistence\Command\DbCommandResultRepository;
+use OCA\PettyCash\Infrastructure\Persistence\Configuration\DbCostCenterRepository;
+use OCA\PettyCash\Infrastructure\Persistence\Configuration\DbCurrencyRepository;
+use OCA\PettyCash\Infrastructure\Persistence\Configuration\DbExpenseTypeRepository;
+use OCA\PettyCash\Infrastructure\Persistence\Configuration\DbRoleAssignmentRepository;
+use OCA\PettyCash\Infrastructure\Persistence\Expense\DbExpenseSheetRepository;
+use OCA\PettyCash\Infrastructure\Persistence\Expense\DbExpenseTransactionRepository;
+use OCA\PettyCash\Infrastructure\Persistence\Expense\DbTransactionRevisionRepository;
+use OCA\PettyCash\Infrastructure\Persistence\Evidence\DbEvidenceRepository;
+use OCA\PettyCash\Infrastructure\Persistence\NextcloudTransactionManager;
+use OCA\PettyCash\Infrastructure\Persistence\Workflow\DbWorkflowDecisionRepository;
 use OCP\AppFramework\App;
 use OCP\AppFramework\Bootstrap\IBootContext;
 use OCP\AppFramework\Bootstrap\IBootstrap;
 use OCP\AppFramework\Bootstrap\IRegistrationContext;
+use OCP\Files\IAppData;
+use OCP\IUserManager;
+use OCP\IGroupManager;
+use OCP\IUserSession;
+use OCP\IDBConnection;
+use Psr\Log\LoggerInterface;
 
 final class Application extends App implements IBootstrap
 {
@@ -20,8 +73,237 @@ final class Application extends App implements IBootstrap
 
     public function register(IRegistrationContext $context): void
     {
-        // Prefer constructor injection and explicit interfaces. Concrete adapters are
-        // registered here only when their interface cannot be autowired by Nextcloud.
+        // Nextcloud infrastructure adapters
+        $context->registerService(PrivateFileStore::class, function ($c) {
+            return new AppDataEvidenceStore($c->query(IAppData::class));
+        });
+
+        $context->registerService(CurrentUser::class, function ($c) {
+            return new NextcloudCurrentUser($c->query(IUserSession::class));
+        });
+
+        $context->registerService(UserDirectory::class, function ($c) {
+            return new NextcloudUserDirectory($c->query(IUserManager::class));
+        });
+
+        $context->registerService(
+            \OCA\PettyCash\Application\Port\AdministratorCheck::class,
+            function ($c) {
+                return new NextcloudAdministratorCheck($c->query(IGroupManager::class));
+            }
+        );
+
+        $context->registerService(
+            \OCA\PettyCash\Domain\Shared\Clock::class,
+            fn() => new SystemClock()
+        );
+
+        $context->registerService(
+            \OCA\PettyCash\Infrastructure\Nextcloud\TechnicalLogger::class,
+            function ($c) {
+                return new \OCA\PettyCash\Infrastructure\Nextcloud\TechnicalLogger($c->query(LoggerInterface::class));
+            }
+        );
+
+        // Persistence repositories
+        $context->registerService(CurrencyRepository::class, function ($c) {
+            return new DbCurrencyRepository(
+                $c->query(IDBConnection::class),
+                $c->query(UserDirectory::class),
+                $c->query(CurrentUser::class)
+            );
+        });
+
+        $context->registerService(CostCenterRepository::class, function ($c) {
+            return new DbCostCenterRepository(
+                $c->query(IDBConnection::class),
+                $c->query(UserDirectory::class),
+                $c->query(CurrentUser::class)
+            );
+        });
+
+        $context->registerService(ExpenseSheetRepository::class, function ($c) {
+            return new DbExpenseSheetRepository(
+                $c->query(IDBConnection::class),
+                $c->query(UserDirectory::class),
+                $c->query(CurrentUser::class)
+            );
+        });
+
+        $context->registerService(ExpenseTransactionRepository::class, function ($c) {
+            return new DbExpenseTransactionRepository(
+                $c->query(IDBConnection::class),
+                $c->query(UserDirectory::class),
+                $c->query(CurrentUser::class),
+                $c->query(TransactionRevisionRepository::class)
+            );
+        });
+
+        $context->registerService(TransactionRevisionRepository::class, function ($c) {
+            return new DbTransactionRevisionRepository(
+                $c->query(IDBConnection::class),
+                $c->query(UserDirectory::class),
+                $c->query(CurrentUser::class)
+            );
+        });
+
+        $context->registerService(EvidenceRepository::class, function ($c) {
+            return new DbEvidenceRepository(
+                $c->query(IDBConnection::class),
+                $c->query(UserDirectory::class),
+                $c->query(CurrentUser::class)
+            );
+        });
+
+        $context->registerService(AuditEventRepository::class, function ($c) {
+            return new DbAuditEventRepository(
+                $c->query(IDBConnection::class),
+                $c->query(UserDirectory::class),
+                $c->query(CurrentUser::class)
+            );
+        });
+
+        $context->registerService(AccountRepository::class, function ($c) {
+            return new DbAccountRepository(
+                $c->query(IDBConnection::class),
+                $c->query(UserDirectory::class),
+                $c->query(CurrentUser::class)
+            );
+        });
+
+        $context->registerService(AccountMovementRepository::class, function ($c) {
+            return new DbAccountMovementRepository(
+                $c->query(IDBConnection::class),
+                $c->query(UserDirectory::class),
+                $c->query(CurrentUser::class)
+            );
+        });
+
+        $context->registerService(ExpenseTypeRepository::class, function ($c) {
+            return new DbExpenseTypeRepository(
+                $c->query(IDBConnection::class),
+                $c->query(UserDirectory::class),
+                $c->query(CurrentUser::class)
+            );
+        });
+
+        $context->registerService(RoleAssignmentRepository::class, function ($c) {
+            return new DbRoleAssignmentRepository(
+                $c->query(IDBConnection::class),
+                $c->query(UserDirectory::class),
+                $c->query(CurrentUser::class)
+            );
+        });
+
+        $context->registerService(WorkflowDecisionRepository::class, function ($c) {
+            return new DbWorkflowDecisionRepository(
+                $c->query(IDBConnection::class),
+                $c->query(UserDirectory::class),
+                $c->query(CurrentUser::class)
+            );
+        });
+
+        $context->registerService(CommandResultRepository::class, function ($c) {
+            return new DbCommandResultRepository(
+                $c->query(IDBConnection::class),
+                $c->query(UserDirectory::class),
+                $c->query(CurrentUser::class)
+            );
+        });
+
+        // Transaction manager
+        $context->registerService(TransactionManager::class, function ($c) {
+            return new NextcloudTransactionManager($c->query(IDBConnection::class));
+        });
+
+        // Audit writer
+        $context->registerService(AuditWriter::class, function ($c) {
+            return new \OCA\PettyCash\Application\Audit\AuditWriterService(
+                $c->query(AuditEventRepository::class),
+                $c->query(CurrentUser::class),
+                $c->query(UserDirectory::class)
+            );
+        });
+
+        // Authorization service
+        $context->registerService(AuthorizationService::class, function ($c) {
+            return new AuthorizationService();
+        });
+
+        // Idempotency service
+        $context->registerService(IdempotencyService::class, function ($c) {
+            return new IdempotencyService($c->query(CommandResultRepository::class));
+        });
+
+        // Application services
+        $context->registerService(SheetService::class, function ($c) {
+            return new SheetService(
+                $c->query(ExpenseSheetRepository::class),
+                $c->query(\OCA\PettyCash\Domain\Account\Repository\AccountRepository::class),
+                $c->query(CurrentUser::class),
+                $c->query(TransactionManager::class)
+            );
+        });
+
+        $context->registerService(TransactionService::class, function ($c) {
+            return new TransactionService(
+                $c->query(ExpenseSheetRepository::class),
+                $c->query(ExpenseTransactionRepository::class),
+                $c->query(TransactionRevisionRepository::class),
+                $c->query(CostCenterRepository::class),
+                $c->query(\OCA\PettyCash\Domain\Configuration\Repository\ExpenseTypeRepository::class),
+                $c->query(CurrentUser::class),
+                $c->query(TransactionManager::class)
+            );
+        });
+
+        $context->registerService(EvidenceService::class, function ($c) {
+            return new EvidenceService(
+                $c->query(PrivateFileStore::class),
+                $c->query(EvidenceRepository::class),
+                $c->query(CurrentUser::class),
+                $c->query(AuditWriter::class),
+                $c->query(UserDirectory::class),
+                $c->query(IdempotencyService::class)
+            );
+        });
+
+        $context->registerService(SubmitSheet::class, function ($c) {
+            return new SubmitSheet(
+                $c->query(TransactionManager::class),
+                $c->query(ExpenseSheetRepository::class),
+                $c->query(AuditWriter::class),
+                $c->query(IdempotencyService::class),
+                $c->query(CurrentUser::class),
+                $c->query(CostCenterRepository::class)
+            );
+        });
+
+        $context->registerService(FinanceQueue::class, function ($c) {
+            return new FinanceQueue(
+                $c->query(ExpenseTransactionRepository::class),
+                $c->query(RoleAssignmentRepository::class),
+                $c->query(CurrentUser::class)
+            );
+        });
+
+        $context->registerService(FinanceSettlementService::class, function ($c) {
+            return new FinanceSettlementService(
+                $c->query(TransactionManager::class),
+                $c->query(ExpenseSheetRepository::class),
+                $c->query(ExpenseTransactionRepository::class),
+                $c->query(TransactionRevisionRepository::class),
+                $c->query(AccountRepository::class),
+                $c->query(AccountMovementRepository::class),
+                $c->query(CostCenterRepository::class),
+                $c->query(RoleAssignmentRepository::class),
+                $c->query(AuditWriter::class),
+                $c->query(IdempotencyService::class),
+                $c->query(CurrentUser::class),
+                $c->query(UserDirectory::class),
+                $c->query(AuthorizationService::class)
+            );
+        });
     }
 
     public function boot(IBootContext $context): void

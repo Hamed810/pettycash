@@ -25,7 +25,7 @@ final class DbCostCenterRepository implements CostCenterRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_cost_centers')
+            ->from('pettycash_cost_centers')
             ->where($qb->expr()->eq('id', $qb->createNamedParameter($id)))
             ->setMaxResults(1);
         $row = $qb->executeQuery()->fetchAssociative();
@@ -36,8 +36,19 @@ final class DbCostCenterRepository implements CostCenterRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_cost_centers')
+            ->from('pettycash_cost_centers')
             ->where($qb->expr()->eq('code', $qb->createNamedParameter($code)))
+            ->setMaxResults(1);
+        $row = $qb->executeQuery()->fetchAssociative();
+        return $row ? $this->mapRow($row) : null;
+    }
+
+    public function findByPublicId(string $publicId): ?CostCenter
+    {
+        $qb = $this->connection->getQueryBuilder();
+        $qb->select('*')
+            ->from('pettycash_cost_centers')
+            ->where($qb->expr()->eq('public_id', $qb->createNamedParameter($publicId)))
             ->setMaxResults(1);
         $row = $qb->executeQuery()->fetchAssociative();
         return $row ? $this->mapRow($row) : null;
@@ -47,7 +58,7 @@ final class DbCostCenterRepository implements CostCenterRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_cost_centers')
+            ->from('pettycash_cost_centers')
             ->where($qb->expr()->eq('code', $qb->createNamedParameter($code)))
             ->andWhere($qb->expr()->eq('active', $qb->createNamedParameter(true, IQueryBuilder::PARAM_BOOL)))
             ->andWhere($qb->expr()->lte('valid_from', $qb->createNamedParameter($date->format('Y-m-d'))))
@@ -65,7 +76,7 @@ final class DbCostCenterRepository implements CostCenterRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_cost_centers')
+            ->from('pettycash_cost_centers')
             ->where($qb->expr()->eq('active', $qb->createNamedParameter(true, IQueryBuilder::PARAM_BOOL)))
             ->andWhere($qb->expr()->lte('valid_from', $qb->createNamedParameter($date->format('Y-m-d'))))
             ->andWhere($qb->expr()->orX(
@@ -81,7 +92,7 @@ final class DbCostCenterRepository implements CostCenterRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_cost_centers')
+            ->from('pettycash_cost_centers')
             ->where($qb->expr()->eq('manager_uid', $qb->createNamedParameter($managerUid)))
             ->andWhere($qb->expr()->eq('active', $qb->createNamedParameter(true, IQueryBuilder::PARAM_BOOL)))
             ->andWhere($qb->expr()->lte('valid_from', $qb->createNamedParameter($date->format('Y-m-d'))))
@@ -98,7 +109,7 @@ final class DbCostCenterRepository implements CostCenterRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_cost_centers')
+            ->from('pettycash_cost_centers')
             ->where($qb->expr()->eq('senior_manager_uid', $qb->createNamedParameter($seniorManagerUid)))
             ->andWhere($qb->expr()->eq('active', $qb->createNamedParameter(true, IQueryBuilder::PARAM_BOOL)))
             ->andWhere($qb->expr()->lte('valid_from', $qb->createNamedParameter($date->format('Y-m-d'))))
@@ -118,7 +129,7 @@ final class DbCostCenterRepository implements CostCenterRepository
         $currentUser = $this->currentUser->uid();
 
         if ($existing) {
-            $qb->update('pc_cost_centers')
+            $qb->update('pettycash_cost_centers')
                 ->set('name', $qb->createNamedParameter($costCenter->name))
                 ->set('description', $qb->createNamedParameter($costCenter->description))
                 ->set('valid_from', $qb->createNamedParameter($costCenter->validFrom->format('Y-m-d')))
@@ -126,14 +137,14 @@ final class DbCostCenterRepository implements CostCenterRepository
                 ->set('active', $qb->createNamedParameter($costCenter->active, IQueryBuilder::PARAM_BOOL))
                 ->set('manager_uid', $costCenter->managerUid ? $qb->createNamedParameter($costCenter->managerUid) : $qb->createNamedParameter(null))
                 ->set('senior_manager_uid', $costCenter->seniorManagerUid ? $qb->createNamedParameter($costCenter->seniorManagerUid) : $qb->createNamedParameter(null))
-                ->set('updated_at', $qb->createNamedParameter($now))
+                ->set('updated_at', $qb->createNamedParameter($now, IQueryBuilder::PARAM_DATETIME_IMMUTABLE))
                 ->set('updated_by', $qb->createNamedParameter($currentUser))
                 ->set('lock_version', $qb->createNamedParameter($existing->lockVersion + 1))
                 ->where($qb->expr()->eq('id', $qb->createNamedParameter($existing->id)))
                 ->andWhere($qb->expr()->eq('lock_version', $qb->createNamedParameter($existing->lockVersion)))
                 ->executeStatement();
         } else {
-            $qb->insert('pc_cost_centers')
+            $qb->insert('pettycash_cost_centers')
                 ->values([
                     'code' => $qb->createNamedParameter($costCenter->code()),
                     'name' => $qb->createNamedParameter($costCenter->name),
@@ -143,9 +154,9 @@ final class DbCostCenterRepository implements CostCenterRepository
                     'active' => $qb->createNamedParameter($costCenter->active, IQueryBuilder::PARAM_BOOL),
                     'manager_uid' => $costCenter->managerUid ? $qb->createNamedParameter($costCenter->managerUid) : $qb->createNamedParameter(null),
                     'senior_manager_uid' => $costCenter->seniorManagerUid ? $qb->createNamedParameter($costCenter->seniorManagerUid) : $qb->createNamedParameter(null),
-                    'created_at' => $qb->createNamedParameter($now),
+                    'created_at' => $qb->createNamedParameter($now, IQueryBuilder::PARAM_DATETIME_IMMUTABLE),
                     'created_by' => $qb->createNamedParameter($currentUser),
-                    'updated_at' => $qb->createNamedParameter($now),
+                    'updated_at' => $qb->createNamedParameter($now, IQueryBuilder::PARAM_DATETIME_IMMUTABLE),
                     'updated_by' => $qb->createNamedParameter($currentUser),
                     'lock_version' => $qb->createNamedParameter(0),
                 ])

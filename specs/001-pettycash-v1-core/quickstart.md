@@ -31,18 +31,40 @@ docker exec --user www-data docker-nextcloud-1 php occ app:list | grep pettycash
 Expected result: Nextcloud reports 34.x, PHP is within 8.2–8.5, and the `pettycash` application is
 visible.
 
-## 2. Migration Safety Gate
+## 2. Schema Namespace and Migration Safety Gate
 
-Before creating the first migration:
+PettyCash V1 is a fresh application. All V1 tables use the logical app-scoped `pettycash_` prefix;
+the instance database prefix is applied by the Nextcloud database abstraction and is never hardcoded
+in application code, migrations, tests, or documentation. Indexes, unique constraints, foreign keys,
+and check constraints use `pettycash_<table>_<subject>_<kind>` (`idx`, `uniq`, `fk`, `chk`).
 
-1. Inspect the host migration history for application ID `pettycash`.
-2. Inspect existing table names without modifying them.
-3. Record the highest prior migration version.
-4. Confirm all new V1 tables use the `pc_*` family.
-5. Confirm no migration drops, renames, or reads legacy `oc_pcash_*` tables as V1 entities.
+Before verifying the V1 baseline:
 
-The implementation must provide an installation test that begins with legacy tables present and
-proves the new migration creates only the new schema.
+1. Confirm every V1 table is named `pettycash_*` and no `pc_*` table or index name remains in
+   migrations, repositories, fixtures, or tests.
+2. Confirm the baseline migrations create the `pettycash_*` schema from an empty database; no
+   rename migration and no mixed namespace exist.
+3. Confirm no migration reads, writes, renames, or drops prototype tables that may exist in the
+   shared database, and that no code references a `pc_` or `oc_pcash_*` name.
+4. Confirm identifiers stay within the declared V1 backends' limits (PostgreSQL 63 bytes, MySQL 64
+   characters).
+
+Acceptance covers a clean installation on an empty database and the forward application of the full
+V1 migration chain in version order. It does not cover any upgrade path from a pre-V1 database.
+
+### Development-only reset (approval required)
+
+The current development migrations have already run, and the discarded prototype shared the
+`pettycash` app ID, so stale migration-state rows can make Nextcloud skip the rewritten baseline.
+After the repository rename, reset PettyCash state in the development instance so the rewritten
+baseline executes from scratch. This is development-environment work and MUST satisfy all of:
+
+- explicit human approval before any deletion;
+- affects PettyCash only, preserving every unrelated Nextcloud app and its data;
+- never deletes Docker volumes or the shared Nextcloud database;
+- clears the `pettycash` app-ID migration state as part of the reset;
+- discards current `pc_*` development data, which is disposable by design;
+- leaves residual prototype tables such as `oc_pcash_*` untouched, as unmanaged artifacts.
 
 ## 3. Planned Dependency and Build Commands
 
@@ -228,7 +250,11 @@ Using the target-volume fixture:
 ## 9. Recovery and Non-Destructive Operations
 
 - Never remove the shared Nextcloud or database volumes as part of testing.
-- Migrations are forward-only and must be tested on a database containing legacy table names.
+- Migrations are forward-only and are tested by clean installation on an empty database plus
+  forward application of the full V1 migration chain in version order. No test requires, or may
+  depend on, legacy table names or a pre-V1 database.
+- Prototype tables left in a shared development database are unmanaged: no migration, test, or tool
+  may read, write, rename, or drop them.
 - If evidence write succeeds but database persistence fails, compensation removes the new orphan.
 - A reconciliation diagnostic reports orphan AppData files and missing binaries without deleting
   anything automatically.

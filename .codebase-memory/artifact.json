@@ -1,11 +1,11 @@
 {
     "schema_version": 2,
-    "commit": "9c1d4c958bb54fea1b7b8757d7b5906875e54090",
-    "indexed_at": "2026-09-21T20:43:42Z",
+    "commit": "e074cff5d0a807055d3a817e1819f396abbc1f6f",
+    "indexed_at": "2026-09-25T11:50:01Z",
     "project": "pettycash",
-    "nodes": 1557,
-    "edges": 2096,
-    "original_size": 4718592,
-    "compressed_size": 791363,
+    "nodes": 3107,
+    "edges": 9338,
+    "original_size": 9961472,
+    "compressed_size": 1906001,
     "compression_level": 3
 }

@@ -25,8 +25,19 @@ final class DbExpenseTypeRepository implements ExpenseTypeRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_expense_types')
+            ->from('pettycash_expense_types')
             ->where($qb->expr()->eq('id', $qb->createNamedParameter($id)))
+            ->setMaxResults(1);
+        $row = $qb->executeQuery()->fetchAssociative();
+        return $row ? $this->mapRow($row) : null;
+    }
+
+    public function findByPublicId(string $publicId): ?ExpenseType
+    {
+        $qb = $this->connection->getQueryBuilder();
+        $qb->select('*')
+            ->from('pettycash_expense_types')
+            ->where($qb->expr()->eq('public_id', $qb->createNamedParameter($publicId)))
             ->setMaxResults(1);
         $row = $qb->executeQuery()->fetchAssociative();
         return $row ? $this->mapRow($row) : null;
@@ -36,7 +47,7 @@ final class DbExpenseTypeRepository implements ExpenseTypeRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_expense_types')
+            ->from('pettycash_expense_types')
             ->where($qb->expr()->eq('title', $qb->createNamedParameter($title)))
             ->andWhere($qb->expr()->eq('active', $qb->createNamedParameter(true, IQueryBuilder::PARAM_BOOL)))
             ->setMaxResults(1);
@@ -49,7 +60,7 @@ final class DbExpenseTypeRepository implements ExpenseTypeRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_expense_types')
+            ->from('pettycash_expense_types')
             ->where($qb->expr()->eq('active', $qb->createNamedParameter(true, IQueryBuilder::PARAM_BOOL)));
         $rows = $qb->executeQuery()->fetchAllAssociative();
         return array_map([$this, 'mapRow'], $rows);
@@ -63,26 +74,26 @@ final class DbExpenseTypeRepository implements ExpenseTypeRepository
         $currentUser = $this->currentUser->uid();
 
         if ($existing) {
-            $qb->update('pc_expense_types')
+            $qb->update('pettycash_expense_types')
                 ->set('description', $qb->createNamedParameter($expenseType->description))
                 ->set('evidence_required', $qb->createNamedParameter($expenseType->evidenceRequired, IQueryBuilder::PARAM_BOOL))
                 ->set('active', $qb->createNamedParameter($expenseType->active, IQueryBuilder::PARAM_BOOL))
-                ->set('updated_at', $qb->createNamedParameter($now))
+                ->set('updated_at', $qb->createNamedParameter($now, IQueryBuilder::PARAM_DATETIME_IMMUTABLE))
                 ->set('updated_by', $qb->createNamedParameter($currentUser))
                 ->set('lock_version', $qb->createNamedParameter($existing->lockVersion + 1))
                 ->where($qb->expr()->eq('id', $qb->createNamedParameter($existing->id)))
                 ->andWhere($qb->expr()->eq('lock_version', $qb->createNamedParameter($existing->lockVersion)))
                 ->executeStatement();
         } else {
-            $qb->insert('pc_expense_types')
+            $qb->insert('pettycash_expense_types')
                 ->values([
                     'title' => $qb->createNamedParameter($expenseType->title),
                     'description' => $qb->createNamedParameter($expenseType->description),
                     'evidence_required' => $qb->createNamedParameter($expenseType->evidenceRequired, IQueryBuilder::PARAM_BOOL),
                     'active' => $qb->createNamedParameter($expenseType->active, IQueryBuilder::PARAM_BOOL),
-                    'created_at' => $qb->createNamedParameter($now),
+                    'created_at' => $qb->createNamedParameter($now, IQueryBuilder::PARAM_DATETIME_IMMUTABLE),
                     'created_by' => $qb->createNamedParameter($currentUser),
-                    'updated_at' => $qb->createNamedParameter($now),
+                    'updated_at' => $qb->createNamedParameter($now, IQueryBuilder::PARAM_DATETIME_IMMUTABLE),
                     'updated_by' => $qb->createNamedParameter($currentUser),
                     'lock_version' => $qb->createNamedParameter(0),
                 ])

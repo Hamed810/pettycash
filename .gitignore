@@ -29,6 +29,10 @@ Thumbs.db
 .env*
 !.env.example
 
+# Local agent tooling backups (may embed private endpoints; never commit)
+*.bak
+opencode.local.json
+
 # Build
 *.log
 *.tmp

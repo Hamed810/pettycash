@@ -959,7 +959,7 @@ components:
         displayName: { type: string }
         roles:
           type: array
-          items: { type: string, enum: [PURCHASER, COST_CENTER_MANAGER, SENIOR_MANAGER, FINANCE, ADMIN] }
+          items: { type: string, enum: [PURCHASER, COST_CENTER_MANAGER, SENIOR_MANAGER, FINANCE, ADMINISTRATOR] }
         capabilities: { $ref: '#/components/schemas/CapabilitySet' }
     Dashboard:
       type: object

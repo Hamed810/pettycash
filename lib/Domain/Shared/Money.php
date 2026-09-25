@@ -24,6 +24,12 @@ final readonly class Money
         return new self($this->minorUnits + $other->minorUnits, $this->currency);
     }
 
+    public function subtract(self $other): self
+    {
+        if (!$this->currency->equals($other->currency)) { throw new InvalidArgumentException('Currency mismatch'); }
+        return new self($this->minorUnits - $other->minorUnits, $this->currency);
+    }
+
     public function minorUnits(): int { return $this->minorUnits; }
     public function currency(): CurrencyCode { return $this->currency; }
     /** @return array{minorUnits:int,currency:string} */

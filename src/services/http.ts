@@ -1,6 +1,6 @@
 import axios from '@nextcloud/axios'
 import { generateOcsUrl } from '@nextcloud/router'
-import type { AxiosRequestConfig } from 'axios'
+import { isAxiosError, type AxiosRequestConfig } from 'axios'
 import { ApiError, type ApiErrorBody } from '../types/api'
 
 export function commandId(): string { return crypto.randomUUID() }
@@ -14,7 +14,7 @@ export async function ocs<T>(path: string, config: AxiosRequestConfig = {}): Pro
 		})
 		return response.data.ocs.data
 	} catch (error: unknown) {
-		if (axios.isAxiosError(error)) {
+		if (isAxiosError(error)) {
 			const data = error.response?.data as { ocs?: { data?: { error?: ApiErrorBody } } } | undefined
 			throw new ApiError(error.response?.status ?? 0, data?.ocs?.data?.error ?? { code: 'NETWORK_FAILURE', message: 'pettycash.error.network' })
 		}
@@ -22,6 +22,6 @@ export async function ocs<T>(path: string, config: AxiosRequestConfig = {}): Pro
 	}
 }
 
-export async function mutate<T>(path: string, method: 'POST' | 'PUT' | 'DELETE', data: unknown, id = commandId()): Promise<T> {
+export async function mutate<T>(path: string, method: 'POST' | 'PUT' | 'PATCH' | 'DELETE', data: unknown, id = commandId()): Promise<T> {
 	return ocs<T>(path, { method, data, headers: { 'X-PettyCash-Command-ID': id } })
 }

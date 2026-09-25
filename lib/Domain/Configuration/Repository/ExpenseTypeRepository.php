@@ -10,6 +10,7 @@ use OCA\PettyCash\Domain\Configuration\ExpenseType;
 interface ExpenseTypeRepository
 {
     public function findById(int $id): ?ExpenseType;
+    public function findByPublicId(string $publicId): ?ExpenseType;
     public function findActiveByTitle(string $title): ?ExpenseType;
     /** @return list<ExpenseType> */
     public function findAllActive(): array;

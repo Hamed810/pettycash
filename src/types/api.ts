@@ -1,4 +1,4 @@
-export interface ApiErrorBody { code: string; message: string; commandId?: string; fieldErrors?: Record<string, string> }
+export interface ApiErrorBody { code: string; message: string; commandId?: string; fieldErrors?: Record<string, string[]> }
 export interface Page<T> { items: T[]; page: number; pageSize: number; total: number }
 export interface CommandOptions { commandId?: string; expectedVersion?: number }
 
@@ -6,4 +6,236 @@ export class ApiError extends Error {
 	public constructor(public readonly status: number, public readonly body: ApiErrorBody) {
 		super(body.message)
 	}
+}
+
+// Filter types
+export interface SheetFilters {
+	status?: string
+	ownerId?: string
+	currency?: string
+	from?: string
+	to?: string
+}
+
+export interface TransactionFilters {
+	status?: string
+	costCenterId?: string
+	expenseTypeId?: string
+	dateFrom?: string
+	dateTo?: string
+	amountMin?: number
+	amountMax?: number
+}
+
+// Sheet types
+export interface SheetCreate { title: string; accountId: string }
+
+export interface SheetSummary {
+	id: string
+	title: string
+	ownerId: string
+	ownerDisplayName: string
+	currency: string
+	status: SheetStatus
+	transactionCount: number
+	totals: SheetTotals
+	createdAt: string
+	submittedAt: string | null
+	completedAt: string | null
+	firstExpenseDate: string | null
+	lastExpenseDate: string | null
+	version: number
+}
+
+export interface SheetTotals {
+	current: Money
+	submitted: Money
+	effectiveApproved: Money
+	effectiveRejected: Money
+	effectivePending: Money
+	costCenterApproved: Money
+	seniorApproved: Money
+	financeApproved: Money
+}
+
+export type SheetStatus =
+	| 'OPEN'
+	| 'AWAITING_COST_CENTER_REVIEW'
+	| 'AWAITING_SENIOR_REVIEW'
+	| 'AWAITING_FINANCE_REVIEW'
+	| 'COMPLETED'
+	| 'COMPLETED_WITH_REJECTIONS'
+
+export interface SheetDetail extends SheetSummary {
+	allowedActions: CapabilitySet
+	transactions: TransactionSummary[]
+}
+
+export interface Money {
+	amountMinor: number
+	currency: string
+	minorUnit: number
+}
+
+// Transaction types
+export interface TransactionDraftWrite {
+	expenseDate: string
+	amountMinor: number
+	description?: string
+	costCenterId?: string
+	expenseTypeId?: string
+}
+
+export interface TransactionSummary {
+	id: string
+	sheetId: string
+	activeRevision: Revision
+	stage: TransactionStage
+	status: TransactionStatus
+	finalOutcome: 'APPROVED' | 'REJECTED' | null
+	latestDecision: Decision
+	evidenceCount: number
+	version: number
+}
+
+export interface TransactionDetail extends TransactionSummary {
+	allowedActions: CapabilitySet
+	decisions: Decision[]
+	evidence: Evidence[]
+}
+
+export interface Revision {
+	id: string
+	number: number
+	expenseDate: string
+	amount: Money
+	description?: string
+	costCenter: EntitySnapshot
+	expenseType: EntitySnapshot
+	createdBy: string
+	createdAt: string
+	active: boolean
+}
+
+export interface EntitySnapshot {
+	id: string
+	code?: string
+	name: string
+}
+
+export type TransactionStage =
+	| 'DRAFT'
+	| 'COST_CENTER'
+	| 'CORRECTION'
+	| 'SENIOR'
+	| 'FINANCE'
+	| 'FINAL'
+
+export type TransactionStatus =
+	| 'DRAFT'
+	| 'AWAITING_COST_CENTER_REVIEW'
+	| 'COST_CENTER_APPROVED'
+	| 'COST_CENTER_REJECTED'
+	| 'AWAITING_SENIOR_REVIEW'
+	| 'SENIOR_APPROVED'
+	| 'SENIOR_REJECTED'
+	| 'AWAITING_FINANCE_REVIEW'
+	| 'AWAITING_PURCHASER_CORRECTION'
+	| 'COMPLETED_APPROVED'
+	| 'COMPLETED_REJECTED'
+
+export interface DecisionWrite {
+	decision: 'APPROVE' | 'REJECT' | 'RETURN'
+	explanation?: string
+	expectedVersion: number
+}
+
+export interface Decision {
+	id: string
+	stage: 'COST_CENTER' | 'SENIOR' | 'FINANCE'
+	decision: 'APPROVE' | 'REJECT' | 'RETURN'
+	explanation?: string
+	actor: ActorSnapshot
+	decidedAt: string
+}
+
+export interface ActorSnapshot {
+	userId: string
+	displayName: string
+	role: string
+}
+
+export interface DecisionResult {
+	decision: Decision
+	transaction: TransactionDetail
+	accountMutation?: AccountMutationResult
+}
+
+export interface Evidence {
+	id: string
+	transactionId: string
+	revisionId: string
+	name: string
+	mediaType: string
+	sizeBytes: number
+	active: boolean
+	uploadedBy: string
+	uploadedAt: string
+	deactivatedAt?: string
+}
+
+// Account types
+export interface Account {
+	id: string
+	userId: string
+	balance: Money
+	active: boolean
+	version: number
+}
+
+export interface AccountCreate {
+	userId: string
+	currency: string
+}
+
+export interface AccountCharge {
+	amountMinor: number
+	description: string
+	occurredAt: string
+	expectedVersion: number
+}
+
+export interface Movement {
+	id: string
+	type: 'CHARGE' | 'CONSUMPTION'
+	amount: Money
+	balanceAfter: Money
+	description: string
+	sourceRevisionId?: string
+	occurredAt: string
+}
+
+export interface AccountMutationResult {
+	account: Account
+	movement: Movement
+}
+
+// Capability types
+export type CapabilitySet = Record<string, boolean>
+export interface SessionContext {
+	userId: string
+	displayName: string
+	roles: Role[]
+	capabilities: CapabilitySet
+}
+
+export type Role = 'PURCHASER' | 'COST_CENTER_MANAGER' | 'SENIOR_MANAGER' | 'FINANCE' | 'ADMINISTRATOR'
+
+// Export types
+export interface ExportRequest {
+	resource: 'sheet' | 'sheets' | 'transactions' | 'report' | 'audit' | 'evidence'
+	format: 'csv' | 'xlsx' | 'pdf' | 'zip'
+	ids?: string[]
+	reportType?: string
+	filters?: Record<string, unknown>
 }

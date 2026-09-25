@@ -23,12 +23,36 @@ final class DbAccountRepository implements AccountRepository
         private readonly CurrentUser $currentUser
     ) {}
 
+    /**
+     * Apply the account + joined-currency projection used by every read path.
+     *
+     * The currency columns are added with `selectAlias()` rather than an inline
+     * `c.code as currency_code` string: `IQueryBuilder` splits any select string
+     * containing ` as ` and keeps only the first segment, so a projection with
+     * several inline aliases is silently truncated into one malformed alias and
+     * MariaDB rejects the query.
+     *
+     * `pettycash_currencies` has no `public_id` — `data-model.md` defines `Currency` with
+     * only `code`, `name`, `minor_unit` and the audit columns, and currencies are
+     * referenced by code, not by an external UUID.
+     */
+    private function applyProjection(IQueryBuilder $qb): IQueryBuilder
+    {
+        $qb->select('a.*')
+            ->selectAlias('c.code', 'currency_code')
+            ->selectAlias('c.name', 'currency_name')
+            ->selectAlias('c.minor_unit', 'currency_minor_unit')
+            ->selectAlias('c.id', 'currency_id');
+
+        return $qb;
+    }
+
     public function findById(int $id): ?PettyCashAccount
     {
         $qb = $this->connection->getQueryBuilder();
-        $qb->select('a.*, c.code as currency_code, c.name as currency_name, c.minor_unit as currency_minor_unit, c.id as currency_id, c.public_id as currency_public_id')
-            ->from('pc_accounts', 'a')
-            ->join('a', 'pc_currencies', 'c', $qb->expr()->eq('a.currency_id', 'c.id'))
+        $this->applyProjection($qb)
+            ->from('pettycash_accounts', 'a')
+            ->join('a', 'pettycash_currencies', 'c', $qb->expr()->eq('a.currency_id', 'c.id'))
             ->where($qb->expr()->eq('a.id', $qb->createNamedParameter($id)))
             ->setMaxResults(1);
         $row = $qb->executeQuery()->fetchAssociative();
@@ -38,9 +62,9 @@ final class DbAccountRepository implements AccountRepository
     public function findByPublicId(string $publicId): ?PettyCashAccount
     {
         $qb = $this->connection->getQueryBuilder();
-        $qb->select('a.*, c.code as currency_code, c.name as currency_name, c.minor_unit as currency_minor_unit, c.id as currency_id, c.public_id as currency_public_id')
-            ->from('pc_accounts', 'a')
-            ->join('a', 'pc_currencies', 'c', $qb->expr()->eq('a.currency_id', 'c.id'))
+        $this->applyProjection($qb)
+            ->from('pettycash_accounts', 'a')
+            ->join('a', 'pettycash_currencies', 'c', $qb->expr()->eq('a.currency_id', 'c.id'))
             ->where($qb->expr()->eq('a.public_id', $qb->createNamedParameter($publicId)))
             ->setMaxResults(1);
         $row = $qb->executeQuery()->fetchAssociative();
@@ -51,9 +75,9 @@ final class DbAccountRepository implements AccountRepository
     public function findActiveByUserUid(string $userUid): array
     {
         $qb = $this->connection->getQueryBuilder();
-        $qb->select('a.*, c.code as currency_code, c.name as currency_name, c.minor_unit as currency_minor_unit, c.id as currency_id, c.public_id as currency_public_id')
-            ->from('pc_accounts', 'a')
-            ->join('a', 'pc_currencies', 'c', $qb->expr()->eq('a.currency_id', 'c.id'))
+        $this->applyProjection($qb)
+            ->from('pettycash_accounts', 'a')
+            ->join('a', 'pettycash_currencies', 'c', $qb->expr()->eq('a.currency_id', 'c.id'))
             ->where($qb->expr()->eq('a.user_uid', $qb->createNamedParameter($userUid)))
             ->andWhere($qb->expr()->eq('a.active', $qb->createNamedParameter(true, IQueryBuilder::PARAM_BOOL)));
         $rows = $qb->executeQuery()->fetchAllAssociative();
@@ -64,9 +88,9 @@ final class DbAccountRepository implements AccountRepository
     public function findActiveByUserAndCurrency(string $userUid, CurrencyCode $currency): array
     {
         $qb = $this->connection->getQueryBuilder();
-        $qb->select('a.*, c.code as currency_code, c.name as currency_name, c.minor_unit as currency_minor_unit, c.id as currency_id, c.public_id as currency_public_id')
-            ->from('pc_accounts', 'a')
-            ->join('a', 'pc_currencies', 'c', $qb->expr()->eq('a.currency_id', 'c.id'))
+        $this->applyProjection($qb)
+            ->from('pettycash_accounts', 'a')
+            ->join('a', 'pettycash_currencies', 'c', $qb->expr()->eq('a.currency_id', 'c.id'))
             ->where($qb->expr()->eq('a.user_uid', $qb->createNamedParameter($userUid)))
             ->andWhere($qb->expr()->eq('c.code', $qb->createNamedParameter((string) $currency)))
             ->andWhere($qb->expr()->eq('a.active', $qb->createNamedParameter(true, IQueryBuilder::PARAM_BOOL)));
@@ -77,42 +101,47 @@ final class DbAccountRepository implements AccountRepository
     public function save(PettyCashAccount $account): void
     {
         $qb = $this->connection->getQueryBuilder();
-        $existing = $account->id ? $this->findById((int) $account->id) : $this->findByPublicId($account->id);
+        // `$id` is the public UUID and `dbId` the surrogate key, so the lookup has
+        // to follow whichever one the aggregate actually carries.
+        $existing = $account->dbId !== null
+            ? $this->findById($account->dbId)
+            : $this->findByPublicId($account->id);
         $now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
         $currentUser = $this->currentUser->uid();
 
         if ($existing) {
-            $qb->update('pc_accounts')
+            $qb->update('pettycash_accounts')
                 ->set('balance_minor', $qb->createNamedParameter($account->balanceMinor))
                 ->set('active', $qb->createNamedParameter($account->active, IQueryBuilder::PARAM_BOOL))
-                ->set('updated_at', $qb->createNamedParameter($now))
+                ->set('updated_at', $qb->createNamedParameter($now, IQueryBuilder::PARAM_DATETIME_IMMUTABLE))
                 ->set('updated_by', $qb->createNamedParameter($currentUser))
                 ->set('lock_version', $qb->createNamedParameter($existing->lockVersion + 1))
-                ->where($qb->expr()->eq('id', $qb->createNamedParameter($existing->id)))
+                ->where($qb->expr()->eq('id', $qb->createNamedParameter($existing->dbId)))
                 ->andWhere($qb->expr()->eq('lock_version', $qb->createNamedParameter($existing->lockVersion)))
                 ->executeStatement();
+            $account->dbId = $existing->dbId;
             $account->lockVersion = $existing->lockVersion + 1;
         } else {
             $currency = $this->getCurrencyByCode($account->currencyCode());
             if (!$currency) {
                 throw new \InvalidArgumentException('Currency not found: ' . $account->currencyCode());
             }
-            $insertId = $qb->insert('pc_accounts')
+            $qb->insert('pettycash_accounts')
                 ->values([
                     'public_id' => $qb->createNamedParameter($account->id),
                     'user_uid' => $qb->createNamedParameter($account->userUid),
                     'currency_id' => $qb->createNamedParameter($currency->id),
                     'balance_minor' => $qb->createNamedParameter($account->balanceMinor),
                     'active' => $qb->createNamedParameter($account->active, IQueryBuilder::PARAM_BOOL),
-                    'created_at' => $qb->createNamedParameter($now),
+                    'created_at' => $qb->createNamedParameter($now, IQueryBuilder::PARAM_DATETIME_IMMUTABLE),
                     'created_by' => $qb->createNamedParameter($currentUser),
-                    'updated_at' => $qb->createNamedParameter($now),
+                    'updated_at' => $qb->createNamedParameter($now, IQueryBuilder::PARAM_DATETIME_IMMUTABLE),
                     'updated_by' => $qb->createNamedParameter($currentUser),
                     'lock_version' => $qb->createNamedParameter(0),
                 ])
                 ->executeStatement();
             
-            $account->dbId = (int) $insertId;
+            $account->dbId = $qb->getLastInsertId();
             $account->lockVersion = 0;
         }
     }
@@ -121,7 +150,7 @@ final class DbAccountRepository implements AccountRepository
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from('pc_currencies')
+            ->from('pettycash_currencies')
             ->where($qb->expr()->eq('code', $qb->createNamedParameter((string) $currencyCode)))
             ->setMaxResults(1);
         $row = $qb->executeQuery()->fetchAssociative();
@@ -150,7 +179,7 @@ final class DbAccountRepository implements AccountRepository
             true,
             null, null, null, null, 0,
             (int) $row['currency_id'],
-            $row['currency_public_id'] ?? null
+            null
         );
         $account = PettyCashAccount::create(
             $row['public_id'],
@@ -160,7 +189,10 @@ final class DbAccountRepository implements AccountRepository
         $account->balanceMinor = (int) $row['balance_minor'];
         $account->active = (bool) $row['active'];
         $account->lockVersion = (int) ($row['lock_version'] ?? 0);
-        $account->id = (int) $row['id'];
+        // `$id` is the public UUID; the surrogate primary key belongs on `dbId`.
+        // Assigning the integer here both violates the property type and replaces
+        // the public identity every caller resolves accounts by.
+        $account->dbId = (int) $row['id'];
         return $account;
     }
 }

@@ -49,15 +49,14 @@ final class PettyCashAccount
         if (!$amount->currency()->equals($this->currencyCode)) {
             throw new InvalidArgumentException('Currency mismatch');
         }
-        $newBalance = $this->balanceMinor + $amount->minorUnits();
-        $movement = new AccountMovement(
+        $movement = AccountMovement::createCharge(
             $this->id . '-' . $commandId,
-            MovementType::Charge,
-            $amount->minorUnits(),
-            $newBalance,
+            $amount,
+            'Account charge',
+            $this,
             $commandId
         );
-        $this->balanceMinor = $newBalance;
+        $this->balanceMinor = $movement->balanceAfter()->minorUnits();
         return $movement;
     }
 
@@ -69,16 +68,15 @@ final class PettyCashAccount
         if (!$amount->currency()->equals($this->currencyCode)) {
             throw new InvalidArgumentException('Currency mismatch');
         }
-        $newBalance = $this->balanceMinor - $amount->minorUnits();
-        $movement = new AccountMovement(
+        $movement = AccountMovement::createConsumption(
             $this->id . '-' . $commandId,
-            MovementType::Consumption,
-            $amount->minorUnits(),
-            $newBalance,
-            $commandId,
-            $sourceRevisionId
+            $amount,
+            'Expense consumption',
+            $this,
+            $sourceRevisionId,
+            $commandId
         );
-        $this->balanceMinor = $newBalance;
+        $this->balanceMinor = $movement->balanceAfter()->minorUnits();
         return $movement;
     }
 

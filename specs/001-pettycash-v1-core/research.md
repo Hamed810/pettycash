@@ -21,7 +21,9 @@ workflow, authorization, money, revision, and audit rules independently testable
   become coupled to transport and persistence details.
 - Microservices were rejected because V1 scale and the constitution do not justify distributed
   transactions, extra deployment units, or duplicated platform integration.
-- The legacy backup was rejected as an implementation base; it remains migration-reference only.
+- The legacy backup was rejected as an implementation base. PettyCash V1 is a fresh application, so
+  it is reference material only: no legacy database import, migration, or data-compatibility path is
+  in V1 scope (FR-080).
 
 ## Decision 2: Correct the PHP Runtime Floor for Nextcloud 34
 
@@ -54,22 +56,43 @@ response conventions.
 - Unversioned ad hoc endpoints were rejected because they would make compatibility and contract
   tests harder.
 
-## Decision 4: Use Nextcloud Database APIs and Forward-Only `pc_*` Migrations
+## Decision 4: Use Nextcloud Database APIs and Forward-Only App-Scoped `pettycash_*` Migrations
 
 **Decision**: Use Nextcloud schema migrations, database connection, query builder, and explicit
-repositories. Create new `pc_*` V1 tables with internal numeric keys and public UUIDs. Inspect
-existing migration records before the first migration and leave `oc_pcash_*` legacy tables intact.
+repositories. Create V1 tables under the logical app-scoped `pettycash_*` prefix with internal numeric
+keys and public UUIDs, and let the Nextcloud database abstraction apply the instance prefix; never
+hardcode an instance prefix such as `oc_`. Name every index, unique constraint, foreign key, and
+check constraint `pettycash_<table>_<subject>_<kind>` (`idx`, `uniq`, `fk`, `chk`) so that no object
+can collide with another app in the shared database. Migrations are forward-only.
 
-**Rationale**: This is portable within the supported Nextcloud database abstraction and prevents
-the reused app identity from accidentally colliding with legacy schema or migration history.
+PettyCash V1 is a fresh application: there is no legacy database import, schema migration, table
+preservation, or data-compatibility contract, and none is planned. The `pc_*` tables already present
+in the current development database are provisional V1 development schema, not legacy data; the
+baseline migrations and all repositories, tests, and fixtures are rewritten to the `pettycash_*`
+namespace so `pc_*` never enters V1 migration history, and that disposable development data is
+discarded by design. Because the discarded prototype shared the `pettycash` app ID, stale
+migration-state rows can cause Nextcloud to skip a rewritten baseline; clearing the `pettycash`
+app-ID migration state is therefore part of an approval-gated development-only reset that affects
+PettyCash only and never touches Docker volumes or the shared database. Residual prototype tables
+in a shared development database are left untouched and unmanaged.
+
+**Rationale**: This is portable within the supported Nextcloud database abstraction, and the
+app-scoped namespace is what actually prevents collisions with other Nextcloud apps on the shared
+instance — a short `pc_` prefix and unprefixed identifier assumptions do not. Forward-only
+migrations under that namespace keep the V1 baseline clean because no pre-V1 data is preserved.
 
 **Alternatives considered**:
 
 - A separate ORM was rejected because it duplicates platform facilities and complicates upgrade
   compatibility.
-- Reusing old tables was rejected because the requirements explicitly state the legacy app is not
-  the V1 design base.
-- Destructive cleanup was rejected because it would violate history and shared-environment rules.
+- Reusing the previous installation's tables was rejected because no legacy import or data
+  compatibility is in V1 scope.
+- Adding a rename migration from `pc_*` to `pettycash_*` was rejected because V1 is unreleased and
+  keeps the provisional name out of migration history entirely.
+- Retaining `pc_*` for existing development tables was rejected because it would leave a mixed,
+  non-app-scoped namespace in the V1 baseline.
+- Dropping residual prototype tables in the shared environment was rejected because it would touch
+  data outside the V1 contract and is unnecessary for a clean V1 install.
 
 ## Decision 5: Represent Money in Minor Units
 
@@ -251,6 +274,109 @@ domain rules, or storage.
   approve a different business-date calendar; date input formatting remains encapsulated for a
   later explicit decision.
 
+## Decision 16: Treat Database Portability as an Explicit V1 Requirement
+
+**Status**: Accepted 2026-09-25 (clarification session)
+
+**Context**: The project develops against MariaDB 11.4, and the constitution and the original plan
+named MariaDB as the compatibility target. That risks MariaDB-specific behavior becoming an
+undeclared application dependency, and a MariaDB-only green test run would not demonstrate
+portability.
+
+**Authoritative sources consulted** (not inferred):
+
+1. *Nextcloud 34 Administration Manual — System requirements*
+   `https://docs.nextcloud.com/server/34/admin_manual/installation/system_requirements.html`
+   (docs footer marks 34 as "stable"; last updated for 34 in 2026)
+2. *Nextcloud 34 Developer Manual — Database access*
+   `https://docs.nextcloud.com/server/34/developer_manual/basics/storage/database.html`
+   (last updated 2026-07-07)
+3. *Nextcloud server `OCP\IDBConnection`* — `https://github.com/nextcloud/server/blob/master/lib/public/IDBConnection.php`
+
+**Documented Nextcloud 34 backends** (verbatim from source 1):
+
+| Backend | Documented versions | Nextcloud's own qualification |
+|---|---|---|
+| MySQL | 8.0 / 8.4 | supported |
+| MariaDB | 10.6 / 10.11 / **11.4** / 11.8 | **recommended** |
+| Oracle | 19c, 21c, 23ai | *only as part of an enterprise subscription* |
+| PostgreSQL | 14 / 15 / 16 / 17 / **18** | **recommended** |
+| SQLite | 3.24+ | *only recommended for testing and minimal-instances* |
+
+**Decision**: V1 declares three Nextcloud database types in `appinfo/info.xml`:
+
+| Declared `<database>` | Concrete engines covered | Nextcloud's own qualification |
+|---|---|---|
+| `mysql` | MySQL 8.0/8.4 and MariaDB 10.6/10.11/11.4/11.8 | MariaDB is the **recommended** engine; Nextcloud documents that "MariaDB is backwards compatible with MySQL" and that one configuration covers both |
+| `pgsql` | PostgreSQL 14/15/16/17/18 | **recommended** |
+| `sqlite` | SQLite 3.24+ | *only recommended for testing and minimal-instances* — declared here for **compatibility verification**, not as a production recommendation |
+
+Oracle/`oci` is explicitly **outside V1 scope**. It may be added later only as an explicit
+Enterprise compatibility target. MariaDB 11.4 remains the local development backend only and is
+not a declared supported backend in its own right.
+
+**Note on SQLite**: Nextcloud qualifies SQLite for testing and minimal instances only. PettyCash
+declares it to verify compatibility, not to recommend it for production financial data. The
+developer manual (source 2) warns that on SQLite a result cursor must be closed after custom
+`execute` calls "to prevent database lock problems", which is stricter than the other backends.
+
+**Consequences**: because `appinfo/info.xml` now declares `mysql`, `pgsql`, and `sqlite` explicitly,
+the stricter Oracle schema tests that Nextcloud applies when Oracle is supported — **and when no
+database is declared at all** (source 2, "Supporting more databases") — do not bind this project.
+The project must nevertheless not exceed the portable limits by accident.
+
+**Portable rules this project adopts as V1 requirements** (each is required by a *declared*
+backend, not by Oracle):
+
+- Use `OCP\IDBConnection`, `OCP\DB\QueryBuilder\IQueryBuilder`, `OCP\AppFramework\Db\QBMapper`
+  and `OCP\DB\Types`; never reference `Doctrine\DBAL\Types\Type::*` constants directly. The
+  developer manual gives a concrete PostgreSQL failure here: PHP casts `false` to an empty string,
+  which PostgreSQL rejects.
+- Prefer `getTypedQueryBuilder()` over `getQueryBuilder()` — introduced and preferred in
+  Nextcloud 34.
+- Migrations use the Nextcloud migration/schema APIs with `Types::*` and are forward-only. They never
+  read, write, or drop prototype tables that may exist in the shared database (FR-080).
+- Tables use the logical app-scoped `pettycash_` prefix and indexes, unique constraints, foreign
+  keys, and check constraints use `pettycash_<table>_<subject>_<kind>`, because the instance prefix
+  is applied by the framework and schema object names are database-wide global on some platforms.
+  No `pc_`-prefixed table or index name remains in V1.
+- Every table carries an auto-increment integer `id` primary key; indexes are explicitly named
+  because index names are database-wide global on some platforms.
+- `GROUP BY` queries must aggregate every non-aggregated selected column, because MySQL/MariaDB
+  `ONLY_FULL_GROUP_BY` rejects otherwise. No `GROUP BY` exists in PettyCash today, so this binds
+  the still-open totals and reporting queries (T105, T106, T101, T102).
+- A delete affecting many rows must not use a `LIMIT` clause: MySQL/MariaDB accept it, other
+  backends do not.
+- `IN` lists are chunked where a backend limit is known, detected via
+  `IDBConnection::getDatabaseProvider()`.
+- `info.xml` declares `<database>mysql</database>`, `<database>pgsql</database>`, and
+  `<database>sqlite</database>` so the supported set is explicit rather than implied.
+- Because the `mysql` Nextcloud type covers two distinct concrete engines, CI must exercise MySQL
+  and MariaDB as separate jobs rather than treating a passing MariaDB run as evidence for MySQL.
+- On SQLite, a result cursor must be closed after custom `execute` calls "to prevent database lock
+  problems" (source 2) — stricter than the other declared backends.
+
+**Rules deliberately NOT adopted as V1 requirements** (Nextcloud applies them for Oracle, which is
+*not* a declared V1 backend, and they were **not** adopted as blanket constraints per the
+2026-09-25 clarification):
+
+| Oracle-derived rule | NC 34 text | Why not adopted for V1 |
+|---|---|---|
+| Table names ≤ 27 incl. `oc_` prefix | "Table names can not be longer than 27 characters" | Every declared backend allows far more (MySQL 64, PostgreSQL 63, SQLite effectively unlimited). `pettycash_transaction_revisions` is 29 and compliant with the declared set, so the app-scoped name is kept unabbreviated. |
+| Boolean columns never `NOT NULL` | "Boolean columns can not be NotNull" | Not required by `mysql`/`pgsql`/`sqlite`. Current schema happens to comply, but it is not a V1 gate. |
+| String columns ≤ 4,000 chars | "String columns can not have a length longer than 4.000 characters" | Not required by the declared set; current maximum is 1,024. |
+| No `NOT NULL` string with empty default in later migrations | "String columns can not be NotNull and have an empty string as default value when being added in a later migration" | Not required by the declared set. |
+| Column / index / FK / sequence names ≤ 30 | "…can not be longer than 30 characters" | Not required by the declared set; names follow the `pettycash_<table>_<subject>_<kind>` convention and are abbreviated only when a full descriptive name would exceed the declared limits. |
+| Galera Cluster: all tables need a primary key | "All tables must have a primary key" | Already satisfied and harmless; retained as good practice, not as an Oracle gate. |
+
+**Deferred architecture constraint — Oracle / Enterprise compatibility.** Recorded in `plan.md`.
+If Oracle support is ever added it MUST first re-verify the exact requirements against the targeted
+Nextcloud and Oracle versions (the table above reflects Nextcloud 34 documentation and may change),
+and MUST be given an explicit compatibility and migration plan. No existing table is renamed and no
+migration is added in anticipation of it.
+- Because the `mysql` Nextcloud type covers two distinct concrete engines, CI must exercise MySQL
+  and MariaDB as separate jobs rather than treating a passing MariaDB run as evidence for MySQL.
+
 ## Primary Sources Consulted
 
 - Nextcloud 34 Developer Manual: app architecture, routing, controllers, security, database,
@@ -263,8 +389,9 @@ domain rules, or storage.
 ## Research Risks Carried into Tasks
 
 - Verify the stopped local container's exact Nextcloud/PHP versions before dependency installation.
-- Inspect migration history for the reused `pettycash` app ID before choosing the first migration
-  version.
+- Clear the migration state recorded for the `pettycash` app ID through the approved
+  development-only reset before verifying a rewritten baseline, because the discarded prototype used
+  the same app ID and its rows can cause Nextcloud to skip V1 migrations.
 - Prove AppData upload compensation and public-link behavior with an early integration spike.
 - Load-test XLSX/PDF memory behavior and Persian PDF rendering at the 10,000-transaction fixture.
 - Test concurrent decisions and finance approvals with real MariaDB locking.
