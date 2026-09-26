@@ -11,6 +11,8 @@ use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Application\Port\UserDirectory;
 use OCA\PettyCash\Domain\Account\AccountMovement;
 use OCA\PettyCash\Domain\Account\Repository\AccountMovementRepository;
+use OCA\PettyCash\Domain\Shared\CurrencyCode;
+use OCA\PettyCash\Domain\Shared\Money;
 use OCA\PettyCash\Domain\Shared\Enum\MovementType;
 use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\IDBConnection;
@@ -23,12 +25,58 @@ final class DbAccountMovementRepository implements AccountMovementRepository
         private readonly CurrentUser $currentUser
     ) {}
 
+    /**
+     * The movement projection used by every read path, including the owning account's currency.
+     *
+     * A movement has **no `currency_code` column**. `data-model.md` defines the entity without one
+     * and draws `Currency 1 ── * Petty-Cash Account 1 ── * Account Movement`: the currency belongs
+     * to the account, and the ledger reaches it through that relationship. The previous
+     * implementation read and wrote a `currency_code` column on the movement table, which the
+     * migration never creates — so every read raised `Undefined array key "currency_code"` and every
+     * write failed on an unknown column. The repository could not move a single row in either
+     * direction, and the only reason it was not noticed is that nothing had yet tried.
+     *
+     * Denormalising the code onto the row would also be the wrong fix: it is a second source of
+     * truth for a value the account already owns, free to disagree with it, and the ledger is the
+     * one record a balance has to be reconstructible from.
+     *
+     * `selectAlias()` rather than an inline `c.code as currency_code`, because `IQueryBuilder`
+     * splits a select string containing ` as ` and keeps only the first segment.
+     */
+    private function applyProjection(IQueryBuilder $qb): IQueryBuilder
+    {
+        return $qb->select('m.*')
+            ->selectAlias('c.code', 'currency_code')
+            ->selectAlias('a.public_id', 'account_public_id')
+            ->selectAlias('r.public_id', 'source_revision_public_id');
+    }
+
+    /**
+     * Joins the movement table to its account and that account's currency.
+     *
+     * Inner joins for those two: a movement whose account or currency row is missing is a corrupted
+     * ledger, and returning it with a guessed currency would put a wrong figure in front of a finance
+     * officer. It has to fail instead.
+     *
+     * The revision join is a **left** join, and that is not a style choice. `source_revision_id` is
+     * nullable and every charge leaves it null, so an inner join would silently drop every charge
+     * from the ledger — the rows most likely to be read, being the ones an administrator funded the
+     * account with.
+     */
+    private function applyJoins(IQueryBuilder $qb): IQueryBuilder
+    {
+        return $qb->from('pettycash_account_movements', 'm')
+            ->join('m', 'pettycash_accounts', 'a', $qb->expr()->eq('m.account_id', 'a.id'))
+            ->join('a', 'pettycash_currencies', 'c', $qb->expr()->eq('a.currency_id', 'c.id'))
+            ->leftJoin('m', 'pettycash_transaction_revisions', 'r', $qb->expr()->eq('m.source_revision_id', 'r.id'));
+    }
+
     public function findById(int $id): ?AccountMovement
     {
         $qb = $this->connection->getQueryBuilder();
-        $qb->select('*')
-            ->from('pettycash_account_movements')
-            ->where($qb->expr()->eq('id', $qb->createNamedParameter($id)))
+        $this->applyProjection($qb);
+        $this->applyJoins($qb);
+        $qb->where($qb->expr()->eq('m.id', $qb->createNamedParameter($id)))
             ->setMaxResults(1);
         $row = $qb->executeQuery()->fetchAssociative();
         return $row ? $this->mapRow($row) : null;
@@ -37,9 +85,9 @@ final class DbAccountMovementRepository implements AccountMovementRepository
     public function findByCommandId(string $commandId): ?AccountMovement
     {
         $qb = $this->connection->getQueryBuilder();
-        $qb->select('*')
-            ->from('pettycash_account_movements')
-            ->where($qb->expr()->eq('command_id', $qb->createNamedParameter($commandId)))
+        $this->applyProjection($qb);
+        $this->applyJoins($qb);
+        $qb->where($qb->expr()->eq('m.command_id', $qb->createNamedParameter($commandId)))
             ->setMaxResults(1);
         $row = $qb->executeQuery()->fetchAssociative();
         return $row ? $this->mapRow($row) : null;
@@ -48,9 +96,9 @@ final class DbAccountMovementRepository implements AccountMovementRepository
     public function findBySourceRevisionId(int $sourceRevisionId): ?AccountMovement
     {
         $qb = $this->connection->getQueryBuilder();
-        $qb->select('*')
-            ->from('pettycash_account_movements')
-            ->where($qb->expr()->eq('source_revision_id', $qb->createNamedParameter($sourceRevisionId)))
+        $this->applyProjection($qb);
+        $this->applyJoins($qb);
+        $qb->where($qb->expr()->eq('m.source_revision_id', $qb->createNamedParameter($sourceRevisionId)))
             ->setMaxResults(1);
         $row = $qb->executeQuery()->fetchAssociative();
         return $row ? $this->mapRow($row) : null;
@@ -60,16 +108,16 @@ final class DbAccountMovementRepository implements AccountMovementRepository
     public function findByAccountId(int $accountId, ?DateTimeImmutable $from = null, ?DateTimeImmutable $to = null): array
     {
         $qb = $this->connection->getQueryBuilder();
-        $qb->select('*')
-            ->from('pettycash_account_movements')
-            ->where($qb->expr()->eq('account_id', $qb->createNamedParameter($accountId)));
+        $this->applyProjection($qb);
+        $this->applyJoins($qb);
+        $qb->where($qb->expr()->eq('m.account_id', $qb->createNamedParameter($accountId)));
         if ($from) {
-            $qb->andWhere($qb->expr()->gte('occurred_at', $qb->createNamedParameter($from->format('Y-m-d H:i:s'))));
+            $qb->andWhere($qb->expr()->gte('m.occurred_at', $qb->createNamedParameter($from->format('Y-m-d H:i:s'))));
         }
         if ($to) {
-            $qb->andWhere($qb->expr()->lte('occurred_at', $qb->createNamedParameter($to->format('Y-m-d H:i:s'))));
+            $qb->andWhere($qb->expr()->lte('m.occurred_at', $qb->createNamedParameter($to->format('Y-m-d H:i:s'))));
         }
-        $qb->orderBy('occurred_at', 'DESC');
+        $qb->orderBy('m.occurred_at', 'DESC');
         $rows = $qb->executeQuery()->fetchAllAssociative();
         return array_map([$this, 'mapRow'], $rows);
     }
@@ -78,10 +126,10 @@ final class DbAccountMovementRepository implements AccountMovementRepository
     public function findByAccountIdPaged(int $accountId, int $offset, int $limit): array
     {
         $qb = $this->connection->getQueryBuilder();
-        $qb->select('*')
-            ->from('pettycash_account_movements')
-            ->where($qb->expr()->eq('account_id', $qb->createNamedParameter($accountId)))
-            ->orderBy('occurred_at', 'DESC')
+        $this->applyProjection($qb);
+        $this->applyJoins($qb);
+        $qb->where($qb->expr()->eq('m.account_id', $qb->createNamedParameter($accountId)))
+            ->orderBy('m.occurred_at', 'DESC')
             ->setFirstResult($offset)
             ->setMaxResults($limit);
         $rows = $qb->executeQuery()->fetchAllAssociative();
@@ -111,7 +159,7 @@ final class DbAccountMovementRepository implements AccountMovementRepository
                 'movement_type' => $qb->createNamedParameter($movement->type->value),
                 'amount_minor' => $qb->createNamedParameter($movement->amount->minorUnits()),
                 'balance_after_minor' => $qb->createNamedParameter($movement->balanceAfter->minorUnits()),
-                'currency_code' => $qb->createNamedParameter((string)$movement->amount->currency()),
+                // No `currency_code`: the currency is the account's, reached through `account_id`.
                 'description' => $qb->createNamedParameter($movement->description ?? ''),
                 'source_revision_id' => $movement->sourceRevisionId ? $qb->createNamedParameter((int) $movement->sourceRevisionId) : $qb->createNamedParameter(null),
                 'source_decision_id' => $qb->createNamedParameter(null),
@@ -158,15 +206,29 @@ final class DbAccountMovementRepository implements AccountMovementRepository
 
     private function mapRow(array $row): AccountMovement
     {
+        $currency = CurrencyCode::fromString((string) $row['currency_code']);
+
         return new AccountMovement(
             $row['public_id'],
             MovementType::from($row['movement_type']),
-            \OCA\PettyCash\Domain\Shared\Money::of((int) $row['amount_minor'], \OCA\PettyCash\Domain\Shared\CurrencyCode::fromString($row['currency_code'])),
-            \OCA\PettyCash\Domain\Shared\Money::of((int) $row['balance_after_minor'], \OCA\PettyCash\Domain\Shared\CurrencyCode::fromString($row['currency_code'])),
+            Money::of((int) $row['amount_minor'], $currency),
+            Money::of((int) $row['balance_after_minor'], $currency),
             $row['description'],
             $row['command_id'],
-            $row['source_revision_id'] ? (string) $row['source_revision_id'] : null,
-            $row['occurred_at'] ? new DateTimeImmutable($row['occurred_at']) : null
+            // The revision's **public UUID**, not the surrogate `source_revision_id` key.
+            // `contracts/ocs-api.yaml` declares `sourceRevisionId` as `format: uuid`, and FR-040's
+            // traceability is only useful to a caller who can act on the id: a raw auto-increment
+            // key is not resolvable by any client and leaks an internal counter through the public
+            // API. `null` for a charge, which has no justifying revision.
+            isset($row['source_revision_public_id']) ? $row['source_revision_public_id'] : null,
+            $row['occurred_at'] ? new DateTimeImmutable($row['occurred_at']) : null,
+            // The surrogate key and the owning account's public UUID, so a movement read back from
+            // the database can be passed to `save()` again — the idempotency check and the account
+            // lookup both need them, and an aggregate that lost them on the way out could not be
+            // written a second time.
+            (int) $row['id'],
+            null,
+            $row['account_public_id'] ?? null
         );
     }
 }

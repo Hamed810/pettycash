@@ -89,10 +89,28 @@ const FIXTURE_IDS = [
     'transaction'     => '66666666-6666-4666-8666-666666666666',
     'revision'        => '77777777-7777-4777-8777-777777777777',
     'secondAccount'   => '88888888-8888-4888-8888-888888888888',
+    // An account belonging to somebody who is not the acting user.
+    //
+    // The ledger states what a named person was given and what they spent, so "not yours" is the
+    // answer that has to be enforced. Without a row owned by another user the only way to test that
+    // is to assert on an id that does not exist, which is indistinguishable from a 404 for a missing
+    // account and would pass against an endpoint that never checks ownership at all. The uid is a
+    // plain string that matches no Nextcloud account on purpose: the endpoint compares it to the
+    // session uid and never resolves it, so a real user would be needed by nothing.
+    'foreignAccount'  => 'abababab-1111-4111-8111-111111111111',
     'secondCurrency'  => '99999999-9999-4999-8999-999999999999',
     'managerRole'     => 'bbbbbbbb-1111-4111-8111-111111111111',
     'seniorRole'      => 'bbbbbbbb-2222-4222-8222-222222222222',
     'evidence'        => 'cccccccc-1111-4111-8111-111111111111',
+    // Two ledger rows on the primary account, one of each movement type.
+    //
+    // `GET /accounts/{id}/movements` is the only read that states what a person was given and what
+    // they spent, so a fixture with an empty ledger could not tell a working projection from one
+    // that silently returns nothing — which is exactly the failure an empty table invites. The
+    // charge carries no `source_revision_id` and the consumption carries the fixture revision, so
+    // the two branches of the schema are both represented and the sign of each is distinguishable.
+    'chargeMovement'  => 'cccccccc-2222-4222-8222-222222222222',
+    'consumptionMovement' => 'cccccccc-3333-4333-8333-333333333333',
     // A second business trio denominated in USD. FR-021 makes the sheet the
     // authoritative currency of every transaction on it, so a non-IRR sheet is
     // what proves the revision read path resolves the real currency instead of
@@ -264,6 +282,15 @@ upsert($db, 'pettycash_accounts', 'public_id', FIXTURE_IDS['secondAccount'], arr
     'lock_version' => 0,
 ], $audit));
 
+upsert($db, 'pettycash_accounts', 'public_id', FIXTURE_IDS['foreignAccount'], array_merge([
+    'public_id' => FIXTURE_IDS['foreignAccount'],
+    'user_uid' => 'pettycash-somebody-else',
+    'currency_id' => $currencyDbId,
+    'balance_minor' => 5000,
+    'active' => true,
+    'lock_version' => 0,
+], $audit));
+
 $accountDbId = scalar($db, 'pettycash_accounts', FIXTURE_IDS['account'], 'id');
 
 // --- Management roles for the acting user ---------------------------------
@@ -367,6 +394,58 @@ $link = $db->getQueryBuilder()->update('pettycash_transactions');
 $link->set('active_revision_id', $link->createNamedParameter($revisionDbId))
     ->where($link->expr()->eq('id', $link->createNamedParameter($transactionDbId)))
     ->executeStatement();
+
+// --- The account ledger ---------------------------------------------------
+//
+// The opening balance is written directly on the account row, which is a balance with no history
+// behind it — and a ledger that begins mid-story cannot show that a charge and a consumption are
+// distinguishable, that `balance_after` moves in the right direction, or that the last row agrees
+// with the balance the account actually carries. Two rows make all three checkable.
+//
+// The figures are chosen so the ledger reconciles with the account row *and* leaves that row's
+// balance at 100,000,000, which the submission and negative-balance assertions already depend on:
+// a charge of 100,100,000 followed by the fixture revision's 100,000 consumption ends at exactly
+// 100,000,000. Changing the account balance to make the numbers easier would have quietly moved
+// the baseline for every other contract test that reads it.
+upsert($db, 'pettycash_account_movements', 'public_id', FIXTURE_IDS['chargeMovement'], [
+    'public_id' => FIXTURE_IDS['chargeMovement'],
+    'account_id' => $accountDbId,
+    'movement_type' => 'CHARGE',
+    'amount_minor' => 100100000,
+    'balance_after_minor' => 100100000,
+    'description' => 'Opening petty-cash float',
+    'source_revision_id' => null,
+    'source_decision_id' => null,
+    'command_id' => 'cccccccc-4222-4222-8222-222222222222',
+    // `actor_uid`/`actor_name`/`actor_role` come from the migration's `actorColumns()`. They are
+    // NOT NULL with no default, and there is no `created_at`/`updated_at` on this table at all: the
+    // migration calls `actorColumns()` but not `auditColumns()`, so a row carrying the usual audit
+    // columns fails. The failure is silent — the seeder exits 0 having printed nothing, which the
+    // harness reports as "Contract fixture seeding produced no output" rather than as a schema error.
+    'actor_uid' => $userUid,
+    'actor_name' => $userUid,
+    'actor_role' => 'FINANCE',
+    'occurred_at' => $now,
+]);
+
+upsert($db, 'pettycash_account_movements', 'public_id', FIXTURE_IDS['consumptionMovement'], [
+    'public_id' => FIXTURE_IDS['consumptionMovement'],
+    'account_id' => $accountDbId,
+    'movement_type' => 'CONSUMPTION',
+    'amount_minor' => 100000,
+    // 100,100,000 less this consumption is the 100,000,000 the account row carries, so a test can
+    // assert that the last movement's `balanceAfter` and the account's `balance` agree. A fixture
+    // where they disagreed would make that assertion fail for the wrong reason.
+    'balance_after_minor' => 100000000,
+    'description' => 'Settlement of the fixture revision',
+    'source_revision_id' => $revisionDbId,
+    'source_decision_id' => null,
+    'command_id' => 'cccccccc-4333-4333-8333-333333333333',
+    'actor_uid' => $userUid,
+    'actor_name' => $userUid,
+    'actor_role' => 'FINANCE',
+    'occurred_at' => $now,
+]);
 
 // --- A non-rial sheet -----------------------------------------------------
 //
@@ -630,6 +709,9 @@ echo json_encode([
     'expenseTypeId'      => FIXTURE_IDS['expenseType'],
     'accountId'          => FIXTURE_IDS['account'],
     'secondAccountId'    => FIXTURE_IDS['secondAccount'],
+    'foreignAccountId'   => FIXTURE_IDS['foreignAccount'],
+    'chargeMovementId'   => FIXTURE_IDS['chargeMovement'],
+    'consumptionMovementId' => FIXTURE_IDS['consumptionMovement'],
     'sheetId'            => FIXTURE_IDS['sheet'],
     'transactionId'      => FIXTURE_IDS['transaction'],
     'revisionId'         => FIXTURE_IDS['revision'],

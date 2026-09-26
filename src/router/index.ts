@@ -1,3 +1,4 @@
+import { defineComponent, h } from 'vue'
 import { createRouter, createWebHashHistory, type Router, type RouteRecordRaw } from 'vue-router'
 
 const DashboardView = () => import('../views/DashboardView.vue')
@@ -12,6 +13,23 @@ const SeniorQueueView = () => import('../views/reviews/SeniorQueueView.vue')
 const FinanceQueueView = () => import('../views/reviews/FinanceQueueView.vue')
 const TransactionReviewDetailView = () => import('../views/reviews/TransactionReviewDetailView.vue')
 const ReturnsQueueView = () => import('../views/reviews/ReturnsQueueView.vue')
+const FinanceReviewView = () => import('../views/reviews/FinanceReviewView.vue')
+const AccountView = () => import('../views/accounts/AccountView.vue')
+
+/**
+ * A route that renders nothing, for a path this app has no view for.
+ *
+ * Registered deliberately rather than left to fall through: a mistyped hash in the address bar used
+ * to produce a blank page with no explanation, which reads as a bug. A named placeholder turns it
+ * into a sentence saying the page does not exist.
+ */
+const NotFoundView = defineComponent({
+	name: 'NotFoundView',
+	setup() {
+		return () =>
+			h('div', { dir: 'rtl', 'data-testid': 'route-not-found' }, 'صفحه مورد نظر یافت نشد')
+	}
+})
 
 /**
  * The single route table.
@@ -37,7 +55,22 @@ export const routes: RouteRecordRaw[] = [
 	{ path: '/reviews/senior', name: 'review-queue-senior', component: SeniorQueueView },
 	{ path: '/reviews/finance', name: 'review-queue-finance', component: FinanceQueueView },
 	{ path: '/reviews/returns', name: 'review-queue-returns', component: ReturnsQueueView },
-	{ path: '/reviews/:stage/:transactionId', name: 'review-detail', component: TransactionReviewDetailView, props: true }
+	{ path: '/reviews/:stage/:transactionId', name: 'review-detail', component: TransactionReviewDetailView, props: true },
+
+	// Finance review (US3, T065).
+	//
+	// This path **overlaps** `/reviews/:stage/:transactionId`: both match
+	// `/reviews/finance/tx-1`. `vue-router` ranks a static segment above a parameter, so the finance
+	// row resolves here and the generic detail view never sees a finance transaction — the ranking is
+	// by score, not by declaration order, so moving this line would not change that. It is recorded
+	// because the overlap is invisible at the call site, and because a finance row that landed on the
+	// generic view would lose exactly the settled-versus-management labelling T065 exists to add.
+	{ path: '/reviews/finance/:transactionId', name: 'finance-review', component: FinanceReviewView, props: true },
+
+	// Purchaser balance and ledger (US3, T065).
+	{ path: '/accounts', name: 'accounts', component: AccountView },
+
+	{ path: '/:pathMatch(.*)*', name: 'not-found', component: NotFoundView }
 ]
 
 export function createAppRouter(): Router {

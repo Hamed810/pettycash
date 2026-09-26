@@ -55,4 +55,42 @@ class AccountController extends OCSController
             return $this->ocsErrorMapper->map($e, $this->request->getHeader('X-PettyCash-Command-ID'));
         }
     }
+
+    /**
+     * One account's ledger, as a `MovementPage`.
+     *
+     * The account id comes from the path, so it is the one identifier in this controller that is not
+     * taken from the trusted session, and it is the reason ownership is checked in the service: a
+     * ledger states what a named person was given and what they spent, so "not yours" and "does not
+     * exist" are answered identically rather than distinguishable.
+     *
+     * An account with no movements is a success with an empty page. An account that has never been
+     * used is a normal state, and reporting it as missing would be a false alarm about data the
+     * application simply does not have yet.
+     */
+    #[NoAdminRequired]
+    public function movements(string $accountId, int $page = 1, int $pageSize = 25): DataResponse
+    {
+        try {
+            $uid = $this->currentUser->uid();
+            if ($uid === '') {
+                return $this->ocsErrorMapper->forbidden('No authenticated user in session');
+            }
+
+            return new DataResponse($this->accountService->listMovements($uid, $accountId, $page, $pageSize));
+        } catch (\InvalidArgumentException $e) {
+            return $this->ocsErrorMapper->validation(
+                $e->getMessage(),
+                $this->request->getHeader('X-PettyCash-Command-ID'),
+                ['page' => [$e->getMessage()]]
+            );
+        } catch (\LogicException $e) {
+            return $this->ocsErrorMapper->notFound(
+                $e->getMessage(),
+                $this->request->getHeader('X-PettyCash-Command-ID')
+            );
+        } catch (\Throwable $e) {
+            return $this->ocsErrorMapper->map($e, $this->request->getHeader('X-PettyCash-Command-ID'));
+        }
+    }
 }

@@ -159,17 +159,17 @@ movements, balances, final states, and rollback.
 - [x] T055 [P] [US3] Write failing finance-rule tests proving senior-approved allows approve/reject/return, senior-rejected forbids approve (explicit test: finance attempt to approve senior-rejected transaction returns forbidden per FR-039), pending/rejected has no balance effect, and negative balances are permitted (explicit test: approved consumption exceeding account balance results in negative balance per FR-027) in `tests/Unit/Domain/Workflow/FinanceDecisionPolicyTest.php`
 - [ ] T056 [P] [US3] Write failing integration tests for fixed row-lock order, exactly-one consumption, command replay, conflicting command UUID, simultaneous approvals, and rollback of decision/movement/balance/state/audit failures in `tests/Integration/Workflow/FinanceSettlementTest.php`
 - [ ] T057 [P] [US3] Write failing contract tests for shared finance queue and finance decision responses in `tests/Contract/Controller/FinanceReviewControllerTest.php`
-- [ ] T058 [P] [US3] Write failing Vue tests for the shared queue, senior-decision restrictions, settlement feedback, and manual retry messaging in `tests/Frontend/Component/FinanceReview.spec.ts`
+- [X] T058 [P] [US3] Write failing Vue tests for the shared queue, senior-decision restrictions, settlement feedback, and manual retry messaging in `tests/Frontend/Component/FinanceReview.spec.ts` (complete — 25 tests covering all four subjects; landed with T287 and the US3 slice, `docs/reports/US3-finance-slice.md`. The "failing" in the task text is the RED convention: they were written and mutation-checked, and pass against the implementation built alongside them)
 
 ### Implementation for User Story 3
 
 - [x] T059 [P] [US3] Implement immutable AccountMovement domain behavior with `positive magnitude; type determines sign`, exact `balance_after_minor`, unique command ID, and unique consumption source in `lib/Domain/Account/AccountMovement.php`
-- [x] T060 [US3] Implement account locking, movement insertion, balance projection, and reconciliation repositories in `lib/Infrastructure/Persistence/Account/DbAccountRepository.php` and `lib/Infrastructure/Persistence/Account/DbAccountMovementRepository.php`
-- [x] T061 [US3] Implement finance settlement orchestration that atomically writes decision, unique movement, balance, transaction final state, sheet final state, command result, and audit in `lib/Application/Workflow/FinanceSettlementService.php`
+- [ ] T060 [US3] Implement account locking, movement insertion, balance projection, and reconciliation repositories in `lib/Infrastructure/Persistence/Account/DbAccountRepository.php` and `lib/Infrastructure/Persistence/Account/DbAccountMovementRepository.php` (**reopened by the US3 slice** — `DbAccountMovementRepository` read and wrote a `currency_code` column the schema has never had, so it could not move a single row in either direction. Repaired here; **movement insertion remains unverified and `findBySourceRevisionId` is still untested**, so this stays open)
+- [ ] T061 [US3] Implement finance settlement orchestration that atomically writes decision, unique movement, balance, transaction final state, sheet final state, command result, and audit in `lib/Application/Workflow/FinanceSettlementService.php` (**reopened by the US3 slice** — `recordConsumption()` updates the account balance and **never calls `$movementRepository->save()`**. The repository is injected and used nowhere in the class, so FR-040's consumption movement is never written: a finance approval moves money without leaving a ledger entry, and the unique `source_revision_id` index that T056's "exactly-one consumption" relies on is never exercised)
 - [x] T062 [US3] Implement shared finance queue queries and decision restrictions without cost-center scoping in `lib/Application/Workflow/FinanceQueue.php`
-- [x] T063 [US3] Add finance queue, finance decision, account summary, and movement OCS routes/controllers in `appinfo/routes.php`, `lib/Controller/ReviewController.php`, and `lib/Controller/AccountController.php`
+- [ ] T063 [US3] Add finance queue, finance decision, account summary, and movement OCS routes/controllers in `appinfo/routes.php`, `lib/Controller/ReviewController.php`, and `lib/Controller/AccountController.php` (**reopened by the US3 slice** — `appinfo/routes.php` declares four account routes and `AccountController` implemented one, so `account#create`, `account#charge` and `account#movements` all resolved to a method that did not exist and answered **HTTP 500**. `movements` is implemented and covered here; **`create` and `charge` are still missing and still 500**)
 - [x] T064 [P] [US3] Implement finance/account typed API services and stores in `src/services/reviewsApi.ts`, `src/services/accountsApi.ts`, `src/stores/reviews.ts`, and `src/stores/accounts.ts`
-- [ ] T065 [US3] Implement finance review, purchaser balance, and account movement views with explicit settled-versus-management labels in `src/views/reviews/FinanceReviewView.vue`, `src/views/accounts/AccountView.vue`, and `src/components/review/` (all elements visible without horizontal scroll at 390px viewport; WCAG AA contrast; ≥12pt Persian font per FR-071)
+- [ ] T065 [US3] Implement finance review, purchaser balance, and account movement views with explicit settled-versus-management labels in `src/views/reviews/FinanceReviewView.vue`, `src/views/accounts/AccountView.vue`, and `src/components/review/` (all elements visible without horizontal scroll at 390px viewport; WCAG AA contrast; ≥12pt Persian font per FR-071) (**partial** — the three views and `SettlementLabel.vue` are built and verified; the same three browser-measured clauses block the remainder that blocked `T053`, and are recorded in `docs/reports/US3-finance-slice.md`)
 - [ ] T066 [US3] Add shared-queue, restriction, negative-balance (explicit test: approved consumption exceeding account balance results in negative balance per FR-027), idempotency, concurrency, and forced-rollback Playwright/API journeys in `tests/E2E/finance-settlement.spec.ts` (verify p95 <3s, error rate <0.1%, zero data loss per FR-073)
 
 **Checkpoint**: Financial settlement is atomic, idempotent, concurrency-safe, and independently
@@ -2358,16 +2358,60 @@ because it materially undermines every future PHP verification in this repositor
   out to be mostly measurement error rather than missing behaviour — and the first time (T283) it hid
   a spec-wide typography violation, so neither number is a reason to discount a red gate.
 
-- [ ] T287 [MEDIUM] Reconcile the finance-queue assertion that sits in the US2 spec file, because
+- [X] T287 [MEDIUM] Reconcile the finance-queue assertion that sits in the US2 spec file, because
   `ManagementReview.spec.ts > FinanceQueueView > should render shared finance queue for all finance
   officers` tests US3 behaviour from a US2 suite. The shared finance queue is US3: `T058` writes its Vue
   tests into `tests/Frontend/Component/FinanceReview.spec.ts`, and `T065`/`T193` own the view. So no task
   owns this particular assertion, and it will otherwise be counted as a US2 failure forever while US3 work
-  proceeds. Either move it to the US3 suite or record explicitly why the US2 file keeps it (partial)
+  proceeds. Either move it to the US3 suite or record explicitly why the US2 file keeps it (complete — moved,
+  the first of the two options)
+
+  **Moved, not recorded**: `tests/Frontend/Component/FinanceReview.spec.ts` is created as the US3 suite
+  `T058` owns, and the `FinanceQueueView` block leaves `ManagementReview.spec.ts` with a comment saying
+  where it went and why. `ManagementReview.spec.ts` is **24/24** and `npx vitest run` is now
+  **160 passed / 160** across 6 files — the first time the frontend gate has been fully green, from
+  1 failed / 127 passed of 128. `typecheck`, `stylelint`, `build` and `check:portability` are clean and
+  `lint` is 0 errors / 105 warnings, unchanged.
+
+  **`should deny administrator without finance role from finance actions` stays in the US2 file on
+  purpose**, and that is the judgement the task asked to be recorded either way. It mounts
+  `FinanceQueueView`, but what it asserts is an authorization property — an administrator without the
+  finance role is offered no decision affordance — which is `T045`/FR-045 scope and cross-cutting rather
+  than US3 finance-queue content. Moving it into the US3 file would be the same category error in reverse.
+  It is recorded as weak rather than fixed here: it seeds an empty queue and then asserts no decision
+  button is present, which an empty queue would satisfy even with authorization entirely absent, so it
+  is a second instance of the pattern this task exists to correct and belongs with the `T045` work.
+
+  **Both moved assertions were corrected rather than relocated, and the corrections are not cosmetic.**
+  The red one asked for `[data-testid="queue-item"]`, a test id no component has ever emitted — the views
+  emit `queue-row-{id}`, which is what lets a row be told from its neighbours, and inventing a `queue-item`
+  attribute to satisfy it would have tested nothing. The other asserted the absence of
+  `[data-testid="cost-center-filter"]`, which passes just as well against a view that renders nothing,
+  since no queue view has ever had a cost-centre filter. FR-034/T062 make the substantive claim — the
+  finance queue is shared, so finance asks for the whole queue and not a slice — and that is observable in
+  the request, so it is asserted there. **The first version of that assertion read `config.url` and
+  therefore could not fail**: axios keeps query parameters in `config.params` and serialises them at send
+  time, so a `costCenterId` added to the request was invisible to it. It passes 4/4 with the mutation
+  applied. Re-read from `config.params` and asserting the key set is exactly `['page', 'pageSize']`, the
+  same mutation fails it. Two tests were added rather than only relocating two: that finance sees the
+  senior decision it is deciding on top of, and that an empty queue says so.
+
+  **The new suite drives the component through the transport instead of seeding the store.** The US2 file
+  seeds `reviewsStore.costCenterQueue` and stubs `fetchCostCenterQueue`, which works only because the stub
+  is what stops the mount-time load from overwriting the seed — it makes the component a passenger on state
+  the test arranged, and it breaks silently if the view ever stops loading on mount. The first draft of the
+  new file made the same mistake and rendered zero rows, which is how it was caught. Here the request is
+  really issued and the page really arrives through `fetchQueue`, so the assertions are about what the
+  component does with a response.
+
+  **All four tests were mutation-checked**, because a relocated assertion that stops testing anything is
+  the failure mode this task is about. Removing the per-row test id fails 2; removing the senior-decision
+  cell fails 1; disabling the empty state fails 1; adding a `costCenterId` to the queue request fails 1.
+  `src/` is byte-identical to its pre-task state afterwards.
 
 ### HIGH — PHP verification can execute stale bytecode and report a false result
 
-- [ ] T288 [HIGH] Make PHP verification immune to Apache's opcode cache, because the contract tests issue
+- [X] T288 [HIGH] Make PHP verification immune to Apache's opcode cache, because the contract tests issue
   **real HTTP requests** and are therefore served by Apache, which has `opcache.enable => On` and
   `opcache.revalidate_freq = 60`. A run started within sixty seconds of editing `lib/` can execute the
   previous bytecode, and this is not theoretical: during this convergence a mutation check reported a
@@ -2380,7 +2424,59 @@ because it materially undermines every future PHP verification in this repositor
   obtained this way is not evidence. The fix is to record the constraint where an agent will meet it and to
   give the wrapper a way to honour it — either a `scripts/dev` helper that clears the SAPI cache Apache is
   using, or an explicit settle requirement documented alongside the other `scripts/dev/*` rules in
-  `AGENTS.md` (partial)
+  `AGENTS.md` (complete — `scripts/dev/opcache-settle` is the second of the two options, not the first, and
+  that choice was forced rather than preferred)
+
+  **Why a settle and not a reset.** The first option turned out to be unreachable from this repository.
+  `opcache_reset()` only affects the SAPI it is called in, so the CLI run resets nothing that serves a
+  request; and dropping a script into the document root does not work either, because
+  `/var/www/html/.htaccess:216` is a front-controller config that falls through to `RewriteRule . index.php`
+  — a probe script dropped in the docroot returned the Nextcloud 404 page instead of executing. The
+  remaining route is `apachectl -k graceful` or a container restart, which is shared environment state and
+  was not used. A wait is sufficient by proof, not by approximation: with `opcache.validate_timestamps => 1`
+  a cached entry is served without touching disk only while `now - t_last_check < revalidate_freq`, and
+  `t_last_check` is a moment at which the mtime was already correct, so a *stale* entry requires
+  `t_last_check < mtime` and therefore `now < mtime + revalidate_freq`. Once `now > mtime + revalidate_freq`
+  nothing stale can be served. `max_accel_time` is unset, so there is no second shorter TTL, and
+  `file_update_protection` (2s) only stops caching freshly written files, which errs towards recompiling.
+
+  **Measured here, both directions, with a canary throwing unconditionally from
+  `SheetPayloadFormatter::totals()`.** Canary, no settle: 13/13 passing — a false PASS. Correct code, no
+  settle: 2 failures — a false FAIL, and `null` where `100000` was asserted, which is the exact shape of a
+  real regression, so an agent that trusted it would have "fixed" working code. Canary with settle: 2
+  failures. Correct code with settle: 13/13. The middle row is the one that matters, because it means the
+  number this task was written about is not an edge case but a routine outcome of editing and immediately
+  re-running.
+
+  **Delivered**: `scripts/dev/opcache-settle` (blocks; `--status` polls and exits 3 while outstanding; exits
+  non-zero rather than proceeding if the wait cannot be computed), called by `scripts/dev/phpunit` before
+  every run that can execute a test; an **Opcode Cache Settling (MANDATORY)** section in `AGENTS.md` so an
+  agent meets the constraint before producing a number, plus a row in the wrapper table and notes in the PHP
+  and frontend verification sections. The helper reports a *measurement*, never an assumption: a failed
+  `docker exec` or a non-numeric mtime is rejected rather than being allowed to evaluate as `0` inside
+  `$(( ))` and produce a confident false "settled", every pass re-scans so an edit made during the wait
+  extends it, and the final state is read back after the wait instead of assumed from the loop comparison.
+  Nine paths were exercised against a stubbed `in-container` — container unreachable, empty settings,
+  unreadable mtimes, settled, unsettled `--status`, `validate_timestamps=0`, opcache disabled, missing
+  `revalidate_freq`, unknown argument — all as intended. Scope is `lib/` and `appinfo/`, files and
+  directories, so creates and deletes are covered and editing `tests/`, `docs/` or the frontend costs
+  nothing.
+
+  **T280's mutation claim re-measured** from a settled state, because it was recorded while the cache was
+  untrustworthy and it is the number that would be cited to prove the totals projection is load-bearing:
+  `SheetTotals::fromRows([])` instead of the query call fails **3** contract tests —
+  `testSheetTotalsSumTheRealActiveRevisions`, `testSubmittedTotalIsASnapshotNotALiveSum`,
+  `testSheetListCarriesTotalsToo` — plus the T275 baseline. The claim holds.
+
+  **`npm run test:e2e` was exposed too and is now covered.** `tests/E2E/purchaser-submit.spec.ts` reaches
+  the app at `http://localhost:8080`, so Playwright also executes `lib/` through the same cache; a
+  `pretest:e2e` hook settles first, and `AGENTS.md` records it in the frontend section.
+
+  **Result**: `scripts/dev/phpunit` is 190 tests / 937 assertions / 1 failure (T275), unchanged, and `lib/`
+  is byte-identical to its pre-task state — the numbers did not change, they became trustworthy. Report:
+  `docs/reports/T288.md`. **Cost accepted**: up to 61s once per edit to `lib/`, zero otherwise, which is
+  the price of not touching the shared container. A reset would remove the cost if restarting Apache is
+  ever approved.
 
 ### MEDIUM — recorded for awareness, deliberately not appended
 

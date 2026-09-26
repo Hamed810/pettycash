@@ -6,6 +6,7 @@ namespace OCA\PettyCash\Tests\Integration\Account;
 
 use OCA\PettyCash\Application\Account\AccountService;
 use OCA\PettyCash\Domain\Account\PettyCashAccount;
+use OCA\PettyCash\Domain\Account\Repository\AccountMovementRepository;
 use OCA\PettyCash\Domain\Account\Repository\AccountRepository;
 use OCA\PettyCash\Domain\Configuration\Currency;
 use OCA\PettyCash\Domain\Configuration\Repository\CurrencyRepository;
@@ -24,6 +25,7 @@ final class AccountServiceTest extends TestCase
 {
     private $container;
     private AccountRepository $accounts;
+    private AccountMovementRepository $movements;
     private CurrencyRepository $currencies;
     private AccountService $service;
     private string $userUid;
@@ -35,7 +37,14 @@ final class AccountServiceTest extends TestCase
         $this->accounts = $this->container->query(AccountRepository::class);
         $currencies = $this->container->query(CurrencyRepository::class);
         $this->currencies = $currencies instanceof CurrencyRepository ? $currencies : new \OCA\PettyCash\Tests\TestDoubles\InMemoryCurrencyRepository();
-        $this->service = new AccountService($this->accounts);
+        $movements = $this->container->query(AccountMovementRepository::class);
+        $this->movements = $movements instanceof AccountMovementRepository
+            ? $movements
+            : new \OCA\PettyCash\Tests\TestDoubles\InMemoryAccountMovementRepository();
+        // The movement repository is a second constructor dependency because `listMovements()` is
+        // the ledger read; passing only the account repository would make every test in this file die
+        // in `setUp()` rather than on a behaviour.
+        $this->service = new AccountService($this->accounts, $this->movements);
         $this->userUid = 'account-service-test-user';
         // minorUnit 3 is deliberately a scale no hardcoded currency table would guess, so a
         // regression to a built-in IRR/USD/EUR/GBP lookup is detected rather than tolerated.

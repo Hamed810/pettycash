@@ -252,7 +252,15 @@ export interface Movement {
 	amount: Money
 	balanceAfter: Money
 	description: string
-	sourceRevisionId?: string
+	/**
+	 * The public UUID of the revision this movement settled, or `null` for a charge.
+	 *
+	 * Nullable rather than merely optional because `contracts/ocs-api.yaml` declares it
+	 * `nullable: true` and the endpoint sends it on every row: an absent property and an explicit
+	 * `null` are different answers here, because the first would leave "a charge, which no revision
+	 * justifies" indistinguishable from a projection that forgot the field.
+	 */
+	sourceRevisionId?: string | null
 	occurredAt: string
 }
 

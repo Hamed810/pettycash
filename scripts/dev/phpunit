@@ -27,6 +27,22 @@ if [ -f "$ENV_FILE" ]; then
   done < "$ENV_FILE"
 fi
 
+# The OCS contract tests issue real HTTP requests, so `lib/` is loaded by
+# Apache's mod_php through an opcode cache that can hold the previous bytecode
+# for `opcache.revalidate_freq` seconds after an edit. PHPUnit itself runs in
+# the CLI SAPI, where opcache is off, so the run cannot notice this itself: it
+# would report a false PASS or a false FAIL and look healthy either way.
+# Settling first is what makes the result evidence. It costs nothing when
+# nothing has changed recently, and it is a hard failure if the wait cannot be
+# computed, because an unverified PHP result is not a result.
+#
+# The only exception is an argument that cannot run a test at all, where there is
+# no bytecode to settle and a wait would only be an obstacle.
+case "${1:-}" in
+  --list-tests|--help|-h|--version|--help-md|--migrate-configuration) ;;
+  *) "$SCRIPT_DIR/opcache-settle" ;;
+esac
+
 exec "$SCRIPT_DIR/in-container" \
   "${ENV_ARGS[@]+"${ENV_ARGS[@]}"}" \
   php vendor/bin/phpunit \

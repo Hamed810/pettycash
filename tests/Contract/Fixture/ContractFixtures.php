@@ -106,6 +106,21 @@ final class ContractFixtures
         return self::id('secondAccountId');
     }
 
+    public static function foreignAccountId(): string
+    {
+        return self::id('foreignAccountId');
+    }
+
+    public static function chargeMovementId(): string
+    {
+        return self::id('chargeMovementId');
+    }
+
+    public static function consumptionMovementId(): string
+    {
+        return self::id('consumptionMovementId');
+    }
+
     public static function sheetId(): string
     {
         return self::id('sheetId');

@@ -1,0 +1,232 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Block until Apache can no longer be serving stale bytecode for this app's PHP.
+#
+# WHY THIS EXISTS
+#
+# `opcache.enable => 1` and `opcache.revalidate_freq => 60` in the Nextcloud
+# container, and `opcache.enable_cli => 0`. The CLI SAPI that runs PHPUnit
+# therefore recompiles every file it loads, so unit and integration tests can
+# never read stale bytecode. The OCS contract tests are the opposite: they
+# issue real HTTP requests, so `lib/` is loaded by Apache's `mod_php` through
+# the opcode cache. A run started within `revalidate_freq` seconds of an edit
+# can execute the *previous* bytecode.
+#
+# That is not a theoretical hazard. It produced a false PASS (a hardcoded empty
+# `totals` object that the tests do catch once the cache has settled) and a
+# false four-test FAIL (a restore that was then reported green), and a canary
+# that threw unconditionally from `SheetPayloadFormatter::totals()` did not fire
+# at all. See `tasks.md` T288. Both directions are wrong, so a green run proves
+# nothing until the cache has settled.
+#
+# WHY IT WAITS INSTEAD OF RESETTING
+#
+# The only way to *reset* the cache is `opcache_reset()` inside the `mod_php`
+# SAPI. `php -r 'opcache_reset();'` resets a different SAPI and achieves
+# nothing, and Apache's document root is a front-controller config
+# (`RewriteRule . index.php` in `/var/www/html/.htaccess`) that will not execute
+# a dropped script. Reaching the real SAPI would mean restarting Apache, which is
+# shared environment state and not this repository's to disturb. Waiting needs
+# no permission and is provably sufficient, which is why this is a wait.
+#
+# WHY WAITING IS SUFFICIENT
+#
+# With `opcache.validate_timestamps => 1`, a cached entry is served without
+# touching disk only while `now - t_last_check < revalidate_freq`, and
+# `t_last_check` is a moment at which the file's mtime was already correct. So a
+# *stale* entry requires `t_last_check < mtime`, and therefore requires
+# `now < mtime + revalidate_freq`. The contrapositive is the rule this script
+# implements: once `now > mtime + revalidate_freq`, nothing stale can be served.
+# `opcache.max_accel_time` is unset (no second, shorter TTL) and
+# `opcache.file_update_protection` (2s) only stops caching freshly written
+# files, which errs towards recompiling.
+#
+# SCOPE
+#
+# `lib/` and `appinfo/` are what Apache loads for this app: Nextcloud's autoloader
+# maps `OCA\PettyCash\` to `lib/`, and `appinfo/` holds `routes.php` and
+# `info.xml`. Directories are scanned as well as files, so a create, rename or
+# delete updates the parent directory's mtime and is covered too. Nothing else
+# in the tree is executed by the SAPI, so editing `tests/`, `docs/` or the
+# frontend does not cause a wait.
+#
+# USAGE
+#
+#   scripts/dev/opcache-settle              # block until settled, then report
+#   scripts/dev/opcache-settle --status     # report the wait, do not block
+#
+# `scripts/dev/phpunit` runs this automatically; it is exposed separately so an
+# agent can settle once and then run several suites.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+BLOCK=1
+case "${1:-}" in
+  --status) BLOCK=0 ;;
+  '') ;;
+  *) echo "opcache-settle: unknown argument '$1'" >&2; exit 2 ;;
+esac
+
+# Container-side paths. Do not guess these: /var/www/html/custom_apps/pettycash
+# is the canonical mapping of this repository, and everything runs through
+# in-container so the boundary in AGENTS.md is respected.
+readonly APP_DIR=/var/www/html/custom_apps/pettycash
+readonly SCAN_PATHS=(lib appinfo)
+
+# Read the effective opcache settings rather than hardcoding 60. This is the CLI
+# SAPI, which the task above is careful about, but the concern there is *cached
+# bytecode*: these four values come from the same php.ini and the container sets
+# no per-directory or per-vhost overrides (verified: no php_admin_value in
+# /etc/apache2). If they ever diverge, `enable=1` with `validate_timestamps=1`
+# is the combination that has to hold for the wait below to mean anything.
+settings() {
+  "$SCRIPT_DIR/in-container" php -r '
+    $keys = ["opcache.enable", "opcache.enable_cli", "opcache.validate_timestamps", "opcache.revalidate_freq"];
+    foreach ($keys as $key) { echo $key, "=", ini_get($key), "\n"; }
+  '
+}
+
+# Read one of the values `settings` emitted. Deliberately a bash loop: this is
+# a mandatory step in every PHP verification run, so it must not depend on a
+# JSON parser being present on the host.
+read_setting() {
+  local key="$1" line
+  while IFS= read -r line; do
+    case "$line" in
+      "$key="*) printf '%s' "${line#*=}"; return 0 ;;
+    esac
+  done <<< "$SETTINGS"
+  return 1
+}
+
+# Newest mtime under the scanned paths, as an integer epoch. Runs in the
+# container because that is where the canonical path lives; the mount is shared
+# with the host, so the value is the same either side.
+#
+# Every value this script reasons about is validated before it is used. A
+# command substitution that returns empty inside `$(( ))` evaluates as 0, which
+# would silently produce a deadline in the past and report "settled" on a run
+# that was never verified. That is the exact class of false confidence this
+# script exists to remove, so the check is explicit rather than left to `set -e`.
+newest_mtime() {
+  local value
+  value="$("$SCRIPT_DIR/in-container" sh -c '
+    cd '"$APP_DIR"' || exit 1
+    find '"${SCAN_PATHS[*]}"' -printf "%T@\n" | sort -n | tail -1 | cut -d. -f1
+  ')" || return 1
+  case "$value" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  printf '%s' "$value"
+}
+
+now_epoch() {
+  local value
+  value="$("$SCRIPT_DIR/in-container" date +%s)" || return 1
+  case "$value" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  printf '%s' "$value"
+}
+
+scan_failed() {
+  echo "opcache-settle: could not read the modification times of ${SCAN_PATHS[*]}" >&2
+  echo "opcache-settle: under $APP_DIR. Without them there is no way to know how long" >&2
+  echo "opcache-settle: Apache may still be holding stale bytecode, and reporting" >&2
+  echo "opcache-settle: 'settled' without checking would be a guess." >&2
+  exit 1
+}
+
+SETTINGS="$(settings)" || {
+  echo "opcache-settle: could not read opcache settings from the container." >&2
+  echo "opcache-settle: without them the wait cannot be computed, and an unverified" >&2
+  echo "opcache-settle: PHP run is not evidence. Start the Nextcloud container." >&2
+  exit 1
+}
+
+if ! read_setting opcache.enable > /dev/null; then
+  echo "opcache-settle: opcache.enable was not reported by the container:" >&2
+  echo "opcache-settle: $SETTINGS" >&2
+  exit 1
+fi
+
+if [ "$(read_setting opcache.enable)" != "1" ]; then
+  echo "opcache-settle: opcache.enable is not 1 in this container; no cache to settle."
+  exit 0
+fi
+
+if [ "$(read_setting opcache.validate_timestamps)" != "1" ]; then
+  # Without timestamp validation opcache never notices an edit at all, and
+  # waiting cannot help. This would need a container configuration change, which
+  # is shared environment state and is deliberately not made from here.
+  echo "opcache-settle: opcache.validate_timestamps is not 1; a wait cannot make a" >&2
+  echo "opcache-settle: PHP run trustworthy. This is a container configuration problem." >&2
+  exit 1
+fi
+
+if [ "$(read_setting opcache.enable_cli)" = "1" ]; then
+  # Not harmful, but it means the CLI shares the configuration this script
+  # reasons about, so the boundary it documents is not the one in force.
+  echo "opcache-settle: warning: opcache.enable_cli is 1, so the CLI SAPI caches too." >&2
+fi
+
+REVALIDATE_FREQ="$(read_setting opcache.revalidate_freq || true)"
+case "$REVALIDATE_FREQ" in
+  ''|*[!0-9]*)
+    echo "opcache-settle: could not read opcache.revalidate_freq (got '$REVALIDATE_FREQ')." >&2
+    exit 1
+    ;;
+esac
+
+# +1s of margin so the comparison is strictly greater-than, which is what the
+# proof in the header needs.
+NEWEST_MTIME="$(newest_mtime)" || scan_failed
+DEADLINE=$(( NEWEST_MTIME + REVALIDATE_FREQ + 1 ))
+
+# The loop re-checks rather than trusting one scan: an edit made while this
+# script was already waiting must not be missed, and the same is true of a run
+# that started mid-wait. `date` comes from the container, so the clock is the
+# one Apache stamps its cache checks with.
+while :; do
+  NOW="$(now_epoch)" || scan_failed
+  REMAINING=$(( DEADLINE - NOW ))
+  if [ "$REMAINING" -le 0 ]; then
+    break
+  fi
+
+  if [ "$BLOCK" -eq 0 ]; then
+    echo "opcache-settle: ${REMAINING}s of settling left (revalidate_freq=${REVALIDATE_FREQ}s)."
+    exit 3
+  fi
+
+  echo "opcache-settle: waiting ${REMAINING}s for Apache's opcode cache to settle (revalidate_freq=${REVALIDATE_FREQ}s)."
+  # Re-scan on every pass so an edit during the wait extends it.
+  NEWEST_MTIME="$(newest_mtime)" || scan_failed
+  NEXT_DEADLINE=$(( NEWEST_MTIME + REVALIDATE_FREQ + 1 ))
+  if [ "$NEXT_DEADLINE" -gt "$DEADLINE" ]; then
+    DEADLINE="$NEXT_DEADLINE"
+    continue
+  fi
+  if [ "$REMAINING" -gt 5 ]; then
+    sleep $(( REMAINING - 5 ))
+  else
+    sleep 1
+  fi
+done
+
+# Final confirmation, read back after the wait rather than assumed from it: the
+# loop exits on an arithmetic comparison, and this is the value that says Apache
+# is current.
+NOW="$(now_epoch)" || scan_failed
+if [ "$NOW" -le $(( NEWEST_MTIME + REVALIDATE_FREQ )) ]; then
+  echo "opcache-settle: verification after the wait still reports unsettled" >&2
+  echo "opcache-settle: (now=$NOW, newest source change=$NEWEST_MTIME, revalidate_freq=$REVALIDATE_FREQ)." >&2
+  exit 1
+fi
+
+if [ "$BLOCK" -eq 0 ]; then
+  echo "opcache-settle: settled (revalidate_freq=${REVALIDATE_FREQ}s)."
+else
+  echo "opcache-settle: settled; Apache is serving current bytecode for lib/ and appinfo/."
+fi

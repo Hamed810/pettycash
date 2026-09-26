@@ -142,7 +142,13 @@ async function fetchQueue(page = 1): Promise<void> {
 }
 
 function openTransactionDetail(transactionId: string): void {
-	router.push({ name: 'review-detail', params: { transactionId, stage: 'finance' } })
+	// The named finance review route rather than the generic `review-detail`. Both match
+	// `/reviews/finance/:id`, and the generic one renders the finance row without the
+	// settled-versus-management labelling T065 exists to add — so this row would quietly lose the one
+	// thing that distinguishes finance from the other two review stages. Asserted in
+	// `FinanceReview.spec.ts`, because a route that resolves to the right view and a link that points
+	// at the wrong name are different failures and only the second one is invisible from the router.
+	router.push({ name: 'finance-review', params: { transactionId } })
 }
 
 onMounted(() => {

@@ -325,43 +325,11 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
     })
   })
 
-  describe('FinanceQueueView', () => {
-    it('should render shared finance queue for all finance officers', async () => {
-      const reviewsStore = useReviewsStore()
-      reviewsStore.financeQueue = {
-        items: [
-          { id: 'tx-1', sheetId: 'sheet-1', stage: 'FINANCE', status: 'AWAITING_FINANCE_REVIEW', finalOutcome: null, evidenceCount: 1, version: 0, latestDecision: { id: 'd-1', stage: 'COST_CENTER', decision: 'APPROVE', actor: { userId: 'user1', displayName: 'User 1', role: 'COST_CENTER_MANAGER' }, decidedAt: '2026-09-20T10:00:00Z' }, activeRevision: { id: 'rev-1', number: 1, expenseDate: '2026-09-20', amount: { amountMinor: 50000, currency: 'IRR', minorUnit: 0 }, description: 'Office supplies', costCenter: { id: 'cc-1', code: 'CC001', name: 'Cost Center' }, expenseType: { id: 'et-1', name: 'Office Supplies' }, createdBy: 'user1', createdAt: '2026-09-20T10:00:00Z', active: true } },
-          { id: 'tx-2', sheetId: 'sheet-1', stage: 'FINANCE', status: 'AWAITING_FINANCE_REVIEW', finalOutcome: null, evidenceCount: 1, version: 0, latestDecision: { id: 'd-1', stage: 'COST_CENTER', decision: 'APPROVE', actor: { userId: 'user1', displayName: 'User 1', role: 'COST_CENTER_MANAGER' }, decidedAt: '2026-09-20T10:00:00Z' }, activeRevision: { id: 'rev-1', number: 1, expenseDate: '2026-09-20', amount: { amountMinor: 30000, currency: 'IRR', minorUnit: 0 }, description: 'Office supplies', costCenter: { id: 'cc-1', code: 'CC001', name: 'Cost Center' }, expenseType: { id: 'et-1', name: 'Office Supplies' }, createdBy: 'user1', createdAt: '2026-09-20T10:00:00Z', active: true } }
-        ],
-        total: 2,
-        page: 1,
-        pageSize: 25
-      }
-      reviewsStore.fetchFinanceQueue = vi.fn().mockResolvedValue(undefined)
-
-      const wrapper = await mountView(FinanceQueueView, '/reviews/finance')
-
-      expect(wrapper.find('[data-testid="finance-queue"]').exists()).toBe(true)
-      expect(wrapper.findAll('[data-testid="queue-item"]').length).toBe(2)
-    })
-
-    it('should not show cost center scoping in finance queue', async () => {
-      const reviewsStore = useReviewsStore()
-      reviewsStore.financeQueue = {
-        items: [
-          { id: 'tx-1', sheetId: 'sheet-1', stage: 'FINANCE', status: 'AWAITING_FINANCE_REVIEW', finalOutcome: null, evidenceCount: 1, version: 0, latestDecision: { id: 'd-1', stage: 'COST_CENTER', decision: 'APPROVE', actor: { userId: 'user1', displayName: 'User 1', role: 'COST_CENTER_MANAGER' }, decidedAt: '2026-09-20T10:00:00Z' }, activeRevision: { id: 'rev-1', number: 1, expenseDate: '2026-09-20', amount: { amountMinor: 50000, currency: 'IRR', minorUnit: 0 }, description: 'Office supplies', costCenter: { id: 'cc-1', code: 'CC001', name: 'Cost Center' }, expenseType: { id: 'et-1', name: 'Office Supplies' }, createdBy: 'user1', createdAt: '2026-09-20T10:00:00Z', active: true } }
-        ],
-        total: 1,
-        page: 1,
-        pageSize: 25
-      }
-      reviewsStore.fetchFinanceQueue = vi.fn().mockResolvedValue(undefined)
-
-      const wrapper = await mountView(FinanceQueueView, '/reviews/finance')
-
-      expect(wrapper.find('[data-testid="cost-center-filter"]').exists()).toBe(false)
-    })
-  })
+  // The `FinanceQueueView` block that used to live here moved to
+  // `tests/Frontend/Component/FinanceReview.spec.ts`. The shared finance queue is US3 (T062/T063
+  // deliver it, T058 owns its Vue tests, T065/T193 own the view), and an assertion about US3
+  // behaviour in a US2 file counts against US2 for as long as US3 is in progress. Its one red
+  // assertion was also asserting a `queue-item` test id that no component has ever emitted.
 
   describe('TransactionReviewDetailView', () => {
     /**

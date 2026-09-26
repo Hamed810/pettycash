@@ -149,6 +149,7 @@ Use the repository development wrappers instead:
 | Run all PHP tests | `scripts/dev/phpunit` |
 | Run one PHP test file | `scripts/dev/phpunit tests/Unit/FooTest.php` |
 | List PHP tests | `scripts/dev/phpunit --list-tests` |
+| Settle Apache's opcode cache | `scripts/dev/opcache-settle` |
 | OCC | `scripts/dev/occ <args>` |
 | Composer | `scripts/dev/composer <args>` |
 | Arbitrary container command | `scripts/dev/in-container <cmd>` |
@@ -158,12 +159,55 @@ The wrappers are responsible for:
 - executing in `docker-nextcloud-1`
 - selecting the correct container working directory
 - mapping the repository to `/var/www/html/custom_apps/pettycash`
+- settling Apache's opcode cache before a test run (see below)
 
 Before any shell command involving PHP or Nextcloud tooling, verify that it starts with:
 
 `scripts/dev/`
 
 Do not manually construct `docker exec` commands for normal PHP/Nextcloud work when a wrapper exists.
+
+## Opcode Cache Settling (MANDATORY)
+
+`scripts/dev/phpunit` settles the container's PHP opcode cache before it runs, and it
+fails the run if the wait cannot be computed. Do not bypass it, and do not reach for
+`php -r 'opcache_reset();'` as a substitute.
+
+The reason is that a PHP verification result in this repository can be a lie in either
+direction:
+
+- The container has `opcache.enable => 1` and `opcache.revalidate_freq => 60`.
+- PHPUnit runs in the CLI SAPI, where `opcache.enable_cli => 0`. Unit and integration
+  tests always recompile, so they cannot be affected.
+- The OCS contract tests issue **real HTTP requests**, so `lib/` is loaded by Apache's
+  `mod_php` through that cache. A run started within 60 seconds of an edit to `lib/` or
+  `appinfo/` can execute the *previous* bytecode.
+
+This has already produced both a false PASS and a false FAIL here (T288), so neither a
+green run nor a red one is evidence until the cache has settled. Measured for T288: with
+a canary that threw unconditionally from `SheetPayloadFormatter::totals()`, a run inside
+the window reported 13/13 passing; with correct code restored and run inside the window,
+the same two tests failed. Both runs were wrong, and both looked healthy.
+
+Rules:
+
+- Use `scripts/dev/phpunit`. It settles first, and blocks for at most
+  `opcache.revalidate_freq + 1` seconds after the most recent change under `lib/` or
+  `appinfo/`. When nothing changed recently it returns immediately.
+- `scripts/dev/in-container php vendor/bin/phpunit` is **not** a substitute. It skips the
+  settle and skips `.env.testing`, so the contract tests cannot authenticate.
+- If you run PHPUnit directly for any reason, settle first:
+  `scripts/dev/opcache-settle && scripts/dev/in-container php vendor/bin/phpunit ...`
+- `scripts/dev/opcache-settle --status` reports the remaining wait without blocking, and
+  exits 3 while a wait is outstanding.
+- If `scripts/dev/opcache-settle` exits non-zero, the run is blocked on purpose. Fix the
+  reported cause. Do not re-run without it.
+- Editing `tests/`, `docs/`, the frontend, or the scripts does not require settling; only
+  `lib/` and `appinfo/` are loaded by the SAPI.
+
+Do not "fix" a slow or surprising contract-test result by waiting a minute and re-running
+to see whether it goes away, and do not conclude a fix did not work from a run taken
+inside the window. Settle first, then measure.
 
 Do not guess container paths.
 
@@ -467,6 +511,10 @@ Use `npm run check` as the preferred full frontend verification command when app
 
 Playwright runs on the host against the configured application runtime.
 
+The browser reaches the app over HTTP, so an e2e run executes `lib/` through Apache's
+opcode cache and is subject to the same staleness as the contract tests. `npm run test:e2e`
+therefore settles the cache first via `pretest:e2e`; see **Opcode Cache Settling** above.
+
 Do not run frontend Node.js tooling inside the Nextcloud container unless explicitly instructed.
 
 ## PHP tests and verification
@@ -480,6 +528,10 @@ scripts/dev/phpunit
 scripts/dev/phpunit tests/Unit/FooTest.php
 scripts/dev/phpunit --list-tests
 ```
+
+A PHP test run is only evidence if Apache's opcode cache has settled first.
+`scripts/dev/phpunit` does that for you; see **Opcode Cache Settling** above before
+interpreting any contract-test result.
 
 Do not run:
 
