@@ -203,7 +203,7 @@ function reset(): void {
 }
 
 .report-filter-bar__label {
-	font-size: 0.875rem;
+	font-size: var(--font-size-floor);
 	color: var(--nc-color-text-maxcontrast, #6b6b6b);
 }
 

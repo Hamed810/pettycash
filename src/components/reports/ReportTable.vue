@@ -119,7 +119,7 @@ function formatCell(value: unknown): string {
 }
 
 .report-table__summary-label {
-	font-size: 0.75rem;
+	font-size: var(--font-size-floor);
 	color: var(--nc-color-text-maxcontrast, #6b6b6b);
 }
 
@@ -140,7 +140,7 @@ function formatCell(value: unknown): string {
 table {
 	width: 100%;
 	border-collapse: collapse;
-	font-size: 0.875rem;
+	font-size: var(--font-size-floor);
 }
 
 th,
@@ -192,7 +192,7 @@ th {
 }
 
 .report-card__label {
-	font-size: 0.75rem;
+	font-size: var(--font-size-floor);
 	color: var(--nc-color-text-maxcontrast, #6b6b6b);
 }
 </style>
