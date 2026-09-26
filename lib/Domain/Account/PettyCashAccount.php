@@ -60,7 +60,7 @@ final class PettyCashAccount
         return $movement;
     }
 
-    public function consume(Money $amount, string $commandId, string $sourceRevisionId): AccountMovement
+    public function consume(Money $amount, string $commandId, string $sourceRevisionId, string $sourceDecisionId): AccountMovement
     {
         if (!$this->active) {
             throw new InvalidArgumentException('Cannot consume from inactive account');
@@ -74,6 +74,7 @@ final class PettyCashAccount
             'Expense consumption',
             $this,
             $sourceRevisionId,
+            $sourceDecisionId,
             $commandId
         );
         $this->balanceMinor = $movement->balanceAfter()->minorUnits();

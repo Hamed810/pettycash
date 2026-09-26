@@ -131,11 +131,26 @@ final class DbExpenseTransactionRepository implements ExpenseTransactionReposito
     /** @return list<ExpenseTransaction> */
     public function findForFinanceQueue(int $offset = 0, int $limit = 100): array
     {
+        // Both senior outcomes, not just one.
+        //
+        // `contracts/workflow.md` gives finance two rows — "Finance after senior approval"
+        // (approve, reject, return) and "Finance after senior rejection" (reject, return;
+        // approval forbidden) — and FR-037 routes *approved or rejected* transactions to
+        // finance. Selecting only `AWAITING_FINANCE_REVIEW` therefore hid senior-rejected
+        // transactions from the queue, so FR-039's "finance may reject it or return it" had
+        // nothing to act on: the only finance-reachable state was one no code path produces,
+        // because a senior approval records `SENIOR_APPROVED`.
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
             ->from('pettycash_transactions')
             ->where($qb->expr()->eq('current_stage', $qb->createNamedParameter(WorkflowStage::Finance->value)))
-            ->andWhere($qb->expr()->eq('current_status', $qb->createNamedParameter(TransactionStatus::AwaitingFinanceReview->value)))
+            ->andWhere($qb->expr()->in(
+                'current_status',
+                $qb->createNamedParameter([
+                    TransactionStatus::SeniorApproved->value,
+                    TransactionStatus::SeniorRejected->value,
+                ], IQueryBuilder::PARAM_STR_ARRAY)
+            ))
             ->orderBy('created_at', 'ASC')
             ->setFirstResult($offset)
             ->setMaxResults($limit);

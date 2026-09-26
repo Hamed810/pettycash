@@ -287,7 +287,7 @@ final class ManagementDecisionTest extends TestCase
         );
 
         self::assertEquals(WorkflowStage::Finance, $updatedTx->stage);
-        self::assertEquals(TransactionStatus::AwaitingFinanceReview, $updatedTx->status);
+        self::assertEquals(TransactionStatus::SeniorApproved, $updatedTx->status);
     }
 
     public function testSeniorManagerCanDecideIndependentlyOfCostCenter(): void
@@ -341,7 +341,7 @@ final class ManagementDecisionTest extends TestCase
         );
 
         self::assertEquals(WorkflowStage::Finance, $updatedTx->stage);
-        self::assertEquals(TransactionStatus::AwaitingFinanceReview, $updatedTx->status);
+        self::assertEquals(TransactionStatus::SeniorApproved, $updatedTx->status);
     }
 
     public function testMultiRoleUserCanReviewOwnTransaction(): void

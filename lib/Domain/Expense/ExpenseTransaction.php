@@ -126,7 +126,24 @@ final class ExpenseTransaction
 
             case WorkflowStage::Senior:
                 if ($decision === Decision::Approve) {
-                    $this->status = TransactionStatus::AwaitingFinanceReview;
+                    // `SeniorApproved`, not `AwaitingFinanceReview`.
+                    //
+                    // `contracts/workflow.md` gives finance **two** rows — "Finance after senior
+                    // approval" (approve, reject, return) and "Finance after senior rejection"
+                    // (reject, return; approval forbidden) — so the senior's outcome has to be
+                    // carried in the status for finance to tell them apart. This branch also
+                    // sets `SeniorRejected` below, and the cost-centre branch likewise records
+                    // `CostCenterApproved`/`CostCenterRejected`, so naming the outcome is the
+                    // established pattern rather than a new one.
+                    //
+                    // Setting `AwaitingFinanceReview` here instead left `SeniorApproved` with no
+                    // producer at all: it was read by `FinanceDecisionPolicy::canFinanceApprove()`
+                    // and by nothing else in the codebase, so every senior-approved transaction
+                    // arrived at finance in a state no one was allowed to approve. FR-038, FR-040,
+                    // and FR-043 were unreachable, and the exception they raised reported the
+                    // cause as "Finance cannot approve a senior-rejected transaction" for a
+                    // transaction the senior had approved.
+                    $this->status = TransactionStatus::SeniorApproved;
                     $this->stage = WorkflowStage::Finance;
                 } elseif ($decision === Decision::Reject) {
                     $this->status = TransactionStatus::SeniorRejected;

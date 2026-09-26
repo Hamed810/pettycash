@@ -85,7 +85,27 @@ final class ExpenseSheet
      */
     public function recalculateStatus(): void
     {
-        if ($this->transactions === []) {
+        $this->recalculateStatusFrom($this->transactions);
+    }
+
+    /**
+     * Recalculate from a transaction set the caller loaded.
+     *
+     * Separate from `recalculateStatus()` because a sheet loaded from the repository carries **no
+     * transactions**: neither `DbExpenseSheetRepository` nor the in-memory double hydrates the
+     * collection, so the aggregate's own list is empty and `recalculateStatus()` returns without
+     * doing anything. Calling it on a freshly-loaded sheet is therefore a silent no-op — which is
+     * exactly why FR-043's completion rule never fired. The caller has to say which transactions it
+     * means, rather than the sheet guessing from a collection that hydration does not fill.
+     *
+     * Reusing `addTransaction()` is not an option: it refuses a sheet that is not open, and by the
+     * time anything is settled the sheet is long submitted.
+     *
+     * @param list<ExpenseTransaction> $transactions
+     */
+    public function recalculateStatusFrom(array $transactions): void
+    {
+        if ($transactions === []) {
             return;
         }
 
@@ -101,7 +121,7 @@ final class ExpenseSheet
         $earliestStage = WorkflowStage::Final;
         $earliestOrder = PHP_INT_MAX;
 
-        foreach ($this->transactions as $tx) {
+        foreach ($transactions as $tx) {
             $order = $stageOrder[$tx->stage->value] ?? PHP_INT_MAX;
             if ($order < $earliestOrder) {
                 $earliestOrder = $order;
@@ -123,7 +143,7 @@ final class ExpenseSheet
         // Check if all transactions are completed
         $allCompleted = true;
         $hasRejections = false;
-        foreach ($this->transactions as $tx) {
+        foreach ($transactions as $tx) {
             if (!in_array($tx->status, [TransactionStatus::CompletedApproved, TransactionStatus::CompletedRejected], true)) {
                 $allCompleted = false;
             }

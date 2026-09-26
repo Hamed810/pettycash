@@ -113,7 +113,7 @@ final class ManagementWorkflowTest extends TestCase
         $tx->recordDecision(WorkflowStage::Senior, Decision::Approve, 'Approved', 'senior-1');
 
         self::assertEquals(WorkflowStage::Finance, $tx->stage);
-        self::assertEquals(TransactionStatus::AwaitingFinanceReview, $tx->status);
+        self::assertEquals(TransactionStatus::SeniorApproved, $tx->status);
     }
 
     public function testSeniorMayDisagreeWithCostCenter(): void
@@ -128,7 +128,7 @@ final class ManagementWorkflowTest extends TestCase
         $tx->recordDecision(WorkflowStage::Senior, Decision::Approve, 'Within budget', 'senior-1');
 
         self::assertEquals(WorkflowStage::Finance, $tx->stage);
-        self::assertEquals(TransactionStatus::AwaitingFinanceReview, $tx->status);
+        self::assertEquals(TransactionStatus::SeniorApproved, $tx->status);
         
         // Both decisions should be preserved
         $decisions = $tx->getDecisions();

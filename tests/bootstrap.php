@@ -22,6 +22,7 @@ use OCA\PettyCash\Application\Expense\TransactionService;
 use OCA\PettyCash\Application\Evidence\EvidenceService;
 use OCA\PettyCash\Application\Workflow\SubmitSheet;
 use OCA\PettyCash\Application\Workflow\ManagementReviewService;
+use OCA\PettyCash\Application\Workflow\FinanceSettlementService;
 use OCA\PettyCash\Domain\Configuration\Repository\CostCenterRepository;
 use OCA\PettyCash\Domain\Configuration\Repository\CurrencyRepository;
 use OCA\PettyCash\Domain\Configuration\Repository\ExpenseTypeRepository;
@@ -204,6 +205,22 @@ $container->register(ManagementReviewService::class, fn($c) => new ManagementRev
     $c->query(ExpenseSheetRepository::class),
     $c->query(ExpenseTransactionRepository::class),
     $c->query(TransactionRevisionRepository::class),
+    $c->query(CostCenterRepository::class),
+    $c->query(RoleAssignmentRepository::class),
+    $c->query(AuditWriter::class),
+    $c->query(IdempotencyService::class),
+    $c->query(CurrentUser::class),
+    $c->query(UserDirectory::class),
+    $c->query(AuthorizationService::class)
+));
+
+$container->register(FinanceSettlementService::class, fn($c) => new FinanceSettlementService(
+    $c->query(TransactionManager::class),
+    $c->query(ExpenseSheetRepository::class),
+    $c->query(ExpenseTransactionRepository::class),
+    $c->query(TransactionRevisionRepository::class),
+    $c->query(AccountRepository::class),
+    $c->query(AccountMovementRepository::class),
     $c->query(CostCenterRepository::class),
     $c->query(RoleAssignmentRepository::class),
     $c->query(AuditWriter::class),

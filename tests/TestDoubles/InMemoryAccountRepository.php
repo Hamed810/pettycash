@@ -50,4 +50,10 @@ final class InMemoryAccountRepository implements \OCA\PettyCash\Domain\Account\R
     {
         $this->accounts[$account->id] = $account;
     }
+
+    /** Test isolation: the double is a container singleton shared across a test process. */
+    public function clear(): void
+    {
+        $this->accounts = [];
+    }
 }

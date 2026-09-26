@@ -48,7 +48,8 @@ final class DbAccountMovementRepository implements AccountMovementRepository
         return $qb->select('m.*')
             ->selectAlias('c.code', 'currency_code')
             ->selectAlias('a.public_id', 'account_public_id')
-            ->selectAlias('r.public_id', 'source_revision_public_id');
+            ->selectAlias('r.public_id', 'source_revision_public_id')
+            ->selectAlias('d.public_id', 'source_decision_public_id');
     }
 
     /**
@@ -68,7 +69,8 @@ final class DbAccountMovementRepository implements AccountMovementRepository
         return $qb->from('pettycash_account_movements', 'm')
             ->join('m', 'pettycash_accounts', 'a', $qb->expr()->eq('m.account_id', 'a.id'))
             ->join('a', 'pettycash_currencies', 'c', $qb->expr()->eq('a.currency_id', 'c.id'))
-            ->leftJoin('m', 'pettycash_transaction_revisions', 'r', $qb->expr()->eq('m.source_revision_id', 'r.id'));
+            ->leftJoin('m', 'pettycash_transaction_revisions', 'r', $qb->expr()->eq('m.source_revision_id', 'r.id'))
+            ->leftJoin('m', 'pettycash_workflow_decisions', 'd', $qb->expr()->eq('m.source_decision_id', 'd.id'));
     }
 
     public function findById(int $id): ?AccountMovement
@@ -93,12 +95,15 @@ final class DbAccountMovementRepository implements AccountMovementRepository
         return $row ? $this->mapRow($row) : null;
     }
 
-    public function findBySourceRevisionId(int $sourceRevisionId): ?AccountMovement
+    public function findBySourceRevisionId(int|string $sourceRevisionId): ?AccountMovement
     {
         $qb = $this->connection->getQueryBuilder();
         $this->applyProjection($qb);
         $this->applyJoins($qb);
-        $qb->where($qb->expr()->eq('m.source_revision_id', $qb->createNamedParameter($sourceRevisionId)))
+        $qb->where($qb->expr()->eq(
+            'm.source_revision_id',
+            $qb->createNamedParameter($this->resolveRevisionDbId($sourceRevisionId), \OCP\DB\Types::BIGINT)
+        ))
             ->setMaxResults(1);
         $row = $qb->executeQuery()->fetchAssociative();
         return $row ? $this->mapRow($row) : null;
@@ -161,8 +166,19 @@ final class DbAccountMovementRepository implements AccountMovementRepository
                 'balance_after_minor' => $qb->createNamedParameter($movement->balanceAfter->minorUnits()),
                 // No `currency_code`: the currency is the account's, reached through `account_id`.
                 'description' => $qb->createNamedParameter($movement->description ?? ''),
-                'source_revision_id' => $movement->sourceRevisionId ? $qb->createNamedParameter((int) $movement->sourceRevisionId) : $qb->createNamedParameter(null),
-                'source_decision_id' => $qb->createNamedParameter(null),
+                // Both source columns are **required for consumption** by `data-model.md`, and
+                // the aggregate carries both as public UUIDs while the table stores surrogate
+                // keys. The previous code cast the UUID straight to `(int)`, which is `0` for
+                // every UUID — so a consumption would have been written against revision `0`,
+                // colliding with every other consumption in the table on the
+                // `pettycash_account_movements_consumption_uniq` index, and the decision
+                // reference was hard-coded to null.
+                'source_revision_id' => $movement->sourceRevisionId === null
+                    ? $qb->createNamedParameter(null)
+                    : $qb->createNamedParameter($this->resolveRevisionDbId($movement->sourceRevisionId), IQueryBuilder::PARAM_INT),
+                'source_decision_id' => $movement->sourceDecisionId === null
+                    ? $qb->createNamedParameter(null)
+                    : $qb->createNamedParameter($this->resolveDecisionDbId($movement->sourceDecisionId), IQueryBuilder::PARAM_INT),
                 'command_id' => $qb->createNamedParameter($movement->commandId),
                 'actor_uid' => $qb->createNamedParameter($currentUser),
                 'actor_name' => $qb->createNamedParameter($this->userDirectory->displayName($currentUser)),
@@ -170,6 +186,48 @@ final class DbAccountMovementRepository implements AccountMovementRepository
                 'occurred_at' => $qb->createNamedParameter($now, IQueryBuilder::PARAM_DATETIME_IMMUTABLE),
             ])
             ->executeStatement();
+    }
+
+    /**
+     * Resolve a revision reference to its surrogate key.
+     *
+     * The aggregate and the public contract both use the revision's public UUID, while the
+     * column is a foreign key, so the translation has to happen here. A UUID is not numeric,
+     * so casting it yields `0` — which is a valid key pointing at some *other* revision, and
+     * on the unique consumption index it collides with every other consumption. That is a
+     * silent corruption rather than a failure, so an unresolvable reference aborts instead.
+     */
+    private function resolveRevisionDbId(int|string $sourceRevisionId): int
+    {
+        return $this->resolvePublicId('pettycash_transaction_revisions', $sourceRevisionId, 'revision');
+    }
+
+    /** As above, for the finance decision that authorised the consumption. */
+    private function resolveDecisionDbId(int|string $sourceDecisionId): int
+    {
+        return $this->resolvePublicId('pettycash_workflow_decisions', $sourceDecisionId, 'decision');
+    }
+
+    private function resolvePublicId(string $table, int|string $publicId, string $label): int
+    {
+        if (is_int($publicId)) {
+            return $publicId;
+        }
+
+        $qb = $this->connection->getQueryBuilder();
+        $qb->select('id')
+            ->from($table)
+            ->where($qb->expr()->eq('public_id', $qb->createNamedParameter($publicId)))
+            ->setMaxResults(1);
+        $row = $qb->executeQuery()->fetchAssociative();
+
+        if ($row === false || !isset($row['id'])) {
+            throw new InvalidArgumentException(
+                sprintf('Account movement %s not found: %s', $label, $publicId)
+            );
+        }
+
+        return (int) $row['id'];
     }
 
     /**
@@ -215,11 +273,10 @@ final class DbAccountMovementRepository implements AccountMovementRepository
             Money::of((int) $row['balance_after_minor'], $currency),
             $row['description'],
             $row['command_id'],
-            // The revision's **public UUID**, not the surrogate `source_revision_id` key.
-            // `contracts/ocs-api.yaml` declares `sourceRevisionId` as `format: uuid`, and FR-040's
-            // traceability is only useful to a caller who can act on the id: a raw auto-increment
-            // key is not resolvable by any client and leaks an internal counter through the public
-            // API. `null` for a charge, which has no justifying revision.
+            // The revision's and decision's **public UUIDs**, not their surrogate keys, for
+            // the same reason the account's is: `contracts/ocs-api.yaml` declares
+            // `sourceRevisionId` as `format: uuid`, and FR-040's traceability is only useful
+            // to a caller who can act on the id. `null` for a charge, which has neither.
             isset($row['source_revision_public_id']) ? $row['source_revision_public_id'] : null,
             $row['occurred_at'] ? new DateTimeImmutable($row['occurred_at']) : null,
             // The surrogate key and the owning account's public UUID, so a movement read back from
@@ -228,7 +285,8 @@ final class DbAccountMovementRepository implements AccountMovementRepository
             // written a second time.
             (int) $row['id'],
             null,
-            $row['account_public_id'] ?? null
+            $row['account_public_id'] ?? null,
+            isset($row['source_decision_public_id']) ? $row['source_decision_public_id'] : null
         );
     }
 }

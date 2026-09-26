@@ -125,9 +125,16 @@ final readonly class FinanceSettlementService
                     throw new LogicException('User not authorized for finance decisions');
                 }
 
-                // Validate finance decision policy
+                // Validate the finance decision matrix for **this** decision.
+                //
+                // This used to call `assertCanApprove()` unconditionally, which meant asking only
+                // "may finance approve this?" and applying the answer to whichever decision had
+                // been requested. A senior-rejected transaction therefore could not be rejected
+                // or returned either: `assertCanApprove(SeniorRejected)` throws, so FR-039's "finance
+                // may reject it or return it for correction" had no reachable path. A purchaser
+                // whose expense was refused at senior stage could not be sent back to correct it.
                 $policy = new FinanceDecisionPolicy();
-                $policy->assertCanApprove($transaction->status);
+                $policy->assertCanDecide($transaction->status, $decision);
 
                 // Validate explanation required for reject/return
                 if (in_array($decision, [Decision::Reject, Decision::Return], true) && trim($explanation) === '') {
@@ -141,6 +148,35 @@ final readonly class FinanceSettlementService
                     throw new LogicException('No active petty cash account found for transaction currency');
                 }
                 $account = $accounts[0];
+
+                // Lock every row this settlement writes, always in the adapter's fixed
+                // order: sheet, transaction, revision, account.
+                //
+                // Two finance officers approving at once is the ordinary case, not the
+                // exotic one. Without one agreed order the pair can deadlock, and a
+                // deadlock reaches the business as a settlement that failed for no stated
+                // reason. FR-042 requires the multi-record write to be atomic, and an
+                // atomic write that can deadlock on ordinary concurrency is not delivering
+                // that.
+                //
+                // The account is locked because it is the row most likely to be contended:
+                // it is shared by every one of that user's transactions. It has to be read
+                // first to learn its key, which is why the read here is followed by a
+                // re-read under the lock — locking after reading, then trusting the first
+                // read, would settle against a balance another settlement has already moved.
+                $this->transactionManager->lockInSettlementOrder(array_filter([
+                    'sheet' => $transaction->sheetId,
+                    'transaction' => $transaction->dbId,
+                    'revision' => $transaction->revision()->dbId,
+                    'account' => $account->dbId,
+                ], static fn ($id): bool => $id !== null));
+
+                if ($account->dbId !== null) {
+                    $locked = $this->accountRepository->findById($account->dbId);
+                    if ($locked !== null) {
+                        $account = $locked;
+                    }
+                }
 
                 // Record the decision on the transaction domain model
                 $workflowDecision = $transaction->recordDecision(
@@ -189,6 +225,16 @@ final readonly class FinanceSettlementService
                 // Persist transaction and decision
                 $this->transactionRepository->save($transaction);
 
+                // FR-043 and the workflow contract's "recalculated sheet state".
+                //
+                // The sheet's own projection was never refreshed, so a sheet whose last transaction
+                // reached a final financial outcome stayed at its previous status and never became
+                // `COMPLETED`. `sheetRepository` was injected into this class and used nowhere.
+                //
+                // It runs after the transaction is saved and inside the same transaction, so the
+                // sheet can never be completed against a transaction whose settlement rolled back.
+                $this->recalculateSheet($transaction->sheetId);
+
                 return ['transaction_id' => $transactionPublicId];
             });
 
@@ -202,6 +248,31 @@ final readonly class FinanceSettlementService
         });
     }
 
+    /**
+     * Refresh a sheet's status from the transactions it actually holds.
+     *
+     * The sheet's transactions are loaded here rather than read off the aggregate, because neither
+     * sheet repository hydrates that collection — see `ExpenseSheet::recalculateStatusFrom()`.
+     *
+     * A sheet that cannot be loaded is left alone rather than treated as complete. An empty
+     * transaction set already means "nothing to recalculate", and inventing a status for a sheet
+     * this settlement cannot see would be a worse failure than a stale one.
+     */
+    private function recalculateSheet(?int $sheetId): void
+    {
+        if ($sheetId === null) {
+            return;
+        }
+
+        $sheet = $this->sheetRepository->findById($sheetId);
+        if ($sheet === null) {
+            return;
+        }
+
+        $sheet->recalculateStatusFrom($this->transactionRepository->findBySheetId($sheetId));
+        $this->sheetRepository->save($sheet);
+    }
+
     private function recordConsumption(
         ExpenseTransaction $transaction,
         PettyCashAccount $account,
@@ -209,11 +280,38 @@ final readonly class FinanceSettlementService
         string $commandId
     ): void {
         $amount = $transaction->revision()->amount();
+        $revision = $transaction->revision();
 
-        // Use the account's consume method which handles balance update
-        $account->consume($amount, $commandId, (string)$workflowDecision->id);
+        // The movement carries the revision's **public** UUID, not its surrogate key.
+        // `contracts/ocs-api.yaml` declares `sourceRevisionId` as `format: uuid`, and the
+        // repository's read path already projects the joined `r.public_id`; handing the
+        // movement a surrogate key here would make the write and the read disagree about
+        // what the same field holds, and a raw auto-increment key is not resolvable by any
+        // client. An unhydrated revision is a corrupted aggregate and must not be settled.
+        $revisionPublicId = $revision->publicId;
+        if ($revisionPublicId === null || trim($revisionPublicId) === '') {
+            throw new LogicException('Transaction revision is missing its public identifier');
+        }
 
-        // Save the account with updated balance
+        // FR-040: final finance approval records **one** consumption movement against the
+        // petty-cash account. The movement is what makes a balance reconstructible, so
+        // updating the balance and stopping here left a finance approval that moved money
+        // without leaving a ledger row — and the unique `source_revision_id` index, which
+        // is what makes "exactly one" an enforced fact rather than an intention, was never
+        // exercised by any code path.
+        //
+        // `consume()` is what produces the movement, and it has already applied the new
+        // balance to the aggregate, so the movement and the account are saved together
+        // inside the caller's transaction: either the ledger and the balance both move, or
+        // neither does.
+        $movement = $account->consume(
+            $amount,
+            $commandId,
+            $revisionPublicId,
+            (string)$workflowDecision->id
+        );
+
+        $this->movementRepository->save($movement);
         $this->accountRepository->save($account);
     }
 

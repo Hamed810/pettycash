@@ -157,15 +157,149 @@ movements, balances, final states, and rollback.
 ### Tests for User Story 3
 
 - [x] T055 [P] [US3] Write failing finance-rule tests proving senior-approved allows approve/reject/return, senior-rejected forbids approve (explicit test: finance attempt to approve senior-rejected transaction returns forbidden per FR-039), pending/rejected has no balance effect, and negative balances are permitted (explicit test: approved consumption exceeding account balance results in negative balance per FR-027) in `tests/Unit/Domain/Workflow/FinanceDecisionPolicyTest.php`
-- [ ] T056 [P] [US3] Write failing integration tests for fixed row-lock order, exactly-one consumption, command replay, conflicting command UUID, simultaneous approvals, and rollback of decision/movement/balance/state/audit failures in `tests/Integration/Workflow/FinanceSettlementTest.php`
+- [X] T056 [P] [US3] Write failing integration tests for fixed row-lock order, exactly-one consumption, command replay, conflicting command UUID, simultaneous approvals, and rollback of decision/movement/balance/state/audit failures in `tests/Integration/Workflow/FinanceSettlementTest.php` (done — 24 tests / 116 assertions, plus 4 matrix tests in `FinanceDecisionPolicyTest`; **all six named cases are covered and each is proven load-bearing by a mutation that was verified to have applied before its result was read**, which is the discipline T286 had to learn twice)
+
+  **The tests found three defects that no existing test could see, and the first of them means
+  User Story 3 could not complete at all.** `TransactionStatus::SeniorApproved` was declared in the
+  enum and read by `FinanceDecisionPolicy::canFinanceApprove()`, and **nothing in the codebase ever
+  assigned it**: `ExpenseTransaction::applyDecision()` set `AwaitingFinanceReview` on a senior
+  approval instead. So every senior-approved transaction arrived at finance in a state nobody was
+  allowed to approve, and the refusal named the wrong cause — "Finance cannot approve a
+  senior-rejected transaction" for a transaction the senior had approved. FR-038, FR-040 and FR-043
+  were unreachable, which is why the missing consumption movement looked like a missing feature
+  rather than a dead stage. `contracts/workflow.md` settles the intent: it gives finance two rows
+  keyed on the senior's *outcome*, and the cost-centre branch already records outcome-named
+  statuses, so the senior branch now records `SeniorApproved` too. `findForFinanceQueue()`
+  selected on `AWAITING_FINANCE_REVIEW` — a state no code path produced — which also hid every
+  senior-**rejected** transaction, leaving FR-039's "finance may reject it or return it" with
+  nothing to act on; it now selects both senior outcomes.
+
+  **FR-039 was broken in two halves, and the second was user-visible.** `recordDecision()` called
+  `assertCanApprove()` **unconditionally**, asking only "may finance approve this?" and applying
+  the answer to whichever decision was requested — so a senior-rejected transaction could not be
+  rejected or returned either, and a purchaser whose expense was refused at senior stage could not
+  be sent back to correct it. And `TransactionPayloadFormatter::allowedActions()` set `canApprove`,
+  `canReject` and `canReturn` all to `true` whenever the actor could decide at all, never consulting
+  the policy, so the interface offered finance an **Approve button that the command path then
+  refused** — the precise disagreement that method's own docblock claims cannot happen, and which no
+  test covered, because the only `allowedActions` in the suite were frontend stubs. Both now consult
+  one decision-aware policy, and a test asserts the offered set equals the permitted set for both
+  senior outcomes and all three decisions.
+
+  **`FinanceSettlementService` never took the lock the workflow contract requires.**
+  `NextcloudTransactionManager::lockInSettlementOrder()` existed and was **absent from the
+  `TransactionManager` port**, so it was unreachable from the application layer and called from
+  nowhere — an unreachable lock is not a lock. It is now on the port, and the settlement takes
+  sheet → transaction → revision → account in that fixed order, re-reading the account after the
+  lock because the account is the row most likely to be contended and it has to be read first to
+  learn its key.
+
+  **`InMemoryAccountMovementRepository` could not support any of this.** It keyed movements on
+  `(int) $movement->id`, but that id is a public UUID string, so **every movement collapsed onto key
+  `0`** and the second silently replaced the first; `findBySourceRevisionId()` compared a `?string`
+  against its own `int` parameter with `===`, so it could never match; and `findByAccountId()`
+  filtered on `$m->id === (string)$accountId`, comparing a movement id to an account id. FR-040's
+  uniqueness is exactly what a per-revision lookup has to answer, and it always answered "not
+  found" — indistinguishable from correct behaviour while nothing asserted against it. Note that a
+  *count* of 1 does not catch the collapsed keying, since one row still reads as one; the test that
+  catches it settles two revisions and asserts two rows survive, and that is asserted separately.
+
+  **Six mutations, each verified to have applied before its result was read.** Removing the ledger
+  write fails 8; removing the lock fails 2; reverting `SeniorApproved` fails **17 of 24**, which is
+  the measure of how dead the stage was; `assertCanDecide` → `assertCanApprove` fails the FR-039
+  rejection; restoring the double's `(int)` keying fails the two-revision test with *"actual size 1
+  matches expected size 2"*; and restoring the all-true capability set fails with *"a
+  SENIOR_REJECTED transaction offered to APPROVE: offered=true, permitted=false"*.
+
+  **One claim is deliberately not made.** The rollback case asserts that the injected ledger failure
+  propagates, that no movement is committed, and that **no command result is stored** — the last
+  being load-bearing, because a result written before the work would turn the retry into a no-op
+  reporting success for a settlement that never happened. It does **not** assert a restored balance
+  or transaction row: the in-memory `TransactionManager` runs the callback and returns, with no
+  snapshot to restore, so such an assertion would be claiming a property of MariaDB that this
+  harness does not have. That belongs to the real-schema work. For the same reason the
+  pre-existing `AtomicityFailureInjectionTest::testFinanceSettlementRollbackOnFailure` is not
+  evidence of anything — it submits a sheet, never fails anything, and asserts the sheet status.
 - [ ] T057 [P] [US3] Write failing contract tests for shared finance queue and finance decision responses in `tests/Contract/Controller/FinanceReviewControllerTest.php`
 - [X] T058 [P] [US3] Write failing Vue tests for the shared queue, senior-decision restrictions, settlement feedback, and manual retry messaging in `tests/Frontend/Component/FinanceReview.spec.ts` (complete — 25 tests covering all four subjects; landed with T287 and the US3 slice, `docs/reports/US3-finance-slice.md`. The "failing" in the task text is the RED convention: they were written and mutation-checked, and pass against the implementation built alongside them)
 
 ### Implementation for User Story 3
 
 - [x] T059 [P] [US3] Implement immutable AccountMovement domain behavior with `positive magnitude; type determines sign`, exact `balance_after_minor`, unique command ID, and unique consumption source in `lib/Domain/Account/AccountMovement.php`
-- [ ] T060 [US3] Implement account locking, movement insertion, balance projection, and reconciliation repositories in `lib/Infrastructure/Persistence/Account/DbAccountRepository.php` and `lib/Infrastructure/Persistence/Account/DbAccountMovementRepository.php` (**reopened by the US3 slice** — `DbAccountMovementRepository` read and wrote a `currency_code` column the schema has never had, so it could not move a single row in either direction. Repaired here; **movement insertion remains unverified and `findBySourceRevisionId` is still untested**, so this stays open)
-- [ ] T061 [US3] Implement finance settlement orchestration that atomically writes decision, unique movement, balance, transaction final state, sheet final state, command result, and audit in `lib/Application/Workflow/FinanceSettlementService.php` (**reopened by the US3 slice** — `recordConsumption()` updates the account balance and **never calls `$movementRepository->save()`**. The repository is injected and used nowhere in the class, so FR-040's consumption movement is never written: a finance approval moves money without leaving a ledger entry, and the unique `source_revision_id` index that T056's "exactly-one consumption" relies on is never exercised)
+- [ ] T060 [US3] Implement account locking, movement insertion, balance projection, and reconciliation repositories in `lib/Infrastructure/Persistence/Account/DbAccountRepository.php` and `lib/Infrastructure/Persistence/Account/DbAccountMovementRepository.php` (**reopened by the US3 slice** — `DbAccountMovementRepository` read and wrote a `currency_code` column the schema has never had, so it could not move a single row in either direction. Repaired here; **movement insertion remains unverified and `findBySourceRevisionId` is still untested**, so this stays open) (**partly advanced by the T056 pass** — **movement insertion and `findBySourceRevisionId` are now written and verified**; account locking is on the port and taken by the settlement. **Still open: the reconciliation repository**, and it has nothing to implement against — `AccountRepository` declares no reconciliation method and neither adapter has one, so this is a design decision about what reconciliation means here rather than a missing class. `scripts/dev/phpunit` is 229 tests / 1137 assertions / 1 failure, the failure being T275 alone)
+
+  **The write path was corrupting the ledger rather than merely missing it.**
+  `DbAccountMovementRepository::save()` cast the movement's `sourceRevisionId` to `(int)`, but the
+  aggregate carries the revision's **public UUID** and `contracts/ocs-api.yaml` declares
+  `sourceRevisionId` as `format: uuid`. A UUID is not numeric, so the cast produced `0` — a valid
+  key pointing at some *other* revision, colliding on `pettycash_account_movements_consumption_uniq`
+  with every other consumption. That is silent corruption rather than a failure. It also hard-coded
+  `source_decision_id => null`, which `data-model.md` marks "Required for consumption": a ledger row
+  said money was spent without recording on whose authority. Both public references are now
+  **resolved** to surrogate keys and unresolvable ones abort rather than defaulting, and
+  `mapRow()` projects the decision's public UUID back so the round trip is symmetric.
+  `findBySourceRevisionId()` is now covered from both directions, and the port's signature was
+  corrected from `int` to `int|string` because the surrogate form it declared was not the form the
+  domain or the contract actually uses — a signature that admits only the surrogate form cannot be
+  called correctly with the value the domain holds.
+- [X] T061 [US3] Implement finance settlement orchestration that atomically writes decision, unique movement, balance, transaction final state, sheet final state, command result, and audit in `lib/Application/Workflow/FinanceSettlementService.php` (**reopened by the US3 slice** — `recordConsumption()` updates the account balance and **never calls `$movementRepository->save()`**. The repository is injected and used nowhere in the class, so FR-040's consumption movement is never written: a finance approval moves money without leaving a ledger entry, and the unique `source_revision_id` index that T056's "exactly-one consumption" relies on is never exercised) (done — all seven named effects are written and verified inside one transaction, and the fixed lock order `contracts/workflow.md` requires is taken. Advanced across two passes: the T056 pass wrote the decision, unique movement, balance, transaction final state, command result and audit; the T061 pass closed **sheet final state**, which could not be fixed by calling the method that already existed)
+
+  **`recordConsumption()` now writes the movement.** `PettyCashAccount::consume()` already *returned*
+  the `AccountMovement` it built; the return value was discarded, so the ledger row was constructed
+  and thrown away while only the balance was persisted. It is now saved inside the caller's
+  transaction, so the ledger and the balance move together or not at all. The source it records was
+  also wrong: the **decision** id was being passed as the source *revision*, and the revision was
+  passed as neither. Both are now carried, which is what `data-model.md` requires for a consumption
+  and what makes FR-040's row traceable to a disputable question.
+
+  **Why the missing movement was never noticed, and why it was the wrong thing to fix first.**
+  `TransactionStatus::SeniorApproved` had no producer, so `assertCanApprove()` refused every
+  settlement and the write below it never executed. T056 found that; the details are recorded there.
+  The lesson is the order: a missing ledger write looks like an unimplemented feature, and it was
+  actually the second defect behind an unreachable stage.
+
+  **`sheetRepository` is injected and used nowhere except the lock.** `contracts/workflow.md`
+  requires the settlement to create "recalculated sheet state", and FR-043 requires a sheet to
+  become completed once every transaction has a final financial outcome. `ExpenseSheet` already has
+  the logic that does it (it maps the earliest outstanding stage and sets `Completed` or
+  `CompletedWithRejections`), and the settlement never calls it — so a sheet whose last transaction
+  is settled stays at its previous status. That was the remaining piece, and it is now closed, so all seven effects this task names are
+  written and verified: decision, unique movement, balance, transaction final state, sheet final
+  state, command result, and audit, inside one transaction.
+
+  **FR-043 could not have been fixed by calling `recalculateStatus()`.** A sheet loaded from either
+  repository carries **no transactions** — neither `DbExpenseSheetRepository` nor the in-memory
+  double hydrates the collection — so the aggregate's own list is empty and `recalculateStatus()`
+  returns without doing anything. Calling it on a freshly-loaded sheet is a silent no-op, which is
+  very likely why the omission went unnoticed: the method looks like it does the job. Reusing
+  `addTransaction()` is not an option either, because it refuses a sheet that is not open and by
+  settlement time the sheet is long submitted. `ExpenseSheet::recalculateStatusFrom(array)` was
+  added so the caller states which transactions it means, and the settlement loads them.
+
+  **The empty-set guard is a safety property, and it is worth naming because a mutation showed it
+  was uncovered.** Walk an empty set and `$allCompleted` is never cleared, so the sheet is declared
+  `COMPLETED` — a caller that loaded nothing would complete a sheet it knows nothing about. The
+  settlement cannot reach that branch, because the transaction it is settling necessarily carries
+  the sheet id it looks up; removing the guard passed the whole settlement suite untouched. It is
+  therefore pinned by a direct test on the aggregate, and the report says so rather than implying
+  the settlement suite covers it.
+
+  **Two of my own fixtures were wrong first, and both are recorded because the corrections are the
+  interesting part.** Each transaction first got its own sheet, which made FR-043 unobservable —
+  a sheet with one transaction always completes, so "completes", "completes-with-rejections" and
+  "does not complete yet" were indistinguishable. And the fixture attached transactions with
+  `addTransaction()`, which correctly refuses a sheet once a settlement has recalculated it, so the
+  second transaction in a test threw *"Submitted sheets are read-only"*. The shared sheet is the
+  only shape in which this requirement can be observed at all.
+
+  **Sheet coverage added, each proven by mutation:** removing the `recalculateSheet()` call fails 3
+  (completion, completion-with-rejections, and waiting for the last unsettled transaction); removing
+  the empty-set guard fails the aggregate-level test with *"Failed asserting that two variables
+  reference the same object"* — the status having become `COMPLETED` from nothing.
+
+  `scripts/dev/phpunit` is **234 tests / 1170 assertions / 1 failure**, the failure being T275 alone
+  and untouched. `npx vitest run` is 214/214 and `npm run check` exits 0. Report:
+  `docs/reports/T061.md`.
 - [x] T062 [US3] Implement shared finance queue queries and decision restrictions without cost-center scoping in `lib/Application/Workflow/FinanceQueue.php`
 - [ ] T063 [US3] Add finance queue, finance decision, account summary, and movement OCS routes/controllers in `appinfo/routes.php`, `lib/Controller/ReviewController.php`, and `lib/Controller/AccountController.php` (**reopened by the US3 slice** — `appinfo/routes.php` declares four account routes and `AccountController` implemented one, so `account#create`, `account#charge` and `account#movements` all resolved to a method that did not exist and answered **HTTP 500**. `movements` is implemented and covered here; **`create` and `charge` are still missing and still 500**)
 - [x] T064 [P] [US3] Implement finance/account typed API services and stores in `src/services/reviewsApi.ts`, `src/services/accountsApi.ts`, `src/stores/reviews.ts`, and `src/stores/accounts.ts`
@@ -403,7 +537,66 @@ feature implementation.
 - [x] T168 [US1] Add missing OCS routes to `appinfo/routes.php` for decisions, correction, resubmit, revisions, audit, queues, returns, evidence links, session, dashboard, configuration, accounts, reports, exports per `contracts/ocs-api.yaml` (done - verified all routes present)
 - [x] T169 [P] [US1] Implement `reviewsApi.ts`, `accountsApi.ts`, `stores/reviews.ts`, `stores/accounts.ts` typed API services and Pinia stores in `src/services/` and `src/stores/` (done - verified files exist)
 - [x] T170 [US1] Complete evidence uploader/list Vue components with Persian RTL (390px viewport, WCAG AA contrast, ≥12pt font) per FR-071 in `src/components/evidence/` (done - rewritten with @nextcloud/vue)
-- [ ] T171 [US1] Install Playwright browsers (`npx playwright install chromium firefox`) and verify `purchaser-submit.spec.ts` E2E tests pass in `tests/E2E/purchaser-submit.spec.ts` (missing)
+- [ ] T171 [US1] Install Playwright browsers (`npx playwright install chromium firefox`) and verify
+  `purchaser-submit.spec.ts` E2E tests pass in `tests/E2E/purchaser-submit.spec.ts` (missing)
+
+  **Deferred by the 2026-09-26 autopilot run — blocked on a browser credential the repository does
+  not hold, not on missing work.** The browser half is already done: `~/.cache/ms-playwright/`
+  holds `chromium-1200` and `firefox-1497`, so the install this task names is satisfied. The
+  verification half cannot be, and the reason is worth recording precisely because it blocks the
+  whole Playwright chain rather than one task.
+
+  `playwright.config.ts` declares no authentication at all — no `globalSetup`, no `storageState`,
+  no `httpCredentials` — and `tests/E2E/purchaser-submit.spec.ts` navigates straight to
+  `/apps/pettycash/`, which answers **401**. The suite has therefore never run against an
+  authenticated session, which is also why `test-results/` still holds a failure artefact for
+  `should-create-an-open-sheet`.
+
+  The one credential the project documents, `.env.testing`'s `PETTYCASH_TEST_PASSWORD`, **cannot**
+  authenticate a browser. `.env.example` defines it as "App password / token for the test user",
+  minted by `occ user:auth-tokens:add`, and
+  `occ user:auth-tokens:list employee1` confirms it: `pc-ct-4`, type `permanent`, scope
+  `filesystem`. It is 72 characters and entirely alphanumeric, which is exactly Nextcloud's
+  app-password format. Measured both ways: the token returns **200** from
+  `GET /ocs/v2.php/apps/pettycash/api/v1/me`, so it is valid, and the login form returns
+  **"Wrong login or password."** while the server logs `Login failed: employee1`. That is the
+  designed behaviour, not a fault — an app token authenticates Basic-auth/OCS callers and is never
+  accepted by the web login form, which only takes the account password. Basic auth is not a way
+  around it either: `GET /apps/pettycash/` with the same credentials answers **403**, because
+  Nextcloud accepts Basic auth for OCS endpoints and not for app pages.
+
+  Two candidate causes were ruled out by measurement rather than left as theories, because each
+  would have looked like a product defect. **Bruteforce throttling** was the first: the container
+  IP `172.18.0.1` carried `delay: 800`, and a throttled login fails with the same message.
+  `scripts/dev/occ security:bruteforce:attempts 172.18.0.1` re-read `attempts: 0, delay: 0` after
+  the natural decay, and the login still failed, so the throttle is not the cause — the
+  credentials are. And **form truncation** was the second: a 72-character password is long enough
+  to suspect a `maxlength`, so the DOM value, the `value` after `fill()`, and the `password=` field
+  of the actual POST body were each compared against the token. All three are byte-identical to
+  the token, and the body carries a `requesttoken`, so nothing is being mangled in transit.
+
+  Unblocking needs a decision that is outside an unattended agent's boundary, so none was taken:
+  supplying the account password for `employee1`, minting a *session* rather than a token, or
+  resetting the account credential. Any of those is a credential mutation on the shared Nextcloud
+  environment. The minimum to unblock this task and the eight that depend on it (`T053`'s three
+  browser-measured clauses, `T054`, `T066`, `T076`, `T089`, `T099`, `T114`, `T122`) is a real
+  browser-login credential for `employee1` in `.env.testing`, alongside a `globalSetup` that logs
+  in and saves `storageState`.
+
+  The spec is separately stale and will need correcting once a session is possible, so the delay
+  should not be read as "only auth is missing". Of the 26 `data-test` selectors it uses, **8 do not
+  exist in `src/`**: `add-transaction-button` (the component emits `create-transaction-btn`),
+  `transaction-list-item` (`transaction-row`), `transaction-status` (`transaction-status-badge`),
+  `validation-error` (`validation-summary` and `validation-summary-{field}`), and
+  `account-option` / `cost-center-option` / `expense-type-option`, which are `NcSelect` options
+  rather than declared hooks. `audit-event` is the eighth and is a **product gap, not a selector
+  mistake**: `src/views/sheets/SheetDetailView.vue:258` renders the audit table body as
+  `<tr v-if="false">`, so the sheet-detail audit history renders a header row and no events at all,
+  under `FR-051`/`FR-052`/`SC-006`. That render belongs to `T098`; the Vue-testable audit query
+  and timeline belong to `T092`/`T093`. It is recorded here so the gap is not rediscovered as a
+  broken selector, and the assertion at line 220 expects the literal `test-user` where the fixture
+  user is `employee1`.
+
 
 ### Phase 4 Completion — US2 Management Review (Priority: P1)
 

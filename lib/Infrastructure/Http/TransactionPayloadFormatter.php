@@ -16,6 +16,7 @@ use OCA\PettyCash\Domain\Evidence\Repository\EvidenceRepository;
 use OCA\PettyCash\Domain\Expense\ExpenseTransaction;
 use OCA\PettyCash\Domain\Workflow\Repository\WorkflowDecisionRepository;
 use OCA\PettyCash\Domain\Workflow\WorkflowStage;
+use OCA\PettyCash\Domain\Workflow\FinanceDecisionPolicy;
 
 /**
  * The single source of truth for the transaction OCS payload.
@@ -221,9 +222,18 @@ final readonly class TransactionPayloadFormatter
         }
 
         if ($this->canDecide($transaction, $actorUid)) {
-            $actions['canApprove'] = true;
-            $actions['canReject'] = true;
-            $actions['canReturn'] = true;
+            // Per-decision, from the same policy the command path enforces.
+            //
+            // These three used to be set together whenever the actor could decide at all, so a
+            // senior-rejected transaction offered finance an Approve button that the command path
+            // then refused — the exact disagreement this method's own docblock claims cannot
+            // happen. FR-039 draws the line between the two senior outcomes, so the capabilities
+            // have to be drawn with it rather than as one "can decide" flag.
+            $policy = new FinanceDecisionPolicy();
+            $status = $transaction->status;
+            $actions['canApprove'] = $policy->canFinanceApprove($status);
+            $actions['canReject'] = $policy->canFinanceReject($status);
+            $actions['canReturn'] = $policy->canFinanceReturn($status);
         }
 
         return $actions;
