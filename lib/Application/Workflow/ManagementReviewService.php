@@ -106,16 +106,24 @@ final readonly class ManagementReviewService
                     throw new InvalidArgumentException("Transaction is not at {$stage->value} stage");
                 }
 
-                // Authorization check
-                $costCenterCode = $transaction->revision()->costCenterId();
-                $costCenter = $costCenterCode ? $this->costCenterRepository->findByCode($costCenterCode) : null;
-                $costCenterId = $costCenter?->id;
+                // Authorization check.
+                //
+                // The scope in the context must be the cost centers the *actor* is
+                // actually assigned to, never the cost center of the record under
+                // review: `canReview()` asks whether the subject cost center is in
+                // that list, so a list built from the subject itself makes the
+                // comparison permanently true and lets a manager decide any cost
+                // center's transaction (FR-004, FR-005, FR-009).
+                $costCenterCode = $this->resolveCostCenterCode($transaction);
+                $costCenterId = $costCenterCode !== null
+                    ? $this->costCenterRepository->findByCode($costCenterCode)?->id
+                    : null;
 
                 $context = new AuthorizationContext(
                     $actorUid,
                     $transaction->ownerUid,
                     $this->getUserRoles($actorUid),
-                    $costCenterCode ? [$costCenterCode] : [],
+                    $this->getManagedCostCenterCodes($actorUid, $stage),
                     false
                 );
 
@@ -336,6 +344,67 @@ final readonly class ManagementReviewService
         $total = count($allTransactions);
 
         return ['items' => $transactions, 'total' => $total];
+    }
+
+    /**
+     * The cost-center code a decision is scoped to.
+     *
+     * The revision carries the code as a submission-time snapshot, which is what the
+     * queues and the audit trail display. Falling back to the numeric join key keeps
+     * the decision path working for a revision whose snapshot is missing, rather than
+     * silently treating an unresolvable cost center as "no scope required".
+     */
+    private function resolveCostCenterCode(ExpenseTransaction $transaction): ?string
+    {
+        $revision = $transaction->revision();
+
+        if ($revision->costCenterCode !== null && $revision->costCenterCode !== '') {
+            return $revision->costCenterCode;
+        }
+
+        if ($revision->costCenterDbId !== null) {
+            return $this->costCenterRepository->findById($revision->costCenterDbId)?->code();
+        }
+
+        return null;
+    }
+
+    /**
+     * The cost-center codes the actor is actively assigned to for this stage.
+     *
+     * Role assignments store the cost center as a numeric join key, so each one is
+     * resolved to its code: the scope comparison in `AuthorizationService::canReview()`
+     * is strict, and a numeric id compared against a code could never match. The
+     * finance stage is a shared queue with no cost-center scoping and the correction
+     * stage is owner-only, so neither carries a scope.
+     *
+     * @return list<string>
+     */
+    private function getManagedCostCenterCodes(string $actorUid, WorkflowStage $stage): array
+    {
+        $requiredRole = match ($stage) {
+            WorkflowStage::CostCenter => \OCA\PettyCash\Domain\Shared\Enum\Role::CostCenterManager,
+            WorkflowStage::Senior => \OCA\PettyCash\Domain\Shared\Enum\Role::SeniorManager,
+            default => null,
+        };
+
+        if ($requiredRole === null) {
+            return [];
+        }
+
+        $now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
+        $codes = [];
+        foreach ($this->roleAssignmentRepository->findActiveByUserAndRole($actorUid, $requiredRole, $now) as $assignment) {
+            if ($assignment->costCenterId === null) {
+                continue;
+            }
+            $code = $this->costCenterRepository->findById($assignment->costCenterId)?->code();
+            if ($code !== null && $code !== '') {
+                $codes[] = $code;
+            }
+        }
+
+        return $codes;
     }
 
     private function getUserRoles(string $userUid): array

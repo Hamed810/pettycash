@@ -19,6 +19,7 @@ use OCA\PettyCash\Domain\Workflow\WorkflowStage;
 use OCA\PettyCash\Domain\Shared\Uuid;
 use OCA\PettyCash\Domain\Shared\CurrencyCode;
 use OCA\PettyCash\Infrastructure\Http\OcsErrorMapper;
+use OCA\PettyCash\Infrastructure\Http\TransactionPayloadFormatter;
 use OCA\PettyCash\Domain\Expense\TransactionRevision;
 use OCA\PettyCash\Domain\Audit\AuditEvent;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
@@ -28,13 +29,6 @@ use OCP\AppFramework\OCSController;
 class TransactionController extends OCSController
 {
     /** @var array<string, int> Currency code to minor unit mapping */
-    private const CURRENCY_MINOR_UNITS = [
-        'IRR' => 0,
-        'USD' => 2,
-        'EUR' => 2,
-        'GBP' => 2,
-    ];
-
     public function __construct(
         \OCP\IRequest $request,
         private TransactionService $transactionService,
@@ -44,7 +38,8 @@ class TransactionController extends OCSController
         private TransactionRevisionRepository $revisionRepository,
         private AuditEventRepository $auditRepository,
         private CurrentUser $currentUser,
-        private OcsErrorMapper $ocsErrorMapper
+        private OcsErrorMapper $ocsErrorMapper,
+        private TransactionPayloadFormatter $payloadFormatter
     ) {
         parent::__construct('pettycash', $request);
     }
@@ -317,47 +312,21 @@ class TransactionController extends OCSController
         }
     }
 
+    /**
+     * The contract's `TransactionDetail`.
+     *
+     * Formatting lives in `TransactionPayloadFormatter` because `ReviewController` used to
+     * carry a second, differently drifted copy of it; see that class for the schemas.
+     */
     private function formatTransaction(object $transaction): array
     {
-        $rev = $transaction->revision();
-        return [
-            'id' => $transaction->publicId ?? $transaction->id,
-            'ownerId' => $transaction->ownerUid,
-            'sheetId' => $transaction->sheetId,
-            'stage' => $transaction->stage->value,
-            'status' => $transaction->status->value,
-            'finalOutcome' => $transaction->finalOutcome,
-            'revision' => $this->formatRevision($rev),
-            'version' => $transaction->lockVersion,
-        ];
+        return $this->payloadFormatter->detail($transaction);
     }
 
+    /** The contract's `Revision`, for the bare-revision endpoints. */
     private function formatRevision(TransactionRevision $rev): array
     {
-        $currencyCode = (string)$rev->amount()->currency();
-        return [
-            'id' => $rev->id(),
-            'number' => $rev->number(),
-            'expenseDate' => $rev->expenseDate()->format('Y-m-d'),
-            'amount' => [
-                'amountMinor' => $rev->amount()->minorUnits(),
-                'currency' => $currencyCode,
-                'minorUnit' => self::CURRENCY_MINOR_UNITS[$currencyCode] ?? 2,
-            ],
-            'description' => $rev->description(),
-            'costCenter' => [
-                'id' => $rev->costCenterId(),
-                'code' => $rev->costCenterCode ?? '',
-                'name' => $rev->costCenterName ?? '',
-            ],
-            'expenseType' => [
-                'id' => $rev->expenseTypeTitle(),
-                'name' => $rev->expenseTypeTitle(),
-            ],
-            'createdBy' => $rev->createdBy ?? '',
-            'createdAt' => $rev->createdAt?->format(\DateTimeInterface::ATOM),
-            'active' => $rev->isActive(),
-        ];
+        return $this->payloadFormatter->revision($rev);
     }
 
     private function formatAuditEvent(AuditEvent $event): array

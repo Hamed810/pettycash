@@ -7,6 +7,7 @@ import type { SheetStatus } from '@/types/api'
 import { NcBreadcrumbs, NcNoteCard, NcButton, NcChip, NcIconSvgWrapper } from '@nextcloud/vue'
 import { mdiPencil, mdiPlus, mdiSend, mdiEye, mdiLock } from '@mdi/js'
 import { t } from '@nextcloud/l10n'
+import { formatMoney } from '@/utils/money'
 
 const route = useRoute()
 const router = useRouter()
@@ -26,10 +27,6 @@ const statusLabels: Record<SheetStatus, string> = {
 
 const isSubmitted = computed(() => sheetStore.currentSheet?.status !== 'OPEN')
 
-function formatMoney(amountMinor: number, currency: string) {
-	return new Intl.NumberFormat('fa-IR', { style: 'currency', currency, minimumFractionDigits: 0 }).format(amountMinor / 100)
-}
-
 function goToEdit() { router.push({ name: 'sheet-edit', params: { id: sheetId.value } }) }
 function goToCreateTransaction() { router.push({ name: 'transaction-create', params: { sheetId: sheetId.value } }) }
 function goToTransaction(transactionId: string) { router.push({ name: 'transaction-detail', params: { id: transactionId } }) }
@@ -40,17 +37,24 @@ async function handleSubmit() {
 	await transactionStore.loadTransactions(sheetId.value)
 }
 
-onMounted(() => {
-	sheetStore.loadSheet(sheetId.value).then(sheet => {
-		if (sheet) transactionStore.loadTransactions(sheetId.value)
-	})
-})
+/**
+ * Loads the sheet, then its transactions.
+ *
+ * The stores record a failure in their own `error` ref, which this view renders in its alert. These
+ * loads are fired from `onMounted` and from a `watch`, neither of which has a caller to react to a
+ * rejection, so it is absorbed here rather than surfacing as an unhandled promise rejection in the
+ * user's console.
+ */
+function loadSheetAndTransactions(id: string) {
+	sheetStore.loadSheet(id).then(sheet => {
+		if (sheet) return transactionStore.loadTransactions(id)
+		return undefined
+	}).catch(() => undefined)
+}
 
-watch(sheetId, (newId) => {
-	sheetStore.loadSheet(newId).then(sheet => {
-		if (sheet) transactionStore.loadTransactions(newId)
-	})
-})
+onMounted(() => { loadSheetAndTransactions(sheetId.value) })
+
+watch(sheetId, (newId) => { loadSheetAndTransactions(newId) })
 
 const transactionHeaders = [
 	{ key: 'expenseDate', label: 'pettycash.transactions.expenseDate', sortable: true },
@@ -100,7 +104,7 @@ const transactionHeaders = [
 		<NcNoteCard data-test="sheet-header">
 			<template #header>
 				<div class="card-header-row">
-					<h2 class="mb-0">{{ sheetStore.currentSheet?.title }}</h2>
+					<h2 class="mb-0" data-test="sheet-title">{{ sheetStore.currentSheet?.title }}</h2>
 					<div class="d-flex gap-2">
 						<NcButton v-if="!isSubmitted" variant="secondary" @click="goToEdit" data-test="edit-sheet-btn">
 							<NcIconSvgWrapper :path="mdiPencil" :size="16" class="mr-2" />
@@ -121,7 +125,7 @@ const transactionHeaders = [
 			<div class="card-details">
 				<div class="detail-item">
 					<strong>{{ t('pettycash', 'sheets.currency') }}</strong>
-					<div>{{ sheetStore.currentSheet?.currency }}</div>
+					<div data-test="sheet-currency">{{ sheetStore.currentSheet?.currency }}</div>
 				</div>
 				<div class="detail-item">
 					<strong>{{ t('pettycash', 'sheets.owner') }}</strong>
@@ -138,35 +142,42 @@ const transactionHeaders = [
 			<div class="totals-grid">
 				<div class="total-chip" data-test="current-total">
 					<span class="total-label">{{ t('pettycash', 'sheets.currentTotal') }}</span>
-					<span class="total-value">{{ formatMoney(sheetStore.currentSheet?.totals.current.amountMinor ?? 0, sheetStore.currentSheet?.currency ?? 'IRR') }}</span>
+					<span class="total-value">{{ formatMoney(sheetStore.currentSheet?.totals.current) }}</span>
 				</div>
 				<div class="total-chip total-chip--info" data-test="submitted-total">
 					<span class="total-label">{{ t('pettycash', 'sheets.submittedTotal') }}</span>
-					<span class="total-value">{{ formatMoney(sheetStore.currentSheet?.totals.submitted.amountMinor ?? 0, sheetStore.currentSheet?.currency ?? 'IRR') }}</span>
+					<span class="total-value">{{ formatMoney(sheetStore.currentSheet?.totals.submitted) }}</span>
 				</div>
-				<div class="total-chip total-chip--success" data-test="effective-approved-total">
-					<span class="total-label">{{ t('pettycash', 'sheets.effectiveApproved') }}</span>
-					<span class="total-value">{{ formatMoney(sheetStore.currentSheet?.totals.effectiveApproved.amountMinor ?? 0, sheetStore.currentSheet?.currency ?? 'IRR') }}</span>
-				</div>
-				<div class="total-chip total-chip--error" data-test="effective-rejected-total">
-					<span class="total-label">{{ t('pettycash', 'sheets.effectiveRejected') }}</span>
-					<span class="total-value">{{ formatMoney(sheetStore.currentSheet?.totals.effectiveRejected.amountMinor ?? 0, sheetStore.currentSheet?.currency ?? 'IRR') }}</span>
-				</div>
-				<div class="total-chip total-chip--warning" data-test="effective-pending-total">
-					<span class="total-label">{{ t('pettycash', 'sheets.effectivePending') }}</span>
-					<span class="total-value">{{ formatMoney(sheetStore.currentSheet?.totals.effectivePending.amountMinor ?? 0, sheetStore.currentSheet?.currency ?? 'IRR') }}</span>
+				<!-- FR-062 asks for the stage-approved columns "alongside the latest effective outcome
+				     column". The three latest-effective figures are that single column: each is summed by
+				     each transaction's latest effective decision, so presenting them as one labelled
+				     group is what distinguishes them from the three per-stage approved columns below. -->
+				<div class="total-column" data-test="effective-outcome-total">
+					<span class="total-column-label">{{ t('pettycash', 'sheets.latestEffectiveOutcome') }}</span>
+					<div class="total-chip total-chip--success" data-test="effective-approved-total">
+						<span class="total-label">{{ t('pettycash', 'sheets.effectiveApproved') }}</span>
+						<span class="total-value">{{ formatMoney(sheetStore.currentSheet?.totals.effectiveApproved) }}</span>
+					</div>
+					<div class="total-chip total-chip--error" data-test="effective-rejected-total">
+						<span class="total-label">{{ t('pettycash', 'sheets.effectiveRejected') }}</span>
+						<span class="total-value">{{ formatMoney(sheetStore.currentSheet?.totals.effectiveRejected) }}</span>
+					</div>
+					<div class="total-chip total-chip--warning" data-test="effective-pending-total">
+						<span class="total-label">{{ t('pettycash', 'sheets.effectivePending') }}</span>
+						<span class="total-value">{{ formatMoney(sheetStore.currentSheet?.totals.effectivePending) }}</span>
+					</div>
 				</div>
 				<div class="total-chip total-chip--primary" data-test="cost-center-approved-total">
 					<span class="total-label">{{ t('pettycash', 'sheets.costCenterApproved') }}</span>
-					<span class="total-value">{{ formatMoney(sheetStore.currentSheet?.totals.costCenterApproved.amountMinor ?? 0, sheetStore.currentSheet?.currency ?? 'IRR') }}</span>
+					<span class="total-value">{{ formatMoney(sheetStore.currentSheet?.totals.costCenterApproved) }}</span>
 				</div>
 				<div class="total-chip total-chip--secondary" data-test="senior-approved-total">
 					<span class="total-label">{{ t('pettycash', 'sheets.seniorApproved') }}</span>
-					<span class="total-value">{{ formatMoney(sheetStore.currentSheet?.totals.seniorApproved.amountMinor ?? 0, sheetStore.currentSheet?.currency ?? 'IRR') }}</span>
+					<span class="total-value">{{ formatMoney(sheetStore.currentSheet?.totals.seniorApproved) }}</span>
 				</div>
 				<div class="total-chip total-chip--orange" data-test="finance-approved-total">
 					<span class="total-label">{{ t('pettycash', 'sheets.financeApproved') }}</span>
-					<span class="total-value">{{ formatMoney(sheetStore.currentSheet?.totals.financeApproved.amountMinor ?? 0, sheetStore.currentSheet?.currency ?? 'IRR') }}</span>
+					<span class="total-value">{{ formatMoney(sheetStore.currentSheet?.totals.financeApproved) }}</span>
 				</div>
 			</div>
 		</NcNoteCard>
@@ -186,13 +197,15 @@ const transactionHeaders = [
 				<table class="nc-table" data-test="transaction-table">
 					<thead>
 						<tr>
-							<th v-for="header in transactionHeaders" :key="header.key">{{ t('pettycash', header.label) }}</th>
+							<th v-for="header in transactionHeaders" :key="header.key" scope="col">{{ t('pettycash', header.label) }}</th>
 						</tr>
 					</thead>
 					<tbody v-if="!transactionStore.loading">
-						<tr v-for="item in transactionStore.transactions" :key="item.id">
+						<!-- Only this sheet's transactions: the store is loaded from the sheet in the
+						     route, so a row here belongs to the sheet the purchaser opened. -->
+						<tr v-for="item in transactionStore.transactions" :key="item.id" data-test="sheet-transaction-row">
 							<td>{{ new Date(item.activeRevision.expenseDate).toLocaleDateString('fa-IR') }}</td>
-							<td>{{ formatMoney(item.activeRevision.amount.amountMinor, item.activeRevision.amount.currency) }}</td>
+							<td>{{ formatMoney(item.activeRevision.amount) }}</td>
 							<td>{{ item.activeRevision.costCenter.name }}</td>
 							<td>{{ item.activeRevision.expenseType.name }}</td>
 							<td>
@@ -249,9 +262,18 @@ const transactionHeaders = [
 			</div>
 		</NcNoteCard>
 
-		<div v-if="sheetStore.error" class="alert alert--error" role="alert">
-			<span>{{ sheetStore.error }}</span>
-			<button type="button" @click="sheetStore.clearError" aria-label="Dismiss">×</button>
+		<!-- A refused submission is reported here. `role="alert"` plus `aria-live` makes it announced
+		     rather than only shown, so a purchaser who has scrolled past the totals still learns why
+		     nothing happened. -->
+		<div
+			v-if="sheetStore.error"
+			class="alert alert--error submission-errors"
+			role="alert"
+			aria-live="assertive"
+			data-test="submission-errors"
+		>
+			<span data-test="submission-error-message">{{ sheetStore.error }}</span>
+			<button type="button" @click="sheetStore.clearError" :aria-label="t('pettycash', 'common.dismiss')">×</button>
 		</div>
 	</div>
 </template>
@@ -294,6 +316,19 @@ const transactionHeaders = [
 	display: flex;
 	flex-direction: column;
 	gap: 0.25rem;
+}
+
+.total-column {
+	display: flex;
+	flex-direction: column;
+	gap: 0.5rem;
+	padding: 0.5rem;
+	border: 1px solid var(--nc-color-border, #ddd);
+	border-radius: 4px;
+}
+
+.total-column-label {
+	font-weight: 600;
 }
 
 .totals-grid {
@@ -358,12 +393,12 @@ const transactionHeaders = [
 	}
 
 .total-label {
-	font-size: 0.75rem;
+	font-size: var(--font-size-floor);
 	color: var(--nc-color-on-surface-variant, #616161);
 }
 
 .total-value {
-	font-size: 1rem;
+	font-size: var(--font-size-floor);
 	font-weight: 600;
 	color: var(--nc-color-on-surface, #212121);
 }
@@ -375,7 +410,7 @@ const transactionHeaders = [
 .nc-table {
 	width: 100%;
 	border-collapse: collapse;
-	font-size: 0.875rem;
+	font-size: var(--font-size-floor);
 }
 
 .nc-table th,

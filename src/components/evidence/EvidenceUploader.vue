@@ -6,7 +6,7 @@ import NcChip from '@nextcloud/vue/components/NcChip'
 import NcIconSvgWrapper from '@nextcloud/vue/components/NcIconSvgWrapper'
 import NcNoteCard from '@nextcloud/vue/components/NcNoteCard'
 import NcProgressBar from '@nextcloud/vue/components/NcProgressBar'
-import { mdiCloudUpload, mdiFileCheck, mdiClose } from '@mdi/js'
+import { mdiCloudUpload, mdiFileCheck, mdiClose, mdiLock } from '@mdi/js'
 import { t } from '@nextcloud/l10n'
 
 interface Props {
@@ -41,14 +41,22 @@ function openFilePicker() {
 }
 
 function onFileSelected(event: Event) {
+	// FR-025 allows evidence to be added before submission and FR-026 forbids it afterwards, so the
+	// input is not even rendered for a submitted transaction. The guard is repeated here because a
+	// file can also arrive by assignment rather than by a click.
+	if (!props.isDraft) return
 	const input = event.target as HTMLInputElement
 	if (input.files && input.files.length > 0) {
 		const selectedFile = input.files[0]
 		if (!selectedFile) {
 			return
 		}
+		// The limit is inclusive: a file of exactly the maximum is allowed.
 		if (selectedFile.size > MAX_FILE_SIZE) {
-			error.value = t('pettycash', 'evidence.fileSizeExceeded', { max: '100 MB' })
+			// The limit is stated, not just the refusal. A message that only says "too large" leaves
+			// the purchaser with nothing to act on, and the `{max}` placeholder this call passed was
+			// never present in the message key, so the number was never rendered.
+			error.value = t('pettycash', 'evidence.fileSizeExceeded: {max}', { max: `${MAX_FILE_SIZE / (1024 * 1024)} MB` })
 			file.value = null
 			return
 		}
@@ -58,7 +66,7 @@ function onFileSelected(event: Event) {
 }
 
 async function handleUpload() {
-	if (!file.value) return
+	if (!file.value || !props.isDraft) return
 	uploading.value = true
 	progress.value = 0
 	error.value = null
@@ -91,41 +99,53 @@ function removeFile() {
 
 <template>
 	<div class="evidence-uploader" dir="rtl" data-test="evidence-uploader">
-		<div class="drop-zone" :class="{ 'has-file': file }" data-test="drop-zone">
-			<input type="file" ref="fileInput" @change="onFileSelected" accept="*" hidden data-test="evidence-upload-input" />
-			<div v-if="!file" class="drop-zone__empty">
-				<NcIconSvgWrapper :path="mdiCloudUpload" :size="48" class="drop-zone__icon" />
-				<span class="drop-zone__text">{{ t('pettycash', 'evidence.dragDrop') }}</span>
-				<small class="drop-zone__hint">{{ t('pettycash', 'evidence.clickToSelect') }}</small>
-				<NcButton variant="secondary" @click="openFilePicker" class="drop-zone__btn" data-test="select-file-btn">
-					{{ t('pettycash', 'evidence.selectFile') }}
-				</NcButton>
-			</div>
-			<div v-else class="drop-zone__file">
-				<div class="drop-zone__file-info">
-					<NcIconSvgWrapper :path="mdiFileCheck" :color="file!.size > MAX_FILE_SIZE ? 'error' : 'success'" :size="24" class="drop-zone__file-icon" />
-					<div class="drop-zone__file-details">
-						<div class="drop-zone__file-name">{{ file!.name }}</div>
-						<div class="drop-zone__file-size">{{ formatFileSize(file!.size) }}</div>
-					</div>
-					<NcChip data-test="file-size-badge">
-						{{ file!.size > MAX_FILE_SIZE ? t('pettycash', 'evidence.tooLarge') : t('pettycash', 'evidence.sizeOk') }}
-					</NcChip>
-				</div>
-				<NcProgressBar v-if="uploading" :value="progress" :indeterminate="!progress" color="primary" data-test="upload-progress" />
-				<div class="drop-zone__actions">
-					<NcButton variant="tertiary" @click="removeFile" data-test="remove-file-btn">
-						<NcIconSvgWrapper :path="mdiClose" :size="16" class="mr-2" />
-						{{ t('pettycash', 'common.remove') }}
-					</NcButton>
-					<NcButton :disabled="uploading || file!.size > MAX_FILE_SIZE" :loading="uploading" variant="primary" @click="handleUpload" data-test="upload-btn">
-						{{ uploading ? t('pettycash', 'evidence.uploading') : t('pettycash', 'evidence.upload') }}
-					</NcButton>
-				</div>
-			</div>
+		<!-- FR-025 permits adding evidence before submission; FR-026 forbids it afterwards, with the
+		     single exception of a correction of a returned transaction, which the server models as a
+		     new revision rather than as an edit of this one. The prop previously existed and was never
+		     read, so a submitted transaction could still be handed evidence. -->
+		<div v-if="!isDraft" class="evidence-locked" data-test="evidence-locked">
+			<NcIconSvgWrapper :path="mdiLock" :size="20" />
+			<span>{{ t('pettycash', 'evidence.lockedAfterSubmission') }}</span>
 		</div>
 
-		<NcNoteCard v-if="error" type="error" data-test="file-size-error">
+		<template v-else>
+			<div class="drop-zone" :class="{ 'has-file': file }" data-test="drop-zone">
+				<input type="file" ref="fileInput" @change="onFileSelected" accept="*" hidden data-test="evidence-upload-input" />
+				<div v-if="!file" class="drop-zone__empty">
+					<NcIconSvgWrapper :path="mdiCloudUpload" :size="48" class="drop-zone__icon" />
+					<span class="drop-zone__text">{{ t('pettycash', 'evidence.dragDrop') }}</span>
+					<small class="drop-zone__hint">{{ t('pettycash', 'evidence.clickToSelect') }}</small>
+					<NcButton variant="secondary" @click="openFilePicker" class="drop-zone__btn" data-test="select-file-btn">
+						{{ t('pettycash', 'evidence.selectFile') }}
+					</NcButton>
+					<small class="drop-zone__limit">{{ t('pettycash', 'evidence.maxSize: {max}', { max: `${MAX_FILE_SIZE / (1024 * 1024)} MB` }) }}</small>
+				</div>
+				<div v-else class="drop-zone__file">
+					<div class="drop-zone__file-info">
+						<NcIconSvgWrapper :path="mdiFileCheck" :size="24" class="drop-zone__file-icon" />
+						<div class="drop-zone__file-details">
+							<div class="drop-zone__file-name">{{ file.name }}</div>
+							<div class="drop-zone__file-size">{{ formatFileSize(file.size) }}</div>
+						</div>
+						<NcChip data-test="file-size-badge">
+							{{ t('pettycash', 'evidence.sizeOk') }}
+						</NcChip>
+					</div>
+					<NcProgressBar v-if="uploading" :value="progress" :indeterminate="!progress" color="primary" data-test="upload-progress" />
+					<div class="drop-zone__actions">
+						<NcButton variant="tertiary" :aria-label="t('pettycash', 'evidence.removeSelected')" @click="removeFile" data-test="remove-file-btn">
+							<NcIconSvgWrapper :path="mdiClose" :size="16" />
+							{{ t('pettycash', 'common.remove') }}
+						</NcButton>
+						<NcButton :disabled="uploading" :loading="uploading" variant="primary" @click="handleUpload" data-test="upload-btn">
+							{{ uploading ? t('pettycash', 'evidence.uploading') : t('pettycash', 'evidence.upload') }}
+						</NcButton>
+					</div>
+				</div>
+			</div>
+		</template>
+
+		<NcNoteCard v-if="error" type="error" role="alert" data-test="file-size-error">
 			{{ error }}
 		</NcNoteCard>
 	</div>
@@ -168,7 +188,7 @@ function removeFile() {
 }
 
 .drop-zone__text {
-	font-size: 1.125rem;
+	font-size: var(--font-size-floor);
 	color: var(--nc-color-on-surface, #212121);
 }
 
@@ -178,6 +198,20 @@ function removeFile() {
 
 .drop-zone__btn {
 	margin-top: 0.5rem;
+}
+
+.drop-zone__limit {
+	color: var(--nc-color-on-surface-variant, #616161);
+}
+
+.evidence-locked {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	padding: 1rem;
+	border: 1px dashed var(--nc-color-outline-variant, #e0e0e0);
+	border-radius: 8px;
+	color: var(--nc-color-on-surface-variant, #616161);
 }
 
 .drop-zone__file {
@@ -213,7 +247,7 @@ function removeFile() {
 }
 
 .drop-zone__file-size {
-	font-size: 0.875rem;
+	font-size: var(--font-size-floor);
 	color: var(--nc-color-on-surface-variant, #616161);
 }
 

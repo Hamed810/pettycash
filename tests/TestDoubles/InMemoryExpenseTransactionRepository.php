@@ -36,7 +36,18 @@ final class InMemoryExpenseTransactionRepository implements \OCA\PettyCash\Domai
      */
     public function findBySheetId(int $sheetId): array
     {
+        return $this->transactionsForSheet($sheetId);
+    }
+
+    /** @return list<ExpenseTransaction> */
+    private function transactionsForSheet(int $sheetId): array
+    {
         return array_values(array_filter($this->transactions, fn($t) => $t->sheetId === $sheetId));
+    }
+
+    public function countBySheetId(int $sheetId): int
+    {
+        return count($this->transactionsForSheet($sheetId));
     }
 
     /**
@@ -111,6 +122,13 @@ final class InMemoryExpenseTransactionRepository implements \OCA\PettyCash\Domai
             $transaction->dbId = count($this->transactions) + 1;
         }
         $this->transactions[$transaction->dbId] = $transaction;
+    }
+
+    public function delete(ExpenseTransaction $transaction): void
+    {
+        if ($transaction->dbId !== null) {
+            unset($this->transactions[$transaction->dbId]);
+        }
     }
 
     public function clear(): void

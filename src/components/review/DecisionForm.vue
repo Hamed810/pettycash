@@ -8,17 +8,33 @@
 				:options="decisionItems"
 				:input-label="t('pettycash', 'reviews.decision')"
 				:required="true"
-				:error-message="decisionError"
+				:error="!!decisionError"
+				:helper-text="decisionError"
 				data-testid="decision-select"
 				class="decision-form__field" />
 
+			<!--
+				`error` + `helper-text`, not `error-message`.
+
+				`@nextcloud/vue` 9.x declares `error` (boolean) and `helperText` (string); it has no
+				`errorMessage` prop. Passing `error-message` therefore fell through as a plain attribute
+				on the component's root and the message was never rendered at all — so FR-033's
+				acceptance scenario ("the decision is rejected until an explanation is given") left the
+				purchaser's manager looking at a submit button that had silently become disabled, with
+				nothing saying why.
+
+				No `aria-describedby` is passed: the control appends the passed value to the id of the
+				helper-text element it renders, so naming an id of our own would leave a reference
+				pointing at nothing. The library already associates the message with the control.
+			-->
 			<NcTextArea
 				v-model="explanation"
 				:label="t('pettycash', 'reviews.explanation')"
 				:required="requiresExplanation"
 				:maxlength="500"
 				:rows="3"
-				:error-message="explanationError"
+				:error="!!explanationError"
+				:helper-text="explanationError"
 				data-testid="explanation-input"
 				class="decision-form__field" />
 

@@ -70,13 +70,13 @@ defineProps<Props>()
 }
 
 .header-label {
-	font-size: 12px;
+	font-size: var(--font-size-emphasis);
 	color: var(--color-text-maxcontrast);
 	text-transform: uppercase;
 }
 
 .header-value {
-	font-size: 14px;
+	font-size: var(--font-size-emphasis);
 	font-weight: 500;
 }
 

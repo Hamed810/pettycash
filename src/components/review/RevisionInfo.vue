@@ -114,13 +114,13 @@ function formatDateTime(dateStr: string): string {
 }
 
 .info-label {
-	font-size: 12px;
+	font-size: var(--font-size-emphasis);
 	color: var(--color-text-maxcontrast);
 	text-transform: uppercase;
 }
 
 .info-value {
-	font-size: 14px;
+	font-size: var(--font-size-emphasis);
 	font-weight: 500;
 }
 

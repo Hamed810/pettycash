@@ -1,11 +1,42 @@
 @use './rtl';
 @use './responsive';
 
+/**
+ * The type scale.
+ *
+ * FR-071 requires user-facing text to be at least 12pt, which is 16 CSS pixels, so **1rem is the
+ * floor and there is no step below it**. The app previously ran a scale whose smallest steps were
+ * 12px, 13px and 14px, which put every caption, meta line and table cell under the requirement's
+ * floor — not in one component but across all of them, because the scale itself started too low.
+ *
+ * De-emphasis is carried by colour and weight, never by making text smaller: a "small caption" step
+ * is exactly what put the app under FR-071's floor, and a reader with low vision is the reader
+ * FR-071 is about.
+ *
+ * | Token                    | Value      | Use                                                |
+ * |--------------------------|------------|----------------------------------------------------|
+ * | `--font-size-floor`      | `1rem`     | body text, table cells, captions, meta lines      |
+ * | `--font-size-emphasis`   | `1.125rem` | a value that must outrank the label beside it     |
+ * | `--font-size-section`    | `1.25rem`  | a section heading within a card                   |
+ * | `--font-size-title`      | `1.5rem`   | the page title                                     |
+ *
+ * Declared on `.pettycash-shell` rather than on `:root` so the scale belongs to the app and is
+ * inherited by every component beneath it, and so a host page's own root font size is not silently
+ * redefined for anything outside PettyCash. Custom properties rather than SCSS variables because a
+ * component's scoped style block cannot see a SCSS variable declared in another file without an
+ * `@use`, and a scale that each component has to import individually is not one scale.
+ */
 .pettycash-shell {
+	--font-size-floor: 1rem;
+	--font-size-emphasis: 1.125rem;
+	--font-size-section: 1.25rem;
+	--font-size-title: 1.5rem;
+
 	box-sizing: border-box;
 	max-inline-size: 1200px;
 	margin-inline: auto;
 	padding: 24px;
 	color: var(--color-main-text);
 	background: var(--color-main-background);
+	font-size: var(--font-size-floor);
 }

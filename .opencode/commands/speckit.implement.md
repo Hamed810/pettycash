@@ -1,5 +1,5 @@
 ---
-description: Execute the implementation plan by processing and executing all tasks defined in tasks.md
+description: Execute the implementation plan by processing dependency-valid, feature-cohesive work from tasks.md and verifying it against the active Spec Kit artifacts.
 ---
 
 ## User Input
@@ -45,227 +45,196 @@ You **MUST** consider the user input before proceeding (if not empty).
     After emitting the block above you MUST actually invoke the hook and wait for it to finish before continuing. Run it the same way you would run the command yourself in this agent/session (the invocation may differ from the literal `{command}` id shown above, e.g. a skills-mode agent runs it as `/skill:speckit-...` or `$speckit-...`). Emitting the block alone does not run the hook.
 - If no hooks are registered or `.specify/extensions.yml` does not exist, skip silently
 
-## Project Execution Context (PettyCash)
+## PettyCash Execution Context
 
 Before entering the Outline:
 
-- **REQUIRED**: Read `AGENTS.md` from the project root. Treat it as authoritative for
-  operational, runtime, Docker ownership, safety, and tool-execution rules.
-- Repository-wide understanding should normally be established by `/speckit.converge`.
-  Do **not** begin implementation with a full repository scan or repeat convergence analysis.
-- Identify the active or next genuinely incomplete task using `tasks.md`, dependency rules,
-  and targeted repository evidence. An unchecked checkbox alone is not proof that the
-  implementation is absent.
-- If a relevant task appears already implemented, inspect only the files/tests needed to
-  verify that task. Do not redo the work and do not audit the entire repository.
-- Use `codebase-memory` only when the active task requires architecture, dependency, or
-  existing-pattern discovery. Prefer LSP/Intelephense for PHP symbol navigation.
-- Runtime routing is fixed by `AGENTS.md`:
-  - Node/frontend tooling (`node`, `npm`, `npx`, Vite, Vitest, `vue-tsc`, ESLint,
-    Stylelint, Playwright) runs on the Ubuntu host from the PettyCash repository.
-  - PHP/Nextcloud tooling MUST use the repository wrappers:
-    - `scripts/dev/phpunit`
-    - `scripts/dev/occ`
-    - `scripts/dev/composer`
-    - `scripts/dev/in-container`
-- Do not probe the host for PHP or Composer.
-- Do not first try a PHP command on the host and then fall back to Docker.
-- Do not manually construct `docker exec` commands for normal PHP/Nextcloud work when
-  an approved `scripts/dev/*` wrapper exists.
-- Do not guess container paths. The wrappers own container execution and working-directory
-  selection according to `AGENTS.md`.
-- Prefer existing `package.json` scripts for frontend verification. Use `npm run check`
-  as the full frontend quality gate when complete frontend verification is appropriate.
-- Do not infer, recreate, or relocate Docker infrastructure. PettyCash consumes the
-  existing external Docker Compose project defined in `AGENTS.md`.
+- **REQUIRED**: Read `AGENTS.md`. It is authoritative for runtime boundaries, Docker ownership,
+  safety constraints, approved wrappers, and project-local execution rules.
+- Treat the active Spec Kit artifacts and approved contracts as feature intent. `AGENTS.md`
+  is operational context, not product intent.
+- Do not begin implementation with a repository-wide audit. `/speckit.converge` owns broad
+  reconciliation; implementation should investigate only as far as needed to complete and verify
+  the active work.
+- Use the most direct trustworthy evidence available: source, tests, contracts, runtime behavior,
+  LSP/symbol navigation, and codebase-memory when it materially helps. Do not force a particular
+  discovery tool when a simpler targeted inspection is sufficient.
+- Follow `AGENTS.md` for every command. Do not rediscover or bypass the established host/container
+  boundary, approved `scripts/dev/*` wrappers, or Docker ownership rules.
 
-## Task Selection Rule
+## Verification Integrity
 
-Do not use ad-hoc `grep`, regex scans, checkbox-only inspection, or shell pipelines as a
-substitute for parsing the task plan already required by this skill.
+A task is complete only when its implementation and relevant verification agree.
 
-`tasks.md` defines planned work and execution order; checkbox state alone is not repository truth.
-
-To choose the next task:
-
-1. Read and parse `tasks.md` as a structured task plan.
-2. Respect phases, dependencies, sequencing rules, and `[P]` markers.
-3. Identify the next candidate incomplete task.
-4. Perform only targeted verification for that candidate when repository state may differ
-   from the checkbox state.
-5. If targeted evidence shows the task is already implemented, do not redo it. Report the
-   task-state mismatch and continue to the next valid candidate.
-6. Do not perform repository-wide completion discovery during implementation. Broad
-   reconciliation belongs to `/speckit.converge`.
-
-Never use a command such as `grep` over task checkboxes to determine which work is actually
-implemented.
-
-## Verification Output Integrity
-
-Tests used to prove RED, PASS, or task completion must be run with enough output
-to preserve the test runner's final status and actual failure reason.
-
-Do not use `grep`, `head`, `tail`, or similar output filtering as the sole evidence
-for test status.
-
-Configuration, collection, component-resolution, environment, and runtime failures
-are not valid RED states.
-
-A RED test is valid only when the test executes correctly and fails on the intended
-missing behavior.
-
-
-
+- A failing test is a valid RED state only when the test collected/executed correctly and failed
+  on the intended missing or incorrect behavior.
+- Collection, configuration, component-resolution, environment, fixture/bootstrap, authentication,
+  or unrelated runtime failures are not proof of the intended RED behavior.
+- A passing assertion accompanied by unhandled exceptions/rejections or a broken harness is not a
+  trustworthy PASS.
+- Do not use truncated/filtered output as the sole evidence when it hides the runner's final status
+  or the actual failure reason.
+- Prefer targeted verification while developing; run broader feature/phase gates at coherent
+  checkpoints instead of after every small edit.
 
 ## Outline
 
-1. Run `.specify/scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks` from repo root and parse FEATURE_DIR and AVAILABLE_DOCS list. All paths must be absolute. For single quotes in args like "I'm Groot", use escape syntax: e.g 'I'\''m Groot' (or double-quote if possible: "I'm Groot").
+1. Run `.specify/scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks`
+   once from repo root and parse `FEATURE_DIR` and `AVAILABLE_DOCS`.
 
-2. **Check checklists status** (if FEATURE_DIR/checklists/ exists):
-   - Treat checklist markers as a read-only gate: scan checkbox state, report status, and ask before proceeding when needed; do NOT modify checklist files or markers
-   - `checklists/requirements.md` is the built-in spec-quality checklist maintained by `/speckit.specify` and `/speckit.clarify`; custom checklists generated by `/speckit.checklist` are reviewer-owned requirements-quality review artifacts
-   - For custom checklists, `[x]` means the reviewer determined the requirements-quality criterion is satisfied; it does NOT mean implementation work is complete
-   - Scan all checklist files in the checklists/ directory
-   - For each checklist, count:
-     - Total items: All lines matching `- [ ]` or `- [X]` or `- [x]`
-     - Checked items: Lines matching `- [X]` or `- [x]`
-     - Unchecked items: Lines matching `- [ ]`
-   - Create a status table:
+   Canonical active artifacts are:
 
-     ```text
-     | Checklist | Total | Checked | Unchecked | Status |
-     |-----------|-------|---------|-----------|--------|
-     | ux.md     | 12    | 12      | 0         | ✓ PASS |
-     | test.md   | 8     | 5       | 3         | ✗ FAIL |
-     | security.md | 6   | 6       | 0         | ✓ PASS |
-     ```
+   - `FEATURE_DIR/spec.md`
+   - `FEATURE_DIR/plan.md`
+   - `FEATURE_DIR/tasks.md`
+   - `FEATURE_DIR/data-model.md` if present
+   - `FEATURE_DIR/contracts/` if present
+   - `FEATURE_DIR/research.md` if present
+   - `FEATURE_DIR/quickstart.md` if present
+   - `.specify/memory/constitution.md` if present
+   - `AGENTS.md` at repository root
 
-   - Calculate overall status:
-     - **PASS**: All checklists have 0 unchecked items
-     - **FAIL**: One or more checklists have unchecked items
+   Do not search for alternate `spec.md`, `plan.md`, or `tasks.md` files and do not guess another
+   feature directory.
 
-   - **If any checklist has unchecked items**:
-     - Display the table with unchecked item counts
-     - **STOP** and ask: "Some checklists have unchecked items. Do you want to proceed with implementation anyway? (yes/no)"
-     - Wait for user response before continuing
-     - If user says "no" or "wait" or "stop", halt execution
-     - If user says "yes" or "proceed" or "continue", proceed to step 3
+2. **Check checklist status** if `FEATURE_DIR/checklists/` exists:
+   - Checklist markers are read-only for this command.
+   - Count checked and unchecked items in each checklist.
+   - If any checklist has unchecked items, show a compact status table and ask whether to proceed.
+   - If all are checked, continue automatically.
+   - A checked requirements-quality item is not proof of completed implementation.
 
-   - **If all checklists are checked**:
-     - Display the table showing all checklists passed
-     - Automatically proceed to step 3
+3. Load implementation context using progressive disclosure:
+   - **REQUIRED**: `tasks.md`, `plan.md`, and `AGENTS.md`
+   - **REQUIRED WHEN RELEVANT**: the specific spec requirements, contracts, data-model sections,
+     research decisions, constitution clauses, and quickstart scenarios touched by the active work
+   - Do not repeatedly reload large artifacts when the required context is already established and
+     repository state has not changed.
 
-3. Load and analyze the implementation context:
-   - **REQUIRED**: Read `AGENTS.md` for operational/runtime constraints. `AGENTS.md`
-     governs execution behavior but does not replace Spec Kit artifacts as feature intent.
-   - **REQUIRED**: Read tasks.md for the complete task list and execution plan
-   - **REQUIRED**: Read plan.md for tech stack, architecture, and file structure
-   - **IF EXISTS**: Read data-model.md for entities and relationships
-   - **IF EXISTS**: Read contracts/ for API specifications and test requirements
-   - **IF EXISTS**: Read research.md for technical decisions and constraints
-   - **IF EXISTS**: Read .specify/memory/constitution.md for governance constraints
-   - **IF EXISTS**: Read quickstart.md for integration scenarios
+4. **Project setup verification**:
+   - Preserve Spec Kit's setup intent, but do not repeat generic setup discovery on every pass.
+   - Verify/create ignore files only when:
+     - setup/toolchain work is still active,
+     - a relevant file is missing,
+     - or the active task changes the corresponding tool/build context.
+   - For PettyCash, merely running inside external Docker infrastructure does not make this
+     repository a Docker build context; follow `AGENTS.md`.
+   - Do not create configuration for technologies that are not actually present.
 
-4. **Project Setup Verification**:
-   - **REQUIRED**: Create/verify ignore files based on actual project setup:
+5. Parse `tasks.md` as a structured plan:
+   - task IDs and checkbox state;
+   - feature/phase grouping;
+   - explicit dependencies and ordering;
+   - `[P]` markers;
+   - referenced files and verification requirements;
+   - convergence tasks that block or belong to a feature slice.
 
-   **Detection & Creation Logic**:
-   - Check if the following command succeeds to determine if the repository is a git repo (create/verify .gitignore if so):
+## Work Selection
 
-     ```sh
-     git rev-parse --git-dir 2>/dev/null
-     ```
+Choose work by dependency and feature coherence, not by "first unchecked checkbox" alone.
 
-   - Check if Dockerfile* exists or the repository actually owns a Docker build context → create/verify .dockerignore.
-     For PettyCash, Docker being mentioned in `plan.md` or `AGENTS.md` is not sufficient:
-     the Docker infrastructure is external to this repository, so do not create or modify
-     `.dockerignore` solely because the application runs in Docker.
-   - Check if .eslintrc* exists → create/verify .eslintignore
-   - Check if eslint.config.* exists → ensure the config's `ignores` entries cover required patterns
-   - Check if .prettierrc* exists → create/verify .prettierignore
-   - Check if .npmrc or package.json exists → create/verify .npmignore (if publishing)
-   - Check if terraform files (*.tf) exist → create/verify .terraformignore
-   - Check if .helmignore needed (helm charts present) → create/verify .helmignore
+Use this order:
 
-   **If ignore file already exists**: Verify it contains essential patterns, append missing critical patterns only
-   **If ignore file missing**: Create with full pattern set for detected technology
+1. honor explicit dependencies and blocking prerequisites;
+2. continue the currently active user story / feature slice when one is already in progress;
+3. absorb open convergence tasks that directly block or correct that same slice;
+4. otherwise select the next dependency-valid feature work from `tasks.md`;
+5. prefer a cohesive batch over jumping between unrelated phases.
 
-   **Common Patterns by Technology** (from plan.md tech stack):
-   - **Node.js/JavaScript/TypeScript**: `node_modules/`, `dist/`, `build/`, `*.log`, `.env*`
-   - **Python**: `__pycache__/`, `*.pyc`, `.venv/`, `venv/`, `dist/`, `*.egg-info/`
-   - **Java**: `target/`, `*.class`, `*.jar`, `.gradle/`, `build/`
-   - **C#/.NET**: `bin/`, `obj/`, `*.user`, `*.suo`, `packages/`
-   - **Go**: `*.exe`, `*.test`, `vendor/`, `*.out`
-   - **Ruby**: `.bundle/`, `log/`, `tmp/`, `*.gem`, `vendor/bundle/`
-   - **PHP**: `vendor/`, `*.log`, `*.cache`, `*.env`
-   - **Rust**: `target/`, `debug/`, `release/`, `*.rs.bk`, `*.rlib`, `*.prof*`, `.idea/`, `*.log`, `.env*`
-   - **Kotlin**: `build/`, `out/`, `.gradle/`, `.idea/`, `*.class`, `*.jar`, `*.iml`, `*.log`, `.env*`
-   - **C++**: `build/`, `bin/`, `obj/`, `out/`, `*.o`, `*.so`, `*.a`, `*.exe`, `*.dll`, `.idea/`, `*.log`, `.env*`
-   - **C**: `build/`, `bin/`, `obj/`, `out/`, `*.o`, `*.a`, `*.so`, `*.exe`, `*.dll`, `autom4te.cache/`, `config.status`, `config.log`, `.idea/`, `*.log`, `.env*`
-   - **Swift**: `.build/`, `DerivedData/`, `*.swiftpm/`, `Packages/`
-   - **R**: `.Rproj.user/`, `.Rhistory`, `.RData`, `.Ruserdata`, `*.Rproj`, `packrat/`, `renv/`
-   - **Universal**: `.DS_Store`, `Thumbs.db`, `*.tmp`, `*.swp`, `.vscode/`, `.idea/`
+Checkbox state is planning state, not conclusive repository truth:
 
-   **Tool-Specific Patterns**:
-   - **Docker**: `node_modules/`, `.git/`, `Dockerfile*`, `.dockerignore`, `*.log*`, `.env*`, `coverage/`
-   - **ESLint**: `node_modules/`, `dist/`, `build/`, `coverage/`, `*.min.js`
-   - **Prettier**: `node_modules/`, `dist/`, `build/`, `coverage/`, `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`
-   - **Terraform**: `.terraform/`, `*.tfstate*`, `*.tfvars`, `.terraform.lock.hcl`
-   - **Kubernetes/k8s**: `*.secret.yaml`, `secrets/`, `.kube/`, `kubeconfig*`, `*.key`, `*.crt`
+- If an unchecked task is already satisfied, verify it narrowly and mark it complete rather than
+  redoing the implementation.
+- If a checked task in the active scope has concrete evidence that its required behavior or
+  verification is incomplete, reopen that checkbox and repair the task instead of creating
+  duplicate work.
+- Do not perform a repository-wide search for stale task state during implementation; broader
+  reconciliation belongs to `/speckit.converge`.
 
-5. Parse tasks.md structure and extract:
-   - **Task phases**: Setup, Tests, Core, Integration, Polish
-   - **Task dependencies**: Sequential vs parallel execution rules
-   - **Task details**: ID, description, file paths, parallel markers [P]
-   - **Execution flow**: Order and dependency requirements
-   - **Task selection**: Choose the next candidate from the parsed task structure, not from
-     ad-hoc checkbox grep/regex output
-   - **Task-state verification**: When needed, verify only the candidate task against relevant
-     files/tests; do not broaden this into a repository-wide audit
+A convergence phase is not automatically higher priority than unfinished feature work. A convergence
+task should move ahead only when it is a dependency, a correctness blocker, or directly belongs to
+the active feature slice.
 
-6. Execute implementation following the task plan:
-   - **Environment routing**: Before each command, route it using `AGENTS.md`.
-     Frontend/Node commands run on the Ubuntu host.
-     PHP/Nextcloud commands MUST use the approved `scripts/dev/*` wrappers.
-     Do not retry a failed PHP/Nextcloud command on the host, do not probe for host PHP,
-     and do not replace a wrapper with an ad-hoc `docker exec` command merely because a
-     binary or path is unavailable.
-   - **Phase-by-phase execution**: Complete each phase before moving to the next
-   - **Respect dependencies**: Run sequential tasks in order, parallel tasks [P] can run together
-   - **Follow TDD approach**: Execute test tasks before their corresponding implementation tasks
-   - **File-based coordination**: Tasks affecting the same files must run sequentially
-   - **Validation checkpoints**: Verify each phase completion before proceeding
+## Implementation Batch
 
-7. Implementation execution rules:
-   - **Setup first**: Initialize project structure, dependencies, configuration
-   - **Tests before code**: If you need to write tests for contracts, entities, and integration scenarios
-   - **Core development**: Implement models, services, CLI commands, endpoints
-   - **Integration work**: Database connections, middleware, logging, external services
-   - **Polish and validation**: Unit tests, performance optimization, documentation
+An invocation does **not** need to exhaust every open task in a large backlog.
 
-8. Progress tracking and error handling:
-   - Report progress after each completed task
-   - For significant completed tasks, create/update `docs/reports/TXXX.md` as required
-     by `AGENTS.md`; do not create reports for trivial work.
-   - If a PHP/Nextcloud command fails because a wrapper is missing, not executable, or uses
-     an invalid path, stop that operation and report the wrapper problem. Do not fall back
-     to host PHP or an invented Docker command.
-   - If `php: not found` appears, treat it as an execution-boundary violation and rerun the
-     intended operation through the appropriate `scripts/dev/*` wrapper.
-   - Halt execution if any non-parallel task fails
-   - For parallel tasks [P], continue with successful tasks, report failed ones
-   - Provide clear error messages with context for debugging
-   - Suggest next steps if implementation cannot proceed
-   - **IMPORTANT** For completed tasks, make sure to mark the task off as [X] in the tasks file.
+By default, execute one coherent dependency-safe batch and stop at a natural verification boundary.
+A batch may contain one task or several tightly related tasks. Continue farther only when the work
+remains coherent and context is still reliable.
 
-9. Completion validation:
-   - Verify all required tasks are completed
-   - Check that implemented features match the original specification
-   - Validate that tests pass and coverage meets requirements
-   - Confirm the implementation follows the technical plan
+Within the batch:
 
-Note: This command assumes a complete task breakdown exists in tasks.md. If tasks are incomplete or missing, suggest running `/speckit.tasks` first to regenerate the task list.
+- follow TDD where the task plan calls for tests first;
+- keep tasks that write the same files sequential;
+- implement against the current spec/plan/contracts rather than stale assumptions in old task prose;
+- when task prose conflicts with newer approved intent, do not silently choose one: use the current
+  source-of-truth ordering from `AGENTS.md` and report the stale task wording for reconciliation.
+
+## Parallel Task Execution
+
+Tasks marked `[P]` may execute concurrently when all of the following are true:
+
+- there is no dependency relationship;
+- write scopes do not overlap;
+- they do not mutate the same runtime/database/test state;
+- they do not both modify coordination surfaces such as dependency manifests, routes, DI/bootstrap,
+  migrations, or `tasks.md`.
+
+Use at most 3 concurrent workers. If independence is uncertain, run sequentially.
+
+After a parallel batch:
+
+1. reconcile the changes;
+2. run combined relevant verification;
+3. update `tasks.md` serially;
+4. resolve conflicts before starting more work.
+
+## Baseline Failures and New Failures
+
+When broader verification is red:
+
+- distinguish failures caused by the active batch from known failures already covered by open tasks;
+- never call a known failure a PASS;
+- do not call a known covered failure a new regression without evidence;
+- record the covering task ID for known baseline failures and continue only when dependency/order
+  rules allow;
+- investigate new or unexplained regressions before marking the active work complete.
+
+A test-harness defect is its own problem; it is not evidence that the product behavior under test is
+missing.
+
+## Progress Tracking
+
+For each completed task:
+
+- verify the task's acceptance/behavioral requirement with the narrowest meaningful test or check;
+- mark `[X]` only after the verification is trustworthy;
+- create/update `docs/reports/TXXX.md` only when required by `AGENTS.md` or when the task is
+  significant enough to need durable evidence;
+- keep conversational progress compact: completed IDs, verification, new blocker if any, next work.
+
+Do not halt merely because an unrelated known baseline test is red. Halt when:
+
+- the active task cannot be completed safely;
+- a required decision is missing;
+- a destructive/shared-environment action requires approval;
+- an unexplained regression blocks trustworthy completion;
+- or a mandatory dependency is unavailable.
+
+## Completion Validation
+
+At the end of the batch:
+
+- verify completed work against the relevant spec/plan/contracts and constitution constraints;
+- run the relevant combined verification for the batch;
+- confirm no new unexplained regression was introduced;
+- ensure task checkboxes reflect the verified state of tasks touched in this invocation;
+- report the next dependency-valid work rather than claiming the entire feature is complete unless
+  all required work is actually complete.
+
+Note: If `tasks.md` is missing or fundamentally incomplete, stop and recommend `/speckit.tasks`.
+Do not regenerate the task plan implicitly.
 
 ## Mandatory Post-Execution Hooks
 
@@ -300,49 +269,23 @@ Check if `.specify/extensions.yml` exists in the project root.
     Prompt: {prompt}
     To execute: `/{command}`
     ```
-## Known Baseline Failures
-
-When broader verification reveals a failing test:
-
-- Determine whether the failure is newly introduced by the active implementation or is an already-known repository gap covered by an existing incomplete task.
-- A known failure already covered by an incomplete task must not be reported as a passing verification result.
-- Do not classify such a known failure as a new regression solely because it appears during broader verification.
-- Record the failing test, error, and covering task ID, then continue when the task dependency/order permits.
-- A new or unexplained regression must be investigated before the active task can be considered complete.
-
-
-## Parallel Task Execution
-
-Tasks marked `[P]` may be executed concurrently when all of the following are true:
-
-- they have no dependency relationship;
-- their expected write scopes do not overlap;
-- they do not mutate the same shared runtime/database/test state;
-- neither task changes shared coordination files such as `tasks.md`,
-  dependency manifests, routes, DI/bootstrap, or migrations.
-
-Prefer a maximum of 3 concurrent implementation workers.
-
-After a parallel batch completes:
-
-1. reconcile all changes;
-2. run the relevant combined verification;
-3. update task state serially;
-4. resolve any conflict before starting the next batch.
-
-If independence is uncertain, execute the tasks sequentially.
-
-
 
 ## Completion Report
 
-Report final status with summary of completed work.
+Report concisely:
+
+- task IDs completed/reopened/reconciled in this invocation;
+- verification performed and its trustworthy result;
+- known baseline failures still present, if relevant;
+- blocker/decision if any;
+- next dependency-valid task or feature slice.
 
 ## Done When
 
-- [ ] All tasks in tasks.md completed and marked `[X]`
-- [ ] Implementation validated against specification, plan, and test coverage
-- [ ] Runtime/tool commands executed through the correct host commands or approved `scripts/dev/*` wrappers per `AGENTS.md`
-- [ ] Significant task reports created when required by `AGENTS.md`
-- [ ] Extension hooks dispatched or skipped according to the rules in Mandatory Post-Execution Hooks above
-- [ ] Completion reported to user with summary of completed work
+- [ ] Active batch is implemented and verified against relevant Spec Kit artifacts
+- [ ] Touched task states match verified repository reality
+- [ ] No new unexplained regression remains
+- [ ] Runtime/tool execution followed `AGENTS.md`
+- [ ] Significant reports were written when required
+- [ ] Extension hooks were dispatched or skipped according to the rules above
+- [ ] Completion report identifies the next work or confirms full completion

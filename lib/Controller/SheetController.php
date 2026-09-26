@@ -5,11 +5,14 @@ declare(strict_types=1);
 namespace OCA\PettyCash\Controller;
 
 use OCA\PettyCash\Application\Expense\SheetService;
+use OCA\PettyCash\Domain\Expense\ExpenseSheet;
 use OCA\PettyCash\Application\Expense\TransactionService;
 use OCA\PettyCash\Application\Evidence\EvidenceService;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Application\Workflow\SubmitSheet;
 use OCA\PettyCash\Infrastructure\Http\OcsErrorMapper;
+use OCA\PettyCash\Infrastructure\Http\SheetPayloadFormatter;
+use OCA\PettyCash\Domain\Expense\Repository\ExpenseTransactionRepository;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
 use OCP\AppFramework\Http\DataResponse;
 use OCP\AppFramework\OCSController;
@@ -23,7 +26,9 @@ class SheetController extends OCSController
         private SubmitSheet $submitSheet,
         private EvidenceService $evidenceService,
         private CurrentUser $currentUser,
-        private OcsErrorMapper $ocsErrorMapper
+        private OcsErrorMapper $ocsErrorMapper,
+        private ExpenseTransactionRepository $transactionRepository,
+        private SheetPayloadFormatter $payloadFormatter
     ) {
         parent::__construct('pettycash', $request);
     }
@@ -139,19 +144,16 @@ class SheetController extends OCSController
         }
     }
 
-    private function formatSheet(object $sheet): array
+    /**
+     * The contract's `SheetSummary` shape.
+     *
+     * Delegated to `SheetPayloadFormatter` for the same reason `TransactionPayloadFormatter` exists:
+     * a private copy of this mapping in a controller is a second place for the contract to drift,
+     * and it had already drifted — it omitted the required `totals` and emitted an `accountId` the
+     * contract does not declare.
+     */
+    private function formatSheet(ExpenseSheet $sheet): array
     {
-        return [
-            'id' => $sheet->publicId ?? $sheet->id,
-            'title' => $sheet->title,
-            'ownerId' => $sheet->ownerUid,
-            'accountId' => $sheet->accountId,
-            'currency' => (string)$sheet->currency,
-            'status' => $sheet->status->value,
-            'transactionCount' => count($sheet->transactions()),
-            'createdAt' => $sheet->createdAt?->format(\DateTimeInterface::ATOM),
-            'submittedAt' => $sheet->firstSubmittedAt?->format(\DateTimeInterface::ATOM),
-            'version' => $sheet->lockVersion,
-        ];
+        return $this->payloadFormatter->summary($sheet);
     }
 }

@@ -60,4 +60,11 @@ final class InMemoryEvidenceRepository implements \OCA\PettyCash\Domain\Evidence
         }
         $this->evidence[$evidence->dbId] = $evidence;
     }
+
+    public function delete(Evidence $evidence): void
+    {
+        if ($evidence->dbId !== null) {
+            unset($this->evidence[$evidence->dbId]);
+        }
+    }
 }

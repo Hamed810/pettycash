@@ -130,7 +130,7 @@ watch([transactionId, stage], () => {
 	margin: 0;
 	padding: 0;
 	list-style: none;
-	font-size: 14px;
+	font-size: var(--font-size-floor);
 }
 
 .breadcrumbs__item + .breadcrumbs__item::before {

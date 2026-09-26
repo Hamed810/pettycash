@@ -70,6 +70,21 @@ final class DbEvidenceRepository implements EvidenceRepository
         return array_map([$this, 'mapRow'], $rows);
     }
 
+    /**
+     * Remove an evidence row outright, for the FR-058 pre-submission case only.
+     */
+    public function delete(Evidence $evidence): void
+    {
+        if ($evidence->dbId === null) {
+            throw new \RuntimeException('Cannot delete evidence that was never persisted');
+        }
+
+        $qb = $this->connection->getQueryBuilder();
+        $qb->delete('pettycash_evidence')
+            ->where($qb->expr()->eq('id', $qb->createNamedParameter($evidence->dbId)))
+            ->executeStatement();
+    }
+
     public function save(Evidence $evidence): void
     {
         $qb = $this->connection->getQueryBuilder();
@@ -78,13 +93,17 @@ final class DbEvidenceRepository implements EvidenceRepository
         $currentUser = $this->currentUser->uid();
 
         if ($existing) {
+            // `pettycash_evidence` records who uploaded the file and when, and who
+            // deactivated it and when. It deliberately has no `updated_at`/`updated_by`
+            // pair: an evidence row is only ever deactivated, and the deactivation
+            // columns are the record of that. Writing audit-style update columns here
+            // made every deactivation fail with "Unknown column 'updated_at' in 'SET'",
+            // which is the HTTP 500 the evidence delete endpoint returned.
             $qb->update('pettycash_evidence')
                 ->set('active', $qb->createNamedParameter($evidence->active, IQueryBuilder::PARAM_BOOL))
                 ->set('deactivated_by', $evidence->deactivatedBy ? $qb->createNamedParameter($evidence->deactivatedBy) : $qb->createNamedParameter(null))
                 ->set('deactivated_at', $evidence->deactivatedAt ? $qb->createNamedParameter($evidence->deactivatedAt->format('Y-m-d H:i:s')) : $qb->createNamedParameter(null))
                 ->set('deactivation_reason', $evidence->deactivationReason ? $qb->createNamedParameter($evidence->deactivationReason) : $qb->createNamedParameter(null))
-                ->set('updated_at', $qb->createNamedParameter($now, IQueryBuilder::PARAM_DATETIME_IMMUTABLE))
-                ->set('updated_by', $qb->createNamedParameter($currentUser))
                 ->where($qb->expr()->eq('id', $qb->createNamedParameter($existing->dbId)))
                 ->executeStatement();
         } else {

@@ -10,6 +10,8 @@ use LogicException;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Domain\Expense\Repository\ExpenseTransactionRepository;
 use OCA\PettyCash\Domain\Configuration\Repository\CostCenterRepository;
+use OCA\PettyCash\Domain\Configuration\CostCenter;
+use OCA\PettyCash\Domain\Expense\TransactionRevision;
 use OCA\PettyCash\Application\Port\UserDirectory;
 use OCA\PettyCash\Application\Port\AuditWriter;
 use OCA\PettyCash\Application\Port\TransactionManager;
@@ -94,41 +96,50 @@ class ResubmitCorrection
                     throw new InvalidArgumentException('Transaction missing required evidence');
                 }
 
-                // Verify cost center exists
-                $costCenterCode = $activeRevision->costCenterId();
-                $costCenter = $this->costCenterRepository->findByCode($costCenterCode);
+                // Verify the cost center still exists.
+                //
+                // `TransactionRevision::costCenterId()` is the cost center's public
+                // UUID, but `findByCode()` looks up a business code such as `CC-100`,
+                // so passing one to the other always misses and every resubmission
+                // failed with "Cost center not found: 22222222-…". The numeric join key
+                // resolves it directly, with the code snapshot as the fallback.
+                $costCenter = $this->resolveCostCenter($activeRevision);
                 if ($costCenter === null) {
-                    throw new InvalidArgumentException("Cost center not found: {$costCenterCode}");
+                    throw new InvalidArgumentException('Cost center not found on the submitted revision');
                 }
+                $costCenterCode = $costCenter->code();
 
                 // Submit the correction (activate revision and route to cost-center review)
                 $submittedTotal = $transaction->resubmitCorrection();
 
-                // Create audit event for correction resubmission
-                $auditEvent = new AuditEvent(
-                    (string)Uuid::random(),
-                    $transaction->dbId,
-                    null,
-                    $activeRevision->dbId,
-                    WorkflowStage::CostCenter->value,
-                    null,
-                    'transaction',
-                    $transactionPublicId,
-                    'CORRECTION_RESUBMITTED',
-                    $actorUid,
-                    $this->userDirectory->displayName($actorUid),
-                    'PURCHASER',
-                    null,
-                    '{}',
-                    json_encode([
+                // Create audit event for correction resubmission.
+                //
+                // `AuditWriter::append()` reads snake_case keys, so the payload has to be
+                // an array with those names. Casting the AuditEvent object instead yields
+                // camelCase properties, `command_id` is never found, and the insert fails
+                // on the NOT NULL `command_id` column — which is the HTTP 500 a
+                // resubmission produced.
+                $this->auditWriter->append([
+                    'id' => (string)Uuid::random(),
+                    'sheet_id' => $transaction->sheetId,
+                    'transaction_id' => $transaction->dbId,
+                    'revision_id' => $activeRevision->dbId,
+                    'stage' => WorkflowStage::CostCenter->value,
+                    'decision_id' => null,
+                    'entity_type' => 'transaction',
+                    'entity_id' => $transactionPublicId,
+                    'event_type' => 'CORRECTION_RESUBMITTED',
+                    'actor_uid' => $actorUid,
+                    'actor_role' => 'PURCHASER',
+                    'explanation' => $explanation ?? '',
+                    'before' => [],
+                    'after' => [
                         'transaction_id' => $transactionPublicId,
                         'revision_number' => $activeRevision->number(),
                         'resubmitted_total_minor' => $submittedTotal,
-                    ], JSON_THROW_ON_ERROR),
-                    $commandId,
-                    new \DateTimeImmutable('now', new \DateTimeZone('UTC'))
-                );
-                $this->auditWriter->append((array)$auditEvent);
+                    ],
+                    'command_id' => $commandId,
+                ]);
 
                 // Persist the transaction
                 $this->transactionRepository->save($transaction);
@@ -140,5 +151,30 @@ class ResubmitCorrection
                 ];
             });
         });
+    }
+
+    /**
+     * Resolve the cost center a revision points at.
+     *
+     * The revision carries three representations of the same cost center: the public
+     * UUID in `costCenterId()`, the numeric join key in `costCenterDbId`, and the
+     * submission-time code snapshot in `costCenterCode`. Only the numeric key and the
+     * code are usable as lookups, and they are tried in that order because the numeric
+     * key is the one the repository indexes.
+     */
+    private function resolveCostCenter(TransactionRevision $revision): ?CostCenter
+    {
+        if ($revision->costCenterDbId !== null) {
+            $byId = $this->costCenterRepository->findById($revision->costCenterDbId);
+            if ($byId !== null) {
+                return $byId;
+            }
+        }
+
+        if ($revision->costCenterCode !== null && $revision->costCenterCode !== '') {
+            return $this->costCenterRepository->findByCode($revision->costCenterCode);
+        }
+
+        return null;
     }
 }

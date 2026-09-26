@@ -65,11 +65,11 @@ Use this cadence:
 ```text
 Initial Convergence
         ↓
-Implementation × up to 5
+Implementation × up to 10
         ↓
 Convergence
         ↓
-(repeat 5-pass implementation blocks + convergence)
+(repeat 10-pass implementation blocks + convergence)
         ↓
 Implementation pass 50 maximum
         ↓

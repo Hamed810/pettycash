@@ -60,13 +60,13 @@ const label = computed(() => {
 
 <style scoped>
 .status-badge {
-	font-size: 12px;
+	font-size: var(--font-size-floor);
 	font-weight: 500;
 }
 
 @media (width <= 390px) {
 	.status-badge {
-		font-size: 12px;
+		font-size: var(--font-size-floor);
 	}
 }
 </style>

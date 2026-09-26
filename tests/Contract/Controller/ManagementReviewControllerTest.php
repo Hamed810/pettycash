@@ -188,7 +188,7 @@ final class ManagementReviewControllerTest extends TestCase
         $this->assertEquals(200, $detail->getStatusCode(), 'The decided transaction should still be readable');
 
         $body = json_decode((string) $detail->getBody(), true);
-        $revision = $body['ocs']['data']['revision'] ?? [];
+        $revision = $body['ocs']['data']['activeRevision'] ?? [];
 
         $this->assertNotEmpty(
             $revision['description'] ?? null,
@@ -211,6 +211,66 @@ final class ManagementReviewControllerTest extends TestCase
 
         // Contract: Missing X-PettyCash-Command-ID should return 400
         $this->assertEquals(400, $response->getStatusCode(), 'Missing command ID should return 400');
+    }
+
+    // ===== OUT-OF-SCOPE AUTHORIZATION (FR-004, FR-005, FR-009) =====
+
+    /**
+     * A manager must not be able to decide a transaction outside their own cost centers.
+     *
+     * `ManagementReviewService` builds its `AuthorizationContext` from the cost center
+     * of the record under review, and `AuthorizationService::canReview()` then asks
+     * whether that cost center is in that list — a comparison of a value against a
+     * list built from the same value, which is always true. With only one cost center
+     * in the fixture, and the acting user assigned to it, that defect is invisible;
+     * this state adds a second cost center the user holds no assignment for.
+     *
+     * Constitution IV requires authorization to be enforced on the server regardless
+     * of client behaviour, and FR-004/FR-005/FR-009 make scope part of the decision,
+     * so hiding the action in the interface must never be the only restriction.
+     */
+    public function testDecisionOnAnUnmanagedCostCenterIsRefused(): void
+    {
+        ContractFixtures::prepare('scope');
+
+        $response = $this->client->request(
+            'POST',
+            '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::outOfScopeTransactionId() . '/decisions',
+            [
+                'headers' => ['X-PettyCash-Command-ID' => ContractFixtures::commandId()],
+                'json' => [
+                    'decision' => 'APPROVE',
+                    'expectedVersion' => ContractFixtures::outOfScopeTransactionVersion(),
+                ],
+            ]
+        );
+
+        $this->assertEquals(
+            403,
+            $response->getStatusCode(),
+            'A manager assigned only to CC-100 must not be able to decide a CC-200 transaction'
+        );
+        $this->assertOcsResponseStructure($response, 403);
+    }
+
+    /**
+     * The same manager must still be allowed to decide inside their own cost center.
+     *
+     * A scope fix that denies everything would also satisfy the test above, so the
+     * permitted case is asserted alongside it to keep the check from degrading into a
+     * blanket refusal.
+     */
+    public function testDecisionInsideTheManagedCostCenterIsStillAllowed(): void
+    {
+        ContractFixtures::prepare('scope');
+
+        $response = $this->decide('APPROVE');
+
+        $this->assertEquals(
+            201,
+            $response->getStatusCode(),
+            'A manager assigned to CC-100 must still be able to decide a CC-100 transaction'
+        );
     }
 
     // ===== HELPER METHODS =====

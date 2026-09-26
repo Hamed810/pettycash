@@ -7,9 +7,11 @@ namespace OCA\PettyCash\Application\Expense;
 use DateTimeImmutable;
 use InvalidArgumentException;
 use OCA\PettyCash\Application\Port\CurrentUser;
+use OCA\PettyCash\Application\Port\PrivateFileStore;
 use OCA\PettyCash\Application\Port\TransactionManager;
 use OCA\PettyCash\Domain\Configuration\Repository\CostCenterRepository;
 use OCA\PettyCash\Domain\Configuration\Repository\ExpenseTypeRepository;
+use OCA\PettyCash\Domain\Evidence\Repository\EvidenceRepository;
 use OCA\PettyCash\Domain\Expense\ExpenseTransaction;
 use OCA\PettyCash\Domain\Expense\Repository\ExpenseSheetRepository;
 use OCA\PettyCash\Domain\Expense\Repository\ExpenseTransactionRepository;
@@ -18,6 +20,8 @@ use OCA\PettyCash\Domain\Expense\TransactionRevision;
 use OCA\PettyCash\Domain\Shared\CurrencyCode;
 use OCA\PettyCash\Domain\Shared\Money;
 use OCA\PettyCash\Domain\Shared\Uuid;
+use OCA\PettyCash\Domain\Workflow\SheetStatus;
+use OCA\PettyCash\Domain\Workflow\TransactionStatus;
 
 final readonly class TransactionService
 {
@@ -27,6 +31,8 @@ final readonly class TransactionService
         private TransactionRevisionRepository $revisionRepository,
         private CostCenterRepository $costCenterRepository,
         private ExpenseTypeRepository $expenseTypeRepository,
+        private EvidenceRepository $evidenceRepository,
+        private PrivateFileStore $fileStore,
         private CurrentUser $currentUser,
         private TransactionManager $transactionManager
     ) {}
@@ -154,6 +160,27 @@ final readonly class TransactionService
                 $expenseType->id ?? 0,
                 $hasEvidence
             );
+        } else {
+            // A partial edit must not erase the fields it does not mention.
+            //
+            // `PATCH /transactions/{id}` with only an expense date and an amount is a
+            // legitimate request, and building a fresh revision left the description,
+            // cost center, and expense type null — so `assertSubmittable()` then
+            // rejected the purchaser's own transaction with "Revision is incomplete",
+            // and had it succeeded it would have silently dropped real business data.
+            // The current revision is the source of truth for anything the caller
+            // omitted.
+            $current = $transaction->revision();
+            $revision->complete(
+                $description ?? $current->description(),
+                $costCenterId ?? $current->costCenterId(),
+                $current->costCenterCode,
+                $current->costCenterName,
+                $current->costCenterDbId ?? 0,
+                $expenseTypeTitle ?? $current->expenseTypeTitle(),
+                $current->expenseTypeDbId ?? 0,
+                $current->hasEvidence()
+            );
         }
 
         $transaction->activate($revision);
@@ -175,6 +202,16 @@ final readonly class TransactionService
     /**
      * Delete a draft transaction from an open sheet
      *
+     * FR-025 lets a purchaser add, edit, and delete transactions before submission, and
+     * FR-058 makes that the point after which records stop being removable. The delete
+     * has to actually remove the row: filtering the sheet's in-memory collection and
+     * re-saving it leaves the transaction in the database and in every later total
+     * while the caller is told it is gone.
+     *
+     * The transaction's own draft evidence goes with it — the AppData binaries first,
+     * then the metadata rows — because that evidence is only removable while it is
+     * still pre-submission. Nothing belonging to a submitted transaction is touched.
+     *
      * @param string $transactionId
      * @param int $expectedVersion
      */
@@ -188,7 +225,7 @@ final readonly class TransactionService
         }
 
         $sheet = $this->sheetRepository->findById($transaction->sheetId ?? 0);
-        if ($sheet === null || $sheet->status !== \OCA\PettyCash\Domain\Workflow\SheetStatus::Open) {
+        if ($sheet === null || $sheet->status !== SheetStatus::Open) {
             throw new InvalidArgumentException('Cannot delete transactions from a submitted sheet');
         }
 
@@ -196,9 +233,26 @@ final readonly class TransactionService
             throw new InvalidArgumentException('Stale version');
         }
 
+        // An open sheet is not sufficient on its own: a transaction that has already
+        // been submitted and returned for correction sits in an open sheet again, and
+        // deleting it would erase submitted business history.
+        if ($transaction->status !== TransactionStatus::Draft) {
+            throw new InvalidArgumentException('Only a draft transaction can be deleted');
+        }
+
         $this->transactionManager->transactional(function () use ($sheet, $transaction): void {
+            $transactionDbId = $transaction->dbId;
+            if ($transactionDbId !== null) {
+                // Remove the AppData binaries while the keys are still known. The
+                // metadata rows are removed by the repository delete below, which
+                // cannot reach the file store.
+                foreach ($this->evidenceRepository->findByTransactionId($transactionDbId) as $evidence) {
+                    $this->fileStore->deleteDraftEvidence($evidence->appDataKey);
+                }
+            }
+
             $sheet->removeTransaction($transaction->id);
-            $this->transactionRepository->save($transaction);
+            $this->transactionRepository->delete($transaction);
             $this->sheetRepository->save($sheet);
         });
     }

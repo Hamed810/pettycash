@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace OCA\PettyCash\Controller;
 
-use Exception;
 use InvalidArgumentException;
 use LogicException;
 use OCA\PettyCash\Application\Workflow\FinanceQueue;
@@ -13,8 +12,8 @@ use OCA\PettyCash\Application\Workflow\ManagementReviewService;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Domain\Workflow\Decision;
 use OCA\PettyCash\Domain\Workflow\WorkflowStage;
-use OCA\PettyCash\Domain\Shared\Uuid;
 use OCA\PettyCash\Infrastructure\Http\OcsErrorMapper;
+use OCA\PettyCash\Infrastructure\Http\TransactionPayloadFormatter;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
 use OCP\AppFramework\Http\DataResponse;
 use OCP\AppFramework\OCSController;
@@ -27,7 +26,8 @@ class ReviewController extends OCSController
         private FinanceQueue $financeQueue,
         private FinanceSettlementService $financeSettlementService,
         private CurrentUser $currentUser,
-        private OcsErrorMapper $ocsErrorMapper
+        private OcsErrorMapper $ocsErrorMapper,
+        private TransactionPayloadFormatter $payloadFormatter
     ) {
         parent::__construct('pettycash', $request);
     }
@@ -65,13 +65,13 @@ class ReviewController extends OCSController
             };
 
             return new DataResponse([
-                'items' => array_map([$this, 'formatTransaction'], $result['items']),
+                'items' => array_map([$this, 'formatSummary'], $result['items']),
                 'total' => $result['total'],
                 'page' => $page,
                 'pageSize' => $pageSize,
             ]);
-        } catch (Exception $e) {
-            return new DataResponse(['error' => $e->getMessage()], 400);
+        } catch (\Throwable $e) {
+            return $this->ocsErrorMapper->map($e);
         }
     }
 
@@ -87,13 +87,13 @@ class ReviewController extends OCSController
             $result = $this->managementReviewService->getReturnsQueue($page, $pageSize);
 
             return new DataResponse([
-                'items' => array_map([$this, 'formatTransaction'], $result['items']),
+                'items' => array_map([$this, 'formatSummary'], $result['items']),
                 'total' => $result['total'],
                 'page' => $page,
                 'pageSize' => $pageSize,
             ]);
-        } catch (Exception $e) {
-            return new DataResponse(['error' => $e->getMessage()], 400);
+        } catch (\Throwable $e) {
+            return $this->ocsErrorMapper->map($e);
         }
     }
 
@@ -111,14 +111,50 @@ class ReviewController extends OCSController
         ?string $explanation,
         int $expectedVersion
     ): DataResponse {
-        try {
-            $workflowDecision = Decision::from($decision);
-            $commandId = (string)Uuid::random();
+        // The caller's command id is the idempotency key. Minting a fresh UUID here
+        // would make every retry look like a new command, so a replayed decision
+        // would be recorded a second time with a second immutable WorkflowDecision and
+        // a second business audit event — and on the finance path this endpoint is the
+        // entry point to settlement.
+        $commandId = $this->request->getHeader('X-PettyCash-Command-ID');
+        if ($commandId === null || trim($commandId) === '') {
+            return $this->ocsErrorMapper->badRequest(
+                'Required fields are missing',
+                null,
+                ['commandId' => ['commandId is required']]
+            );
+        }
 
+        $fieldErrors = [];
+        if ($decision === null || trim($decision) === '') {
+            $fieldErrors['decision'] = ['decision is required'];
+        }
+        if ($fieldErrors !== []) {
+            return $this->ocsErrorMapper->validation(
+                'Required fields are missing',
+                $commandId,
+                $fieldErrors
+            );
+        }
+
+        try {
+            // `Decision::from()` is a backed-enum lookup that raises \ValueError for an
+            // unknown value, and \ValueError extends \Error rather than \Exception, so
+            // it has to be turned into a validation failure explicitly.
+            $workflowDecision = Decision::from($decision);
+        } catch (\ValueError) {
+            return $this->ocsErrorMapper->validation(
+                'The decision value is not valid',
+                $commandId,
+                ['decision' => ['decision must be APPROVE, REJECT, or RETURN']]
+            );
+        }
+
+        try {
             // Determine which service to use based on transaction stage
             $transaction = $this->managementReviewService->getTransactionForDecision($transactionId);
             if ($transaction === null) {
-                return new DataResponse(['error' => 'Transaction not found'], 404);
+                return $this->ocsErrorMapper->notFound('Transaction not found', $commandId);
             }
 
             $stage = $transaction->stage;
@@ -144,49 +180,46 @@ class ReviewController extends OCSController
 
             return new DataResponse($this->formatTransaction($updatedTransaction), 201);
         } catch (InvalidArgumentException $e) {
-            return new DataResponse(['error' => $e->getMessage()], 400);
+            // A missing explanation on REJECT/RETURN, a stale version, and an
+            // out-of-state decision are all caller-correctable validation failures,
+            // so they answer 422 with a stable code and field errors rather than a
+            // bare 400 body.
+            return $this->ocsErrorMapper->validation($e->getMessage(), $commandId, $this->fieldErrorsFor($e));
         } catch (LogicException $e) {
-            return new DataResponse(['error' => $e->getMessage()], 403);
-        } catch (Exception $e) {
-            return new DataResponse(['error' => $e->getMessage()], 500);
+            return $this->ocsErrorMapper->forbidden($e->getMessage(), $commandId);
+        } catch (\Throwable $e) {
+            return $this->ocsErrorMapper->map($e, $commandId);
         }
     }
 
-    private static function getMinorUnit(\OCA\PettyCash\Domain\Shared\CurrencyCode $currency): int
+    /**
+     * Attach the offending field where the message identifies one, so the caller can
+     * highlight it instead of only reading a sentence.
+     *
+     * @return array<string, list<string>>
+     */
+    private function fieldErrorsFor(\Throwable $e): array
     {
-        return match ((string)$currency) {
-            'IRR' => 0,
-            'USD', 'EUR', 'GBP' => 2,
-            default => 0,
+        $message = $e->getMessage();
+
+        return match (true) {
+            str_contains($message, 'explanation') => ['explanation' => ['explanation is required for reject or return']],
+            str_contains($message, 'version') => ['expectedVersion' => ['the transaction has changed, reload and retry']],
+            str_contains($message, 'stage') => ['stage' => ['the transaction is not at this review stage']],
+            default => [],
         };
     }
 
+    /** The contract's `TransactionSummary`; the queues carry no decisions or evidence. */
+    private function formatSummary(\OCA\PettyCash\Domain\Expense\ExpenseTransaction $transaction): array
+    {
+        return $this->payloadFormatter->summary($transaction);
+    }
+
+    /** The contract's `TransactionDetail`, which the review views and decision form consume. */
     private function formatTransaction(\OCA\PettyCash\Domain\Expense\ExpenseTransaction $transaction): array
     {
-        return [
-            'id' => $transaction->publicId ?? $transaction->id,
-            'ownerId' => $transaction->ownerUid,
-            'sheetId' => $transaction->sheetId,
-            'stage' => $transaction->stage->value,
-            'status' => $transaction->status->value,
-            'finalOutcome' => $transaction->finalOutcome,
-            'revision' => [
-                'id' => $transaction->revision()->id(),
-                'number' => $transaction->revision()->number(),
-                'expenseDate' => $transaction->revision()->expenseDate()->format('Y-m-d'),
-                'amount' => [
-                    'amountMinor' => $transaction->revision()->amount()->minorUnits(),
-                    'currency' => (string)$transaction->revision()->amount()->currency(),
-                    'minorUnit' => self::getMinorUnit($transaction->revision()->amount()->currency()),
-                ],
-                'description' => $transaction->revision()->description(),
-                'costCenterId' => $transaction->revision()->costCenterId(),
-                'expenseTypeTitle' => $transaction->revision()->expenseTypeTitle(),
-                'hasEvidence' => $transaction->revision()->hasEvidence(),
-                'createdAt' => $transaction->revision()->createdAt?->format(\DateTimeInterface::ATOM),
-                'active' => $transaction->revision()->isActive(),
-            ],
-            'version' => $transaction->lockVersion,
-        ];
+        return $this->payloadFormatter->detail($transaction);
     }
+
 }

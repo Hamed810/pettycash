@@ -185,6 +185,51 @@ final class DbTransactionRevisionRepository implements TransactionRevisionReposi
         return $qb->executeQuery()->fetchAssociative() !== false;
     }
 
+    /**
+     * Resolve the currency code that `amount_minor` is denominated in.
+     *
+     * `pettycash_transaction_revisions` stores an integer minor-unit amount with
+     * no currency of its own, and FR-021 makes the sheet the authority for its
+     * transactions' currency, so the read path has to walk revision -> transaction
+     * -> sheet -> currency to learn it. Assuming a currency here is not a display
+     * detail: because the fraction digits are themselves per-currency
+     * configuration, the same integer denotes a different real amount in every
+     * currency, and a wrong assumption corrupts every total, settlement, and
+     * export derived from the revision.
+     *
+     * @throws LogicException when the owning sheet's currency cannot be resolved,
+     *                        rather than substituting a default that would silently
+     *                        report the wrong money
+     */
+    private function resolveCurrencyCode(int $revisionDbId, int $transactionDbId): string
+    {
+        if ($transactionDbId <= 0) {
+            throw new LogicException(
+                'Cannot read a transaction revision amount without its owning transaction id'
+            );
+        }
+
+        $qb = $this->connection->getQueryBuilder();
+        $qb->select('c.code')
+            ->from('pettycash_transaction_revisions', 'r')
+            ->join('r', 'pettycash_transactions', 't', $qb->expr()->eq('r.transaction_id', 't.id'))
+            ->join('t', 'pettycash_sheets', 's', $qb->expr()->eq('t.sheet_id', 's.id'))
+            ->join('s', 'pettycash_currencies', 'c', $qb->expr()->eq('s.currency_id', 'c.id'))
+            ->where($qb->expr()->eq('r.id', $qb->createNamedParameter($revisionDbId)))
+            ->andWhere($qb->expr()->eq('r.transaction_id', $qb->createNamedParameter($transactionDbId)))
+            ->setMaxResults(1);
+
+        $row = $qb->executeQuery()->fetchAssociative();
+        if ($row === false || !isset($row['code']) || $row['code'] === '') {
+            throw new LogicException(
+                'Cannot resolve the currency of transaction revision ' . $revisionDbId
+                . ' from its sheet; the amount has no valid currency'
+            );
+        }
+
+        return (string) $row['code'];
+    }
+
     private function mapRow(array $row): TransactionRevision
     {
         $revisionDbId = (int) $row['id'];
@@ -198,7 +243,9 @@ final class DbTransactionRevisionRepository implements TransactionRevisionReposi
             new DateTimeImmutable($row['expense_date']),
             \OCA\PettyCash\Domain\Shared\Money::of(
                 (int) $row['amount_minor'],
-                \OCA\PettyCash\Domain\Shared\CurrencyCode::fromString('IRR') // Placeholder - would need to get from sheet
+                \OCA\PettyCash\Domain\Shared\CurrencyCode::fromString(
+                    $this->resolveCurrencyCode($revisionDbId, $transactionDbId)
+                )
             ),
             $row['supersedes_revision_id'] ? $this->getRevisionPublicId((int) $row['supersedes_revision_id']) : null
         );

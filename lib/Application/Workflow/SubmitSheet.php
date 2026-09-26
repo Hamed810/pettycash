@@ -19,6 +19,7 @@ use OCA\PettyCash\Domain\Expense\ExpenseSheet;
 use OCA\PettyCash\Domain\Expense\Repository\ExpenseSheetRepository;
 use OCA\PettyCash\Domain\Expense\Repository\ExpenseTransactionRepository;
 use OCA\PettyCash\Domain\Expense\Repository\TransactionRevisionRepository;
+use OCA\PettyCash\Domain\Expense\TransactionRevision;
 use OCA\PettyCash\Domain\Workflow\WorkflowStage;
 
 final readonly class SubmitSheet
@@ -29,7 +30,8 @@ final readonly class SubmitSheet
         private AuditWriter $auditWriter,
         private IdempotencyService $idempotencyService,
         private CurrentUser $currentUser,
-        private CostCenterRepository $costCenterRepository
+        private CostCenterRepository $costCenterRepository,
+        private ExpenseTransactionRepository $transactionRepository
     ) {}
 
     /**
@@ -62,6 +64,19 @@ final readonly class SubmitSheet
                     throw new InvalidArgumentException('Only open sheets can be submitted');
                 }
 
+                // Attach the sheet's transactions before validating it.
+                //
+                // `ExpenseSheet` is a domain aggregate that owns its transactions, but
+                // `DbExpenseSheetRepository` deliberately does not compose them, so a
+                // sheet loaded from the database always carried an empty collection.
+                // Submission then failed with "At least one transaction is required"
+                // for every sheet that genuinely had one.
+                if ($sheet->dbId !== null) {
+                    foreach ($this->transactionRepository->findBySheetId($sheet->dbId) as $transaction) {
+                        $sheet->addTransaction($transaction);
+                    }
+                }
+
                 // Validate all transactions are complete
                 if ($sheet->transactions() === []) {
                     throw new InvalidArgumentException('At least one transaction is required');
@@ -69,45 +84,41 @@ final readonly class SubmitSheet
 
                 // Check each transaction's cost center
                 foreach ($sheet->transactions() as $tx) {
-                    $costCenterCode = $tx->revision()->costCenterId();
-                    if ($costCenterCode === null) {
-                        throw new InvalidArgumentException('Transaction missing cost center');
-                    }
-
-                    $costCenter = $this->costCenterRepository->findByCode($costCenterCode);
+                    $costCenter = $this->resolveCostCenter($tx->revision());
                     if ($costCenter === null) {
-                        throw new InvalidArgumentException("Cost center not found: {$costCenterCode}");
+                        throw new InvalidArgumentException('Transaction missing cost center');
                     }
                 }
 
                 // Submit the sheet (domain logic)
                 $submittedTotal = $sheet->submit();
 
-                // Create audit event for submission
-                $auditEvent = new AuditEvent(
-                    (string)\OCA\PettyCash\Domain\Shared\Uuid::random(),
-                    $sheet->dbId,
-                    null,
-                    null,
-                    WorkflowStage::CostCenter->value,
-                    null,
-                    'sheet',
-                    $sheetId,
-                    'SUBMISSION',
-                    $ownerUid,
-                    $this->currentUserDisplayName(),
-                    'PURCHASER',
-                    null,
-                    '{}',
-                    json_encode([
+                // Create audit event for submission.
+                //
+                // `AuditWriter::append()` reads snake_case keys; casting the AuditEvent
+                // object yields camelCase properties, so `command_id` is never found
+                // and the insert fails on the NOT NULL column.
+                $this->auditWriter->append([
+                    'id' => (string)\OCA\PettyCash\Domain\Shared\Uuid::random(),
+                    'sheet_id' => $sheet->dbId,
+                    'transaction_id' => null,
+                    'revision_id' => null,
+                    'stage' => WorkflowStage::CostCenter->value,
+                    'decision_id' => null,
+                    'entity_type' => 'sheet',
+                    'entity_id' => $sheetId,
+                    'event_type' => 'SUBMISSION',
+                    'actor_uid' => $ownerUid,
+                    'actor_role' => 'PURCHASER',
+                    'explanation' => '',
+                    'before' => [],
+                    'after' => [
                         'sheet_id' => $sheetId,
                         'transaction_count' => count($sheet->transactions()),
                         'submitted_total_minor' => $submittedTotal,
-                    ], JSON_THROW_ON_ERROR),
-                    $commandId,
-                    new DateTimeImmutable('now', new DateTimeZone('UTC'))
-                );
-                $this->auditWriter->append((array)$auditEvent);
+                    ],
+                    'command_id' => $commandId,
+                ]);
 
                 // Persist the sheet
                 $this->sheetRepository->save($sheet);
@@ -128,5 +139,35 @@ final readonly class SubmitSheet
     private function currentUserDisplayName(): string
     {
         return $this->currentUser->uid();
+    }
+
+    /**
+     * Resolve the cost center a revision points at.
+     *
+     * `TransactionRevision::costCenterId()` is the cost center's public UUID, which
+     * `findByCode()` can never match, so the numeric join key is tried first and the
+     * submission-time code snapshot second.
+     */
+    private function resolveCostCenter(TransactionRevision $revision): ?\OCA\PettyCash\Domain\Configuration\CostCenter
+    {
+        if ($revision->costCenterDbId !== null) {
+            $byId = $this->costCenterRepository->findById($revision->costCenterDbId);
+            if ($byId !== null) {
+                return $byId;
+            }
+        }
+
+        if ($revision->costCenterId() !== null) {
+            $byPublicId = $this->costCenterRepository->findByPublicId($revision->costCenterId());
+            if ($byPublicId !== null) {
+                return $byPublicId;
+            }
+        }
+
+        if ($revision->costCenterCode !== null && $revision->costCenterCode !== '') {
+            return $this->costCenterRepository->findByCode($revision->costCenterCode);
+        }
+
+        return null;
     }
 }

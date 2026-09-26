@@ -121,18 +121,18 @@ function formatDateTime(dateStr: string): string {
 }
 
 .decision-stage {
-	font-size: 12px;
+	font-size: var(--font-size-floor);
 	font-weight: 500;
 	color: var(--color-primary-element);
 	text-transform: uppercase;
 }
 
 .advisory-badge {
-	font-size: 12px;
+	font-size: var(--font-size-floor);
 }
 
 .decision-type {
-	font-size: 13px;
+	font-size: var(--font-size-floor);
 	font-weight: 600;
 	padding: 2px 8px;
 	border-radius: 12px;
@@ -155,24 +155,24 @@ function formatDateTime(dateStr: string): string {
 }
 
 .decision-actor {
-	font-size: 13px;
+	font-size: var(--font-size-floor);
 }
 
 .actor-role {
 	margin-inline-start: 8px;
 	font-weight: 400;
 	color: var(--color-text-maxcontrast);
-	font-size: 12px;
+	font-size: var(--font-size-floor);
 }
 
 .decision-explanation {
-	font-size: 13px;
+	font-size: var(--font-size-floor);
 	color: var(--color-text-maxcontrast);
 	font-style: italic;
 }
 
 .decision-time {
-	font-size: 12px;
+	font-size: var(--font-size-floor);
 	color: var(--color-text-maxcontrast);
 }
 

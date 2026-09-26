@@ -47,6 +47,9 @@ const accountOptions = computed(() =>
 	}))
 )
 
+/** The caller's selected account, so its balance can be shown next to the form. */
+const selectedAccount = computed(() => accounts.value.find((a) => a.id === form.value.accountId))
+
 const availableCurrencyOptions = computed(() =>
 	accountStore.availableCurrencies.map((code) => ({ label: code, value: code }))
 )
@@ -66,6 +69,21 @@ function validateForm() {
 	if (!form.value.accountId) errors.value.accountId = t('pettycash', 'validation.required')
 	return Object.keys(errors.value).length === 0
 }
+
+/**
+ * The same rules as `validateForm`, evaluated for the submit button's disabled state.
+ *
+ * A submit button that is enabled only to refuse the click hides the reason; disabling it up front
+ * states the form is not yet submittable. Both derive from one set of rules so they cannot disagree.
+ */
+const validationErrors = computed(() => {
+	const found: Record<string, string> = {}
+	if (!form.value.title.trim()) found.title = t('pettycash', 'validation.required')
+	if (!form.value.accountId) found.accountId = t('pettycash', 'validation.required')
+	return found
+})
+
+const isSubmittable = computed(() => Object.keys(validationErrors.value).length === 0)
 
 async function loadAccounts() {
 	await accountStore.loadAccounts()
@@ -99,8 +117,11 @@ async function handleSubmit() {
 }
 
 onMounted(() => {
-	if (isEditing.value) loadSheetForEdit()
-	else loadAccounts()
+	// The stores record a failure in their own `error` ref, which this view renders in its alert.
+	// A mount-time load has no caller to react to the rejection, so it is absorbed here rather than
+	// surfacing as an unhandled promise rejection in the user's console.
+	if (isEditing.value) loadSheetForEdit().catch(() => undefined)
+	else loadAccounts().catch(() => undefined)
 })
 </script>
 
@@ -115,6 +136,22 @@ onMounted(() => {
 			</template>
 
 			<form @submit.prevent="handleSubmit" data-test="sheet-form">
+				<!-- A summary as well as the per-field messages: after a refused submit the purchaser
+				     needs to see what is missing without hunting for each red field. -->
+				<div
+					v-if="Object.keys(errors).length > 0"
+					class="alert alert--error validation-summary"
+					role="alert"
+					data-test="validation-summary"
+				>
+					<strong data-test="validation-summary-title">{{ t('pettycash', 'validation.summary') }}</strong>
+					<ul class="validation-summary-list">
+						<li v-for="(message, field) in errors" :key="field" :data-test="`validation-summary-${field}`">
+							{{ message }}
+						</li>
+					</ul>
+				</div>
+
 				<div class="form-row">
 					<div class="form-col">
 						<NcTextField
@@ -122,6 +159,7 @@ onMounted(() => {
 							:label="t('pettycash', 'sheets.title')"
 							:error="!!errors.title"
 							:helper-text="errors.title || ''"
+							:aria-label="t('pettycash', 'sheets.title')"
 							required
 							data-test="sheet-title-input"
 						/>
@@ -131,6 +169,8 @@ onMounted(() => {
 							v-model="form.accountId"
 							:options="accountOptions"
 							:label="t('pettycash', 'sheets.account')"
+							:input-label="t('pettycash', 'sheets.account')"
+							:aria-label-combobox="t('pettycash', 'sheets.account')"
 							:error="!!errors.accountId"
 							:helper-text="errors.accountId || ''"
 							:disabled="loadingAccounts || !hasAccounts"
@@ -145,6 +185,12 @@ onMounted(() => {
 						<p v-else-if="accountsError" class="error-hint" data-test="accounts-error">
 							{{ accountsError }}
 						</p>
+						<!-- FR-027: the balance is shown where the account is chosen, so the purchaser
+						     sees it before committing. It is informational only — FR-045 forbids it
+						     from blocking submission. -->
+						<p v-if="selectedAccount" class="account-balance" data-test="account-balance">
+							{{ formatBalance(selectedAccount) }}
+						</p>
 					</div>
 				</div>
 
@@ -155,6 +201,8 @@ onMounted(() => {
 							:name="currency"
 							:options="availableCurrencyOptions"
 							:label="t('pettycash', 'sheets.currency')"
+							:input-label="t('pettycash', 'sheets.currency')"
+							:aria-label-combobox="t('pettycash', 'sheets.currency')"
 							disabled
 							data-test="currency-select"
 						/>
@@ -167,6 +215,7 @@ onMounted(() => {
 							v-model="currency"
 							:name="currency"
 							:label="t('pettycash', 'sheets.currency')"
+							:aria-label="t('pettycash', 'sheets.currency')"
 							readonly
 							data-test="currency-display"
 						/>
@@ -179,7 +228,7 @@ onMounted(() => {
 					</NcButton>
 					<NcButton
 						variant="primary"
-						:disabled="sheetStore.loading"
+						:disabled="sheetStore.loading || !isSubmittable"
 						:loading="sheetStore.loading"
 						type="submit"
 						data-test="sheet-create-submit"
@@ -228,6 +277,17 @@ onMounted(() => {
 	justify-content: flex-end;
 	gap: 0.5rem;
 	margin-top: 1rem;
+}
+
+.validation-summary-list {
+	margin: 0;
+	padding-inline-start: 1.25rem;
+}
+
+.account-balance {
+	margin: 0.25rem 0 0;
+	font-size: var(--font-size-floor);
+	opacity: 0.8;
 }
 
 .alert {

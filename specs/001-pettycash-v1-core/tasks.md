@@ -137,7 +137,7 @@ preserved differing decisions.
 - [x] T050 [US2] Implement manager/senior queue queries, decision orchestration, actor snapshots, sheet-stage recalculation, and audit writes in `lib/Application/Workflow/ManagementReviewService.php` (cost-center decisions visible to senior with full details; senior may approve/reject/return independently without forced acknowledgment)
 - [x] T051 [US2] Add management queue and decision OCS routes/controllers in `appinfo/routes.php` and `lib/Controller/ReviewController.php`
 - [x] T052 [P] [US2] Implement typed review API services and review Pinia state in `src/services/reviewsApi.ts` and `src/stores/reviews.ts`
-- [x] T053 [US2] Implement cost-center and senior queue views, transaction review detail, decision form, and prior-decision history components in `src/views/reviews/` and `src/components/review/` (all elements visible without horizontal scroll at 390px viewport; status color/icon WCAG AA contrast; text ≥12pt Persian font per FR-071)
+- [ ] T053 [US2] Implement cost-center and senior queue views, transaction review detail, decision form, and prior-decision history components in `src/views/reviews/` and `src/components/review/` (all elements visible without horizontal scroll at 390px viewport; status color/icon WCAG AA contrast; text ≥12pt Persian font per FR-071) (**reopened by T286** — the checkbox was checked while 15 of the tests this task claims to satisfy failed, which Constitution V does not allow. The US2 behaviour is now delivered and verified: `ManagementReview.spec.ts` is 23/24, the one failure being `FinanceQueueView`, which T287 reclassifies as US3. **What still prevents this being complete is its last three clauses, none of which jsdom can verify**: "no horizontal scroll at 390px" needs a layout engine, WCAG AA contrast needs font metrics, and the ≥12pt floor as a *measurement* needs a real browser. What can be checked in their place is now in place — declared mobile breakpoints, the absence of any `min-width` forcing the viewport wider, status conveyed as text rather than colour alone, and a per-component floor check on the declarations — but a declaration is not a rendering. Those clauses belong to `T116`'s test file and to `T122`/`T123`'s browser and manual matrices, and until one of those runs this task must not be checked again. One product defect was fixed along the way and is recorded in T286: `DecisionForm.vue` passed an `error-message` prop that `@nextcloud/vue` 9.x does not have, so the mandatory-explanation message was never rendered)
 - [ ] T054 [US2] Add management scope, self-review, disagreement, rejection, and return Playwright journeys in `tests/E2E/management-review.spec.ts`
 
 **Checkpoint**: Both management stages work independently against submitted fixtures; all prior
@@ -168,7 +168,7 @@ movements, balances, final states, and rollback.
 - [x] T061 [US3] Implement finance settlement orchestration that atomically writes decision, unique movement, balance, transaction final state, sheet final state, command result, and audit in `lib/Application/Workflow/FinanceSettlementService.php`
 - [x] T062 [US3] Implement shared finance queue queries and decision restrictions without cost-center scoping in `lib/Application/Workflow/FinanceQueue.php`
 - [x] T063 [US3] Add finance queue, finance decision, account summary, and movement OCS routes/controllers in `appinfo/routes.php`, `lib/Controller/ReviewController.php`, and `lib/Controller/AccountController.php`
-- [ ] T064 [P] [US3] Implement finance/account typed API services and stores in `src/services/reviewsApi.ts`, `src/services/accountsApi.ts`, `src/stores/reviews.ts`, and `src/stores/accounts.ts`
+- [x] T064 [P] [US3] Implement finance/account typed API services and stores in `src/services/reviewsApi.ts`, `src/services/accountsApi.ts`, `src/stores/reviews.ts`, and `src/stores/accounts.ts`
 - [ ] T065 [US3] Implement finance review, purchaser balance, and account movement views with explicit settled-versus-management labels in `src/views/reviews/FinanceReviewView.vue`, `src/views/accounts/AccountView.vue`, and `src/components/review/` (all elements visible without horizontal scroll at 390px viewport; WCAG AA contrast; ≥12pt Persian font per FR-071)
 - [ ] T066 [US3] Add shared-queue, restriction, negative-balance (explicit test: approved consumption exceeding account balance results in negative balance per FR-027), idempotency, concurrency, and forced-rollback Playwright/API journeys in `tests/E2E/finance-settlement.spec.ts` (verify p95 <3s, error rate <0.1%, zero data loss per FR-073)
 
@@ -194,8 +194,8 @@ unchanged.
 
 ### Implementation for User Story 4
 
-- [ ] T070 [US4] Implement correction-draft creation, owner-only editing, immutable prior revision cloning, and supersedes linkage in `lib/Application/Expense/CreateCorrectionDraft.php`
-- [ ] T071 [US4] Implement atomic correction validation, active-revision activation, current-manager snapshots, cost-center rerouting, state projection, command result, and audit in `lib/Application/Workflow/ResubmitCorrection.php`
+- [x] T070 [US4] Implement correction-draft creation, owner-only editing, immutable prior revision cloning, and supersedes linkage in `lib/Application/Expense/CreateCorrectionDraft.php`
+- [x] T071 [US4] Implement atomic correction validation, active-revision activation, current-manager snapshots, cost-center rerouting, state projection, command result, and audit in `lib/Application/Workflow/ResubmitCorrection.php`
 - [ ] T072 [US4] Update evidence services so correction uploads retain originating revision links and post-submission removal deactivates rather than deletes in `lib/Application/Evidence/EvidenceService.php`
 - [ ] T073 [US4] Add correction, resubmit, revision-history, and purchaser-return OCS routes/controllers in `appinfo/routes.php`, `lib/Controller/TransactionController.php`, and `lib/Controller/ReviewController.php` (correction evidence upload enforces 100 MB max per FR-074; no advanced evidence restrictions in V1 per FR-030)
 - [ ] T074 [P] [US4] Implement correction and revision-history API/store behavior in `src/services/transactionsApi.ts`, `src/services/reviewsApi.ts`, and `src/stores/sheets.ts`
@@ -287,7 +287,7 @@ evidence; verify every report/export contains all permitted and zero out-of-scop
 
 ### Implementation for User Story 7
 
-- [ ] T105 [US7] Implement indexed sheet summary and totals projections using active revisions and immutable decisions without storing independent mutable totals in `lib/Infrastructure/Persistence/Expense/SheetSummaryQuery.php`
+- [x] T105 [US7] Implement indexed sheet summary and totals projections using active revisions and immutable decisions without storing independent mutable totals in `lib/Infrastructure/Persistence/Expense/SheetSummaryQuery.php` (done - `SheetSummaryQuery` reads one flat row per (active revision, decision) pair through the join on `active_revision_id` and `pettycash_workflow_decisions_revision_stage_uniq`, with `sheet_id` leading `pettycash_transactions_sheet_state_idx`, and hands the rows to the domain's already-tested `SheetTotals::fromRows()`. The reduction rules are deliberately **not** restated in SQL: the most-advanced-decision precedence and the fact that a return makes a transaction pending live in the domain, and duplicating them in SQL would give one rule two implementations that drift. Only decisions on the **active** revision are read — a decision on a superseded revision stays in the database as FR-050 history but no longer describes the current outcome. The precedence rule itself had no home in the domain at all, so it is now `SheetTotals::effectiveOutcome(finance, senior, costCenter)`, asserted case by case in `tests/Unit/Domain/Expense/SheetTotalsTest.php` (8 data-provider cases plus the returned-transaction case where the transaction is pending while its earlier stage approvals still count) — 11/11 green)
 - [ ] T106 [P] [US7] Implement role-scoped dashboard and report query services with server-side filters and maximum page size 100 in `lib/Application/Reporting/DashboardQuery.php` and `lib/Application/Reporting/ReportQuery.php` (config audit visibility per role scope: admins all, finance charged accounts, managers assigned cost centers)
 - [ ] T107 [P] [US7] Implement native streaming CSV with spreadsheet-formula escaping in `lib/Infrastructure/Export/CsvExporter.php`
 - [ ] T108 [P] [US7] Implement XLSX export with the six-sheet complete-sheet layout from `contracts/exports.md` in `lib/Infrastructure/Export/XlsxExporter.php`
@@ -322,7 +322,7 @@ manual retry after communication failure.
 - [ ] T117 [US8] Implement hash-based Vue Router routes for dashboard, sheets, transactions, three review queues, accounts, reports, audit, and administration in `src/router/index.ts`
 - [ ] T118 [US8] Implement the Nextcloud application shell with role-union navigation, content region, responsive detail behavior, route-heading focus, and session bootstrap in `src/AppRoot.vue`, `src/main.ts`, and `src/components/layout/`
 - [ ] T119 [P] [US8] Move every user-facing string through Nextcloud localization and add the Persian V1 catalog while keeping canonical API/domain values untranslated in `src/l10n.ts` and `l10n/fa.js`
-- [ ] T120 [P] [US8] Implement logical-property RTL styles, Nextcloud theme variables, desktop tables, mobile cards, status text/icons (WCAG AA contrast), and bidirectional isolation in `src/styles/app.scss`, `src/styles/rtl.scss`, and `src/styles/responsive.scss` (all elements visible without horizontal scroll at 390px viewport; text ≥12pt Persian font per FR-071)
+- [ ] T120 [P] [US8] Implement logical-property RTL styles, Nextcloud theme variables, desktop tables, mobile cards, status text/icons (WCAG AA contrast), and bidirectional isolation in `src/styles/app.scss`, `src/styles/rtl.scss`, and `src/styles/responsive.scss` (all elements visible without horizontal scroll at 390px viewport; text ≥12pt Persian font per FR-071) (partial - **the FR-071 typography half is done**, the rest of the scope is not. `tests/Frontend/typography.spec.ts` is green: 4/4, from 42 violations of the 12pt floor. The app's scale started below the requirement — 12px, 13px, 14px, `0.75rem`, `0.875rem`, `0.9rem` across 16 files — so every caption, meta line and table cell in the app was under it, and that is now expressed once as four tokens on `.pettycash-shell` in `src/styles/app.scss` (`--font-size-floor: 1rem`, `--font-size-emphasis: 1.125rem`, `--font-size-section: 1.25rem`, `--font-size-title: 1.5rem`) which all 44 declarations now read. Two steps that used to be 12px next to a 14px value became `1rem` and `1.125rem`, so the label/value hierarchy survives the floor being raised under it. De-emphasis is carried by colour and weight, never by size. **What is still open in this task**, and is the larger half: logical-property RTL styles, the Nextcloud theme variables, desktop tables against mobile cards, status text/icons at WCAG AA contrast, and bidirectional isolation — `_rtl.scss` is still 9 lines (a `direction` attribute and one `unicode-bidi: isolate` class) and `_responsive.scss` still 5 (one padding breakpoint), so none of that has been started. FR-071's *other* clauses — no horizontal scroll at 390px, and the ≥12pt requirement as a browser measurement rather than a declaration scan — belong to `T116`'s test file and `T122`/`T123`'s browser and manual matrices, and are not claimed here)
 - [ ] T121 [US8] Implement normalized loading/error/empty states and explicit user-triggered retry with no automatic mutation retry in `src/components/shared/` and `src/composables/useAsyncAction.ts`
 - [ ] T122 [US8] Add Playwright projects and journeys for Chrome 120+, Edge 120+, and Firefox 115+ (ESR) at desktop and mobile-sized viewports, including dark/high-contrast themes and keyboard navigation in `tests/E2E/browser-matrix.spec.ts` (verify all elements visible without horizontal scroll at 390px viewport; WCAG AA contrast; ≥12pt Persian font per FR-071; p95 <3s, error rate <0.1%, zero data loss per FR-073)
 - [ ] T123 [US8] Execute and record the manual Persian RTL, current installed Firefox (115+ ESR), accessibility, and representative-user first-attempt acceptance matrix in `specs/001-pettycash-v1-core/checklists/ui-acceptance.md` (verify all elements visible without horizontal scroll at 390px viewport; status color/icon WCAG AA contrast; text ≥12pt Persian font; p95 <3s, error rate <0.1%, zero data loss; test Chrome 120+, Edge 120+ per FR-072)
@@ -407,40 +407,40 @@ feature implementation.
 
 ### Phase 4 Completion — US2 Management Review (Priority: P1)
 
-- [ ] T172 [US2] Mark T044 complete - `ManagementWorkflowTest.php` exists with 12 passing tests in `tests/Unit/Domain/Workflow/ManagementWorkflowTest.php` (missing)
-- [ ] T173 [US2] Mark T045 complete - `ManagementReviewAuthorizationTest.php` exists with 13 passing tests in `tests/Unit/Security/ManagementReviewAuthorizationTest.php` (missing)
+- [x] T172 [US2] Mark T044 complete - `ManagementWorkflowTest.php` exists with 12 passing tests in `tests/Unit/Domain/Workflow/ManagementWorkflowTest.php` (missing)
+- [x] T173 [US2] Mark T045 complete - `ManagementReviewAuthorizationTest.php` exists with 13 passing tests in `tests/Unit/Security/ManagementReviewAuthorizationTest.php` (missing)
 - [ ] T174 [P] [US2] Create `ManagementReviewControllerTest.php` and `ManagementDecisionTest.php` contract/integration tests for management queues and decision endpoints per T046 in `tests/Contract/Controller/` and `tests/Integration/Workflow/` (missing)
 - [ ] T175 [P] [US2] Create `ManagementReview.spec.ts` Vue tests for scoped queues, evidence/history display, decision form validation per FR-071 in `tests/Frontend/Component/ManagementReview.spec.ts` (missing)
-- [ ] T176 [P] [US2] Implement `WorkflowStateMachine.php` centralized workflow state machine and transition guards from `contracts/workflow.md` per T048 in `lib/Domain/Workflow/WorkflowStateMachine.php` (missing)
-- [ ] T177 [US2] Enhance `WorkflowDecision.php` with "one effective decision per revision and stage" uniqueness constraint per T049 in `lib/Domain/Workflow/WorkflowDecision.php` (partial)
-- [ ] T178 [US2] Implement `ManagementReviewService.php` with manager/senior queue queries, decision orchestration, actor snapshots, sheet-stage recalculation, audit writes per T050 in `lib/Application/Workflow/ManagementReviewService.php` (missing)
-- [ ] T179 [US2] Add `ReviewController.php` with management queue and decision OCS routes/controllers per T051 in `lib/Controller/ReviewController.php` and `appinfo/routes.php` (missing)
-- [ ] T180 [P] [US2] Implement `reviewsApi.ts` and `stores/reviews.ts` typed review API services and Pinia state per T052 in `src/services/` and `src/stores/` (missing)
-- [ ] T181 [US2] Implement cost-center/senior queue views, transaction review detail, decision form, prior-decision history components per FR-071 in `src/views/reviews/` and `src/components/review/` (missing)
+- [x] T176 [P] [US2] Implement `WorkflowStateMachine.php` centralized workflow state machine and transition guards from `contracts/workflow.md` per T048 in `lib/Domain/Workflow/WorkflowStateMachine.php` (missing)
+- [x] T177 [US2] Enhance `WorkflowDecision.php` with "one effective decision per revision and stage" uniqueness constraint per T049 in `lib/Domain/Workflow/WorkflowDecision.php` (partial)
+- [x] T178 [US2] Implement `ManagementReviewService.php` with manager/senior queue queries, decision orchestration, actor snapshots, sheet-stage recalculation, audit writes per T050 in `lib/Application/Workflow/ManagementReviewService.php` (missing)
+- [x] T179 [US2] Add `ReviewController.php` with management queue and decision OCS routes/controllers per T051 in `lib/Controller/ReviewController.php` and `appinfo/routes.php` (missing)
+- [x] T180 [P] [US2] Implement `reviewsApi.ts` and `stores/reviews.ts` typed review API services and Pinia state per T052 in `src/services/` and `src/stores/` (missing)
+- [x] T181 [US2] Implement cost-center/senior queue views, transaction review detail, decision form, prior-decision history components per FR-071 in `src/views/reviews/` and `src/components/review/` (missing)
 - [ ] T182 [US2] Add `management-review.spec.ts` Playwright journeys for scope, self-review, disagreement, rejection, return per T054 in `tests/E2E/management-review.spec.ts` (missing)
 
 ### Phase 5 Completion — US3 Finance Settlement (Priority: P1)
 
-- [ ] T183 [US3] Mark T055 complete - `FinanceDecisionPolicyTest.php` exists with 10 passing tests in `tests/Unit/Domain/Workflow/FinanceDecisionPolicyTest.php` (missing)
+- [x] T183 [US3] Mark T055 complete - `FinanceDecisionPolicyTest.php` exists with 10 passing tests in `tests/Unit/Domain/Workflow/FinanceDecisionPolicyTest.php` (missing)
 - [ ] T184 [P] [US3] Create `FinanceSettlementTest.php` integration tests for fixed row-lock order, exactly-one consumption, command replay, conflicting UUID, simultaneous approvals, rollback per T056 in `tests/Integration/Workflow/FinanceSettlementTest.php` (missing)
 - [ ] T185 [P] [US3] Create `FinanceReviewControllerTest.php` contract tests for shared finance queue and decisions per T057 in `tests/Contract/Controller/FinanceReviewControllerTest.php` (missing)
 - [ ] T186 [P] [US3] Create `FinanceReview.spec.ts` Vue tests for shared queue, senior-decision restrictions, settlement feedback per FR-071 in `tests/Frontend/Component/FinanceReview.spec.ts` (missing)
-- [ ] T187 [P] [US3] Align `AccountMovement` domain with minor units (not Money), positive magnitude, unique command ID, unique consumption source per T059 in `lib/Domain/Account/AccountMovement.php` (partial)
+- [x] T187 [P] [US3] Align `AccountMovement` domain with minor units (not Money), positive magnitude, unique command ID, unique consumption source per T059 in `lib/Domain/Account/AccountMovement.php` (partial)
 - [x] T188 [US3] Implement `DbAccountRepository.php` and `DbAccountMovementRepository.php` with account locking, movement insertion, balance projection per T060 in `lib/Infrastructure/Persistence/Account/` (missing) (done - the four account read queries now build their currency projection with `selectAlias()` instead of inline `as` aliases, which `IQueryBuilder` splits with an unbounded `preg_split` and truncates into one malformed alias; `c.public_id` was also dropped because `data-model.md` defines `Currency` without a `public_id`; `mapRow()` no longer overwrites the public-UUID `$id` with the surrogate key, and `save()` now resolves the existing row via `dbId`; `AccountMovement` carries `accountPublicId` so `DbAccountMovementRepository::save()` resolves the real `pc_accounts.id` and fails loudly instead of writing `account_id = 1`. `POST /sheets` moved from HTTP 500 to a structured 422 and the account query is now exception-free. Pessimistic row locking is NOT implemented here and remains with T060/T129)
-- [ ] T189 [US3] Implement `FinanceSettlementService.php` atomic orchestration (decision, unique movement, balance, transaction final state, sheet final state, command result, audit) per T061 in `lib/Application/Workflow/FinanceSettlementService.php` (missing)
-- [ ] T190 [US3] Implement `FinanceQueue.php` shared finance queue queries without cost-center scoping per T062 in `lib/Application/Workflow/FinanceQueue.php` (missing)
-- [ ] T191 [US3] Add finance/account routes/controllers per T063 in `appinfo/routes.php`, `lib/Controller/ReviewController.php`, `lib/Controller/AccountController.php` (missing)
-- [ ] T192 [P] [US3] Implement `accountsApi.ts` and `stores/accounts.ts` finance/account typed API services and stores per T064 in `src/services/` and `src/stores/` (missing)
+- [x] T189 [US3] Implement `FinanceSettlementService.php` atomic orchestration (decision, unique movement, balance, transaction final state, sheet final state, command result, audit) per T061 in `lib/Application/Workflow/FinanceSettlementService.php` (missing)
+- [x] T190 [US3] Implement `FinanceQueue.php` shared finance queue queries without cost-center scoping per T062 in `lib/Application/Workflow/FinanceQueue.php` (missing)
+- [x] T191 [US3] Add finance/account routes/controllers per T063 in `appinfo/routes.php`, `lib/Controller/ReviewController.php`, `lib/Controller/AccountController.php` (missing)
+- [x] T192 [P] [US3] Implement `accountsApi.ts` and `stores/accounts.ts` finance/account typed API services and stores per T064 in `src/services/` and `src/stores/` (missing)
 - [ ] T193 [US3] Implement finance review, purchaser balance, account movement views with settled-vs-management labels per FR-071 in `src/views/reviews/FinanceReviewView.vue`, `src/views/accounts/AccountView.vue`, `src/components/review/` (missing)
 - [ ] T194 [US3] Add `finance-settlement.spec.ts` Playwright/API journeys with negative-balance test per FR-027 in `tests/E2E/finance-settlement.spec.ts` (missing)
 
 ### Phase 6 Completion — US4 Correction (Priority: P1)
 
-- [ ] T195 [US4] Mark T067 complete - `TransactionRevisionTest.php` exists with 11 passing tests in `tests/Unit/Domain/Expense/TransactionRevisionTest.php` (missing)
-- [ ] T196 [US4] Mark T068 complete - `TransactionCorrectionTest.php` exists with 7 passing tests in `tests/Integration/Workflow/TransactionCorrectionTest.php` (missing)
+- [x] T195 [US4] Mark T067 complete - `TransactionRevisionTest.php` exists with 11 passing tests in `tests/Unit/Domain/Expense/TransactionRevisionTest.php` (missing)
+- [x] T196 [US4] Mark T068 complete - `TransactionCorrectionTest.php` exists with 7 passing tests in `tests/Integration/Workflow/TransactionCorrectionTest.php` (missing)
 - [ ] T197 [P] [US4] Create `CorrectionControllerTest.php` and `TransactionCorrection.spec.ts` contract/Vue tests per T069 in `tests/Contract/Controller/` and `tests/Frontend/Component/` (missing)
-- [ ] T198 [US4] Implement `CreateCorrectionDraft.php` correction-draft creation, owner-only editing, immutable prior revision cloning, supersedes linkage per T070 in `lib/Application/Expense/CreateCorrectionDraft.php` (missing)
-- [ ] T199 [US4] Implement `ResubmitCorrection.php` atomic correction validation, active-revision activation, manager snapshots, cost-center rerouting, state projection, audit per T071 in `lib/Application/Workflow/ResubmitCorrection.php` (missing)
+- [x] T198 [US4] Implement `CreateCorrectionDraft.php` correction-draft creation, owner-only editing, immutable prior revision cloning, supersedes linkage per T070 in `lib/Application/Expense/CreateCorrectionDraft.php` (missing)
+- [x] T199 [US4] Implement `ResubmitCorrection.php` atomic correction validation, active-revision activation, manager snapshots, cost-center rerouting, state projection, audit per T071 in `lib/Application/Workflow/ResubmitCorrection.php` (missing)
 - [ ] T200 [US4] Update `EvidenceService.php` for correction evidence: retain originating revision links, post-submit deactivation only per T072 in `lib/Application/Evidence/EvidenceService.php` (partial)
 - [ ] T201 [US4] Add correction/resubmit/revision-history routes/controllers per T073 in `appinfo/routes.php`, `lib/Controller/TransactionController.php`, `lib/Controller/ReviewController.php` (missing)
 - [ ] T202 [P] [US4] Update `transactionsApi.ts`, `reviewsApi.ts`, `sheets.ts` for correction/revision-history API/store behavior per T074 in `src/services/` and `src/stores/` (missing)
@@ -775,7 +775,7 @@ defects that stop the mandated frontend quality gate from being able to pass.
 
 ### MEDIUM — mandated frontend quality gate cannot pass
 
-- [ ] T245 [MEDIUM] Bring `npm run typecheck` back to zero errors so the `npm run check` gate mandated by `AGENTS.md` can pass end to end; the current 22 errors are all in the two RED suites (20 in `tests/Frontend/Component/ManagementReview.spec.ts`, 2 in `PurchaserFlow.spec.ts`) and none in `src/`, and the 20 ManagementReview errors are the RED fixtures passing `allowedActions`, `actorName`, `uid`, and `ownerId` props and fixtures that the unimplemented US2 review components do not declare, so this task reconciles the RED spec prop/fixture contract with the component prop contracts produced by T181 and resolves the remaining `PurchaserFlow.spec.ts` errors alongside T164; it must not be closed by loosening `tsconfig.json` strictness, suppressing the suites, or excluding them from the typecheck project (partial) (22 errors at append time, down from 24 after T244; all 22 remain in the two RED suites)
+- [x] T245 [MEDIUM] Bring `npm run typecheck` back to zero errors so the `npm run check` gate mandated by `AGENTS.md` can pass end to end; the current 22 errors are all in the two RED suites (20 in `tests/Frontend/Component/ManagementReview.spec.ts`, 2 in `PurchaserFlow.spec.ts`) and none in `src/`, and the 20 ManagementReview errors are the RED fixtures passing `allowedActions`, `actorName`, `uid`, and `ownerId` props and fixtures that the unimplemented US2 review components do not declare, so this task reconciles the RED spec prop/fixture contract with the component prop contracts produced by T181 and resolves the remaining `PurchaserFlow.spec.ts` errors alongside T164; it must not be closed by loosening `tsconfig.json` strictness, suppressing the suites, or excluding them from the typecheck project (partial) (done - `npm run typecheck` now reports zero errors and `npm run lint` zero errors, down from 20 and 1. The 20 ManagementReview errors were all fixture/prop shapes that the components do not declare, so the RED spec was reconciled against the prop contracts T181 produced rather than the other way round: queue items became `TransactionSummary` (`sheetId`, `activeRevision`, `finalOutcome`, `evidenceCount`, `version`, `latestDecision`) instead of the ad-hoc `ownerId`/`revision`/`costCenterId` shape, decisions took the nested `actor: { userId, displayName, role }` with `decidedAt` instead of `actorName`/`actorRole`/`createdAt`, the auth store user became `{ userId, displayName, roles }` instead of `{ uid, roles, costCenterCodes }`, the four `DecisionForm` mounts now pass the required `allowedActions` prop, and the evidence fixtures were completed to the declared `Evidence` shape. The spec-invented `priorDecisions` array was removed from the senior queue items: it is not in the contract's `TransactionSummary` and `SeniorQueueView` reads `item.latestDecision`, so nothing consumed it. The two `PurchaserFlow.spec.ts` errors were the unused `id` parameter on the stubbed `accountById`, now `_id`. Nothing was loosened: `tsconfig.json` strictness is untouched, neither suite is suppressed, and both remain in the typecheck project. **`npm run check` still cannot pass end to end**, and that is not a T245 defect: `npm run test` reports the same 58 failed / 18 passed / 26 errors it reported before this change, byte for byte, because those suites are RED by construction — they assert the US2 review behaviour that is not implemented yet. The gate closes when that implementation lands, not here. Verification: `npm run check:portability`, `typecheck`, `lint`, and `stylelint` all pass and `build` succeeds; lint retains 105 pre-existing warnings, none of them errors)
 
 ---
 
@@ -1032,7 +1032,7 @@ P1 path.
   and a decisions endpoint that answers `201` when no `X-PettyCash-Command-ID` is supplied
   (contradicts)
 
-- [ ] T256 [CRITICAL] Stop hardcoding the currency when hydrating a revision's amount in
+- [x] T256 [CRITICAL] Stop hardcoding the currency when hydrating a revision's amount in
   `DbTransactionRevisionRepository::mapRow()` at
   `lib/Infrastructure/Persistence/Expense/DbTransactionRevisionRepository.php:154`, which builds
   `Money::of((int) $row['amount_minor'], CurrencyCode::fromString('IRR'))` with the in-code comment
@@ -1046,11 +1046,26 @@ P1 path.
   revision loaded through this repository, and it directly contradicts FR-021 and the FR-040
   requirement that consumption is recorded against the account matching the sheet currency; the
   revision must resolve its currency from the owning sheet or account rather than assume IRR, and
-  the fix must be covered by a persistence test using a non-IRR currency (contradicts)
+  the fix must be covered by a persistence test using a non-IRR currency (contradicts) (done - `mapRow()`
+   now resolves the currency through revision -> transaction -> sheet -> currency by joining
+   `pettycash_transactions` and `pettycash_sheets` to `pettycash_currencies` and reading `c.code`, instead
+   of assuming `IRR`; because the same integer denotes a different real amount in every currency, an
+   unresolvable currency now raises a `LogicException` naming the revision rather than silently
+   substituting a default, matching the existing `requireTransactionDbId()` policy against writing a
+   placeholder that would orphan the row. Covered by a real-MariaDB persistence test: the contract
+   fixture seeder grew a `usd` state that seeds a second sheet, transaction, and revision denominated in
+   USD (10.00 stored as 1000 minor units), and
+   `PurchaserFlowControllerTest::testRevisionReadsBackTheSheetCurrencyRatherThanRial` asserts
+   `amount.currency === 'USD'`, `amountMinor === 1000`, and `minorUnit === 2`. It was observed red with
+   `'IRR'` where `'USD'` was expected, and the companion
+   `testRialSheetStillReadsBackRial` guards that resolving from the sheet does not degenerate into always
+   answering with the second fixture's currency. Suite went from 164 tests / 694 assertions / 10 failures
+   to 166 / 702 / 10 — the two new tests pass and the failing set is byte-identical to the pre-change
+   baseline, so no existing behaviour regressed)
 
 ### HIGH — the review scope check cannot deny
 
-- [ ] T257 [HIGH] Build the acting user's responsibility scope from their actual role assignments
+- [x] T257 [HIGH] Build the acting user's responsibility scope from their actual role assignments
   instead of from the record being decided, because
   `lib/Application/Workflow/ManagementReviewService.php:114-124` constructs
   `new AuthorizationContext($actorUid, $transaction->ownerUid, $this->getUserRoles($actorUid),
@@ -1066,11 +1081,33 @@ P1 path.
   FR-005, and FR-009 require authorization to be enforced server-side across decisions, and
   hiding an action in the interface must not be the only restriction, so this is a server-side
   authorization defect rather than a scoping preference; fixing T255 alone would turn this
-  vacuous comparison into a permanently-true one and hide the defect rather than close it (contradicts)
+  vacuous comparison into a permanently-true one and hide the defect rather than close it (contradicts) (done -
+  `ManagementReviewService::recordDecision()` now builds the `AuthorizationContext` scope with a new
+  `getManagedCostCenterCodes()`, which reads the actor's active `RoleAssignment` rows for the role the
+  stage requires and resolves each numeric `costCenterId` to its code, instead of reusing the cost center
+  of the record under review. The subject code comes from a new `resolveCostCenterCode()`, which prefers
+  the revision's submission-time `costCenterCode` snapshot and falls back to the numeric join key through
+  `CostCenterRepository::findById()`. Resolving both sides to codes mattered: the previous code passed
+  `revision()->costCenterId()`, which is the cost center's public UUID, into `findByCode()` — a lookup
+  that expects a code such as `CC-100` and therefore always returned null — so the scope comparison was
+  not only vacuous but also compared unlike units, and `canReview()`'s strict `in_array` could never have
+  matched a real code either. Finance keeps its shared queue and correction stays owner-only, so both
+  stages correctly carry an empty scope. `AuthorizationService` itself is unchanged, so the existing
+  `AuthorizationServiceTest` and `ManagementReviewAuthorizationTest` code-based matrix still holds.
+  Covered by two live contract tests against a new `scope` fixture state that seeds a second cost center
+  (`CC-200`) the acting user holds no assignment for, with a transaction inside it awaiting cost-center
+  review: `testDecisionOnAnUnmanagedCostCenterIsRefused` was observed red with `201` where `403` was
+  expected, and `testDecisionInsideTheManagedCostCenterIsStillAllowed` asserts `201` in the same state so
+  the check cannot degrade into a blanket refusal. Fixing that also exposed a latent fixture defect: the
+  seeder wrote `status => 'AWAITING_COST_CENTER_REVIEW'` on `pettycash_sheets`, which is a transaction
+  status and not a `SheetStatus` case value, so any state that read a submitted sheet raised
+  `"AWAITING_COST_CENTER_REVIEW" is not a valid backing value for enum SheetStatus`; the baseline is now
+  `COST_CENTER` for cost-center review and `CORRECTION` for the correction state. Suite went from 166
+  tests / 702 assertions / 10 failures to 168 / 714 / 10 with the failing set identical to the baseline)
 
 ### HIGH — draft delete is a no-op
 
-- [ ] T258 [HIGH] Make `TransactionService::deleteTransaction()` in
+- [x] T258 [HIGH] Make `TransactionService::deleteTransaction()` in
   `lib/Application/Expense/TransactionService.php:181-204` actually delete the draft, because it
   validates ownership, the OPEN sheet status, and the optimistic-lock version and then, inside its
   transaction, only calls `ExpenseSheet::removeTransaction($transaction->id)` — which at
@@ -1083,11 +1120,30 @@ P1 path.
   without deleting is a correctness and auditability defect; the delete must be restricted to draft
   state, must remove or deactivate the transaction's own evidence per the FR-058 pre-submission rule
   without touching any submitted record, and must be covered by a test asserting the record is
-  genuinely gone (contradicts)
+  genuinely gone (contradicts) (done - `TransactionService::deleteTransaction()` now requires
+  `TransactionStatus::Draft` in addition to the open sheet, because a returned transaction sits in an open
+  sheet again and the sheet check alone would have let a purchaser erase submitted business history. Inside
+  the transaction it removes the transaction's own AppData binaries through `PrivateFileStore` while the keys
+  are still known, drops it from the sheet aggregate, and calls a new
+  `ExpenseTransactionRepository::delete()`. That new port method is implemented in
+  `DbExpenseTransactionRepository` as three query-builder deletes — revisions first, then
+  `pettycash_evidence`, then the transaction — because `pettycash_transaction_revisions.transaction_id`
+  points at the row being removed and the schema declares no foreign keys, so leaving either behind would
+  strand rows no query would ever reach. `EvidenceRepository::delete()` was added for the same
+  pre-submission reason; after submission evidence is still only ever deactivated. `TransactionService`
+  gained `EvidenceRepository` and `PrivateFileStore` dependencies, wired in both `lib/AppInfo/Application.php`
+  and `tests/bootstrap.php`, and both in-memory doubles implement the new port methods. No raw SQL and no
+  delete-`LIMIT` were used, so `npm run check:portability` stays green. The RED state was established
+  honestly: with the repository delete temporarily swapped back for a `save()`, the new
+  `testDeletingADraftTransactionRemovesItFromTheDatabase` failed with `200` where `404` was expected —
+  a `204` over a record that is still there — and passed once the delete was restored, so the test detects
+  the defect rather than merely describing the fix. `testDeletingASubmittedTransactionIsRefused` asserts
+  both the refusal and that the transaction survives it. Suite went from 168 tests / 714 assertions /
+  10 failures to 170 / 718 / 10 with the failing set identical to the baseline)
 
 ### HIGH — evidence deactivation and streaming still read AppData inside the transaction
 
-- [ ] T259 [HIGH] Apply the T247 no-read-back rule to the two remaining evidence paths, because
+- [x] T259 [HIGH] Apply the T247 no-read-back rule to the two remaining evidence paths, because
   `DELETE /evidence/{id}` and `GET /evidence/{id}/content` both return HTTP 500 with
   `Exception: dirty table reads: SELECT filecache.fileid, storage, path ... ` logged by the running
   container, while the upload path was fixed by T247 and returns 201. The deactivation path calls
@@ -1099,7 +1155,27 @@ P1 path.
   require evidence to be removable before submission, deactivated rather than deleted after it, and
   previewable and downloadable by authorized users, and none of the three is currently reachable
   through the API; the fix must preserve FR-060 authenticated streaming and the T038 draft-delete
-  compensation, and must keep the AppData read outside the open database transaction (contradicts)
+  compensation, and must keep the AppData read outside the open database transaction (contradicts) (done -
+  the recorded root cause turned out to be wrong, and the real one was more basic. The AppData read was not
+  a transaction-visibility problem at all: it failed inside *and* outside a transaction, verified directly
+  against the real `AppDataEvidenceStore` in the container. `putEvidence()` writes into nested folders and
+  returns the full `evidence/<transaction>/<revision>/<filename>` key, but `read()`, `deleteDraft()`,
+  `exists()`, and `getFileSize()` all handed that whole key to `getFile()` on the evidence folder as if it
+  were a single filename, so no key this class had ever written could resolve. A new `findFile()` walks the
+  path segments and drops the leading `evidence` segment, since the walk already starts inside that folder;
+  all four methods now go through it. The second defect was independent: `DbEvidenceRepository::save()`'s
+  update branch set `updated_at` and `updated_by`, and `pettycash_evidence` has no such columns — the
+  migration records `uploaded_by`/`uploaded_at` and `deactivated_by`/`deactivated_at`/
+  `deactivation_reason`, with no update pair because an evidence row is only ever deactivated. Every
+  deactivation therefore failed with `Unknown column 'updated_at' in 'SET'` and the endpoint returned HTTP
+  500. Those two writes are gone, and the deactivation columns are the record of the change. Together the
+  two fixes take `DELETE /evidence/{id}` from 500 to 200 and `GET /evidence/{id}/content` from 500 to 200,
+  and the suite fell from 10 failures to 9. One residual failure is left open on purpose:
+  `testGetEvidenceContentReturns200WithStream` now reaches its content-type assertion and fails because the
+  controller serves the stored `application/pdf` while `contracts/ocs-api.yaml:661` declares
+  `application/octet-stream` for that response and FR-060 requires previewing to work. That is a
+  contradiction between the approved contract and the requirement, not something to settle silently here, so
+  it is left for convergence to record)
 
 ## Phase 27: Convergence (App-Scoped `pettycash_*` Schema Namespace)
 
@@ -1258,7 +1334,7 @@ brought only `SheetController`, `TransactionController`, and `EvidenceController
 
 ### HIGH — the decision endpoint mints its own command ID, defeating replay protection
 
-- [ ] T269 [HIGH] Make `ReviewController::decide()` at `lib/Controller/ReviewController.php:116`
+- [x] T269 [HIGH] Make `ReviewController::decide()` at `lib/Controller/ReviewController.php:116`
   read the command ID from the `X-PettyCash-Command-ID` request header the way
   `TransactionController::decide()` already does at
   `lib/Controller/TransactionController.php:202`, and reject the request with 400 when the header is
@@ -1276,7 +1352,7 @@ brought only `SheetController`, `TransactionController`, and `EvidenceController
 
 ### HIGH — an invalid decision value escapes the handler and returns 500
 
-- [ ] T270 [HIGH] Catch `\Throwable` rather than `Exception` in the failure handling of
+- [x] T270 [HIGH] Catch `\Throwable` rather than `Exception` in the failure handling of
   `ReviewController::decide()` at `lib/Controller/ReviewController.php:146-152`, and map an invalid
   decision value to the 400-or-422 the contract allows, because
   `Decision::from($decision)` at `:115` is a PHP 8.1 backed-enum lookup that throws `\ValueError`
@@ -1288,11 +1364,11 @@ brought only `SheetController`, `TransactionController`, and `EvidenceController
   neither 400 nor 422. `TransactionController` already catches `\Throwable` at each of its eight
   handlers, so this is a divergence from the pattern already established in the codebase, and the
   same latent defect exists at `lib/Controller/QueueController.php:34` for
-  `WorkflowStage::from($stage)` (contradicts)
+  `WorkflowStage::from($stage)` (done - `Decision::from()` is now wrapped in its own `try` that catches `\ValueError` and returns 422 with a `VALIDATION_FAILED` code and a `decision` field error, instead of letting it escape three `Exception` handlers that could never see it because `\ValueError` extends `\Error`. The main handler ends in `catch (\Throwable $e)` routed through `OcsErrorMapper::map()`. The same latent defect was fixed where T269/T270 recorded it: `QueueController::index()` caught `Exception` around `WorkflowStage::from()` and now catches `\ValueError|\TypeError`, and the two remaining `catch (Exception $e)` handlers in `ReviewController::index()` and `::returns()` now catch `\Throwable` and go through the mapper, so no handler in either controller can be bypassed by an `Error`. `testRecordDecisionInvalidDecisionReturns400Or422` was observed red and now passes) (contradicts)
 
 ### HIGH — validation failures return 400 with a non-OCS body instead of 422
 
-- [ ] T271 [HIGH] Route the validation failures of `ReviewController::decide()` through
+- [x] T271 [HIGH] Route the validation failures of `ReviewController::decide()` through
   `OcsErrorMapper::validation()` at `lib/Controller/ReviewController.php:146-147` instead of
   returning `new DataResponse(['error' => $e->getMessage()], 400)`, so that the
   `InvalidArgumentException('Explanation required')` thrown by `WorkflowDecision::create()` at
@@ -1303,7 +1379,7 @@ brought only `SheetController`, `TransactionController`, and `EvidenceController
   `testRecordDecisionReturnRequiresExplanation` both fail today with 400 against an expected 422.
   The mapper is already injected into this controller and is used only at line 56, and
   `TransactionController` already calls `ocsErrorMapper->validation()` for the same class of
-  failure, so no new service or dependency is required (contradicts)
+  failure, so no new service or dependency is required (done - `InvalidArgumentException` is now mapped through `OcsErrorMapper::validation()`, so a missing explanation on REJECT/RETURN, a stale version, and an out-of-state decision each answer 422 with a stable `VALIDATION_FAILED` code and field errors instead of a bare `{"error": "..."}` 400 body. A new `fieldErrorsFor()` helper attaches the offending field — `explanation`, `expectedVersion`, or `stage` — by matching the service message, so the caller can highlight the input rather than only read a sentence. The endpoint also validates a blank `decision` up front through the mapper, matching `TransactionController::decide()`. `testRecordDecisionRejectRequiresExplanation` and `testRecordDecisionReturnRequiresExplanation` were both observed red with 400 against an expected 422 and now pass) (contradicts)
 
 ## Phase 30: Convergence (Route/Controller Integrity and a Task-Ordering Defect)
 
@@ -1352,3 +1428,963 @@ because their controllers do not exist, and a further 2 route targets name actio
   must be written so that it reports the full unresolved set as data, and it may legitimately stay
   red until T087, T112, and T096 land, in which case it must be recorded as an expected-failure
   list owned by those task IDs rather than deleted (partial)
+
+## Phase 31: Convergence (Traceability Range Excludes the Schema and Portability Requirements)
+
+**Purpose**: Record the one gap found by assessing `spec.md`, `plan.md`, and `tasks.md` against the
+repository state after Phase 30. Every other remaining-work item is already owned by an existing
+incomplete task and is deliberately not duplicated here.
+
+### MEDIUM — the traceability task's stated range is narrower than the approved requirement set
+
+- [ ] T273 [MEDIUM] Extend the requirement-to-test traceability matrix in
+  `specs/001-pettycash-v1-core/checklists/traceability.md` to the full approved requirement set —
+  FR-001 through FR-081 and SC-001 through SC-014 — because T134 scopes the same deliverable to
+  "FR-001 through FR-076 and SC-001 through SC-012" while `spec.md` defines FR-001–FR-081 and
+  SC-001–SC-014, and `plan.md:60` still declares "76 functional requirements". FR-077 (declared
+  backend portability), FR-078 (`pettycash_` table prefix), FR-079 (`pettycash_*` constraint
+  naming), FR-080 (clean-installation storage with no pre-V1 import or preservation contract), and
+  FR-081 (schema-change acceptance over clean install and the forward migration chain), together with
+  SC-013 (per-backend portability acceptance) and SC-014 (100% `pettycash_` clean-install schema),
+  are therefore outside the matrix T134 will produce. Those five requirements and two success
+  criteria are buildable obligations with real verification tasks — T239 provides the four-backend CI
+  matrix for FR-077/SC-013, and T260, T262, T263, and T264 provide the namespace, reset, clean-install
+  acceptance, and identifier-limit work for FR-078/FR-079/FR-081/SC-014 — so omitting them from the
+  traceability deliverable would let a genuinely verified requirement read as untraceable, and
+  Constitution V requires documentation claims to be updated in the same change whenever their claims
+  are affected. The matrix must map each of FR-001–FR-081 and SC-001–SC-014 to the task and test
+  that satisfies it, and must record `plan.md:60`'s "76 functional requirements" as superseded by the
+  81-requirement set without editing `plan.md` itself, which convergence and this task must not
+  rewrite (partial)
+
+## Phase 32: Convergence (Unchecked Tasks Whose Deliverable Already Exists)
+
+**Purpose**: Record the repository-wide task-state drift that implementation surfaced on pass 1 of
+this run, after T256. Convergence may not rewrite existing task state, so the reconciliation is
+appended here as work for `/speckit.implement` to perform and verify.
+
+### HIGH — 21 unchecked tasks would re-implement code that already exists
+
+- [x] T274 [HIGH] Verify each unchecked task in the table below against the repository and mark it
+  `[X]` only where the named deliverable is genuinely present and correct, leaving open every task
+  whose work is genuinely absent, because every one of these is unchecked while its artifact is
+  already in the tree, and `/speckit.implement` selecting them would rewrite completed work that
+  `AGENTS.md` forbids redoing and would report already-implemented work as delivered. The drift came
+  from Phase 13, whose tasks were written against a repository state that no longer holds: all 21
+  `(missing)` annotations are false, and three unchecked **original** Phase 5/6 tasks are already
+  satisfied too. Convergence deliberately does not mark these off itself — appending this task is the
+  only sanctioned route, so the marking must be done here against evidence, not assumed.
+
+  | Task | Named deliverable | Observed state |
+  |---|---|---|
+  | T064 | `src/services/accountsApi.ts`, `src/stores/accounts.ts` | both exist |
+  | T070 | `lib/Application/Expense/CreateCorrectionDraft.php` | exists |
+  | T071 | `lib/Application/Workflow/ResubmitCorrection.php` | exists |
+  | T172 | `tests/Unit/Domain/Workflow/ManagementWorkflowTest.php` | exists; T044 already `[x]` |
+  | T173 | `tests/Unit/Security/ManagementReviewAuthorizationTest.php` | exists; T045 already `[x]` |
+  | T176 | `lib/Domain/Workflow/WorkflowStateMachine.php` | exists; T048 already `[x]` |
+  | T177 | `lib/Domain/Workflow/WorkflowDecision.php` | exists; T049 already `[x]` |
+  | T178 | `lib/Application/Workflow/ManagementReviewService.php` | exists; T050 already `[x]` |
+  | T179 | `lib/Controller/ReviewController.php` | exists; T051 already `[x]` |
+  | T180 | `src/services/reviewsApi.ts`, `src/stores/reviews.ts` | both exist; T052 already `[x]` |
+  | T181 | `src/views/reviews/*`, `src/components/review/*` | exist; T053 already `[x]` |
+  | T183 | `tests/Unit/Domain/Workflow/FinanceDecisionPolicyTest.php` | exists; T055 already `[x]` |
+  | T187 | `lib/Domain/Account/AccountMovement.php` | exists; T059 already `[x]` |
+  | T189 | `lib/Application/Workflow/FinanceSettlementService.php` | exists; T061 already `[x]` |
+  | T190 | `lib/Application/Workflow/FinanceQueue.php` | exists; T062 already `[x]` |
+  | T191 | `lib/Controller/ReviewController.php`, `lib/Controller/AccountController.php` | both exist; T063 already `[x]` |
+  | T192 | `src/services/accountsApi.ts`, `src/stores/accounts.ts` | both exist |
+  | T195 | `tests/Unit/Domain/Expense/TransactionRevisionTest.php` | exists; T067 already `[x]` |
+  | T196 | `tests/Integration/Workflow/TransactionCorrectionTest.php` | exists; T068 already `[x]` |
+  | T198 | `lib/Application/Expense/CreateCorrectionDraft.php` | exists |
+  | T199 | `lib/Application/Workflow/ResubmitCorrection.php` | exists |
+
+  Two qualifications the verification must respect. First, **T191 is only satisfied for the routes
+  and controller classes that exist**: `AccountController` currently declares `index` only, so
+  `account#create`, `account#charge`, and `account#movements` are still registered in
+  `appinfo/routes.php` without an action, which is T087's work and must stay open — T063's
+  checkbox already records the class, not the missing actions. Second, **T064, T192, T070, T071,
+  T187, T189, and T190 name files that exist but whose behaviour is still under active defect
+  repair** (T257, T269, T270, T271), so closing them records that the deliverable exists, not that
+  its behaviour is correct. The genuinely absent neighbours — `T182`, `T184`, `T185`, `T186`,
+  `T194`, `T197`, `T202`, `T203`, `T204`, the `T205`–`T209` umbrellas, every US5/US6/US7 service
+  and controller, and `docs/audit-retention.md` — were confirmed missing and stay open untouched
+  (contradicts) (done - all 21 tasks verified against the repository and marked `[X]`; every
+  checkbox line was confirmed unique before editing, so no other task's text was touched. The
+  four whose parent task was still unchecked were verified by behaviour rather than by existence
+  alone: `CreateCorrectionDraft::execute()` enforces the awaited-correction state, the optimistic
+  lock, and owner-only editing, and `TransactionRevision::correction()` clones into a new revision
+  numbered `number + 1` that links `supersedes` to the prior revision while leaving that prior
+  revision untouched; `ResubmitCorrection::execute()` runs the command through
+  `IdempotencyService`, validates cost center, expense type, description, and evidence, activates
+  the draft, reroutes to cost-center review, and writes the audit event; `accountsApi.ts` exposes a
+  typed, paginated `listAccounts` and `stores/accounts.ts` a real Pinia store. The other seventeen
+  are Phase 13 duplicates whose parent task was already `[X]` and whose file exists. T191 was
+  closed as written — the qualification it records still holds, because `AccountController` declares
+  only `index`, so `account#create`, `account#charge`, and `account#movements` remain T087's open
+  work and the unresolved-route set is still owned by T087, T096, T112, and T272. Task counts moved
+  from 159 unchecked / 114 checked to 139 / 135)
+
+## Phase 33: Convergence (Evidence Streaming Contract Conflict and FR-058 Deletion Path)
+
+**Purpose**: Record what implementation found while completing T259. Both findings below were
+surfaced by that task, neither is covered by an existing task, and neither may be settled by
+choosing one artifact's word over the other's.
+
+### MEDIUM — the evidence content type is fixed by the contract and contradicted by FR-060
+
+- [ ] T275 [MEDIUM] Reconcile the evidence streaming response before `contracts/ocs-api.yaml` is
+  treated as verified, because the approved contract and the functional requirement disagree about
+  the same response. `contracts/ocs-api.yaml:657-662` declares exactly one success content type for
+  `GET /evidence/{id}/content` — `application/octet-stream` — and
+  `PurchaserFlowControllerTest::testGetEvidenceContentReturns200WithStream` asserts it, while
+  `EvidenceController::content()` at `lib/Controller/EvidenceController.php:274` sets
+  `'Content-Type' => $evidence->mediaType`, which for a PDF upload is `application/pdf`. FR-060
+  requires that authorized users be able to **preview** supported evidence, and an
+  `application/octet-stream` response cannot be previewed in a browser — it downloads. So the
+  contract as written makes the FR-060 preview journey unimplementable, and the implementation as
+  written violates the contract. T143 is marked complete and asserted nothing about the content
+  type, which is why the contradiction survived: the endpoint returned HTTP 500 until T259, so the
+  status assertion failed first and the content-type assertion was never reached. T259 fixed the
+  500 and deliberately stopped at that point rather than quietly changing either side. Constitution
+  Governance requires a conflict between authoritative artifacts to be reconciled in the artifact
+  rather than chosen silently, so the decision belongs to the maintainer: either the contract is
+  amended to describe a stored-media-type response so FR-060 preview works, or FR-060 is clarified to
+  mean download-only and the implementation is corrected to send `application/octet-stream`.
+  Whichever is chosen, the contract test must be updated in the same change so the two cannot drift
+  apart again, and `Content-Disposition` already distinguishes `inline` from `attachment`, so
+  preview-vs-download remains expressible once the media type is decided (contradicts)
+
+### MEDIUM — the draft-delete evidence path unlinks binaries for submitted transactions
+
+- [ ] T276 [MEDIUM] Route post-submission evidence removal through deactivation rather than
+  unlinking, because `EvidenceController::destroy()` calls `EvidenceService::deleteDraftEvidence()`
+  for every state — its own comment at `lib/Controller/EvidenceController.php:228` says "we'll
+  deactivate in both cases" and then does the opposite — and that method calls
+  `fileStore->deleteDraftEvidence()` at `lib/Application/Evidence/EvidenceService.php:106` before it
+  deactivates the metadata. So a submitted transaction's evidence binary is removed from AppData
+  even though the row survives as inactive, which contradicts FR-058's rule that evidence is
+  deactivated rather than deleted after submission and FR-060's requirement that authorized users
+  can still preview it; the metadata row remains and now points at bytes that no longer exist. The
+  same method also carries a self-admitted gap at `EvidenceService.php:103-104` — "This check will be
+  enhanced with proper transaction state verification" — so nothing verifies the transaction is
+  actually in draft state before the unlink happens. T072 already owns "post-submission removal
+  deactivates rather than deletes" for `EvidenceService.php` and stays open, so this is recorded
+  rather than duplicated: the added value is that T259 established the delete path returns HTTP 200
+  again, and `AppDataEvidenceStore::deleteDraft()` silently swallows `NotFoundException`, so a
+  successful-looking response does not by itself prove the unlink was the correct operation (partial)
+
+## Phase 34: Convergence (P1 Contract Path Repaired — Recorded After the Fact)
+
+**Purpose**: Record the defects implementation found and fixed while working the P1 contract
+path. None of these had a covering task, so the fixes are recorded here to keep them traceable
+rather than left as undocumented changes. All four are marked complete; each was proven red before
+its fix and the suite was re-run against the full prior failing set after every step.
+
+- [x] T277 [CRITICAL] Repair the four P1 contract-path failures that remained after T269–T271,
+  because the OCS contract suite could not go green and each failure hid a distinct real defect
+  (contradicts) (done - `POST /sheets/{id}/submit` answered 422 "At least one transaction is
+  required" for sheets that had one, because `DbExpenseSheetRepository` deliberately does not
+  compose the sheet's transactions and so a sheet loaded from the database always carried an
+  empty collection; `SubmitSheet` now attaches them via `ExpenseTransactionRepository::findBySheetId()`
+  before validating, with the new dependency wired in `lib/AppInfo/Application.php` and
+  `tests/bootstrap.php`. `POST /transactions/{id}/correction` answered 403 for a correction the
+  caller was entitled to make, because `TransactionRevision::correction()` clones the business
+  fields into a fresh aggregate without the owning-transaction join key, and
+  `CreateCorrectionDraft` never carried it over, so the save was refused by
+  `requireTransactionDbId()`; it now sets `transactionDbId` exactly as `TransactionService::createTransaction()`
+  does. `POST /transactions/{id}/resubmit` answered 422 "Cost center not found: 22222222-…" because
+  both `SubmitSheet` and `ResubmitCorrection` passed `revision()->costCenterId()` — the cost
+  center's public UUID — to `CostCenterRepository::findByCode()`, which looks up a business code
+  such as `CC-100`; both now resolve through a private helper that tries the numeric join key,
+  then the public UUID, then the code snapshot. `PATCH /transactions/{id}` answered 422
+  "Revision is incomplete" for a legitimate partial edit, because building a new revision left
+  description, cost center, and expense type null whenever the caller omitted them, so the
+  purchaser's own transaction failed `assertSubmittable()` — and had it passed it would have
+  silently dropped real business data; omitted fields now carry forward from the current revision.
+  Two audit defects were fixed alongside: `SubmitSheet` and `ResubmitCorrection` both passed
+  `AuditWriter::append((array) $auditEvent)`, but `append()` reads snake_case keys, so a cast
+  object yielded camelCase properties, `command_id` was never found, and the insert failed on the
+  NOT NULL column with an HTTP 500; both now pass a proper snake_case array. Suite went from 170
+  tests / 750 assertions / 5 failures to 170 / 794 / 1, and the single remaining failure is T275's
+  contract-versus-FR-060 conflict, which is deliberately unresolved)
+
+- [x] T278 [HIGH] Make the contract fixture seeder a true reset, because three order-dependent
+  failures were caused by its own leftover state rather than by the code under test, which
+  contradicts the promise in its docblock that "every run is a reset" (contradicts) (done - the
+  seeder cleared decisions, evidence, and audit but never the rows the suites create *on the
+  fixture sheet*: `POST /sheets/{id}/transactions` writes a real draft with only an expense date
+  and an amount, those rows accumulated, and submission then walked them and failed on a
+  transaction that has no cost center, so `testSubmitSheetReturns200WithSubmittedSheetDetail`
+  passed or failed depending on which tests had run first. It also never removed correction
+  revisions, so a correction run left `revision_number 2` behind and the next run violated
+  `pettycash_transaction_revisions_number_uniq` with `Duplicate entry '42-2'`. The seeder now
+  deletes the stray transactions' decisions, evidence, audit, revisions, and the transactions
+  themselves, then any fixture revision above number 1. One builder is used per statement for the
+  stray-transaction select: separate `getQueryBuilder()` instances for `expr()` and
+  `createNamedParameter()` leave the parameter unbound and emit it verbatim, producing
+  `... (:dcValue1) AND (`id` <> :dcValue1)`, which is the same trap the `upsert()` docblock already
+  documents. All five states — draft, submitted, correction, usd, scope — seed cleanly and
+  repeatedly)
+
+- [x] T279 [MEDIUM] Report the sheet `transactionCount` honestly in the sheet detail response,
+  because `SheetController::formatSheet()` reports `count` from an aggregate that is still empty at
+  that point, so a submitted sheet answers `200` with `status: COST_CENTER` and
+  `transactionCount: 0` — a response that contradicts itself and understates the purchaser's
+  record (partial) (recorded, not started: T277 fixed the submission path but the read model for
+  the sheet detail response is a separate concern and is left open rather than folded into a
+  completed task) (done - the count is now derived from a new `ExpenseTransactionRepository::countBySheetId()`
+  rather than from the `ExpenseSheet` aggregate, which `DbExpenseSheetRepository` does not compose on read
+  and which therefore always reported zero. The port method, the `DbExpenseTransactionRepository`
+  implementation, and the in-memory double all carry it, and `SheetController::formatSheet()` takes the
+  repository through its constructor — the AppFramework resolves it, so no service registration changed.
+  Counting through the repository rather than `count($sheet->transactions())` also avoids loading every
+  revision just to produce a number. Verified against the running container: the fixture sheet now answers
+  `transactionCount: 1` against `status: OPEN`, where it previously answered `0` alongside
+  `status: COST_CENTER` after submission. Two live contract tests cover it: one requires the count to
+  reflect the seeded transaction, and one submits the sheet and then requires both `status: COST_CENTER`
+  and a count of 1, which guards the derivation against a future change that reads a stale snapshot.
+  Suite went from 172 tests / 826 assertions / 1 failure to 174 / 831 / 1, the remaining failure still being
+  T275. `npm run check:portability` stays green and Psalm reports no issues in the changed files)
+
+## Phase 35: Convergence (The OCS API Does Not Implement Its Own Contract)
+
+**Purpose**: Record the cross-cutting drift that T245 exposed and deliberately did not fix. T245's
+mandate was the frontend type gate, and it recorded that "the API does not currently implement the
+contract it is typed against". Assessing that properly shows it is not a type-level nuisance: the
+frontend is written to the contract and the backend answers a different shape, so the affected
+views cannot work in a browser at all. No existing task covers the payload shapes — T272 covers
+route resolvability, and T124 would eventually *detect* the drift without fixing it.
+
+### CRITICAL — the transaction payload does not match `TransactionSummary`/`TransactionDetail`
+
+- [x] T280 [CRITICAL] Make the transaction OCS responses conform to
+  `contracts/ocs-api.yaml`, because the backend answers a shape the contract does not describe and
+  the frontend is written to the contract, so the review and transaction views cannot render. The
+  contract requires `TransactionSummary` to carry `activeRevision`, `evidenceCount`, and
+  `version`, and `TransactionDetail` to add `allowedActions`, `decisions`, and `evidence`. Both
+  `TransactionController::formatTransaction()` (`lib/Controller/TransactionController.php:322`) and
+  `ReviewController::formatTransaction()` (`lib/Controller/ReviewController.php:164`) instead return
+  a flat `revision` object, add an `ownerId` the contract does not declare, and omit all three of
+  `allowedActions`, `decisions`, and `evidence` entirely. Inside that object the contract requires
+  `costCenter` and `expenseType` as `EntitySnapshot` values, while both formatters emit the scalar
+  `costCenterId` and `expenseTypeTitle`; and the contract's required `minorUnit` is being produced
+  from the hardcoded presentation tables that T266 already owns. The consequences are not
+  theoretical: `src/views/reviews/CostCenterQueueView.vue:59-60`, `SeniorQueueView.vue:59-60`, and
+  `src/views/sheets/SheetDetailView.vue:194-197` all read `item.activeRevision.costCenter.name`,
+  `item.activeRevision.expenseType.name`, and `item.activeRevision.amount`, so `item.activeRevision`
+  is `undefined` on every live response and each of those templates dereferences it. Because
+  `decisions` is never returned, `PriorDecisionHistory.vue` cannot be fed from the API even though
+  the component and its props are complete, which is why the US2 advisory-decision journey in T054
+  cannot be built on a working endpoint. The unit and integration suites do not catch this because
+  `tests/bootstrap.php` wires in-memory doubles and the contract tests assert the OCS envelope and
+  status rather than the payload shape, so a green suite is compatible with every view being broken.
+  This task must align the three formatters with the approved schemas, add a contract test that
+  asserts the declared required keys are present and the undeclared ones absent for
+  `GET /transactions/{id}`, the queue endpoints, and `GET /sheets/{id}/transactions`, and resolve
+  `minorUnit` through `CurrencyRepository` rather than the T266 tables so the shape and the digit
+  count are corrected in one change (contradicts) (done - a new
+  `lib/Infrastructure/Http/TransactionPayloadFormatter.php` is now the single source of the transaction
+  payload, and both controllers delegate to it: `summary()` for queue and list items, `detail()` for single
+  transactions, and a public `revision()` for the two endpoints that answer with a bare revision. Leaving the
+  formatting duplicated in the controllers is what let the two copies drift apart in the first place, so the
+  duplication itself had to go. `TransactionController::CURRENCY_MINOR_UNITS` and
+  `ReviewController::getMinorUnit()` are both deleted — they had no other reader — so `minorUnit` now comes
+  from the administrator-configured `Currency.minor_unit` via `CurrencyRepository`, which is most of what
+  T266 asks for; T266 stays open for the part this deliberately does not do, namely turning an unknown or
+  inactive currency into an explicit error instead of a zero-digit fallback. `allowedActions` is derived from
+  the same server-side `AuthorizationService` decision and the actor's real role assignments that the
+  command path enforces, so a hidden action and a refused action cannot disagree, which also means the
+  T257 scope fix is visible to the interface rather than only to the server. Verified against the running
+  container: `GET /transactions/{id}` now returns exactly the contract's members — `id, sheetId, activeRevision,
+  stage, status, finalOutcome, latestDecision, evidenceCount, version` plus `allowedActions, decisions,
+  evidence` — with `costCenter` and `expenseType` as `EntitySnapshot` objects and no `revision`, `ownerId`,
+  `costCenterId`, or `expenseTypeTitle` anywhere. Two live contract tests assert that: the detail test
+  requires every declared member and forbids the four undeclared flat shapes, and the queue test requires
+  `activeRevision`/`evidenceCount` while forbidding `decisions`, so the two response kinds cannot be
+  conflated again. **Correction to this task's recorded evidence**: it claimed both controllers emit the
+  scalar `costCenterId`/`expenseTypeTitle`. That was only true of `ReviewController`; `TransactionController`
+  already emitted `EntitySnapshot` objects, so its drift was the `revision`-versus-`activeRevision` key, the
+  undeclared `ownerId`, and the missing `latestDecision`/`evidenceCount`/`allowedActions`/`decisions`/`evidence`.
+  Three tests that asserted against the old flat shape (`testRevisionReadsBackTheSheetCurrencyRatherThanRial`,
+  `testRialSheetStillReadsBackRial`, and T255's `testDecisionDoesNotEraseTheRevisionBusinessFields`) were
+  updated to the contract path rather than left passing against a shape the contract does not describe.
+  Suite went from 170 tests / 794 assertions / 1 failure to 172 / 826 / 1, the remaining failure still being
+  T275)
+
+### HIGH — the sheet payload omits the stage-approved totals FR-062 requires
+
+- [x] T281 [HIGH] Add the `totals` object to the sheet OCS responses, because
+  `contracts/ocs-api.yaml` lists `totals` among the required members of `SheetSummary` and
+  `SheetController::formatSheet()` never emits it, so no response has ever carried totals. FR-062
+  requires the headline sheet totals to be presented as separate stage-approved columns —
+  Cost Center Approved, Senior Approved, and Finance Approved — alongside the latest effective
+  outcome, and the plan repeats that requirement in its Complexity Tracking section; with `totals`
+  absent there is nowhere for those three figures to be shown, so the requirement is unimplemented
+  end to end rather than merely mis-formatted. The same formatter also returns an `accountId` the
+  contract does not declare, and its `transactionCount` is T279's separate defect. T105 owns the
+  indexed `SheetSummaryQuery` projection that computes these figures (now delivered by T105), so this
+  task depended on T105 and must not be closed by a hardcoded or empty `totals` object. The contract
+  test added by T280 must cover the sheet endpoints too (done - `SheetPayloadFormatter` in `lib/Infrastructure/Http/` is now the single source of truth for the sheet payload, for the same reason `TransactionPayloadFormatter` exists, and `SheetController::formatSheet()` is a one-line delegation. It emits all eight `SheetTotals` members with the contract's `Money` shape, and the `accountId` the contract does not declare is gone. **`submitted` is not derived**: `data-model.md:184` defines `submitted_total_minor` as a "snapshot at first submission", held on the sheet and nullable, and deriving it from the current revisions would make it move on every correction — the opposite of what a snapshot is for. Six contract tests were added covering the whole `SheetTotals` schema on `GET /sheets/{id}` and `GET /sheets`, the real 100,000-minor-unit fixture transaction summing into `current` and `effectivePending`, the configured `minorUnit` (2 for the USD fixture sheet), `submitted` moving 0 → 100,000 across a submission, and the absent `accountId`. `scripts/dev/phpunit` is 190 tests / 937 assertions / 1 failure, the failure being T275. **The `totals` are not hardcoded and the projection is load-bearing**: replacing the query call with `SheetTotals::fromRows([])` — exactly the shortcut this task forbids — fails three of the new tests, and they were re-run against a settled opcode cache to be sure of it (see T288)
+
+## Phase 36: Convergence (The Checked Frontend Tasks Are Not True, and the RED States Measuring Them Are Invalid)
+
+**Purpose**: Record what the quality gate actually reports. `npm run check` is red — `scripts/dev/phpunit`
+is 174 tests / 831 assertions / 1 failure (the deliberately unresolved T275 artifact conflict), but
+`npm test` is **58 failed / 18 passed with 26 unhandled errors**, and nothing in the 134 open tasks
+owns any of it. Two independent problems are stacked here and neither is a behaviour gap: the US2
+suite measures nothing at all because its harness crashes before any assertion runs, and the US1
+suite's 18 green tests pass *while* an unhandled rejection is raised. Under Constitution V's
+Delivery rule 8 a task is complete only when implementation, verification, and task status agree,
+so `T034`, `T042`, `T047`, and `T053` are all checked against a gate that fails. Convergence may
+only append, so this phase adds the work rather than un-checking them.
+
+### CRITICAL — the US2 RED state is invalid; the file measures nothing
+
+- [x] T282 [CRITICAL] Give `ManagementReview.spec.ts` a valid RED state before any US2 conclusion is
+  drawn from it, because all 19 of its tests fail during `mount()` for a reason unrelated to the
+  behaviour under test. Each of the five views it mounts calls a router composable in `setup()` —
+  `useRouter()` at `src/views/reviews/CostCenterQueueView.vue:109`,
+  `src/views/reviews/FinanceQueueView.vue:110`, `src/views/reviews/ReturnsQueueView.vue:111`,
+  `src/views/reviews/SeniorQueueView.vue:112`, and both `useRoute()`/`useRouter()` at
+  `src/views/reviews/TransactionReviewDetailView.vue:91-92` — and `TransactionReviewDetailView.vue:9`
+  and each queue view's line 6 render `<RouterLink>`, but every `mount()` passes only
+  `global: { plugins: [pinia] }`. The result is `[Vue warn]: injection "Symbol(router)" not found`
+  followed by `TypeError: Cannot read properties of undefined (reading 'resolve')` from
+  `vue-router`'s `useLink`, for all 19 tests, so not one assertion in the file has ever run. The
+  sibling `PurchaserFlow.spec.ts` already shows the correct pattern — it builds a real router with
+  `createRouter(createWebHashHistory())` — so this task is to apply that wiring (or a faithful
+  `RouterLink` stub plus a router that resolves the named routes the views link to) to all 19
+  mounts, then re-record which tests fail on behaviour. AGENTS.md's RED-State Rules list exactly
+  this as invalid: a runtime failure unrelated to the intended missing behaviour, with skipped and
+  incomplete counts that say nothing useful. Do not mark `T047`/`T053` on the strength of the
+  current 19 failures; re-derive the list first, and note the corrected count in this task (done - the
+  file now builds its router from the application's own exported `routes` table in
+  `src/router/index.ts` rather than a hand-copied list, so a name a view links to cannot silently go
+  missing, and a `mountView()` helper supplies pinia plus that router and awaits the mount-time
+  loads. Two further sources of false confidence were removed: `DecisionForm.vue` and
+  `PriorDecisionHistory.vue` were being replaced by inline `{ template: '<div/>' }` placeholders
+  even though both real components exist, so six tests asserted against a stub rather than the
+  implementation, and `@/services/reviewsApi` was mocked with function names the store never calls
+  (`listQueue`/`getTransaction`/`submitDecision` against the real
+  `fetchQueue`/`fetchTransactionForReview`/`recordDecision`), which left the real functions in place
+  to issue live requests. The transport is now stubbed at the axios boundary instead. **The
+  corrected count is 15 failures out of 19, every one an `AssertionError` or a `setValue` mismatch
+  against the real control, with no harness crash left** — so the file measures US2 behaviour for
+  the first time and `T047`/`T053` are demonstrably not complete. Mounting the routes' real lazy
+  components also cost ~30s because each `router.push` re-imported every view, and asking a
+  never-navigated router for `isReady()` stalled ~5s per test; replacing the route components with
+  inert placeholders and always performing a navigation brought the file from 33s to 3.1s)
+
+- [x] T283 [CRITICAL] Make the US1 purchaser frontend behaviour that `T034`/`T042` claim to have
+  actually delivered, because both are checked while 34 of their own tests fail. Set difference
+  between the `data-test` hooks the suite asserts and the hooks `src/` emits leaves **25** asserted
+  names with no producer anywhere in `src/`: `account-balance`, `sheet-title`, `sheet-currency`,
+  `sheet-transactions`, `effective-outcome-total`, `cost-center-error`, `expense-type-error`,
+  `description-error`, `amount-error`, `evidence-error`, `submission-errors`, `transaction-stage`,
+  `transaction-currency`, `latest-decision`, `evidence-name`, `evidence-type`, `evidence-size`,
+  `evidence-upload-time`, `deactivation-info`, `actor-snapshot`, `prior-revisions`, `open-sheets`,
+  `balance-blocking-warning`, `status-badge`, `responsive-container`. Grouped by requirement, what
+  is absent is: per-field submission error presentation and the sheet/transaction header and
+  currency display (`FR-071`); the latest-effective-outcome column beside the stage totals
+  (`FR-062`, which is also why `T281` cannot close — but `T281` owns the *server* `totals` object
+  and this task owns only the presentation of a column the view already tries to draw); evidence
+  list columns and the deactivation info that distinguishes inactive from deleted evidence
+  (`FR-058`); decision actor snapshots and prior-revision presentation (`FR-051`/`FR-052`); the
+  balance-independent submission and returned-transaction correction affordances; and the
+  purchaser's multiple-open-sheets dashboard. Implement the behaviour rather than adding the
+  attributes, and where a failure is instead the test encoding a mock-era contract, correct the
+  assertion and say so in this task — do not add a hook whose only purpose is to satisfy a
+  selector. Specifically, three assertions prove nothing even if made to pass: a `body` class
+  named `persian-font` is not FR-071's ≥12pt Persian type, a class named `wcag-aa` on
+  `[data-test="status-badge"]` is not WCAG AA contrast, and the presence of
+  `[data-test="responsive-container"]` is not "no horizontal scroll at 390px". Those three must be
+  replaced with assertions that can fail when the requirement is violated, per `FR-071`/`FR-072`.
+  `SheetDetailView.vue:141-159` already renders the stage-total chips, which is why
+  "should display separate stage totals" passes while the outcome column beside them does not
+  (complete - **all seven groups green**, 85/85 in this file, from 39 failures of 66. Six slices were
+  needed: `Sheet Forms`, `Sheet Detail View`, `Transaction Forms`, `Transaction List View` +
+  `Transaction Detail View`, `Evidence Upload` + `Submitted Read-Only Behavior`, and `Multiple Open
+  Sheets` + `Balance-Independent Submission`. The count after four slices was 13 failures of 86, and
+  the first slice's own snapshot was 31 of 66, down from 39, with `Sheet Forms` 12/12 green. What the
+  first slice established, which changes
+  how the rest of this task must be read: **this file's `vi.mock('@nextcloud/vue', …)` never reached
+  the components it appears to cover.** Every view imports `@nextcloud/vue/components/NcX` by deep
+  path — 13 files do — and only `SheetDetailView.vue` and `TransactionDetailView.vue` import the
+  barrel, so 14 of the 15 mocked components were dead weight and the real ones were rendering all
+  along. A probe confirmed it: the real `NcSelect` emits a `v-select` wrapper with a `role="listbox"`
+  and **zero** `<option>` elements, and `v-select` will not open under jsdom at all, so the original
+  `findAll('option').length > 1` assertion could never have passed. Assertions that depended on the
+  mock have been rewritten against the component that actually runs — the account-selection tests
+  now read the options the view hands its `NcSelect` through a typed `selectOptions()` helper, which
+  is where the requirement is actually decided and which fails if the accounts are not derived from
+  the store. The mocked list also contained `NcAlert`, which **does not exist in `@nextcloud/vue`
+  9.x** at all, and the validation summary was therefore built on a plain `role="alert"` element
+  rather than an invented library component. The accounts store mock is now a mutable binding driven
+  by `setAccounts()`, because three requirements are conditional on how many accounts the caller
+  holds and a fixed two-account stub made them untestable — with it, "disable currency selection when
+  the user has only one active account" became a real test instead of one that asserted the
+  two-account branch while claiming to test the one-account branch. Genuine gaps fixed in this slice:
+  a validation summary naming each missing field, the selected account's balance shown at its own
+  currency scale, the submit button disabled while the form is invalid, and `aria-label` on the
+  sheet-title, expense-date, and amount controls, which the real `NcSelect` had already been warning
+  about ("An `inputLabel` or `ariaLabelCombobox` should be set"). The three mock-era accessibility
+  proxies are gone, each replaced by an assertion that can fail: status is now checked to carry a text
+  label for every status in the `TransactionStatus` union rather than to have a `wcag-aa` class
+  nothing ever set, the 390px requirement is checked as a declared mobile breakpoint plus the absence
+  of a `min-width` above the viewport rather than a `responsive-container` attribute no component
+  emitted, and the Persian ≥12pt requirement moved to a real gate. **That last one is RED and is the
+  finding worth flagging: `tests/Frontend/typography.spec.ts` resolves 12pt to 16px and finds 42
+  declarations in `src/` below that floor** — 12px, 13px, 14px, `0.75rem`, and `0.875rem` across
+  `StatusBadge`, all five review views, both evidence list components, and every review component.
+  The app's entire typography is under the floor, so this is a spec-wide FR-071 violation and not a
+  single-component slip. It is recorded here and left red for `T120`, which owns the styling, rather
+  than half-fixed here. Two of my own replacement assertions were wrong and were corrected against
+  the source rather than left passing: I invented a `FINANCE_APPROVED` status to assert a label for,
+  which the `TransactionStatus` union does not contain, and I asserted the *smallest* responsive
+  breakpoint must be ≤390px when a `max-width: 600px` rule already covers 390px — the requirement is
+  that the viewport falls inside a declared breakpoint, so it is the largest that must reach 390).
+
+  **Second slice (`Sheet Detail View`, now 7/7 green; 28 failures of 67 remain in this file).** The
+  three remaining failures split cleanly. Two were genuine presentation gaps and are fixed: the
+  sheet's title and currency had no test handle, so `data-test="sheet-title"` and
+  `data-test="sheet-currency"` were added to the elements that already render them, and FR-062's
+  "latest effective outcome column" now exists as a column rather than as three loose chips — the
+  contract's `effectiveApproved`/`effectiveRejected`/`effectivePending` are each summed by a
+  transaction's latest effective decision (`data-model.md` line 195), so grouping them under one
+  labelled `data-test="effective-outcome-total"` container is what distinguishes that column from
+  the three per-stage approved columns it is required to sit beside. The third was a test that
+  asserted an error state it never produced: it mounted the view with an empty store and required
+  `[data-test="submission-errors"]` to exist, so it never submitted and never generated an error.
+  The region now carries `role="alert"` and `aria-live="assertive"` so a refused submission is
+  announced rather than only painted, and the test sets the store's `error` explicitly, requires the
+  region to be *absent* without it, and adds a dismissal test
+
+  **Third slice (`Transaction Forms`, now 17/17 green; 19 failures of 75 remain in this file).** All
+  eight failures were in the form, and they were not one kind of problem. Four of them — the
+  `cost-center-error`, `expense-type-error`, `description-error` and `evidence-error` cases — repeated
+  the second slice's defect exactly: each mounted an empty form and required the error to be there
+  already, so none of them ever submitted. They are rewritten to submit, and then to check the two
+  things FR-071 asks of error presentation rather than the presence of an attribute: that the control
+  announces its *own* message, and that a summary names every missing field at once. The second is
+  real and was missing — a purchaser with five required fields and only per-field messages has to hunt
+  for each red one — so the form now renders a `role="alert"` / `aria-live="assertive"` summary, the
+  same pattern `SheetFormView` already established. The per-field `*-error` hooks from this task's
+  opening list are therefore **not** added: a probe of the real controls showed that `NcTextField`,
+  `NcTextArea`, `NcSelect` and `NcDateTimePickerNative` each already render the `helper-text` as a
+  `<p>` and point the control at it through `aria-describedby`, so a duplicate element added only to
+  carry a `data-test` would have printed every message twice.
+
+  Three of the requirements themselves were absent from the view. **FR-023's evidence rule did not
+  exist at all** — `validateForm()` checked date, amount, description, cost center and expense type
+  and stopped — and it is conditional, because `data-model.md` line 103 gives `evidence_required` the
+  meaning "at least one active item required at submission when true". Both branches are now
+  asserted. **FR-021's currency was never displayed**: the form showed no currency and offered no
+  choice, so "inherits the sheet currency" was satisfied only by the absence of anything. It now
+  shows the sheet's currency read-only, and the sheet is resolved from the route on create and from
+  the loaded transaction on edit — the edit route `/transactions/:id/edit` carries no `sheetId`, so
+  reading the route alone would leave the field blank exactly where a correction is being made.
+  **FR-026 locked nothing**: `isDraft` existed and was passed to the uploader, but no field was
+  disabled, so a submitted transaction stayed fully editable. Every control and both actions are now
+  locked, with the requirement's one named exception — a returned transaction stays editable, because
+  that is the correction the requirement carves out.
+
+  Two defects surfaced only because a test was corrected rather than made to pass. The view's cost
+  centers and expense types were **hard-coded placeholders** (`cc-1`, `et-1`) that exist nowhere in
+  the instance, and a transaction is routed to the manager the server holds for its cost center
+  (FR-032), so an invented identifier routes to nobody and is rejected on write. They now come from
+  `GET /configuration/cost-centers` and `GET /configuration/expense-types` through a new
+  `src/services/configurationApi.ts`, and `CostCenter`/`ExpenseType` are declared in
+  `src/types/api.ts` from the contract. The test's fixture identifiers were deliberately made
+  *unlike* the old placeholders, because when they matched, "the options come from the configuration"
+  passed against the hard-coded list too. Second, the amount rule rejected only `<= 0`, so `0.5`
+  minor units reached an API that has nowhere to put the remainder; it is now a positive integer, and
+  the control carries `step="1"` so the fraction is never offered.
+
+  Four assertions in this file were mock-era contracts and were corrected against the source. Two are
+  worth recording because they are the same class of error as the three already corrected in the
+  first slice. `expect(wrapper.emitted('save-draft'))` demanded an event from a routed view that has
+  no parent to emit to and persists through the store — it could never pass; the test now reads the
+  `POST` body and asserts that a draft carries a date and an amount and *nothing else*, which is what
+  FR-022 actually says. And `props: { transactionStatus: … }` passed a prop the view never declared,
+  so it asserted against a contract that did not exist while the status sat on the loaded
+  transaction; a `createWrapperAtRoute()` helper now mounts on a real route, because the route is the
+  input that decides which branch a form takes. In the Accessibility group, "proper ARIA labels" was
+  `attributes('aria-label')` on two controls — but WCAG resolves a name from `aria-label` *or* an
+  associated `<label for>`, and `NcDateTimePickerNative` sets `aria-label` only when it hides its own
+  visible label, so satisfying the assertion would have meant removing the label the purchaser reads.
+  It is replaced by an `accessibleName()` helper applied to every control of both purchaser forms,
+  which fails if a label is dropped, re-pointed or emptied.
+
+  One defect was found in the already-completed first slice rather than in this one: the sheet form's
+  `currency-display` had no accessible name at all, and the old assertion never looked at it. The
+  `l10n` mock was also wrong in a way that had been hiding this class of problem — it returned its
+  *first* argument, so every string in every component rendered as the literal `pettycash` and no
+  assertion could distinguish one message from another. It now returns the message, which is what
+  makes the per-field message assertions mean anything.
+
+  RED was proven rather than assumed: run against the pre-slice view, 10 of these 17 fail, and every
+  one of the 10 fails on a behavioural claim. The 7 that pass are the pre-existing behaviour this
+  slice re-asserts (the form's fields render, a draft persists, the evidence area exists) plus the
+  guard that a type which does *not* require evidence is not made to — which the old view satisfied by
+  having no evidence rule at all. Two tests initially failed for the wrong reason and were fixed
+  before being counted: one submitted through a `data-test` handle this slice had added, so it failed
+  on the missing attribute rather than on the behaviour, and now submits through the `form` element;
+  the other passed vacuously because the fixture reused the hard-coded `cc-1`/`et-1` identifiers.
+
+  **Fourth slice (`Transaction List View` 5/5 and `Transaction Detail View` 9/9 green; 13 failures of
+  86 remain in this file).** All six failures in these two groups had the same root cause as the
+  previous two slices: the test asserted a state it never produced. Every one of them mounted a view
+  whose store was empty — the OCS mock answers an empty page — and then required a **per-row** or
+  **per-decision** element to exist. There were no rows, so none of them could, whatever the view
+  rendered. The two that already had their hook (`evidence-count`, `evidence-active-badge`) were the
+  clearest case: the view was correct and the test could never pass. The tests now seed the rows,
+  decisions, evidence and revisions they assert on, through the OCS mock rather than by poking the
+  store after mount, so the real load path runs.
+
+  Seeding them exposed three things that had been invisible behind the empty store. **`StatusBadge`
+  was asserted only for existing**, which proves nothing about which badge is on which row; each row
+  is now checked for the badge derived from *its own* status, and a row is checked *not* to carry
+  another row's. **A returned transaction showed the blanket read-only badge and a correction button
+  at the same time** — FR-026 forbids editing after submission "except through correction of a
+  returned transaction", so the view was telling the purchaser the opposite of what the button beside
+  it was about to let them do. The badge is now withheld for that one state. And **the revision panel
+  opened on `revisions[0]`**, which is the *oldest* revision, so a corrected transaction displayed its
+  superseded amount and cost centre as the current ones; FR-050 makes the active revision the one
+  that determines the current information, so that is what the panel now opens on and the test proves
+  the superseded figure is not on show.
+
+  Three requirements were genuinely absent. **FR-052's actor snapshot was incomplete**: the view
+  rendered the display name and the role and dropped the identifier, so a decision could not be traced
+  to the person who made it, and the three parts FR-052 names are now all presented. **FR-050/FR-053's
+  prior revisions did not exist** — the view had a revision *selector*, which lets a reader page
+  through history, but never stated that what they are reading is retained history rather than a
+  previous state of an editable row. There is now an inert region listing the superseded revisions,
+  with no control in it that could change one. **The list fetched `latestDecision` on every row and
+  never rendered it**, so a sheet in review could only be understood by opening each transaction in
+  turn; it is now a column, and a row with no decision says so rather than showing a blank cell that
+  reads as a rendering fault. The icon-only row and create buttons also had no accessible name at all
+  (WCAG 4.1.2), and the table headers had no `scope`.
+
+  **A defect found while writing the scale assertion: four views divided money by a hard-coded 100.**
+  `Money` carries the currency's own `minorUnit`, and `SheetDetailView.vue:30`, `SheetListView.vue:16`,
+  `TransactionDetailView.vue:54` and `TransactionListView.vue:20` each did
+  `Intl.NumberFormat(…).format(amountMinor / 100)` — printing a rial amount, which has no minor unit,
+  one hundred times too small. It is the figure a finance officer reconciles against. `CostCenterQueueView`
+  already had the correct version inline, so the correct implementation existed and three other views
+  had not been brought onto it; it now lives in `src/utils/money.ts` and all four call it, with the
+  divisor read from the payload. `SheetDetailView` was also reading the *sheet's* currency to label
+  each total rather than the currency on the total itself. The test states the scale rather than the
+  Persian digit shapes, and independently catches a reintroduced `/100`: mutating the helper's divisor
+  back to `100` fails it.
+
+  `TransactionSummary.latestDecision` was declared non-optional, which is wrong — the contract does not
+  list it among `required`, so a fresh draft has none. The type now says so, which is what removed the
+  `null as unknown as Decision` cast the fixtures had needed.
+
+  Two currently-green tests in these groups were passing for the wrong reason and are now honest.
+  `should show read-only view for submitted transactions` passed because with no transaction loaded the
+  view computed `isSubmitted` as `null !== 'DRAFT'`; it now loads a transaction whose status is
+  `AWAITING_COST_CENTER_REVIEW` and also requires the edit and correction affordances to be absent,
+  which is what would contradict the badge. `should display revision selector…` passed on a selector
+  that is always rendered; it now requires two revisions so there is something to choose between.
+
+  RED proven: run against the pre-slice views, 8 of these 14 fail, every one on a behavioural claim.
+  The 6 that pass are behaviour the old views already had once given data — the empty state, the
+  evidence count and state columns, the revision selector, the read-only badge for a genuinely
+  submitted transaction. Two of my own assertions were wrong and were corrected against the source
+  rather than left passing: one required the revision panel *not* to render an "Origin" row, which it
+  legitimately does, and one compared a money figure against hard-coded Persian digits and then
+  against a string (`۱۰`) that the locale-formatted date in the same panel supplied.
+
+  **Fifth slice (`Evidence Upload` 11/11 and `Submitted Read-Only Behavior` 8/8 green; 4 failures of
+  90 remain in this file).** The finding that mattered most in this slice was not a missing hook.
+  `EvidenceList.vue` rendered through `NcListItem` using `avatar`, `title` and `subtitle` slots —
+  **none of which exist in `@nextcloud/vue` 9.x**, whose slots are `icon`, `name`, `subname`,
+  `details`, `indicator` and `actions`. Every evidence row therefore rendered as an empty shell: a
+  purchaser looking at a transaction's receipt saw the file name, type, size, upload time, state and
+  available actions *nowhere*. A probe of the real component is what established it, and it is the
+  same root cause as the first slice's `NcSelect` finding — a component written against a library
+  surface that does not exist, hidden by a mock. It is not fixed by correcting slot names alone:
+  `NcListItem` also always renders its row as an anchor (a focusable link to `#` for a file that
+  navigates nowhere) and hides its actions behind a hover-revealed three-dot menu, so the removal
+  affordance FR-058 requires only appears when the pointer happens to be over the row. The component
+  is now a plain list built from the same primitives the rest of the app uses, with the actions
+  always visible.
+
+  Three requirement violations came out of it. **FR-060 was broken in the direction that matters
+  most**: the download button was gated on `isDraft`, so a cost-centre manager reviewing a
+  *submitted* transaction — the entire point of the review — was offered no way to open the receipt
+  they were being asked to approve. Download is now gated on the item being active, and only removal
+  is pre-submission. **FR-025/FR-026 were not enforced at all in `EvidenceUploader`**: it accepted an
+  `isDraft` prop and then never read it, so the drop zone, the file input and the upload button were
+  all live on a submitted transaction. The picker is no longer rendered in that state and the
+  component says why, rather than simply being absent. **A refusal that did not say what the limit
+  is**: the message key carried a `{max}` placeholder that no source ever filled, so "too large" was
+  shown without the number. The limit is now stated on the picker as well as in the refusal, and the
+  boundary is asserted inclusive — a file of exactly 100 MB is accepted, since only `> MAX` is
+  refused and an off-by-one there silently rejects a legitimate receipt.
+
+  **FR-059's history was incomplete**: a deactivated item showed a chip saying "inactive" and, when
+  the server supplied a `deactivatedAt`, a timestamp — but the two lived in different places and the
+  timestamp had no handle, so nothing could state that a file is retained rather than deleted. The
+  component also rendered the inactive state *twice*, an `evidence-active-badge` and a separate
+  `inactive-badge` that both said "inactive"; the duplicate is collapsed to one chip, and the test
+  now asserts the state through it rather than preserving a handle whose only purpose was a second
+  copy of the same word. The test's fixture also carried a `deactivationReason` field that neither
+  the contract nor `src/types/api.ts` has; it was dropped rather than added to the type.
+
+  Five of the six tests in `Submitted Read-Only Behavior` passed a prop no view declares —
+  `sheetStatus`, `isSubmitted`, `transactionStatus` — and asserted contracts that do not exist.
+  `SheetDetailView` turned out to gate `edit-sheet-btn`, `create-transaction-btn` and the submit
+  button on `isSubmitted` correctly already, so those four are now honest tests that drive a seeded
+  sheet through the OCS mock and check the affordances that must be *absent* as well as the badge
+  that must be present. One of them also looked for `[data-test="read-only-indicator"]` on a sheet, a
+  name no sheet view has ever emitted.
+
+  **Sixth slice (`Multiple Open Sheets` 4/4 and `Balance-Independent Submission` 3/3 green; this file
+  is 85/85).** FR-018 and FR-061 ask for a purchaser's open sheets to be visible as the actionable
+  ones, and the sheet store has computed `openSheets` that the view never used — open and closed
+  sheets sat in one undifferentiated table. There is now a labelled open-sheets region, and an empty
+  one says so rather than rendering an empty table. The "separate transaction lists per sheet" test
+  asserted that a hook existed, which a list showing every transaction in the instance would also
+  satisfy; it now seeds two sheets' transactions, opens one, and asserts that the opened sheet's rows
+  are there and the page names the sheet they belong to.
+
+  All three `Balance-Independent Submission` tests passed an `accountBalance` prop to views that
+  declare no such prop; the balance is on the account in the accounts store, and the first slice had
+  already made FR-027 true — the submit button depends on the title and the account and never on the
+  balance. These three therefore **pass against the pre-slice source**, because the behaviour they
+  guard was already correct and only the tests were fictional. They are kept because they now say
+  what FR-027 and FR-020 actually require: an overdrawn account does not disable submission, the
+  negative balance is displayed as negative (the positive form is a substring of the negative one, so
+  only the negative form proves the sign survived) and without an alert role, and having no account at
+  all is a normal state that leaves the form reachable.
+
+  RED proven: against the pre-slice components, 11 of these 26 tests fail, every one on a behavioural
+  claim. The 15 that pass are the already-correct submission gating in `SheetDetailView` and the
+  already-correct FR-027 balance handling from the first slice, plus the corrected harness defects.
+  Three of my own assertions were wrong and were corrected against the source: one called 1,024,000
+  bytes "1.0 MB" when the component's threshold makes it 1000 KB, one required the balance text to
+  begin with a minus when the format leads with the currency code, and one asked for the second of
+  the two duplicate inactive chips.
+
+### HIGH — the US1 green tests pass through an unhandled rejection
+
+- [x] T284 [HIGH] Stop `PurchaserFlow.spec.ts` from raising unhandled rejections, because its 18
+  passing results are currently unverifiable. The file mocks `@nextcloud/axios` as
+  `{ default: { request: vi.fn(), isAxiosError: vi.fn() } }`, so `request()` resolves `undefined`,
+  `src/services/http.ts:15` evaluates `response.data.ocs.data` on `undefined`, and Vitest collects
+  **26 unhandled rejections** — its own output warns "This might cause false positive tests". Because
+  the rejection is raised by a `Promise` the test never awaits, it escapes the test body entirely,
+  so a test can be green while the code under test threw. Give the mock a resolved OCS envelope
+  (`{ data: { ocs: { data: … } } }`) for the paths a component calls on mount, and assert the
+  rejection is caught: mount each view and require `error` to be a populated `ApiError` rather than
+  a raw `TypeError`, per `T030`'s canonical error model and `contracts/ocs-api.yaml`'s `Error`
+  schema. `AGENTS.md` treats a suite whose failures or passes are caused by the wrong harness as
+  outside a valid RED state, so this must be resolved before the counts in `T283` are believed
+  (done - the axios mock is now a hoisted `ocsRequest` that resolves a well-formed envelope whose
+  payload matches the contract per endpoint, so a component under test genuinely loads. This
+  exposed a second defect the silent failure had been hiding: `revisions.value = await
+  listRevisions()` assigns into a `ref<Revision[]>`, and answering `/revisions` with a page instead
+  of the bare `Revision[]` the contract declares at `contracts/ocs-api.yaml:552-565` produced
+  `TypeError: transactionStore.revisions.map is not a function` at
+  `src/views/transactions/TransactionDetailView.vue:53` — the mock was wrong, not the client, and the
+  declared shape is now encoded in the mock so the two cannot drift again. The remaining unhandled
+  rejections were real and shipped: every store records a failure in its own `error` ref and then
+  re-throws, and `SheetListView.vue`, `TransactionListView.vue`, `SheetDetailView.vue`,
+  `TransactionDetailView.vue` and `SheetFormView.vue` fired those loads from `onMounted` and `watch`
+  with nothing attached, so any failed load became an unhandled rejection in the user's console. The
+  store re-throw is load-bearing — `SheetFormView.handleSubmit` relies on it to skip its navigation —
+  so the fix belongs at the fire-and-forget call sites, each of which now absorbs the rejection with
+  a comment pointing at the alert that already renders the error. Four new tests cover the transport:
+  the sheet list request is issued and its page stored with no error, a 422 surfaces the server's own
+  message rather than a `TypeError` message, a non-OCS body reports `malformedResponse`, and a 409
+  keeps the server's code instead of degrading to `NETWORK_FAILURE`. The file went from 26 unhandled
+  rejections to 0, and the 39 remaining failures are unchanged and now trustworthy because the
+  transport under them works)
+
+- [x] T285 [HIGH] Guard the OCS response unwrap in `src/services/http.ts`, because
+  `return response.data.ocs.data` is a three-level unguarded dereference on a response whose shape
+  the function does not verify, and the `catch` below it only recognises `AxiosError`. Any
+  Nextcloud response that is not OCS-shaped — the HTML body a session expiry returns, a reverse
+  proxy's 502 page, an empty 204 from a route that returns no content — produces a raw
+  `TypeError`, which fails the `isAxiosError` branch and is re-thrown verbatim, so the caller never
+  receives the `ApiError` envelope `T030` is accountable for and the UI has nothing to render.
+  Verify the shape before dereferencing and convert a non-OCS or non-JSON body into an `ApiError`
+  with a real status and a translatable code rather than a `NETWORK_FAILURE` stand-in. No task
+  covers this: `T030` is checked and never asserted the unwrap, and the task search for `http.ts`
+  in the open list returns only the record of what `T266` removed from the controllers (done - a new
+  `unwrap()` helper in `src/services/http.ts` type-checks the body before dereferencing it and
+  returns either the payload or an `ApiErrorBody`, and `ocs()` raises `ApiError` on the malformed
+  branch. The helper also treats an `error` member inside a 2xx `ocs.data` as a rejection, because
+  OCS permits a failure to arrive as HTTP 200 and a caller must not be handed a business failure as
+  if it were a payload. The `catch` now re-throws an `ApiError` unchanged before the
+  `isAxiosError` branch, so the new failure is classified instead of being re-wrapped as
+  `NETWORK_FAILURE`. New `tests/Frontend/http.spec.ts` covers the envelope, the header and resolved
+  URL, a caller-supplied versus generated command id, the server error envelope, the no-envelope
+  fallback, and a non-axios rejection. Its seven non-OCS cases — `undefined`, `{}`, an HTML session
+  -expiry page, a bare array, an `ocs` member that is not an object, an `ocs` member with no `data`,
+  and a proxy error page — were proven RED first, each failing with exactly the predicted
+  `TypeError: Cannot read properties of undefined`; they are now 15/15 green)
+
+### MEDIUM — recorded for awareness, deliberately not appended
+
+- `tests/Frontend/__mocks__/components.ts` is now dead: it declares eight placeholder components
+  whose own header reads "placeholder implementations … will be replaced by real components in
+  T042", `T042` is complete, and `vitest.config.ts` no longer aliases to it. `T158` and `T215`
+  already own its removal, so this is recorded here rather than duplicated as a new task.
+
+## Phase 37: Convergence (The US2 Review Frontend Is Claimed, and PHP Verification Can Read Stale Bytecode)
+
+**Purpose**: Record what the quality gate actually reports now that T283 closed US1. `scripts/dev/phpunit`
+is 190 tests / 937 assertions / 1 failure — the deliberately unresolved T275 artifact conflict, and nothing
+else. `npx vitest run` is 108 passed / 15 failed of 123, and **every one of the 15 is US2 review-frontend
+behaviour**. T053 claims to implement exactly those components and is checked. T282 gave that spec file a
+valid RED state but implemented nothing, and no open task implements US2's review frontend, so this is the
+US2 counterpart of the situation T283 was appended for on the US1 side. A second finding is recorded
+because it materially undermines every future PHP verification in this repository.
+
+### CRITICAL — the US2 management-review frontend is claimed and not delivered
+
+- [x] T286 [CRITICAL] Make the US2 management-review frontend that `T053` claims to have actually delivered,
+  because `T053` is checked while 14 of the 15 remaining `ManagementReview.spec.ts` failures are its own
+  subject matter, and no open task covers it. Every one of the five components named by `T053` exists in
+  `src/views/reviews/` and `src/components/review/`, so this is `partial` rather than `missing`: they were
+  built and do not satisfy the requirements. Grouped by what is absent, the failures are: the decision form's
+  mandatory-explanation rule for REJECT and RETURN and its absence for APPROVE (`FR-033`/`FR-035`, and US2's
+  stated acceptance scenario "Given a manager rejects or returns a transaction without an explanation …
+  the decision is rejected until an explanation is given"); the prior-decision history's full detail and its
+  presentation of a cost-centre decision as **advisory** in the senior stage, which `FR-034` and its
+  clarification both require and which is the whole point of the advisory rule; the cost-centre queue's
+  pagination, its no-horizontal-scroll layout at 390px, its WCAG AA status colours and icons, and its ≥12pt
+  Persian text (`FR-071`/`FR-072`); the senior manager deciding independently without being forced to
+  acknowledge the advisory decision (`FR-035`, `FR-034`); the transaction review detail's evidence and
+  history, including preview and download (`FR-060`); and the permitted self-review case where a
+  multi-role user reviews their own transaction when scope and stage match (`FR-002`/`FR-008`, which T045
+  covers server-side but which has no client). T282 is already complete and deliberately scoped to harness
+  validity only, so this is not a duplicate of it; `T065`/`T193` are US3 finance review and name a different
+  view set, so they do not cover this either. Constitution V requires a task to be complete only when the
+  acceptance criteria pass, so `T053` must be reopened rather than left checked. One of the fifteen is a
+  test-side defect rather than a product gap and is called out so it is corrected rather than implemented
+  around: `should include X-PettyCash-Command-ID header` asserts the header on `DecisionForm.vue`, but the
+  component correctly delegates to `reviewsStore.recordDecision` → `reviewsApi.recordDecision` →
+  `mutate()`, and it is `mutate()` at `src/services/http.ts:67` that sets the header on every mutating
+  request. The command identity **is** sent; the assertion is looking in the wrong place (partial)
+
+  **Slice 1 (`DecisionForm`, 4/4 green; 11 of 19 remain in this file).** The product defect is a
+  library-surface mismatch of the same family T283 found in slice 1: `DecisionForm.vue` passed
+  `:error-message` to `NcSelect` and `NcTextArea`, and **`@nextcloud/vue` 9.x has no `errorMessage`
+  prop** — it declares `error` (boolean) and `helperText` (string). The attribute therefore fell
+  through onto each component's root and the message was never rendered at all. The consequence is
+  exactly FR-033's acceptance scenario failing in the way that matters: the decision *was* refused
+  and the submit button *did* go disabled, but nothing ever said why, so the manager was left with a
+  dead button. Both controls now use `:error` + `:helper-text`. A sweep of `src/` found
+  `DecisionForm.vue` is the only site passing an invalid `error-message`; `SheetDetailView.vue:275`'s
+  match is a `data-test` attribute name, not a prop.
+
+  Three of the four failures turned out to be test-side as well, and all three are the "test encodes
+  a contract that does not exist" class rather than product gaps — the component already computed
+  `explanationError`, already gated the submit on it, and already generated a `commandId` into the
+  emitted payload. Each was corrected against the source rather than worked around. `setValue()` on
+  `[data-testid="decision-select"]` throws `cannot be called on DIV`: the real `NcSelect` renders a
+  `v-select` whose root is a `div` and whose dropdown opens on real focus, which never happens under
+  jsdom — the identical finding that made T283's first slice rewrite its own select assertions, now
+  confirmed independently in a second suite. The decision is chosen through the component's
+  `update:modelValue`, the event a real selection emits. The submit control is `type="submit"` inside
+  a `<form @submit.prevent>`, so `trigger('click')` on it raises a click and nothing else — jsdom
+  does not submit a form from a synthetic click on its submit button — and `submitDecision()` awaits
+  the store before emitting, so the event is not observable until the promise chain drains; the tests
+  now submit the form and `flushPromises()`. And the command-ID assertion could never have found the
+  header even had the behaviour been missing, because the form delegates to
+  `reviewsStore.recordDecision` → `reviewsApi.recordDecision` → `mutate()`, and `mutate()` at
+  `src/services/http.ts:67` is what sets `X-PettyCash-Command-ID`; what the component does own is the
+  identity it generates and hands over, so that is asserted, and asserted to *look* like a UUID rather
+  than merely to be a present property.
+
+  **One assertion of mine was wrong and was corrected against the source.** I first had the component
+  pass `:aria-describedby="explanationError ? 'decision-explanation-error' : undefined"`, reasoning
+  that an explicit association was better. It is not: the control *appends* a passed `aria-describedby`
+  to the id of the helper-text element it renders itself, so naming an id of our own leaves a
+  reference pointing at nothing — a dangling association, which is worse than none. The attribute was
+  removed, and the test reads the library's own helper-text element through the ids the control names,
+  which is what makes it a real assertion.
+
+  RED proven by mutation, not assumed: forcing `:error="false"` and `:helper-text="undefined"` — the
+  pre-fix behaviour — fails the two mandatory-explanation tests with
+  `expected 'textarea__input' to contain 'error'`, and both are green again once restored.
+
+  **What remains in this task:** 11 failures across `CostCenterQueueView` (4 — pagination, a
+  `rtl-layout` class name, WCAG AA status colours/icons, ≥12pt), `SeniorQueueView` (1 — independent
+  decision per FR-035), `TransactionReviewDetailView` (2 — evidence, history, preview/download per
+  FR-060), `PriorDecisionHistory` (2 — full detail, advisory presentation per FR-034), the permitted
+  self-review case (1, FR-002/FR-008), and `FinanceQueueView` (1, which T287 reclassifies as US3).
+  The `rtl-layout` and the `Advisory` assertions have already been observed to be unsatisfiable as
+  written — a class name is not a requirement, and the corrected `l10n` mock returns the message key
+  rather than an English word — so both are expected to be test-side corrections, in the same class as
+  the three in this slice.
+
+  **Slice 2 (`PriorDecisionHistory` 5/5 and `TransactionReviewDetailView` 3/3 green; 7 of 23 remain in
+  this file).** This slice found **no product defect**: all six failures were the test encoding a
+  contract that does not exist, which is worth stating plainly because it bears on how much of this
+  task's CRITICAL severity is real. The components were already correct and the suite was asserting
+  against hooks and strings that were never there.
+
+  Four of the six were selector mistakes, each of which the components answered correctly under a
+  different name. `[data-testid="decision-item"]` matches **nothing**, because the component emits
+  `decision-item-{id}` per decision — which is the better design, since it distinguishes an earlier
+  decision from a later one, and the tests now use it to assert that. `[data-testid="decision-history"]`
+  has never existed; the history is `prior-decision-history` with a `decision-history-list` inside it.
+  `[data-testid="evidence-download"]` is really `evidence-download-btn`. And `evidence-preview` is an
+  `<img>`, so it is image-only by construction — the original assertion that it exists for a PDF
+  receipt could never hold, and the affordance that applies to every *active* evidence type is the
+  preview **button**, which is what is now asserted, together with a separate image case so the inline
+  preview is not left unchecked.
+
+  The remaining two asserted English words. `should show cost center decisions as advisory…` required
+  the text "Advisory", which no correct component could produce: the `l10n` mock returns the message
+  key, as it must for an assertion to mean the same thing in any locale — the same correction T283 made
+  when it fixed that mock. And `should display all prior decisions with full details` required the raw
+  enums `APPROVE`/`REJECT`, while the component renders the translated `reviews.decision.*`. That
+  second test was also the weakest of the six: it only counted items and looked for four names, so it
+  is now driven by a loop over both decisions and asserts each one's stage, outcome, actor, role,
+  explanation and timestamp — which is what "full details" means in FR-034, rather than four
+  substrings.
+
+  Three tests were **added**, each covering a claim the requirement makes that the original six never
+  touched. FR-034's advisory rule is *conditional* — a cost-centre decision is advisory **in the senior
+  stage** — so both the negative case (the same decision at the cost-centre stage is not badged) and
+  the selective case (at the senior stage, only the cost-centre decision is badged) are now asserted; a
+  component that badged every decision as advisory would have passed the original. FR-060 asks for the
+  active state to be visible, so a deactivated item is asserted to be marked, to lose the preview
+  affordance, and to remain listed — FR-059 makes deactivation a mark, not a deletion. And an image
+  evidence is asserted to preview inline with a real `alt`, so the image is not announced unlabelled.
+
+  **Two of my own mutations were invalid and were discarded rather than reported as passes.** Making
+  `isAdvisory` return `true` "passed" on the first attempt because the edit had not applied, and a
+  regex-based variant then broke template collection so the suite reported "no tests" — a collection
+  failure, which the RED rules correctly refuse as evidence. Both were re-run as verified single-line
+  edits. The behaviour is proven: forcing `isAdvisory` to `true` fails the two advisory tests; hiding
+  the explanation fails the full-details test with `expected … to contain 'OK'`; offering preview for
+  inactive evidence fails the deactivation test. A fourth check — that the inline `alt` is the file's
+  name — was confirmed by inspecting the rendered element rather than by mutation, because the
+  mutation broke collection; it renders `alt="receipt.png"` against the content endpoint.
+
+  **What remains in this task:** 7 failures — `CostCenterQueueView` (4: pagination, an `rtl-layout`
+  class name, WCAG AA status colours/icons, ≥12pt), `SeniorQueueView` (1: independent decision per
+  FR-035), permitted self-review (1: FR-002/FR-008), and `FinanceQueueView` (1, reclassified as US3 by
+  T287). The `rtl-layout` and `≥12pt` assertions are the two still most likely to be unsatisfiable as
+  written, for the reasons recorded above.
+
+  **Slice 3 (`CostCenterQueueView` 6/6, `SeniorQueueView` 2/2, permitted self-review 1/1; the file is
+  23/24 and the one failure is `FinanceQueueView`, which T287 reclassifies as US3).** Like slice 2,
+  this one found **no product defect in the views** — five of the six failures were the same
+  selector-and-string class, and they are worth grouping because the *same three* meaningless
+  assertions keep recurring across the suite and are now gone from it for good.
+
+  `[data-testid="queue-item"]` matches nothing, because the view emits `queue-row-{id}` — the third
+  time a per-item id has been asserted as a bare one after `transaction-row` and `decision-item-{id}`
+  in T283 and slice 2. And two of the four were the mock-era proxies T283 catalogued in its first
+  slice and which had already been removed from `PurchaserFlow.spec.ts` but not from here: an
+  `rtl-layout` **class name** that no requirement names and no stylesheet defines, and a
+  `wcag-aa-contrast` **class** that nothing ever sets. The fourth required a `persian-text` hook no
+  component emits and an inline `style="font-size: …"` attribute the app never uses — all typography
+  is declared in style blocks, and T120 moved the whole app onto a four-step token scale, so an
+  assertion demanding an inline font size contradicts the codebase's own convention.
+
+  Each was replaced by the claim the test's *name* makes, checked where it can actually be decided.
+  "Persian RTL without horizontal scroll at 390px" became: the view declares `dir="rtl"`, a mobile
+  breakpoint reaches 390px, and nothing declares a `min-width` that would force the viewport wider.
+  "WCAG AA status colours/icons" became: each row's status is readable **text** and each row carries
+  the badge derived from *its own* status, which is the half of WCAG 1.4.1 that actually excludes
+  colour-only signalling and is the same substitute T283 adopted. "≥12pt font" became: none of this
+  view's own declarations falls below the floor — the rule T120's app-wide gate enforces, asserted
+  here for one component. jsdom has no layout engine and no font metrics, so the three browser-measured
+  clauses cannot be settled here at all; that is why `T053` is reopened rather than checked.
+
+  The pagination test also **lied about what it checked**: it was named "with paginated transactions"
+  while seeding two items against a page size of 25, so the single page it asserted was not a
+  pagination control — and it asserted two rows rather than any paging. It now seeds a 25-item first
+  page of 30 and asserts the control and the page indicator, with the complementary case added: a queue
+  that fits one page offers no pagination. Writing that test surfaced a real property of the view worth
+  recording — **it renders exactly the page the server sent and does not slice again**, which is why
+  asserting "25 rows back from 30 items" was wrong rather than merely failing.
+
+  `should allow senior to decide independently without forced acknowledgment` mounted
+  `SeniorQueueView` and looked for a `DecisionForm` in it. There is no decision form in that view — a
+  decision is recorded on the transaction's own page — and **`allowIndependentDecision` is a prop no
+  view passes and no code reads**: it is declared on `DecisionForm` at line 76 and is dead. So the
+  assertion could not have held under any implementation. FR-034 is now checked where the decision is
+  actually taken: the senior reaches the decision form, all three of their choices are available, and
+  nothing in the senior's path asks them to acknowledge the cost-centre decision — asserted both by
+  the two acknowledgment hooks one might add and by the rendered view containing no such affordance
+  under any name.
+
+  The permitted self-review case had the same shape: it asserted `queue-item` and a
+  `decision-button` that no component has ever emitted. It now asserts what the **client** actually
+  owns, and says so: the multi-role user sees their own transaction in the queue and its action is
+  present, enabled and named. Whether the decision is permitted is the server's call and T045 covers
+  it, so a client-side assertion that the view "allows" the review would claim an enforcement the
+  interface does not perform.
+
+  RED proven by five mutations, each verified to have applied before its result was read — the lesson
+  from slice 2, where two mutations were silently invalid. Showing pagination for a single page fails
+  the no-pagination test; moving the breakpoint to 300px fails the layout test with
+  `expected 300 to be greater than or equal to 390`; introducing a 12px declaration fails the floor
+  test; **removing the text from `StatusBadge` fails the WCAG test with
+  `expected '' not to be ''`, which is the assertion that finally makes colour-alone signalling
+  detectable**; and disabling the row's action fails the self-review test.
+
+  **Two of my own assertions were wrong and were corrected against the source.** I expected 25 rows
+  back from 30 seeded items, which assumed a client-side page slice the view does not and should not
+  perform. And my breakpoint check searched for `max-width: Npx` only, missing the range syntax
+  `width <= 390px` this view actually uses — so it reported no breakpoint on a file that declares one.
+  Both spellings are now accepted, and a range-syntax regression is caught by the mutation above.
+
+  **Slice 3 closes this task for its US2 scope.** `ManagementReview.spec.ts` is **23/24**, and the one
+  remaining failure is `FinanceQueueView > should render shared finance queue for all finance
+  officers`, which is US3 behaviour that `T287` reclassifies — it is deliberately not counted here,
+  because claiming it would mean implementing a finance view this task does not own. The
+  `npx vitest run` gate is **1 failed / 127 passed of 128**, that single failure being the same
+  `FinanceQueueView` case; `PurchaserFlow.spec.ts` remains 85/85 after T283; `typecheck`, `stylelint`,
+  `build` and `check:portability` are clean and `lint` is 0 errors / 105 warnings. `T053` is reopened
+  with the three browser-measured clauses named as what still blocks it.
+
+  **What this task found, in one line:** of fifteen failing assertions, **one was a product defect**
+  (`DecisionForm`'s non-existent `error-message` prop, which left FR-033's mandatory explanation
+  invisible) and the other fourteen were the suite asserting hooks, class names, English words and
+  raw enums that the components had never been expected to produce. That ratio is the finding worth
+  carrying forward, because it is the second time in this feature that a red gate of this size turned
+  out to be mostly measurement error rather than missing behaviour — and the first time (T283) it hid
+  a spec-wide typography violation, so neither number is a reason to discount a red gate.
+
+- [ ] T287 [MEDIUM] Reconcile the finance-queue assertion that sits in the US2 spec file, because
+  `ManagementReview.spec.ts > FinanceQueueView > should render shared finance queue for all finance
+  officers` tests US3 behaviour from a US2 suite. The shared finance queue is US3: `T058` writes its Vue
+  tests into `tests/Frontend/Component/FinanceReview.spec.ts`, and `T065`/`T193` own the view. So no task
+  owns this particular assertion, and it will otherwise be counted as a US2 failure forever while US3 work
+  proceeds. Either move it to the US3 suite or record explicitly why the US2 file keeps it (partial)
+
+### HIGH — PHP verification can execute stale bytecode and report a false result
+
+- [ ] T288 [HIGH] Make PHP verification immune to Apache's opcode cache, because the contract tests issue
+  **real HTTP requests** and are therefore served by Apache, which has `opcache.enable => On` and
+  `opcache.revalidate_freq = 60`. A run started within sixty seconds of editing `lib/` can execute the
+  previous bytecode, and this is not theoretical: during this convergence a mutation check reported a
+  **false PASS** (a hardcoded empty `totals` object that the tests provably do catch once fresh), and a
+  restore was reported as a **false four-test failure** that then passed unchanged. A canary that made
+  `SheetPayloadFormatter::totals()` throw unconditionally did not fire at all, which is what identified the
+  cause: `opcache.enable_cli => Off`, so a `php -r 'opcache_reset();'` run through `scripts/dev/in-container`
+  resets nothing in the SAPI that actually serves the request. Both a false PASS and a false FAIL are
+  possible, and Constitution V requires evidence that acceptance criteria pass, so a verification result
+  obtained this way is not evidence. The fix is to record the constraint where an agent will meet it and to
+  give the wrapper a way to honour it — either a `scripts/dev` helper that clears the SAPI cache Apache is
+  using, or an explicit settle requirement documented alongside the other `scripts/dev/*` rules in
+  `AGENTS.md` (partial)
+
+### MEDIUM — recorded for awareness, deliberately not appended
+
+- The 15 US2 assertions are the only frontend failures; `PurchaserFlow.spec.ts` is 85/85 after T283, and
+  `http.spec.ts` and `typography.spec.ts` are green. T120 remains open with its FR-071 typography half done
+  and its RTL/theme/card/contrast scope untouched, and T116/T122/T123 still own the browser-measured half of
+  FR-071/FR-072. No new task: those are already tracked.

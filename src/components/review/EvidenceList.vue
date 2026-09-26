@@ -61,7 +61,7 @@ defineProps<Props>()
 	color: var(--color-primary-element-text);
 	padding: 2px 8px;
 	border-radius: 12px;
-	font-size: 12px;
+	font-size: var(--font-size-floor);
 	font-weight: 500;
 }
 

@@ -161,7 +161,7 @@ function download(): void {
 }
 
 .file-name {
-	font-size: 13px;
+	font-size: var(--font-size-floor);
 	font-weight: 500;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -169,14 +169,14 @@ function download(): void {
 }
 
 .deactivated-badge {
-	font-size: 12px;
+	font-size: var(--font-size-floor);
 }
 
 .file-meta {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 8px;
-	font-size: 12px;
+	font-size: var(--font-size-floor);
 	color: var(--color-text-maxcontrast);
 }
 

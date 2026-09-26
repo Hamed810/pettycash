@@ -16,4 +16,12 @@ interface EvidenceRepository
     /** @return list<Evidence> */
     public function findByRevisionId(int $revisionId): array;
     public function save(Evidence $evidence): void;
+    /**
+     * Remove an evidence row outright.
+     *
+     * Reserved for the FR-058 pre-submission case, where the purchaser's draft
+     * transaction is deleted together with the evidence attached to it. After
+     * submission evidence is only ever deactivated, never deleted.
+     */
+    public function delete(Evidence $evidence): void;
 }

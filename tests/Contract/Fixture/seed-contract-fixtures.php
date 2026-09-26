@@ -28,6 +28,15 @@ declare(strict_types=1);
  *              AWAITING_PURCHASER_CORRECTION with the evidence its revision
  *              already carries. Use it for the correction and resubmit
  *              assertions.
+ *   usd       the same `draft` baseline plus a second sheet, transaction, and
+ *              revision denominated in USD. Use it for the currency read-back
+ *              assertions, which need a sheet whose currency is not the rial
+ *              default.
+ *   scope     the same `submitted` baseline plus a second cost center the acting
+ *              user holds no assignment for, with a transaction inside it awaiting
+ *              cost-center review. Use it for the out-of-scope authorization
+ *              assertions, which cannot be expressed while the only cost center in
+ *              the fixture is one the user manages.
  *
  * Every run is a reset, not just a first-time seed: the fixture rows are written
  * back to the requested baseline and the rows the suites create while exercising
@@ -57,8 +66,8 @@ if ($userUid === '') {
 }
 
 $state = $argv[2] ?? 'draft';
-if (!in_array($state, ['draft', 'submitted', 'correction'], true)) {
-    fwrite(STDERR, "Unknown fixture state '{$state}'; expected draft, submitted, or correction.\n");
+if (!in_array($state, ['draft', 'submitted', 'correction', 'usd', 'scope'], true)) {
+    fwrite(STDERR, "Unknown fixture state '{$state}'; expected draft, submitted, correction, usd, or scope.\n");
     exit(1);
 }
 
@@ -84,6 +93,22 @@ const FIXTURE_IDS = [
     'managerRole'     => 'bbbbbbbb-1111-4111-8111-111111111111',
     'seniorRole'      => 'bbbbbbbb-2222-4222-8222-222222222222',
     'evidence'        => 'cccccccc-1111-4111-8111-111111111111',
+    // A second business trio denominated in USD. FR-021 makes the sheet the
+    // authoritative currency of every transaction on it, so a non-IRR sheet is
+    // what proves the revision read path resolves the real currency instead of
+    // assuming one.
+    'usdSheet'        => 'dddddddd-1111-4111-8111-111111111111',
+    'usdTransaction'  => 'dddddddd-2222-4222-8222-222222222222',
+    'usdRevision'     => 'dddddddd-3333-4333-8333-333333333333',
+    // A second cost center the acting user holds no assignment for, with a
+    // transaction inside it awaiting cost-center review. FR-004/FR-005 require the
+    // decision path to enforce scope server-side, so a user assigned only to CC-100
+    // must be refused on a CC-200 transaction; a fixture whose only cost center is
+    // the one the user manages cannot tell a real scope check from a vacuous one.
+    'otherCostCenter' => 'eeeeeeee-1111-4111-8111-111111111111',
+    'otherSheet'      => 'eeeeeeee-4444-4444-8444-444444444444',
+    'otherTransaction' => 'eeeeeeee-2222-4222-8222-222222222222',
+    'otherRevision'   => 'eeeeeeee-3333-4333-8333-333333333333',
 ];
 
 $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
@@ -269,9 +294,15 @@ upsert($db, 'pettycash_role_assignments', 'public_id', FIXTURE_IDS['seniorRole']
 
 // --- Business records -----------------------------------------------------
 
-$sheetBaseline = $state === 'draft'
-    ? ['status' => 'OPEN', 'submitted_total_minor' => null, 'first_submitted_at' => null]
-    : ['status' => 'AWAITING_COST_CENTER_REVIEW', 'submitted_total_minor' => 100000, 'first_submitted_at' => $now];
+// The sheet status is the earliest outstanding stage, so it is a `SheetStatus` case
+// value (COST_CENTER, CORRECTION, …) and never a transaction status such as
+// AWAITING_COST_CENTER_REVIEW: `SheetStatus` cannot represent the latter, and a row
+// carrying it fails to hydrate as soon as anything reads the sheet.
+$sheetBaseline = match ($state) {
+    'draft', 'usd' => ['status' => 'OPEN', 'submitted_total_minor' => null, 'first_submitted_at' => null],
+    'correction' => ['status' => 'CORRECTION', 'submitted_total_minor' => 100000, 'first_submitted_at' => $now],
+    default => ['status' => 'COST_CENTER', 'submitted_total_minor' => 100000, 'first_submitted_at' => $now],
+};
 
 upsert($db, 'pettycash_sheets', 'public_id', FIXTURE_IDS['sheet'], array_merge([
     'public_id' => FIXTURE_IDS['sheet'],
@@ -290,7 +321,7 @@ upsert($db, 'pettycash_sheets', 'public_id', FIXTURE_IDS['sheet'], array_merge([
 $sheetDbId = scalar($db, 'pettycash_sheets', FIXTURE_IDS['sheet'], 'id');
 
 $transactionBaseline = match ($state) {
-    'draft' => ['current_stage' => 'COST_CENTER', 'current_status' => 'DRAFT'],
+    'draft', 'usd' => ['current_stage' => 'COST_CENTER', 'current_status' => 'DRAFT'],
     'correction' => ['current_stage' => 'CORRECTION', 'current_status' => 'AWAITING_PURCHASER_CORRECTION'],
     default => ['current_stage' => 'COST_CENTER', 'current_status' => 'AWAITING_COST_CENTER_REVIEW'],
 };
@@ -337,12 +368,236 @@ $link->set('active_revision_id', $link->createNamedParameter($revisionDbId))
     ->where($link->expr()->eq('id', $link->createNamedParameter($transactionDbId)))
     ->executeStatement();
 
+// --- A non-rial sheet -----------------------------------------------------
+//
+// `amount_minor` is only meaningful next to a currency, and FR-021 makes the
+// sheet the authority for that currency. A revision read back through
+// `DbTransactionRevisionRepository::mapRow()` must therefore report the sheet's
+// own currency; seeding a USD sheet is what makes an IRR assumption observable.
+
+$usdSheetId = null;
+$usdTransactionId = null;
+$usdRevisionId = null;
+
+if ($state === 'usd') {
+    $secondAccountDbId = scalar($db, 'pettycash_accounts', FIXTURE_IDS['secondAccount'], 'id');
+
+    upsert($db, 'pettycash_sheets', 'public_id', FIXTURE_IDS['usdSheet'], [
+        'public_id' => FIXTURE_IDS['usdSheet'],
+        'title' => 'Contract Fixture USD Sheet',
+        'owner_uid' => $userUid,
+        'account_id' => $secondAccountDbId,
+        'currency_id' => $secondCurrencyDbId,
+        'status' => 'OPEN',
+        'submitted_total_minor' => null,
+        'first_submitted_at' => null,
+        'management_completed_at' => null,
+        'finance_started_at' => null,
+        'completed_at' => null,
+        'lock_version' => 0,
+        'created_at' => $now,
+    ]);
+
+    $usdSheetDbId = scalar($db, 'pettycash_sheets', FIXTURE_IDS['usdSheet'], 'id');
+
+    upsert($db, 'pettycash_transactions', 'public_id', FIXTURE_IDS['usdTransaction'], [
+        'public_id' => FIXTURE_IDS['usdTransaction'],
+        'sheet_id' => $usdSheetDbId,
+        'owner_uid' => $userUid,
+        'current_stage' => 'COST_CENTER',
+        'current_status' => 'DRAFT',
+        'final_outcome' => null,
+        'created_at' => $now,
+        'updated_at' => $now,
+        'lock_version' => 0,
+    ]);
+
+    $usdTransactionDbId = scalar($db, 'pettycash_transactions', FIXTURE_IDS['usdTransaction'], 'id');
+
+    // 10.00 USD. Read back as IRR this is a ten-thousand-rial expense, which is
+    // the corruption the currency read path has to avoid.
+    upsert($db, 'pettycash_transaction_revisions', 'public_id', FIXTURE_IDS['usdRevision'], [
+        'public_id' => FIXTURE_IDS['usdRevision'],
+        'transaction_id' => $usdTransactionDbId,
+        'revision_number' => 1,
+        'expense_date' => $today,
+        'amount_minor' => 1000,
+        'description' => 'Contract fixture USD expense',
+        'cost_center_id' => $costCenterDbId,
+        'cost_center_code' => 'CC-100',
+        'cost_center_name' => 'Contract Fixture Cost Center',
+        'expense_type_id' => $expenseTypeDbId,
+        'expense_type_title' => 'Contract Fixture Expense Type',
+        'manager_uid' => null,
+        'senior_manager_uid' => null,
+        'created_at' => $now,
+        'created_by' => $userUid,
+        'activated_at' => $now,
+        'supersedes_revision_id' => null,
+    ]);
+
+    $usdRevisionDbId = scalar($db, 'pettycash_transaction_revisions', FIXTURE_IDS['usdRevision'], 'id');
+
+    $usdLink = $db->getQueryBuilder()->update('pettycash_transactions');
+    $usdLink->set('active_revision_id', $usdLink->createNamedParameter($usdRevisionDbId))
+        ->where($usdLink->expr()->eq('id', $usdLink->createNamedParameter($usdTransactionDbId)))
+        ->executeStatement();
+
+    deleteWhere($db, 'pettycash_workflow_decisions', 'transaction_id', $usdTransactionDbId);
+    deleteWhere($db, 'pettycash_evidence', 'transaction_id', $usdTransactionDbId);
+    deleteWhere($db, 'pettycash_transaction_audit', 'transaction_id', $usdTransactionDbId);
+    deleteWhere($db, 'pettycash_transaction_audit', 'sheet_id', $usdSheetDbId);
+
+    $usdSheetId = FIXTURE_IDS['usdSheet'];
+    $usdTransactionId = FIXTURE_IDS['usdTransaction'];
+    $usdRevisionId = FIXTURE_IDS['usdRevision'];
+}
+
+// --- A cost center the acting user does not manage -------------------------
+//
+// Scope enforcement can only be observed against a cost center the actor is *not*
+// assigned to. Building the authorization context from the record under review makes
+// the scope comparison compare the transaction's own cost center against a list
+// derived from that same value, which is always true; only a second, unmanaged cost
+// center can tell a real check from a vacuous one.
+
+$otherCostCenterId = null;
+$otherTransactionId = null;
+$otherTransactionVersion = null;
+
+if ($state === 'scope') {
+    upsert($db, 'pettycash_cost_centers', 'public_id', FIXTURE_IDS['otherCostCenter'], array_merge([
+        'public_id' => FIXTURE_IDS['otherCostCenter'],
+        'code' => 'CC-200',
+        'name' => 'Contract Fixture Unmanaged Cost Center',
+        'description' => 'Seeded so out-of-scope decisions can be refused.',
+        'valid_from' => $today,
+        'valid_to' => null,
+        'active' => true,
+        'lock_version' => 0,
+    ], $audit));
+
+    $otherCostCenterDbId = scalar($db, 'pettycash_cost_centers', FIXTURE_IDS['otherCostCenter'], 'id');
+
+    upsert($db, 'pettycash_sheets', 'public_id', FIXTURE_IDS['otherSheet'], [
+        'public_id' => FIXTURE_IDS['otherSheet'],
+        'title' => 'Contract Fixture Out-of-Scope Sheet',
+        'owner_uid' => $userUid,
+        'account_id' => $accountDbId,
+        'currency_id' => $currencyDbId,
+        'status' => 'COST_CENTER',
+        'submitted_total_minor' => 50000,
+        'first_submitted_at' => $now,
+        'management_completed_at' => null,
+        'finance_started_at' => null,
+        'completed_at' => null,
+        'lock_version' => 0,
+        'created_at' => $now,
+    ]);
+
+    $otherSheetDbId = scalar($db, 'pettycash_sheets', FIXTURE_IDS['otherSheet'], 'id');
+
+    upsert($db, 'pettycash_transactions', 'public_id', FIXTURE_IDS['otherTransaction'], [
+        'public_id' => FIXTURE_IDS['otherTransaction'],
+        'sheet_id' => $otherSheetDbId,
+        'owner_uid' => $userUid,
+        'current_stage' => 'COST_CENTER',
+        'current_status' => 'AWAITING_COST_CENTER_REVIEW',
+        'final_outcome' => null,
+        'created_at' => $now,
+        'updated_at' => $now,
+        'lock_version' => 0,
+    ]);
+
+    $otherTransactionDbId = scalar($db, 'pettycash_transactions', FIXTURE_IDS['otherTransaction'], 'id');
+
+    upsert($db, 'pettycash_transaction_revisions', 'public_id', FIXTURE_IDS['otherRevision'], [
+        'public_id' => FIXTURE_IDS['otherRevision'],
+        'transaction_id' => $otherTransactionDbId,
+        'revision_number' => 1,
+        'expense_date' => $today,
+        'amount_minor' => 50000,
+        'description' => 'Contract fixture out-of-scope expense',
+        'cost_center_id' => $otherCostCenterDbId,
+        'cost_center_code' => 'CC-200',
+        'cost_center_name' => 'Contract Fixture Unmanaged Cost Center',
+        'expense_type_id' => $expenseTypeDbId,
+        'expense_type_title' => 'Contract Fixture Expense Type',
+        'manager_uid' => $userUid,
+        'senior_manager_uid' => $userUid,
+        'created_at' => $now,
+        'created_by' => $userUid,
+        'activated_at' => $now,
+        'supersedes_revision_id' => null,
+    ]);
+
+    $otherRevisionDbId = scalar($db, 'pettycash_transaction_revisions', FIXTURE_IDS['otherRevision'], 'id');
+
+    $otherLink = $db->getQueryBuilder()->update('pettycash_transactions');
+    $otherLink->set('active_revision_id', $otherLink->createNamedParameter($otherRevisionDbId))
+        ->where($otherLink->expr()->eq('id', $otherLink->createNamedParameter($otherTransactionDbId)))
+        ->executeStatement();
+
+    deleteWhere($db, 'pettycash_workflow_decisions', 'transaction_id', $otherTransactionDbId);
+    deleteWhere($db, 'pettycash_evidence', 'transaction_id', $otherTransactionDbId);
+    deleteWhere($db, 'pettycash_transaction_audit', 'transaction_id', $otherTransactionDbId);
+    deleteWhere($db, 'pettycash_transaction_audit', 'sheet_id', $otherSheetDbId);
+
+    $otherCostCenterId = FIXTURE_IDS['otherCostCenter'];
+    $otherTransactionId = FIXTURE_IDS['otherTransaction'];
+    $otherTransactionVersion = columnValue($db, 'pettycash_transactions', FIXTURE_IDS['otherTransaction'], 'lock_version');
+}
+
 // --- Clear what the suites leave behind -----------------------------------
 
 deleteWhere($db, 'pettycash_workflow_decisions', 'transaction_id', $transactionDbId);
 deleteWhere($db, 'pettycash_evidence', 'transaction_id', $transactionDbId);
 deleteWhere($db, 'pettycash_transaction_audit', 'transaction_id', $transactionDbId);
 deleteWhere($db, 'pettycash_transaction_audit', 'sheet_id', $sheetDbId);
+
+// Remove rows the suites created on the fixture sheet itself.
+//
+// `POST /sheets/{id}/transactions` writes a real draft with only an expense date and
+// an amount, and those rows survive every seed. They accumulate on the fixture sheet
+// until submission walks them and fails on a transaction that has no cost center —
+// an order-dependent failure caused entirely by fixture state, not by the code under
+// test. Their revisions go first so none are stranded.
+// One builder for the whole statement: a named parameter created by a different
+// builder instance is never bound and is emitted verbatim, which produces invalid
+// SQL. The same builder also cannot bind one name twice, so the two placeholders
+// here are distinct.
+$straySelect = $db->getQueryBuilder();
+$strayRows = $straySelect->select('id')
+    ->from('pettycash_transactions')
+    ->where($straySelect->expr()->eq('sheet_id', $straySelect->createNamedParameter($sheetDbId)))
+    ->andWhere($straySelect->expr()->neq('id', $straySelect->createNamedParameter($transactionDbId)))
+    ->executeQuery()
+    ->fetchAllAssociative();
+
+foreach ($strayRows as $strayRow) {
+    $strayDbId = (int) $strayRow['id'];
+    deleteWhere($db, 'pettycash_workflow_decisions', 'transaction_id', $strayDbId);
+    deleteWhere($db, 'pettycash_evidence', 'transaction_id', $strayDbId);
+    deleteWhere($db, 'pettycash_transaction_audit', 'transaction_id', $strayDbId);
+
+    $strayRevisions = $db->getQueryBuilder()->delete('pettycash_transaction_revisions');
+    $strayRevisions->where($strayRevisions->expr()->eq('transaction_id', $strayRevisions->createNamedParameter($strayDbId)))
+        ->executeStatement();
+
+    $strayDelete = $db->getQueryBuilder()->delete('pettycash_transactions');
+    $strayDelete->where($strayDelete->expr()->eq('id', $strayDelete->createNamedParameter($strayDbId)))
+        ->executeStatement();
+}
+
+// Correction revisions are created by the suites, and the baseline is always
+// revision 1. Without this, a correction run leaves revision 2 behind and the next
+// run violates `pettycash_transaction_revisions_number_uniq` — the fixture would
+// depend on the order the suites happen to execute in, which is exactly what this
+// seeder is supposed to prevent.
+$extraRevisions = $db->getQueryBuilder()->delete('pettycash_transaction_revisions');
+$extraRevisions->where($extraRevisions->expr()->eq('transaction_id', $extraRevisions->createNamedParameter($transactionDbId)))
+    ->andWhere($extraRevisions->expr()->gt('revision_number', $extraRevisions->createNamedParameter(1)))
+    ->executeStatement();
 
 // A returned transaction can only be resubmitted once its revision carries
 // evidence, so the correction state needs one. This is metadata only: the
@@ -382,4 +637,16 @@ echo json_encode([
     // The optimistic-lock values the suites must echo back as `expectedVersion`.
     'sheetVersion'       => columnValue($db, 'pettycash_sheets', FIXTURE_IDS['sheet'], 'lock_version'),
     'transactionVersion' => columnValue($db, 'pettycash_transactions', FIXTURE_IDS['transaction'], 'lock_version'),
+    // Present only in the `usd` state; `null` elsewhere so a suite that forgets to
+    // prepare that state fails loudly instead of reading a stale manifest key.
+    'usdSheetId'         => $usdSheetId,
+    'usdTransactionId'   => $usdTransactionId,
+    'usdRevisionId'      => $usdRevisionId,
+    'usdTransactionVersion' => $usdTransactionId === null
+        ? null
+        : columnValue($db, 'pettycash_transactions', FIXTURE_IDS['usdTransaction'], 'lock_version'),
+    // Present only in the `scope` state.
+    'otherCostCenterId'   => $otherCostCenterId,
+    'otherTransactionId'  => $otherTransactionId,
+    'otherTransactionVersion' => $otherTransactionVersion,
 ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES), PHP_EOL;

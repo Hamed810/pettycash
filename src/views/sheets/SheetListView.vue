@@ -8,47 +8,118 @@ import NcNoteCard from '@nextcloud/vue/components/NcNoteCard'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import { mdiPlus, mdiEye, mdiPencil } from '@mdi/js'
 import { t } from '@nextcloud/l10n'
+import { formatMoney } from '@/utils/money'
 
 const router = useRouter()
 const sheetStore = useSheetStore()
-
-function formatMoney(amountMinor: number, currency: string) {
-	return new Intl.NumberFormat('fa-IR', { style: 'currency', currency, minimumFractionDigits: 0 }).format(amountMinor / 100)
-}
 
 function goToCreate() { router.push({ name: 'sheet-create' }) }
 function goToDetail(sheetId: string) { router.push({ name: 'sheet-detail', params: { id: sheetId } }) }
 function goToEdit(sheetId: string) { router.push({ name: 'sheet-edit', params: { id: sheetId } }) }
 
-onMounted(() => { sheetStore.loadSheets() })
+onMounted(() => {
+	// The store records the failure in `error`, which this view renders in its alert. A mount-time
+	// load has no caller to react to the rejection, so it is absorbed here rather than surfacing as
+	// an unhandled promise rejection in the user's console.
+	sheetStore.loadSheets().catch(() => undefined)
+})
 </script>
 
 <template>
 	<div class="sheet-list-view" dir="rtl" data-test="sheet-list-view">
 		<div class="header-row">
 			<h1 class="mb-0">{{ t('pettycash', 'sheets.title') }}</h1>
-			<NcButton variant="primary" @click="goToCreate" data-test="create-sheet-button">
+			<NcButton
+				variant="primary"
+				:aria-label="t('pettycash', 'sheets.create')"
+				@click="goToCreate"
+				data-test="create-sheet-button"
+			>
 				<NcIconSvgWrapper :path="mdiPlus" :size="16" class="mr-2" />
 				{{ t('pettycash', 'sheets.create') }}
 			</NcButton>
 		</div>
+
+		<!--
+			FR-018 lets a purchaser hold several open sheets at once and FR-061 asks for a dashboard of
+			the caller's relevant open work. The open sheets are the actionable ones — a transaction can
+			still be added to them and they can still be submitted — so they are listed as their own
+			region instead of sitting in one undifferentiated table. The store already computed
+			`openSheets`; the view simply never used it.
+		-->
+		<NcNoteCard data-test="open-sheets">
+			<template #header>
+				{{ t('pettycash', 'sheets.openSheets') }}
+			</template>
+
+			<table v-if="sheetStore.openSheets.length" class="nc-table">
+				<thead>
+					<tr>
+						<th scope="col">{{ t('pettycash', 'sheets.title') }}</th>
+						<th scope="col">{{ t('pettycash', 'sheets.currency') }}</th>
+						<th scope="col">{{ t('pettycash', 'sheets.transactionCount') }}</th>
+						<th scope="col">{{ t('pettycash', 'sheets.totals') }}</th>
+						<th scope="col">{{ t('pettycash', 'sheets.createdAt') }}</th>
+						<th scope="col">{{ t('pettycash', 'sheets.actions') }}</th>
+					</tr>
+				</thead>
+				<tbody>
+					<tr v-for="item in sheetStore.openSheets" :key="item.id" data-test="sheet-row">
+						<td>
+							<NcButton variant="tertiary" @click="goToDetail(item.id)" data-test="sheet-list-item">
+								{{ item.title }}
+							</NcButton>
+						</td>
+						<td>{{ item.currency }}</td>
+						<td>{{ item.transactionCount }}</td>
+						<td>{{ formatMoney(item.totals.current) }}</td>
+						<td>{{ new Date(item.createdAt).toLocaleDateString('fa-IR') }}</td>
+						<td>
+							<div class="actions-menu">
+								<NcButton
+									variant="tertiary"
+									:aria-label="t('pettycash', 'sheets.viewNamed', { name: item.title })"
+									@click="goToDetail(item.id)"
+									data-test="view-sheet"
+								>
+									<NcIconSvgWrapper :path="mdiEye" :size="16" class="mr-2" />
+									{{ t('pettycash', 'common.view') }}
+								</NcButton>
+								<NcButton
+									variant="tertiary"
+									:aria-label="t('pettycash', 'sheets.editNamed', { name: item.title })"
+									@click="goToEdit(item.id)"
+									data-test="edit-sheet"
+								>
+									<NcIconSvgWrapper :path="mdiPencil" :size="16" class="mr-2" />
+									{{ t('pettycash', 'common.edit') }}
+								</NcButton>
+							</div>
+						</td>
+					</tr>
+				</tbody>
+			</table>
+			<p v-else class="empty-hint" data-test="no-open-sheets">
+				{{ t('pettycash', 'sheets.noOpenSheets') }}
+			</p>
+		</NcNoteCard>
 
 		<NcNoteCard data-test="sheet-list">
 			<div class="table-container">
 				<table class="nc-table">
 					<thead>
 						<tr>
-							<th>{{ t('pettycash', 'sheets.title') }}</th>
-							<th>{{ t('pettycash', 'sheets.currency') }}</th>
-							<th>{{ t('pettycash', 'sheets.status') }}</th>
-							<th>{{ t('pettycash', 'sheets.transactionCount') }}</th>
-							<th>{{ t('pettycash', 'sheets.totals') }}</th>
-							<th>{{ t('pettycash', 'sheets.createdAt') }}</th>
-							<th>{{ t('pettycash', 'sheets.actions') }}</th>
+							<th scope="col">{{ t('pettycash', 'sheets.title') }}</th>
+							<th scope="col">{{ t('pettycash', 'sheets.currency') }}</th>
+							<th scope="col">{{ t('pettycash', 'sheets.status') }}</th>
+							<th scope="col">{{ t('pettycash', 'sheets.transactionCount') }}</th>
+							<th scope="col">{{ t('pettycash', 'sheets.totals') }}</th>
+							<th scope="col">{{ t('pettycash', 'sheets.createdAt') }}</th>
+							<th scope="col">{{ t('pettycash', 'sheets.actions') }}</th>
 						</tr>
 					</thead>
 					<tbody v-if="!sheetStore.loading">
-						<tr v-for="item in sheetStore.sheets" :key="item.id">
+						<tr v-for="item in sheetStore.sheets" :key="item.id" data-test="sheet-row">
 							<td>
 								<NcButton variant="tertiary" @click="goToDetail(item.id)" data-test="sheet-list-item">
 									{{ item.title }}
@@ -56,23 +127,34 @@ onMounted(() => { sheetStore.loadSheets() })
 							</td>
 							<td>{{ item.currency }}</td>
 							<td>
-								<StatusBadge :status="item.status" data-test="sheet-status" />
+								<StatusBadge :status="item.status" />
 							</td>
 							<td>{{ item.transactionCount }}</td>
 							<td>
 								<div class="totals-cell">
-									<span>{{ formatMoney(item.totals.current.amountMinor, item.totals.current.currency) }}</span>
+									<span>{{ formatMoney(item.totals.current) }}</span>
 									<small class="text-caption">{{ t('pettycash', 'sheets.currentTotal') }}</small>
 								</div>
 							</td>
 							<td>{{ new Date(item.createdAt).toLocaleDateString('fa-IR') }}</td>
 							<td>
 								<div class="actions-menu">
-									<NcButton variant="tertiary" @click="goToDetail(item.id)" data-test="view-sheet">
+									<NcButton
+										variant="tertiary"
+										:aria-label="t('pettycash', 'sheets.viewNamed', { name: item.title })"
+										@click="goToDetail(item.id)"
+										data-test="view-sheet"
+									>
 										<NcIconSvgWrapper :path="mdiEye" :size="16" class="mr-2" />
 										{{ t('pettycash', 'common.view') }}
 									</NcButton>
-									<NcButton v-if="item.status === 'OPEN'" variant="tertiary" @click="goToEdit(item.id)" data-test="edit-sheet">
+									<NcButton
+										v-if="item.status === 'OPEN'"
+										variant="tertiary"
+										:aria-label="t('pettycash', 'sheets.editNamed', { name: item.title })"
+										@click="goToEdit(item.id)"
+										data-test="edit-sheet"
+									>
 										<NcIconSvgWrapper :path="mdiPencil" :size="16" class="mr-2" />
 										{{ t('pettycash', 'common.edit') }}
 									</NcButton>
@@ -103,6 +185,11 @@ onMounted(() => { sheetStore.loadSheets() })
 	gap: 1rem;
 }
 
+.empty-hint {
+	margin: 0;
+	color: var(--color-text-maxcontrast);
+}
+
 .header-row {
 	display: flex;
 	justify-content: space-between;
@@ -118,7 +205,7 @@ onMounted(() => { sheetStore.loadSheets() })
 .nc-table {
 	width: 100%;
 	border-collapse: collapse;
-	font-size: 0.875rem;
+	font-size: var(--font-size-floor);
 }
 
 .nc-table th,

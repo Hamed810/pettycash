@@ -48,6 +48,9 @@ use OCA\PettyCash\Infrastructure\Persistence\Configuration\DbRoleAssignmentRepos
 use OCA\PettyCash\Infrastructure\Persistence\Expense\DbExpenseSheetRepository;
 use OCA\PettyCash\Infrastructure\Persistence\Expense\DbExpenseTransactionRepository;
 use OCA\PettyCash\Infrastructure\Persistence\Expense\DbTransactionRevisionRepository;
+use OCA\PettyCash\Infrastructure\Http\SheetPayloadFormatter;
+use OCA\PettyCash\Infrastructure\Http\TransactionPayloadFormatter;
+use OCA\PettyCash\Infrastructure\Persistence\Expense\SheetSummaryQuery;
 use OCA\PettyCash\Infrastructure\Persistence\Evidence\DbEvidenceRepository;
 use OCA\PettyCash\Infrastructure\Persistence\NextcloudTransactionManager;
 use OCA\PettyCash\Infrastructure\Persistence\Workflow\DbWorkflowDecisionRepository;
@@ -203,6 +206,37 @@ final class Application extends App implements IBootstrap
             );
         });
 
+        // The derived sheet-summary projection behind FR-062. Registered rather than auto-wired
+        // because it takes the connection, which the container cannot resolve on its own.
+        $context->registerService(SheetSummaryQuery::class, function ($c) {
+            return new SheetSummaryQuery($c->query(IDBConnection::class));
+        });
+
+        // The single source of truth for the sheet OCS payload, for the same reason the transaction
+        // formatter exists: the contract requires `totals`, and a private copy of this mapping in
+        // SheetController had already drifted away from it.
+        $context->registerService(SheetPayloadFormatter::class, function ($c) {
+            return new SheetPayloadFormatter(
+                $c->query(SheetSummaryQuery::class),
+                $c->query(ExpenseTransactionRepository::class),
+                $c->query(CurrencyRepository::class)
+            );
+        });
+
+        // The single source of truth for the transaction OCS payload. Both
+        // TransactionController and ReviewController delegate to it; see the class for why
+        // the formatting was not left duplicated in the controllers.
+        $context->registerService(TransactionPayloadFormatter::class, function ($c) {
+            return new TransactionPayloadFormatter(
+                $c->query(WorkflowDecisionRepository::class),
+                $c->query(EvidenceRepository::class),
+                $c->query(CostCenterRepository::class),
+                $c->query(CurrencyRepository::class),
+                $c->query(RoleAssignmentRepository::class),
+                $c->query(CurrentUser::class)
+            );
+        });
+
         $context->registerService(CommandResultRepository::class, function ($c) {
             return new DbCommandResultRepository(
                 $c->query(IDBConnection::class),
@@ -252,6 +286,8 @@ final class Application extends App implements IBootstrap
                 $c->query(TransactionRevisionRepository::class),
                 $c->query(CostCenterRepository::class),
                 $c->query(\OCA\PettyCash\Domain\Configuration\Repository\ExpenseTypeRepository::class),
+                $c->query(EvidenceRepository::class),
+                $c->query(PrivateFileStore::class),
                 $c->query(CurrentUser::class),
                 $c->query(TransactionManager::class)
             );
@@ -275,7 +311,8 @@ final class Application extends App implements IBootstrap
                 $c->query(AuditWriter::class),
                 $c->query(IdempotencyService::class),
                 $c->query(CurrentUser::class),
-                $c->query(CostCenterRepository::class)
+                $c->query(CostCenterRepository::class),
+                $c->query(ExpenseTransactionRepository::class)
             );
         });
 

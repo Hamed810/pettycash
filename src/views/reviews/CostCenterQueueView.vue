@@ -157,7 +157,7 @@ onMounted(() => {
 	margin: 0;
 	padding: 0;
 	list-style: none;
-	font-size: 14px;
+	font-size: var(--font-size-floor);
 }
 
 .breadcrumbs__item + .breadcrumbs__item::before {
@@ -204,7 +204,7 @@ onMounted(() => {
 .queue-table {
 	width: 100%;
 	border-collapse: collapse;
-	font-size: 14px;
+	font-size: var(--font-size-floor);
 }
 
 .queue-table th,
@@ -231,7 +231,7 @@ onMounted(() => {
 		display: block;
 		overflow-x: auto;
 		white-space: nowrap;
-		font-size: 12px;
+		font-size: var(--font-size-floor);
 	}
 
 	.queue-view__header {

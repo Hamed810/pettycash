@@ -93,7 +93,15 @@ export interface TransactionSummary {
 	stage: TransactionStage
 	status: TransactionStatus
 	finalOutcome: 'APPROVED' | 'REJECTED' | null
-	latestDecision: Decision
+	/**
+	 * Absent until a decision exists.
+	 *
+	 * `contracts/ocs-api.yaml` does not list `latestDecision` among `TransactionSummary`'s required
+	 * properties, so a fresh draft has none. Declaring it non-optional is what forces every reader to
+	 * either lie about it or cast, and a reader that lies renders a blank cell where a draft's "no
+	 * decision yet" belongs.
+	 */
+	latestDecision?: Decision
 	evidenceCount: number
 	version: number
 }
@@ -182,6 +190,39 @@ export interface Evidence {
 	uploadedBy: string
 	uploadedAt: string
 	deactivatedAt?: string
+}
+
+// Configuration types
+/**
+ * A cost center as `contracts/ocs-api.yaml`'s `CostCenter` describes it.
+ *
+ * A transaction is routed to the manager the server holds for this cost center (FR-032), so the
+ * client sends the identifier and never the manager: an invented or stale manager assignment would
+ * route the transaction to nobody.
+ */
+export interface CostCenter {
+	id: string
+	code: string
+	name: string
+	validFrom: string
+	validTo: string | null
+	active: boolean
+	version: number
+}
+
+/**
+ * An expense type as `contracts/ocs-api.yaml`'s `ExpenseType` describes it.
+ *
+ * `evidenceRequired` is what decides whether FR-023's evidence rule applies to a transaction, so it
+ * is part of the type rather than a separate lookup: reading it from anywhere else would let the
+ * form demand evidence the configuration does not require, or omit evidence it does.
+ */
+export interface ExpenseType {
+	id: string
+	title: string
+	evidenceRequired: boolean
+	active: boolean
+	version: number
 }
 
 // Account types

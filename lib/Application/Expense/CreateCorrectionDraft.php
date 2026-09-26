@@ -63,6 +63,14 @@ class CreateCorrectionDraft
             // Create new draft revision by cloning the active one
             $newRevision = $transaction->createCorrectionRevision((string)Uuid::random());
 
+            // `TransactionRevision::correction()` clones the business fields but builds a
+            // fresh aggregate, so the owning-transaction join key has to be carried
+            // over. `pettycash_transaction_revisions.transaction_id` is NOT NULL, and
+            // without it the save is refused with "Cannot persist a transaction
+            // revision without its owning transaction id" and the endpoint answers
+            // 403 for a correction the caller is entitled to make.
+            $newRevision->transactionDbId = $transaction->dbId;
+
             // Save the new revision
             $this->revisionRepository->save($newRevision);
 

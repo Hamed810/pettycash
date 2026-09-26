@@ -31,11 +31,11 @@ final class ContractFixtures
      * test happened to leave behind, which is order-dependent and hides real
      * behaviour.
      *
-     * @param 'draft'|'submitted'|'correction' $state
+     * @param 'draft'|'submitted'|'correction'|'usd'|'scope' $state
      */
     public static function prepare(string $state = 'draft'): void
     {
-        if (!in_array($state, ['draft', 'submitted', 'correction'], true)) {
+        if (!in_array($state, ['draft', 'submitted', 'correction', 'usd', 'scope'], true)) {
             throw new \RuntimeException("Unknown contract fixture state '{$state}'.");
         }
 
@@ -129,6 +129,56 @@ final class ContractFixtures
     public static function expenseTypeId(): string
     {
         return self::id('expenseTypeId');
+    }
+
+    /**
+     * The USD sheet, which the currency read-back assertions need because FR-021
+     * makes the sheet the authority for its transactions' currency and the rial
+     * default would hide a hardcoded currency.
+     */
+    public static function usdSheetId(): string
+    {
+        return self::id('usdSheetId');
+    }
+
+    public static function usdTransactionId(): string
+    {
+        return self::id('usdTransactionId');
+    }
+
+    /** The USD transaction's current optimistic-lock value. */
+    public static function usdTransactionVersion(): int
+    {
+        $version = self::all()['usdTransactionVersion'] ?? null;
+        if (!is_int($version)) {
+            throw new \RuntimeException(
+                'The USD fixture is only seeded in the `usd` state; call ContractFixtures::prepare(\'usd\') first.'
+            );
+        }
+
+        return $version;
+    }
+
+    /**
+     * A transaction inside a cost center the acting user holds no assignment for,
+     * used to prove the decision path refuses an out-of-scope decision server-side.
+     */
+    public static function outOfScopeTransactionId(): string
+    {
+        return self::id('otherTransactionId');
+    }
+
+    /** The out-of-scope transaction's current optimistic-lock value. */
+    public static function outOfScopeTransactionVersion(): int
+    {
+        $version = self::all()['otherTransactionVersion'] ?? null;
+        if (!is_int($version)) {
+            throw new \RuntimeException(
+                'The unmanaged cost center is only seeded in the `scope` state; call ContractFixtures::prepare(\'scope\') first.'
+            );
+        }
+
+        return $version;
     }
 
     /**

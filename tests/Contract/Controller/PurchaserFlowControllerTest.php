@@ -28,6 +28,179 @@ final class PurchaserFlowControllerTest extends TestCase
         ContractFixtures::prepare('draft');
     }
 
+    /**
+     * FR-062: the sheet response must carry `totals`, because the three stage-approved columns the
+     * requirement names have nowhere to be read from otherwise.
+     *
+     * `contracts/ocs-api.yaml` lists `totals` among `SheetSummary`'s required members, and
+     * `formatSheet()` never emitted it — so this asserts the whole `SheetTotals` schema is present
+     * and correctly typed on the sheet endpoints, not merely that a `totals` key exists.
+     */
+    public function testSheetResponseCarriesTheFullTotalsObject(): void
+    {
+        ContractFixtures::prepare('draft');
+
+        $response = $this->client->request('GET', '/ocs/v2.php/apps/pettycash/api/v1/sheets/' . ContractFixtures::sheetId());
+        $this->assertEquals(200, $response->getStatusCode());
+        $data = json_decode((string) $response->getBody(), true)['ocs']['data'] ?? [];
+
+        $this->assertArrayHasKey('totals', $data, 'SheetSummary requires totals');
+        $this->assertIsArray($data['totals']);
+
+        foreach ([
+            'current', 'submitted',
+            'effectiveApproved', 'effectiveRejected', 'effectivePending',
+            'costCenterApproved', 'seniorApproved', 'financeApproved',
+        ] as $figure) {
+            $this->assertArrayHasKey($figure, $data['totals'], "SheetTotals requires {$figure}");
+            $this->assertIsInt($data['totals'][$figure]['amountMinor'] ?? null, "{$figure}.amountMinor must be an integer");
+            $this->assertIsString($data['totals'][$figure]['currency'] ?? null, "{$figure}.currency must be a string");
+            $this->assertIsInt($data['totals'][$figure]['minorUnit'] ?? null, "{$figure}.minorUnit must be an integer");
+        }
+    }
+
+    /**
+     * The projection must read the sheet's real transactions, not answer zero.
+     *
+     * The fixture seeds one transaction of 100,000 minor units with no decisions, so the sheet's
+     * current total is 100,000 and the whole of it is pending — a transaction nobody has decided
+     * yet. A projection that returned zeros, or that counted the transaction as approved, would both
+     * satisfy a test that only checked the key was present.
+     */
+    public function testSheetTotalsSumTheRealActiveRevisions(): void
+    {
+        ContractFixtures::prepare('draft');
+
+        $response = $this->client->request('GET', '/ocs/v2.php/apps/pettycash/api/v1/sheets/' . ContractFixtures::sheetId());
+        $totals = json_decode((string) $response->getBody(), true)['ocs']['data']['totals'] ?? [];
+
+        $this->assertSame(
+            100000,
+            $totals['current']['amountMinor'] ?? null,
+            'The current total must sum the active revisions the sheet actually holds'
+        );
+        $this->assertSame(
+            100000,
+            $totals['effectivePending']['amountMinor'] ?? null,
+            'An undecided transaction is pending, so the whole amount is pending'
+        );
+        $this->assertSame(0, $totals['effectiveApproved']['amountMinor'] ?? null, 'Nothing is approved yet');
+        $this->assertSame(0, $totals['effectiveRejected']['amountMinor'] ?? null, 'Nothing is rejected yet');
+        foreach (['costCenterApproved', 'seniorApproved', 'financeApproved'] as $stage) {
+            $this->assertSame(0, $totals[$stage]['amountMinor'] ?? null, "{$stage} must be zero before any decision");
+        }
+    }
+
+    /**
+     * `minorUnit` has to come from the configured currency, because a reader divides by ten to the
+     * power of it. The fixture sheet is USD with two minor digits, so a hardcoded 0 or a fixed /100
+     * would misstate every figure on the sheet.
+     */
+    public function testSheetTotalsReportTheConfiguredCurrencyScale(): void
+    {
+        ContractFixtures::prepare('draft');
+
+        $response = $this->client->request('GET', '/ocs/v2.php/apps/pettycash/api/v1/sheets/' . ContractFixtures::sheetId());
+        $data = json_decode((string) $response->getBody(), true)['ocs']['data'] ?? [];
+
+        $currency = $data['currency'] ?? null;
+        $this->assertIsString($currency);
+
+        foreach ($data['totals'] as $figure => $money) {
+            $this->assertSame($currency, $money['currency'], "{$figure} must be denominated in the sheet's own currency");
+        }
+
+        $expected = $currency === 'USD' ? 2 : 0;
+        $this->assertSame(
+            $expected,
+            $data['totals']['current']['minorUnit'] ?? null,
+            'minorUnit must be the configured value for the sheet currency, not a guess'
+        );
+    }
+
+    /**
+     * `submitted` is a snapshot taken at first submission, not a live sum — that is the only reason
+     * it is a separate figure from `current`. Before submission it is zero; afterwards it is the
+     * amount that was submitted.
+     */
+    public function testSubmittedTotalIsASnapshotNotALiveSum(): void
+    {
+        ContractFixtures::prepare('draft');
+
+        $before = json_decode(
+            (string) $this->client->request('GET', '/ocs/v2.php/apps/pettycash/api/v1/sheets/' . ContractFixtures::sheetId())->getBody(),
+            true
+        )['ocs']['data']['totals'] ?? [];
+        $this->assertSame(0, $before['submitted']['amountMinor'] ?? null, 'A draft has submitted nothing');
+        $this->assertSame(100000, $before['current']['amountMinor'] ?? null, 'The draft still has a current total');
+
+        $submit = $this->client->request(
+            'POST',
+            '/ocs/v2.php/apps/pettycash/api/v1/sheets/' . ContractFixtures::sheetId() . '/submit',
+            [
+                'headers' => ['X-PettyCash-Command-ID' => ContractFixtures::commandId()],
+                'json' => ['expectedVersion' => ContractFixtures::sheetVersion()],
+            ]
+        );
+        $this->assertEquals(200, $submit->getStatusCode());
+
+        $after = json_decode(
+            (string) $this->client->request('GET', '/ocs/v2.php/apps/pettycash/api/v1/sheets/' . ContractFixtures::sheetId())->getBody(),
+            true
+        )['ocs']['data']['totals'] ?? [];
+
+        $this->assertSame(
+            100000,
+            $after['submitted']['amountMinor'] ?? null,
+            'Submission must record the submitted amount as a snapshot'
+        );
+    }
+
+    /**
+     * The sheet list carries the same shape as the sheet detail, so `index` cannot answer without
+     * totals where `show` answers with them.
+     */
+    public function testSheetListCarriesTotalsToo(): void
+    {
+        ContractFixtures::prepare('draft');
+
+        $response = $this->client->request('GET', '/ocs/v2.php/apps/pettycash/api/v1/sheets');
+        $items = json_decode((string) $response->getBody(), true)['ocs']['data']['items'] ?? [];
+
+        $this->assertNotEmpty($items, 'The fixture should seed at least one sheet');
+        foreach ($items as $item) {
+            $this->assertArrayHasKey('totals', $item, 'Every SheetSummary in a page must carry totals');
+        }
+
+        $withTheFixtureSheet = null;
+        foreach ($items as $item) {
+            if (($item['id'] ?? null) === ContractFixtures::sheetId()) {
+                $withTheFixtureSheet = $item;
+            }
+        }
+        $this->assertNotNull($withTheFixtureSheet, 'The fixture sheet should appear in the list');
+        $this->assertSame(
+            100000,
+            $withTheFixtureSheet['totals']['current']['amountMinor'] ?? null,
+            'The listed sheet must total its real transactions, not zero'
+        );
+    }
+
+    /**
+     * The contract does not declare `accountId` on `SheetSummary`, and the formatter used to emit
+     * it. A field the schema does not describe is one nothing can be tested against, so it is
+     * dropped rather than kept as an extra.
+     */
+    public function testSheetSummaryCarriesNoUndeclaredAccountId(): void
+    {
+        ContractFixtures::prepare('draft');
+
+        $response = $this->client->request('GET', '/ocs/v2.php/apps/pettycash/api/v1/sheets/' . ContractFixtures::sheetId());
+        $data = json_decode((string) $response->getBody(), true)['ocs']['data'] ?? [];
+
+        $this->assertArrayNotHasKey('accountId', $data, 'SheetSummary does not declare accountId');
+    }
+
     // ===== SHEETS =====
 
     public function testCreateSheetReturns201WithSheetDetail(): void
@@ -354,6 +527,298 @@ final class PurchaserFlowControllerTest extends TestCase
         } finally {
             @unlink($tempFile);
         }
+    }
+
+    // ===== CURRENCY READ-BACK (FR-021) =====
+
+    /**
+     * A revision's `amount_minor` is only meaningful beside a currency, and FR-021
+     * makes the sheet the authority for that currency. Reading a USD sheet's
+     * transaction back must therefore report USD, not the rial default: a hardcoded
+     * currency turns a 10.00 USD expense into a ten-thousand-rial one and corrupts
+     * every total, settlement, and export derived from it.
+     */
+    public function testRevisionReadsBackTheSheetCurrencyRatherThanRial(): void
+    {
+        ContractFixtures::prepare('usd');
+
+        $response = $this->client->request(
+            'GET',
+            '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::usdTransactionId()
+        );
+
+        $this->assertEquals(200, $response->getStatusCode(), 'GET /transactions/{id} should return 200 OK');
+
+        $body = json_decode((string) $response->getBody(), true);
+        $amount = $body['ocs']['data']['activeRevision']['amount'] ?? null;
+
+        $this->assertIsArray($amount, 'The transaction detail should carry the revision amount');
+        $this->assertSame(
+            'USD',
+            $amount['currency'] ?? null,
+            'A revision read back from a USD sheet must report the sheet currency (FR-021)'
+        );
+        $this->assertSame(
+            1000,
+            $amount['amountMinor'] ?? null,
+            'The stored minor units must be reported unchanged alongside their own currency'
+        );
+        $this->assertSame(
+            2,
+            $amount['minorUnit'] ?? null,
+            'The fraction digits reported for USD must be the configured two, not the rial default of zero'
+        );
+    }
+
+    /**
+     * The rial sheet must keep reporting rial, so resolving the currency from the
+     * sheet cannot degenerate into always answering with whatever the second
+     * fixture happens to use.
+     */
+    public function testRialSheetStillReadsBackRial(): void
+    {
+        ContractFixtures::prepare('draft');
+
+        $response = $this->client->request(
+            'GET',
+            '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId()
+        );
+
+        $this->assertEquals(200, $response->getStatusCode(), 'GET /transactions/{id} should return 200 OK');
+
+        $body = json_decode((string) $response->getBody(), true);
+        $amount = $body['ocs']['data']['activeRevision']['amount'] ?? null;
+
+        $this->assertIsArray($amount, 'The transaction detail should carry the revision amount');
+        $this->assertSame(
+            'IRR',
+            $amount['currency'] ?? null,
+            'A revision read back from a rial sheet must report rial'
+        );
+    }
+
+    // ===== DRAFT DELETE (FR-025, FR-058) =====
+
+    /**
+     * A successful delete must actually remove the transaction.
+     *
+     * `TransactionService::deleteTransaction()` used to validate ownership, the open
+     * sheet, and the optimistic lock, then only filter the sheet's in-memory
+     * transaction collection and re-save it. No `DELETE` reached
+     * `pettycash_transactions`, so the endpoint answered `204 No Content` while the
+     * expense remained fully present in the database and in every later total.
+     */
+    public function testDeletingADraftTransactionRemovesItFromTheDatabase(): void
+    {
+        ContractFixtures::prepare('draft');
+
+        $delete = $this->client->request(
+            'DELETE',
+            '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId(),
+            [
+                'headers' => ['X-PettyCash-Command-ID' => ContractFixtures::commandId()],
+                'json' => ['expectedVersion' => ContractFixtures::transactionVersion()],
+            ]
+        );
+
+        $this->assertSame(
+            204,
+            $delete->getStatusCode(),
+            'DELETE /transactions/{id} on a draft should answer 204 No Content'
+        );
+
+        $readBack = $this->client->request(
+            'GET',
+            '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId()
+        );
+
+        $this->assertSame(
+            404,
+            $readBack->getStatusCode(),
+            'A deleted draft must no longer be readable; a 204 over a record that is still there is a no-op delete'
+        );
+    }
+
+    /**
+     * A submitted transaction must not be deletable even by its owner.
+     *
+     * A returned transaction sits in an open sheet again, so the open-sheet check
+     * alone would let a purchaser erase submitted business history — which
+     * Constitution IV forbids. This guards the draft-state restriction independently
+     * of the delete actually working.
+     */
+    public function testDeletingASubmittedTransactionIsRefused(): void
+    {
+        ContractFixtures::prepare('submitted');
+
+        $response = $this->client->request(
+            'DELETE',
+            '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId(),
+            [
+                'headers' => ['X-PettyCash-Command-ID' => ContractFixtures::commandId()],
+                'json' => ['expectedVersion' => ContractFixtures::transactionVersion()],
+            ]
+        );
+
+        $this->assertContains(
+            $response->getStatusCode(),
+            [400, 403, 409, 422],
+            'A transaction that has been submitted must not be deletable, whatever the caller'
+        );
+
+        $readBack = $this->client->request(
+            'GET',
+            '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId()
+        );
+
+        $this->assertSame(
+            200,
+            $readBack->getStatusCode(),
+            'The refused delete must leave the submitted transaction intact'
+        );
+    }
+
+    // ===== TRANSACTION PAYLOAD CONFORMANCE (contracts/ocs-api.yaml) =====
+
+    /**
+     * The response must carry the contract's `TransactionDetail` members.
+     *
+     * `contracts/ocs-api.yaml` defines `TransactionSummary` (required: id, sheetId,
+     * activeRevision, stage, status, evidenceCount, version) and `TransactionDetail` (adding
+     * allowedActions, decisions, evidence). Both controllers used to carry their own private
+     * formatter and both had drifted: the key was `revision` rather than `activeRevision`, and
+     * `ReviewController` emitted flat `costCenterId`/`expenseTypeTitle` scalars instead of the
+     * `EntitySnapshot` objects the contract requires.
+     *
+     * The frontend is written to the contract — `CostCenterQueueView.vue` and
+     * `SheetDetailView.vue` both read `item.activeRevision.costCenter.name` — so a response that
+     * does not match makes those views dereference `undefined` on every load. Asserting the
+     * shape is the only way the suite can catch that, because the status code is 200 either way.
+     */
+    public function testTransactionDetailCarriesTheContractShape(): void
+    {
+        ContractFixtures::prepare('submitted');
+
+        $response = $this->client->request('GET', '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId());
+        $this->assertEquals(200, $response->getStatusCode(), 'GET /transactions/{id} should return 200 OK');
+
+        $data = json_decode((string) $response->getBody(), true)['ocs']['data'] ?? [];
+
+        foreach (['id', 'sheetId', 'activeRevision', 'stage', 'status', 'evidenceCount', 'version'] as $required) {
+            $this->assertArrayHasKey(
+                $required,
+                $data,
+                "TransactionSummary requires `{$required}`; the response must satisfy contracts/ocs-api.yaml"
+            );
+        }
+
+        foreach (['allowedActions', 'decisions', 'evidence'] as $detailMember) {
+            $this->assertArrayHasKey(
+                $detailMember,
+                $data,
+                "TransactionDetail requires `{$detailMember}`"
+            );
+        }
+
+        $revision = $data['activeRevision'];
+        $this->assertIsArray($revision['costCenter'] ?? null, 'Revision.costCenter must be an EntitySnapshot object');
+        $this->assertArrayHasKey('name', $revision['costCenter'], 'EntitySnapshot.name is required');
+        $this->assertIsArray($revision['expenseType'] ?? null, 'Revision.expenseType must be an EntitySnapshot object');
+        $this->assertArrayHasKey('name', $revision['expenseType'], 'EntitySnapshot.name is required');
+
+        foreach (['amountMinor', 'currency', 'minorUnit'] as $moneyMember) {
+            $this->assertArrayHasKey($moneyMember, $revision['amount'] ?? [], "Money requires `{$moneyMember}`");
+        }
+
+        // The undeclared flat shapes must be gone, or the drift can silently return.
+        $this->assertArrayNotHasKey('revision', $data, 'The key is `activeRevision`; the flat `revision` shape is not in the contract');
+        $this->assertArrayNotHasKey('ownerId', $data, 'TransactionSummary does not declare `ownerId`');
+        $this->assertArrayNotHasKey('costCenterId', $revision, 'Revision declares `costCenter`, not the scalar `costCenterId`');
+        $this->assertArrayNotHasKey('expenseTypeTitle', $revision, 'Revision declares `expenseType`, not the scalar `expenseTypeTitle`');
+    }
+
+    /**
+     * The queue endpoints answer `TransactionSummary`, which carries no decisions or evidence.
+     *
+     * Asserting the summary shape on a queue keeps the two response kinds from being conflated,
+     * which is how `PriorDecisionHistory` came to have nothing to render: the review detail
+     * endpoint is the only one that returns a `decisions` array.
+     */
+    public function testQueueReturnsTransactionSummaryItems(): void
+    {
+        ContractFixtures::prepare('scope');
+
+        $response = $this->client->request('GET', '/ocs/v2.php/apps/pettycash/api/v1/queues/cost-center');
+        $this->assertEquals(200, $response->getStatusCode(), 'GET /queues/cost-center should return 200 OK');
+
+        $items = json_decode((string) $response->getBody(), true)['ocs']['data']['items'] ?? [];
+        $this->assertNotEmpty($items, 'The fixture assigns the acting user as CC-100 manager, so the queue is not empty');
+
+        foreach ($items as $item) {
+            $this->assertArrayHasKey('activeRevision', $item, 'Queue items must expose `activeRevision`');
+            $this->assertArrayHasKey('evidenceCount', $item, 'Queue items must expose `evidenceCount`');
+            $this->assertArrayNotHasKey('decisions', $item, 'TransactionSummary does not carry `decisions`');
+            $this->assertArrayNotHasKey('revision', $item, 'The key is `activeRevision`');
+        }
+    }
+
+    // ===== SHEET READ MODEL HONESTY =====
+
+    /**
+     * A sheet must not report a transaction count that contradicts its own status.
+     *
+     * `SheetController::formatSheet()` counted from the `ExpenseSheet` aggregate, which
+     * `DbExpenseSheetRepository` does not compose on read, so every sheet reported
+     * `transactionCount: 0`. A submitted sheet therefore answered `200` with
+     * `status: COST_CENTER` alongside a count of zero — a response that contradicts itself and
+     * understates the purchaser's record. The count now comes from the repository.
+     */
+    public function testSheetDetailReportsItsRealTransactionCount(): void
+    {
+        ContractFixtures::prepare('draft');
+
+        $response = $this->client->request('GET', '/ocs/v2.php/apps/pettycash/api/v1/sheets/' . ContractFixtures::sheetId());
+        $this->assertEquals(200, $response->getStatusCode(), 'GET /sheets/{id} should return 200 OK');
+
+        $data = json_decode((string) $response->getBody(), true)['ocs']['data'] ?? [];
+
+        // The fixture seeds exactly one transaction on the fixture sheet.
+        $this->assertSame(
+            1,
+            $data['transactionCount'] ?? null,
+            'A sheet holding one seeded transaction must report transactionCount 1, not 0'
+        );
+    }
+
+    /**
+     * Submitting a sheet must raise the count, not leave it at the draft figure.
+     *
+     * The count is derived rather than stored, so this guards the derivation against a future
+     * change that reads a stale snapshot instead of the live rows.
+     */
+    public function testSheetTransactionCountSurvivesSubmission(): void
+    {
+        ContractFixtures::prepare('draft');
+
+        $submit = $this->client->request(
+            'POST',
+            '/ocs/v2.php/apps/pettycash/api/v1/sheets/' . ContractFixtures::sheetId() . '/submit',
+            [
+                'headers' => ['X-PettyCash-Command-ID' => ContractFixtures::commandId()],
+                'json' => ['expectedVersion' => ContractFixtures::sheetVersion()],
+            ]
+        );
+        $this->assertEquals(200, $submit->getStatusCode(), 'The fixture sheet should submit');
+
+        $response = $this->client->request('GET', '/ocs/v2.php/apps/pettycash/api/v1/sheets/' . ContractFixtures::sheetId());
+        $data = json_decode((string) $response->getBody(), true)['ocs']['data'] ?? [];
+
+        $this->assertSame('COST_CENTER', $data['status'] ?? null, 'The sheet should now be in cost-center review');
+        $this->assertSame(
+            1,
+            $data['transactionCount'] ?? null,
+            'A submitted sheet must still report the transaction it carries'
+        );
     }
 
     // ===== HELPER METHODS =====

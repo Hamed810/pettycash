@@ -68,6 +68,30 @@ final class OcsErrorMapper
         return $this->respond(Http::STATUS_NOT_FOUND, 'NOT_FOUND', $message, $commandId);
     }
 
+    /**
+     * A malformed request rather than an invalid field value.
+     *
+     * Distinct from `validation()` on purpose: a missing required header means the
+     * request never carried the information the endpoint needs, which is a 400, while
+     * a present-but-unacceptable value is a 422. Both still answer with the `Error`
+     * schema, so the frontend client reads them the same way.
+     *
+     * @param array<string, list<string>> $fieldErrors
+     */
+    public function badRequest(
+        string $message,
+        ?string $commandId = null,
+        array $fieldErrors = [],
+    ): DataResponse {
+        return $this->respond(
+            Http::STATUS_BAD_REQUEST,
+            'BAD_REQUEST',
+            $message,
+            $commandId,
+            $fieldErrors,
+        );
+    }
+
     public function forbidden(string $message, ?string $commandId = null): DataResponse
     {
         return $this->respond(Http::STATUS_FORBIDDEN, 'FORBIDDEN', $message, $commandId);

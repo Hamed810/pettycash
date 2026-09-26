@@ -5,7 +5,6 @@ import type { Evidence } from '@/types/api'
 import NcButton from '@nextcloud/vue/components/NcButton'
 import NcChip from '@nextcloud/vue/components/NcChip'
 import NcIconSvgWrapper from '@nextcloud/vue/components/NcIconSvgWrapper'
-import NcListItem from '@nextcloud/vue/components/NcListItem'
 import NcNoteCard from '@nextcloud/vue/components/NcNoteCard'
 import { mdiImage, mdiFilePdfBox, mdiFileDocument, mdiFile, mdiDownload, mdiDelete, mdiFileOutline } from '@mdi/js'
 import { t } from '@nextcloud/l10n'
@@ -26,6 +25,11 @@ function formatFileSize(bytes: number) {
 	if (bytes < 1024) return bytes + ' B'
 	if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
 	return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
+}
+
+function formatTimestamp(value: string): string {
+	const parsed = new Date(value)
+	return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString('fa-IR')
 }
 
 function getMediaTypeIcon(mediaType: string) {
@@ -69,50 +73,84 @@ async function handleDelete(ev: Evidence) {
 
 <template>
 	<div class="evidence-list" dir="rtl" data-test="evidence-list">
-		<div v-if="props.evidence.length">
-			<NcListItem v-for="ev in props.evidence" :key="ev.id" class="evidence-item" data-test="evidence-list-item">
-				<template #avatar>
-					<NcIconSvgWrapper :path="getMediaTypeIcon(ev.mediaType)" :size="24" :color="ev.active ? 'primary' : 'error'" />
-				</template>
-				<template #title>
-					<div class="evidence-title">
-						<span class="evidence-name">{{ ev.name }}</span>
-						<div class="evidence-meta">
-							<span>{{ ev.mediaType }}</span>
-							<span>·</span>
-							<span>{{ formatFileSize(ev.sizeBytes) }}</span>
-							<span>·</span>
-							<span>{{ new Date(ev.uploadedAt).toLocaleString('fa-IR') }}</span>
-						</div>
+		<!--
+			A plain list rather than `NcListItem`.
+
+			`NcListItem` was previously used with `avatar` / `title` / `subtitle` slots, none of which
+			exist in `@nextcloud/vue` 9.x — its slots are `icon`, `name`, `subname`, `details`,
+			`indicator` and `actions` — so every evidence row rendered as an empty shell and a purchaser
+			looking at a transaction's receipt saw nothing at all. Its remaining shape is wrong for this
+			too: it always renders its row as an anchor, which for a non-navigable file is a focusable
+			link to nowhere, and it puts its actions behind a hover-revealed three-dot menu, so the
+			removal affordance FR-058 requires is hidden until the pointer happens to be over the row.
+		-->
+		<ul v-if="props.evidence.length" class="evidence-items">
+			<li v-for="ev in props.evidence" :key="ev.id" class="evidence-item" data-test="evidence-list-item">
+				<NcIconSvgWrapper
+					:path="getMediaTypeIcon(ev.mediaType)"
+					:size="24"
+					:color="ev.active ? 'primary' : 'error'"
+					class="evidence-item__icon"
+				/>
+
+				<div class="evidence-item__body">
+					<span class="evidence-item__name" data-test="evidence-name">{{ ev.name }}</span>
+					<div class="evidence-item__meta">
+						<span data-test="evidence-type">{{ ev.mediaType }}</span>
+						<span aria-hidden="true">·</span>
+						<span data-test="evidence-size">{{ formatFileSize(ev.sizeBytes) }}</span>
+						<span aria-hidden="true">·</span>
+						<span data-test="evidence-upload-time">{{ formatTimestamp(ev.uploadedAt) }}</span>
 					</div>
-				</template>
-				<template #subtitle>
-					<div class="evidence-actions">
-						<NcChip data-test="evidence-active-badge">
-							{{ ev.active ? t('pettycash', 'evidence.active') : t('pettycash', 'evidence.inactive') }}
-						</NcChip>
-						<NcButton v-if="ev.active && props.isDraft" variant="tertiary" @click="handleDownload(ev)" data-test="download-evidence-btn">
-							<NcIconSvgWrapper :path="mdiDownload" :size="16" />
-						</NcButton>
-						<NcButton v-if="ev.active && props.isDraft" variant="tertiary" @click="handleDelete(ev)" :disabled="deleting === ev.id" :loading="deleting === ev.id" data-test="delete-evidence-btn">
-							<NcIconSvgWrapper :path="mdiDelete" :size="16" />
-						</NcButton>
-						<NcChip v-if="!ev.active" variant="error" data-test="inactive-badge">
-							{{ t('pettycash', 'evidence.inactive') }}
-						</NcChip>
-						<div v-if="!ev.active" class="evidence-deactivation-info">
-							<span v-if="ev.deactivatedAt">{{ t('pettycash', 'evidence.deactivatedAt') }} {{ new Date(ev.deactivatedAt).toLocaleString('fa-IR') }}</span>
-						</div>
+					<!-- FR-059: a deactivated file is retained, and its history stays viewable, so the
+					     time it was withdrawn is part of what the row says. Without a timestamp the
+					     row would say only that it is inactive, which is not the same information. -->
+					<div v-if="!ev.active" class="evidence-item__deactivation" data-test="deactivation-info">
+						<span v-if="ev.deactivatedAt">
+							{{ t('pettycash', 'evidence.deactivatedAt') }} {{ formatTimestamp(ev.deactivatedAt) }}
+						</span>
+						<span v-else>{{ t('pettycash', 'evidence.deactivatedAtUnknown') }}</span>
 					</div>
-				</template>
-			</NcListItem>
-		</div>
-		<div v-else class="evidence-empty">
+				</div>
+
+				<div class="evidence-item__actions">
+					<NcChip :variant="ev.active ? 'success' : 'error'" data-test="evidence-active-badge">
+						{{ ev.active ? t('pettycash', 'evidence.active') : t('pettycash', 'evidence.inactive') }}
+					</NcChip>
+					<!-- FR-060: an authorized viewer must be able to download evidence and see its state,
+					     so download is offered whenever the item is active — including to a reviewer
+					     looking at a submitted transaction, which is the case download used to refuse. -->
+					<NcButton
+						v-if="ev.active"
+						variant="tertiary"
+						:aria-label="t('pettycash', 'evidence.downloadNamed', { name: ev.name })"
+						@click="handleDownload(ev)"
+						data-test="download-evidence-btn"
+					>
+						<NcIconSvgWrapper :path="mdiDownload" :size="16" />
+					</NcButton>
+					<!-- FR-058: removal belongs to the purchaser and only before submission. -->
+					<NcButton
+						v-if="ev.active && props.isDraft"
+						variant="tertiary"
+						:aria-label="t('pettycash', 'evidence.removeNamed', { name: ev.name })"
+						:disabled="deleting === ev.id"
+						:loading="deleting === ev.id"
+						@click="handleDelete(ev)"
+						data-test="delete-evidence-btn"
+					>
+						<NcIconSvgWrapper :path="mdiDelete" :size="16" />
+					</NcButton>
+				</div>
+			</li>
+		</ul>
+
+		<div v-else class="evidence-empty" data-test="evidence-empty">
 			<NcIconSvgWrapper :path="mdiFileOutline" :size="48" class="evidence-empty-icon" />
 			<p>{{ t('pettycash', 'evidence.none') }}</p>
 		</div>
 
-		<NcNoteCard v-if="error" type="error">
+		<NcNoteCard v-if="error" type="error" role="alert" data-test="evidence-error">
 			{{ error }}
 		</NcNoteCard>
 	</div>
@@ -125,42 +163,64 @@ async function handleDelete(ev: Evidence) {
 	gap: 0.5rem;
 }
 
-.evidence-item {
-	--nc-list-item-gap: 1rem;
+.evidence-items {
+	display: flex;
+	flex-direction: column;
+	gap: 0.5rem;
+	margin: 0;
+	padding: 0;
+	list-style: none;
 }
 
-.evidence-title {
+.evidence-item {
+	display: flex;
+	align-items: center;
+	gap: 1rem;
+	padding: 0.75rem;
+	background-color: var(--nc-color-surface-container-low, #fafafa);
+	border-radius: 4px;
+}
+
+.evidence-item__icon {
+	flex-shrink: 0;
+}
+
+.evidence-item__body {
 	display: flex;
 	flex-direction: column;
 	gap: 0.25rem;
+	flex: 1;
+	min-width: 0;
 }
 
-.evidence-name {
+.evidence-item__name {
 	font-weight: 500;
+	overflow-wrap: anywhere;
 }
 
-.evidence-meta {
+.evidence-item__meta {
 	display: flex;
 	align-items: center;
 	gap: 0.5rem;
-	font-size: 0.75rem;
+	font-size: var(--font-size-floor);
 	color: var(--nc-color-on-surface-variant, #616161);
 	flex-wrap: wrap;
 }
 
-.evidence-actions {
-	display: flex;
-	align-items: center;
-	gap: 0.5rem;
-	flex-wrap: wrap;
-}
-
-.evidence-deactivation-info {
+.evidence-item__deactivation {
 	display: flex;
 	flex-direction: column;
 	gap: 0.125rem;
-	font-size: 0.75rem;
+	font-size: var(--font-size-floor);
 	color: var(--nc-color-on-surface-variant, #616161);
+}
+
+.evidence-item__actions {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	flex-shrink: 0;
+	flex-wrap: wrap;
 }
 
 .evidence-empty {

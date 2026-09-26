@@ -9,6 +9,7 @@ import NcNoteCard from '@nextcloud/vue/components/NcNoteCard'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import { mdiPlus, mdiEye } from '@mdi/js'
 import { t } from '@nextcloud/l10n'
+import { formatMoney } from '@/utils/money'
 
 const route = useRoute()
 const router = useRouter()
@@ -16,14 +17,15 @@ const transactionStore = useTransactionStore()
 
 const sheetId = computed(() => route.params.sheetId as string)
 
-function formatMoney(amountMinor: number, currency: string) {
-	return new Intl.NumberFormat('fa-IR', { style: 'currency', currency, minimumFractionDigits: 0 }).format(amountMinor / 100)
-}
-
 function goToCreate() { router.push({ name: 'transaction-create', params: { sheetId: sheetId.value } }) }
 function goToDetail(transactionId: string) { router.push({ name: 'transaction-detail', params: { id: transactionId } }) }
 
-onMounted(() => { transactionStore.loadTransactions(sheetId.value) })
+onMounted(() => {
+	// The store records the failure in `error`, which this view renders in its alert. A mount-time
+	// load has no caller to react to the rejection, so it is absorbed here rather than surfacing as
+	// an unhandled promise rejection in the user's console.
+	transactionStore.loadTransactions(sheetId.value).catch(() => undefined)
+})
 </script>
 
 <template>
@@ -35,7 +37,12 @@ onMounted(() => { transactionStore.loadTransactions(sheetId.value) })
 					{ text: t('pettycash', 'transactions.list') }
 				]"
 			/>
-			<NcButton variant="primary" @click="goToCreate" data-test="create-transaction-btn">
+			<NcButton
+				variant="primary"
+				:aria-label="t('pettycash', 'transactions.add')"
+				@click="goToCreate"
+				data-test="create-transaction-btn"
+			>
 				<NcIconSvgWrapper :path="mdiPlus" :size="16" class="mr-2" />
 				{{ t('pettycash', 'transactions.add') }}
 			</NcButton>
@@ -43,36 +50,61 @@ onMounted(() => { transactionStore.loadTransactions(sheetId.value) })
 
 		<NcNoteCard data-test="transaction-list">
 			<div class="table-container">
-				<table class="nc-table" data-test="transaction-list">
+				<table class="nc-table" data-test="transaction-table">
 					<thead>
 						<tr>
-							<th>{{ t('pettycash', 'transactions.expenseDate') }}</th>
-							<th>{{ t('pettycash', 'transactions.amount') }}</th>
-							<th>{{ t('pettycash', 'transactions.costCenter') }}</th>
-							<th>{{ t('pettycash', 'transactions.expenseType') }}</th>
-							<th>{{ t('pettycash', 'transactions.stage') }}</th>
-							<th>{{ t('pettycash', 'transactions.status') }}</th>
-							<th>{{ t('pettycash', 'transactions.evidenceCount') }}</th>
-							<th>{{ t('pettycash', 'transactions.actions') }}</th>
+							<th scope="col">{{ t('pettycash', 'transactions.expenseDate') }}</th>
+							<th scope="col">{{ t('pettycash', 'transactions.amount') }}</th>
+							<th scope="col">{{ t('pettycash', 'transactions.costCenter') }}</th>
+							<th scope="col">{{ t('pettycash', 'transactions.expenseType') }}</th>
+							<th scope="col">{{ t('pettycash', 'transactions.stage') }}</th>
+							<th scope="col">{{ t('pettycash', 'transactions.status') }}</th>
+							<!-- The latest decision is what tells a purchaser why a transaction is where
+							     it is. The field arrives on every row and was never rendered, so a sheet
+							     in review could only be understood by opening each transaction. -->
+							<th scope="col">{{ t('pettycash', 'transactions.latestDecision') }}</th>
+							<th scope="col">{{ t('pettycash', 'transactions.evidenceCount') }}</th>
+							<th scope="col">{{ t('pettycash', 'transactions.actions') }}</th>
 						</tr>
 					</thead>
 					<tbody v-if="!transactionStore.loading">
-						<tr v-for="item in transactionStore.transactions" :key="item.id">
+						<tr v-for="item in transactionStore.transactions" :key="item.id" data-test="transaction-row">
 							<td>{{ new Date(item.activeRevision.expenseDate).toLocaleDateString('fa-IR') }}</td>
-							<td>{{ formatMoney(item.activeRevision.amount.amountMinor, item.activeRevision.amount.currency) }}</td>
+							<td>{{ formatMoney(item.activeRevision.amount) }}</td>
 							<td>{{ item.activeRevision.costCenter.name }}</td>
 							<td>{{ item.activeRevision.expenseType.name }}</td>
-							<td>
+							<td data-test="transaction-stage">
 								<NcChip>
 									{{ t('pettycash', 'stage.' + item.stage.toLowerCase()) }}
 								</NcChip>
 							</td>
 							<td>
-								<StatusBadge :status="item.status" data-test="transaction-status" />
+								<StatusBadge :status="item.status" />
+							</td>
+							<td data-test="latest-decision">
+								<template v-if="item.latestDecision">
+									<span class="latest-decision__decision">
+										{{ t('pettycash', 'decision.' + item.latestDecision.decision.toLowerCase()) }}
+									</span>
+									<!-- FR-052: the actor is a snapshot, so the name shown is the one the
+									     decision was made under, not the account's current name. -->
+									<small class="latest-decision__actor">
+										{{ item.latestDecision.actor.displayName }}
+										({{ t('pettycash', 'stage.' + item.latestDecision.stage.toLowerCase()) }})
+									</small>
+								</template>
+								<small v-else class="latest-decision__actor">
+									{{ t('pettycash', 'transactions.noDecision') }}
+								</small>
 							</td>
 							<td data-test="evidence-count">{{ item.evidenceCount }}</td>
 							<td>
-								<NcButton variant="tertiary" @click="goToDetail(item.id)" data-test="view-transaction">
+								<NcButton
+									variant="tertiary"
+									:aria-label="t('pettycash', 'transactions.viewDetails')"
+									@click="goToDetail(item.id)"
+									data-test="view-transaction"
+								>
 									<NcIconSvgWrapper :path="mdiEye" :size="16" />
 								</NcButton>
 							</td>
@@ -80,7 +112,7 @@ onMounted(() => { transactionStore.loadTransactions(sheetId.value) })
 					</tbody>
 					<tbody v-else>
 						<tr>
-							<td :colspan="8" class="text-center py-8">Loading...</td>
+							<td :colspan="9" class="text-center py-8">Loading...</td>
 						</tr>
 					</tbody>
 				</table>
@@ -116,7 +148,7 @@ onMounted(() => { transactionStore.loadTransactions(sheetId.value) })
 .nc-table {
 	width: 100%;
 	border-collapse: collapse;
-	font-size: 0.875rem;
+	font-size: var(--font-size-floor);
 }
 
 .nc-table th,
@@ -134,6 +166,15 @@ onMounted(() => { transactionStore.loadTransactions(sheetId.value) })
 
 .nc-table tbody tr:hover {
 	background-color: var(--nc-color-surface-container-low, #fafafa);
+}
+
+.latest-decision__decision {
+	display: block;
+}
+
+.latest-decision__actor {
+	display: block;
+	color: var(--color-text-maxcontrast);
 }
 
 .alert {

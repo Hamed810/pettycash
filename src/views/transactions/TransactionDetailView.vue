@@ -7,6 +7,7 @@ import { NcButton, NcChip, NcIconSvgWrapper, NcNoteCard, NcBreadcrumbs, NcSelect
 import { mdiPencil, mdiUndoVariant, mdiDownload, mdiDelete, mdiFileOutline, mdiPlus, mdiLock } from '@mdi/js'
 import EvidenceUploader from '@/components/evidence/EvidenceUploader.vue'
 import { t } from '@nextcloud/l10n'
+import { formatMoney } from '@/utils/money'
 
 const route = useRoute()
 const router = useRouter()
@@ -28,14 +29,27 @@ const statusLabels: Record<TransactionStatus, string> = {
 	COMPLETED_REJECTED: 'pettycash.status.completedRejected'
 }
 
-const isSubmitted = computed(() => transactionStore.currentTransaction?.status !== 'DRAFT')
-const isReturned = computed(() => transactionStore.currentTransaction?.status === 'AWAITING_PURCHASER_CORRECTION')
+const status = computed(() => transactionStore.currentTransaction?.status)
+const isSubmitted = computed(() => status.value !== undefined && status.value !== 'DRAFT')
+const isReturned = computed(() => status.value === 'AWAITING_PURCHASER_CORRECTION')
 const canCreateCorrection = computed(() => isReturned.value)
-const canEdit = computed(() => !isSubmitted.value)
+const canEdit = computed(() => status.value === undefined || status.value === 'DRAFT')
 
-function formatMoney(amountMinor: number, currency: string) {
-	return new Intl.NumberFormat('fa-IR', { style: 'currency', currency, minimumFractionDigits: 0 }).format(amountMinor / 100)
-}
+/**
+ * Whether to state that the transaction is read-only.
+ *
+ * A *returned* transaction is submitted, so `isSubmitted` is true for it — but FR-026 carves out
+ * exactly one edit after submission, the correction of a returned transaction, and the view offers
+ * that correction through a button. Showing the blanket read-only badge next to it tells the
+ * purchaser the opposite of what the button is about to let them do, so the badge is withheld for
+ * this one state and the correction button carries the meaning on its own.
+ */
+const showReadOnly = computed(() => isSubmitted.value && !isReturned.value)
+
+/**
+ * The superseded revisions, which FR-050 keeps part of the record and FR-053 makes append-only.
+ */
+const priorRevisions = computed(() => transactionStore.revisions.filter((rev) => !rev.active))
 
 function formatFileSize(bytes: number) {
 	if (bytes < 1024) return bytes + ' B'
@@ -56,18 +70,31 @@ const revisionOptions = computed(() => {
 	}))
 })
 
+/**
+ * The revision on display.
+ *
+ * FR-050 makes the *active* revision the one that determines the current information, so it is what
+ * the panel opens on. Defaulting to `revisions[0]` opened on the oldest revision instead, which showed
+ * a corrected transaction's superseded amount as if it were the current one.
+ */
 const selectedRevision = computed(() => {
-	return transactionStore.revisions.find((r: any) => r.id === selectedRevisionId.value) || transactionStore.revisions[0]
+	return transactionStore.revisions.find((r: any) => r.id === selectedRevisionId.value)
+		|| transactionStore.revisions.find((r: any) => r.active)
+		|| transactionStore.revisions[0]
 })
 
 const selectedRevisionIndex = computed(() => {
-	return transactionStore.revisions.findIndex((r: any) => r.id === selectedRevisionId.value)
+	return transactionStore.revisions.findIndex((r: any) => r.id === selectedRevision.value?.id)
 })
 
 async function loadData() {
-	await transactionStore.loadTransaction(transactionId.value)
-	await transactionStore.loadRevisions(transactionId.value)
-	await transactionStore.loadAudit(transactionId.value)
+	// Each store records a failure in its own `error` ref, which this view renders in its alert.
+	// `loadData` is fired from `onMounted`, from a `watch`, and from the evidence-upload handler,
+	// none of which has a caller to react to a rejection, so it is absorbed here rather than
+	// surfacing as an unhandled promise rejection in the user's console.
+	await transactionStore.loadTransaction(transactionId.value).catch(() => undefined)
+	await transactionStore.loadRevisions(transactionId.value).catch(() => undefined)
+	await transactionStore.loadAudit(transactionId.value).catch(() => undefined)
 }
 
 async function handleEvidenceUploaded() {
@@ -108,8 +135,8 @@ watch(transactionId, () => { loadData() })
 				{{ t('pettycash', statusLabels[transactionStore.currentTransaction?.status ?? 'DRAFT']) }}
 			</NcChip>
 			<NcChip
-				v-if="isSubmitted"
- variant="secondary"
+				v-if="showReadOnly"
+				variant="secondary"
 
 
 				data-test="read-only-indicator"
@@ -143,7 +170,7 @@ watch(transactionId, () => { loadData() })
 				</div>
 				<div class="detail-item">
 					<strong>{{ t('pettycash', 'transactions.amount') }}</strong>
-					<div>{{ formatMoney(transactionStore.currentTransaction.activeRevision.amount.amountMinor, transactionStore.currentTransaction.activeRevision.amount.currency) }}</div>
+					<div>{{ formatMoney(transactionStore.currentTransaction.activeRevision.amount) }}</div>
 				</div>
 				<div class="detail-item">
 					<strong>{{ t('pettycash', 'transactions.costCenter') }}</strong>
@@ -217,7 +244,7 @@ watch(transactionId, () => { loadData() })
 						</div>
 						<div class="detail-item">
 							<strong>{{ t('pettycash', 'transactions.amount') }}</strong>
-							<div>{{ formatMoney(selectedRevision.amount.amountMinor, selectedRevision.amount.currency) }}</div>
+							<div>{{ formatMoney(selectedRevision.amount) }}</div>
 						</div>
 						<div class="detail-item">
 							<strong>{{ t('pettycash', 'transactions.costCenter') }}</strong>
@@ -244,6 +271,42 @@ watch(transactionId, () => { loadData() })
 			</div>
 		</NcNoteCard>
 
+		<!-- FR-050 keeps every superseded revision part of the record and FR-053 makes that record
+		     append-only, so this region is deliberately inert: no control in it can change a past
+		     revision. The revision selector above lets a reader page through history; this states that
+		     what they are reading is retained history rather than a previous state of an editable row. -->
+		<NcNoteCard v-if="priorRevisions.length > 0" data-test="prior-revisions">
+			<template #header>
+				{{ t('pettycash', 'transactions.priorRevisions') }}
+			</template>
+
+			<p class="prior-revisions__note">
+				{{ t('pettycash', 'transactions.priorRevisionsRetained') }}
+			</p>
+			<ul class="prior-revisions-list">
+				<li v-for="rev in priorRevisions" :key="rev.id" class="prior-revision" data-test="prior-revision">
+					<div class="prior-revision__header">
+						<strong>{{ t('pettycash', 'transactions.revision') }} {{ rev.number }}</strong>
+						<small>{{ new Date(rev.createdAt).toLocaleString('fa-IR') }}</small>
+					</div>
+					<dl class="prior-revision__fields">
+						<dt>{{ t('pettycash', 'transactions.expenseDate') }}</dt>
+						<dd>{{ new Date(rev.expenseDate).toLocaleDateString('fa-IR') }}</dd>
+						<dt>{{ t('pettycash', 'transactions.amount') }}</dt>
+						<dd>{{ formatMoney(rev.amount) }}</dd>
+						<dt>{{ t('pettycash', 'transactions.costCenter') }}</dt>
+						<dd>{{ rev.costCenter.name }}</dd>
+						<dt>{{ t('pettycash', 'transactions.expenseType') }}</dt>
+						<dd>{{ rev.expenseType.name }}</dd>
+						<template v-if="rev.description">
+							<dt>{{ t('pettycash', 'transactions.description') }}</dt>
+							<dd>{{ rev.description }}</dd>
+						</template>
+					</dl>
+				</li>
+			</ul>
+		</NcNoteCard>
+
 		<NcNoteCard data-test="decision-list">
 			<template #header>
 				{{ t('pettycash', 'transactions.decisions') }}
@@ -259,12 +322,20 @@ watch(transactionId, () => { loadData() })
 						<small>{{ new Date(decision.decidedAt).toLocaleString('fa-IR') }}</small>
 					</div>
 					<div class="decision-meta">
-						<span>{{ decision.actor.displayName }} ({{ decision.actor.role }})</span>
-						<span v-if="decision.explanation">{{ decision.explanation }}</span>
+						<!-- FR-052: the actor is a snapshot, not a live user lookup. The display name and
+						     role are the ones the decision was made under, and the identifier is what ties
+						     it to a person at all — the view previously showed the name and the role and
+						     dropped the identifier, so a decision could not be traced back. -->
+						<span class="actor-snapshot" data-test="actor-snapshot">
+							<span data-test="actor-display-name">{{ decision.actor.displayName }}</span>
+							<span data-test="actor-role">({{ decision.actor.role }})</span>
+							<small class="actor-snapshot__id" data-test="actor-user-id">{{ decision.actor.userId }}</small>
+						</span>
+						<span v-if="decision.explanation" data-test="decision-explanation">{{ decision.explanation }}</span>
 					</div>
 				</div>
 			</div>
-			<div v-else class="text-center py-4">{{ t('pettycash', 'transactions.noDecisions') }}</div>
+			<div v-else class="text-center py-4" data-test="no-decisions">{{ t('pettycash', 'transactions.noDecisions') }}</div>
 		</NcNoteCard>
 
 		<NcNoteCard data-test="evidence-list">
@@ -383,7 +454,7 @@ watch(transactionId, () => { loadData() })
 	border-radius: 4px 4px 0 0;
 	cursor: pointer;
 	color: var(--nc-color-on-surface-variant, #616161);
-	font-size: 0.875rem;
+	font-size: var(--font-size-floor);
 }
 
 .tab-button.active {
@@ -420,8 +491,61 @@ watch(transactionId, () => { loadData() })
 	display: flex;
 	align-items: center;
 	gap: 1rem;
-	font-size: 0.875rem;
+	font-size: var(--font-size-floor);
 	color: var(--nc-color-on-surface-variant, #616161);
+}
+
+.actor-snapshot {
+	display: inline-flex;
+	align-items: baseline;
+	gap: 0.25rem;
+}
+
+.actor-snapshot__id {
+	color: var(--color-text-maxcontrast);
+}
+
+.prior-revisions__note {
+	margin: 0 0 0.75rem;
+	color: var(--color-text-maxcontrast);
+}
+
+.prior-revisions-list {
+	display: flex;
+	flex-direction: column;
+	gap: 0.75rem;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.prior-revision {
+	padding: 0.75rem;
+	background-color: var(--nc-color-surface-container-low, #fafafa);
+	border-radius: 4px;
+}
+
+.prior-revision__header {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 0.5rem;
+	margin-bottom: 0.25rem;
+}
+
+.prior-revision__fields {
+	display: grid;
+	grid-template-columns: auto 1fr;
+	gap: 0.125rem 0.75rem;
+	margin: 0;
+}
+
+.prior-revision__fields dt {
+	color: var(--color-text-maxcontrast);
+}
+
+.prior-revision__fields dd {
+	margin: 0;
 }
 
 .evidence-list {
@@ -463,7 +587,7 @@ watch(transactionId, () => { loadData() })
 }
 
 .evidence-meta {
-	font-size: 0.75rem;
+	font-size: var(--font-size-floor);
 	color: var(--nc-color-on-surface-variant, #616161);
 }
 

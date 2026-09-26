@@ -59,6 +59,17 @@ final class DbExpenseTransactionRepository implements ExpenseTransactionReposito
         return array_map([$this, 'mapRow'], $rows);
     }
 
+    public function countBySheetId(int $sheetId): int
+    {
+        $qb = $this->connection->getQueryBuilder();
+        $qb->select($qb->func()->count('id', 'transaction_count'))
+            ->from('pettycash_transactions')
+            ->where($qb->expr()->eq('sheet_id', $qb->createNamedParameter($sheetId)));
+
+        $row = $qb->executeQuery()->fetchAssociative();
+        return $row === false ? 0 : (int) ($row['transaction_count'] ?? 0);
+    }
+
     /** @return list<ExpenseTransaction> */
     public function findByOwnerUid(string $ownerUid, ?WorkflowStage $stage = null, ?TransactionStatus $status = null, int $offset = 0, int $limit = 100): array
     {
@@ -205,6 +216,37 @@ final class DbExpenseTransactionRepository implements ExpenseTransactionReposito
             $transaction->dbId = $qb->getLastInsertId();
             $transaction->lockVersion = 0;
         }
+    }
+
+    /**
+     * Delete a never-submitted transaction and the revisions that belong to it.
+     *
+     * The revision rows go first because `pettycash_transaction_revisions.transaction_id`
+     * points at the transaction being removed, and leaving them behind would strand
+     * revisions no query would ever reach.
+     */
+    public function delete(ExpenseTransaction $transaction): void
+    {
+        $transactionDbId = $transaction->dbId;
+        if ($transactionDbId === null) {
+            throw new RuntimeException(
+                'Cannot delete a transaction that was never persisted'
+            );
+        }
+
+        $qb = $this->connection->getQueryBuilder();
+
+        $qb->delete('pettycash_transaction_revisions')
+            ->where($qb->expr()->eq('transaction_id', $qb->createNamedParameter($transactionDbId)))
+            ->executeStatement();
+
+        $qb->delete('pettycash_evidence')
+            ->where($qb->expr()->eq('transaction_id', $qb->createNamedParameter($transactionDbId)))
+            ->executeStatement();
+
+        $qb->delete('pettycash_transactions')
+            ->where($qb->expr()->eq('id', $qb->createNamedParameter($transactionDbId)))
+            ->executeStatement();
     }
 
     private function mapRow(array $row): ExpenseTransaction

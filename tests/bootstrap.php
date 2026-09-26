@@ -174,6 +174,8 @@ $container->register(TransactionService::class, fn($c) => new TransactionService
     $c->query(TransactionRevisionRepository::class),
     $c->query(CostCenterRepository::class),
     $c->query(ExpenseTypeRepository::class),
+    $c->query(EvidenceRepository::class),
+    $c->query(PrivateFileStore::class),
     $c->query(CurrentUser::class),
     $c->query(TransactionManager::class)
 ));
@@ -193,7 +195,8 @@ $container->register(SubmitSheet::class, fn($c) => new SubmitSheet(
     $c->query(AuditWriter::class),
     $c->query(IdempotencyService::class),
     $c->query(CurrentUser::class),
-    $c->query(CostCenterRepository::class)
+    $c->query(CostCenterRepository::class),
+    $c->query(ExpenseTransactionRepository::class)
 ));
 
 $container->register(ManagementReviewService::class, fn($c) => new ManagementReviewService(

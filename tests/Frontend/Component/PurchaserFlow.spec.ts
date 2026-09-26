@@ -1,25 +1,36 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createWebHashHistory } from 'vue-router'
 
 // The account picker is driven by the caller's real accounts from the OCS accounts endpoint, so the
 // store is stubbed here. Mocking the store (rather than the service) is required because the store
 // imports the service through a relative path, which a module mock keyed on the `@/` alias does not
-// intercept. Without it the component correctly renders its empty state and no account option could
-// ever be asserted.
+// intercept. Without it the component correctly renders its empty state and no account could ever be
+// asserted.
+//
+// The accounts are held in a mutable module-level binding rather than written inline, because several
+// requirements are conditional on how many accounts the caller has — a single account fixes the
+// sheet currency while several make it a choice — and a fixed two-account stub made those
+// requirements untestable. `setAccounts()` is called from the tests that depend on the count.
+const accountFixture = vi.hoisted(() => ({ accounts: [] as unknown[] }))
+
+const RIAL_ACCOUNT = { id: 'acc-1', userId: 'employee1', balance: { amountMinor: 1000000, currency: 'IRR', minorUnit: 0 }, active: true, version: 0 }
+const USD_ACCOUNT = { id: 'acc-2', userId: 'employee1', balance: { amountMinor: 5000, currency: 'USD', minorUnit: 2 }, active: true, version: 0 }
+
+function setAccounts(accounts: unknown[]): void {
+	accountFixture.accounts = accounts
+}
+
 vi.mock('@/stores/accounts', () => ({
 	useAccountStore: () => ({
-		accounts: [
-			{ id: 'acc-1', userId: 'employee1', balance: { amountMinor: 1000000, currency: 'IRR', minorUnit: 0 }, active: true, version: 0 },
-			{ id: 'acc-2', userId: 'employee1', balance: { amountMinor: 5000, currency: 'USD', minorUnit: 2 }, active: true, version: 0 }
-		],
+		accounts: accountFixture.accounts,
 		loading: false,
 		loaded: true,
 		error: null,
-		hasAccounts: true,
-		availableCurrencies: ['IRR', 'USD'],
-		accountById: (id: string) => undefined,
+		hasAccounts: accountFixture.accounts.length > 0,
+		availableCurrencies: [...new Set(accountFixture.accounts.map((a) => (a as { balance: { currency: string } }).balance.currency))],
+		accountById: (id: string) => accountFixture.accounts.find((a) => (a as { id: string }).id === id),
 		resetError: () => undefined,
 		loadAccounts: async () => undefined
 	})
@@ -33,16 +44,142 @@ vi.mock('@nextcloud/router', () => ({
 	appVersion: '1.0.0'
 }))
 
+// The OCS transport is exercised for real here rather than stubbed out, so the mock must answer
+// with a genuine envelope. A bare `vi.fn()` resolves `undefined`, `src/services/http.ts` then
+// dereferences `response.data.ocs.data` and raises a TypeError inside a promise the view never
+// awaits, which surfaced as 26 unhandled rejections and left every "green" test in this file
+// passing only because its mount-time fetch had silently failed. `emptyOcsResponse` answers every
+// endpoint with a well-formed but empty result, so a component under test renders its empty state
+// and the fetch genuinely succeeds.
+const ocsRequest = vi.hoisted(() => vi.fn())
+
 vi.mock('@nextcloud/axios', () => ({
 	default: {
-		request: vi.fn(),
-		isAxiosError: vi.fn()
+		request: (...args: unknown[]) => ocsRequest(...args),
+		isAxiosError: (error: unknown) => Boolean((error as { isAxiosError?: boolean } | null)?.isAxiosError)
 	}
 }))
 
+const EMPTY_PAGE = { items: [], page: 1, pageSize: 25, total: 0 }
+
+// Configuration fixtures, in the shape `contracts/ocs-api.yaml` declares. They are mutable so a test
+// can drive a requirement that is conditional on the configuration — FR-023's evidence rule is decided
+// by the selected expense type's `evidenceRequired`, so a fixed stub would make it untestable.
+//
+// The identifiers are deliberately unlike the `cc-1`/`et-1` placeholders the view used to hard-code:
+// had the fixture reused them, an "options come from the configuration" assertion would have passed
+// against the hard-coded list too, and proved nothing about where the options came from.
+const configurationFixture = vi.hoisted(() => ({
+	costCenters: [] as unknown[],
+	expenseTypes: [] as unknown[]
+}))
+
+const COST_CENTER_ENGINEERING = 'cc-eng-0001'
+const COST_CENTER_MARKETING = 'cc-mkt-0002'
+const EXPENSE_TYPE_SUPPLIES = 'et-sup-0001'
+const EXPENSE_TYPE_TRAVEL = 'et-trv-0002'
+
+function defaultCostCenters(): unknown[] {
+	return [
+		{ id: COST_CENTER_ENGINEERING, code: 'ENG', name: 'Engineering', validFrom: '2026-01-01', validTo: null, active: true, version: 0 },
+		{ id: COST_CENTER_MARKETING, code: 'MKT', name: 'Marketing', validFrom: '2026-01-01', validTo: null, active: true, version: 0 }
+	]
+}
+
+function defaultExpenseTypes(): unknown[] {
+	return [
+		{ id: EXPENSE_TYPE_SUPPLIES, title: 'Office Supplies', evidenceRequired: false, active: true, version: 0 },
+		{ id: EXPENSE_TYPE_TRAVEL, title: 'Travel', evidenceRequired: true, active: true, version: 0 }
+	]
+}
+
+function setCostCenters(costCenters: unknown[]): void {
+	configurationFixture.costCenters = costCenters
+}
+
+function setExpenseTypes(expenseTypes: unknown[]): void {
+	configurationFixture.expenseTypes = expenseTypes
+}
+
+// Transaction fixtures. The list and detail views render per-row and per-decision content, so a test
+// that never seeds one is asserting against an empty collection — which is why the three "list" tests
+// and the "evidence list" test below all failed while the view was, in two of the cases, already
+// correct. `detail` stays `null` by default so the groups that do not care are unaffected.
+const transactionFixtures = vi.hoisted(() => ({
+	list: [] as unknown[],
+	detail: null as unknown,
+	revisions: [] as unknown[],
+	sheet: null as unknown,
+	sheetList: [] as unknown[]
+}))
+
+function setTransactionList(items: unknown[]): void {
+	transactionFixtures.list = items
+}
+
+function setTransactionDetail(detail: unknown): void {
+	transactionFixtures.detail = detail
+}
+
+function setRevisions(revisions: unknown[]): void {
+	transactionFixtures.revisions = revisions
+}
+
+function setSheetDetail(sheet: unknown): void {
+	transactionFixtures.sheet = sheet
+}
+
+function setSheetList(sheets: unknown[]): void {
+	transactionFixtures.sheetList = sheets
+}
+
+function emptyOcsResponse(config: { url?: string }): { status: number; data: unknown } {
+	const url = config?.url ?? ''
+	const data = emptyPayloadFor(url)
+	return { status: 200, data: { ocs: { meta: { status: 'ok', statuscode: 200 }, data } } }
+}
+
+/**
+ * The declared response shape per endpoint, because a store that assigns this straight into a typed
+ * ref is the cheapest way to catch a client that expects the wrong shape.
+ * `GET /transactions/{id}/revisions` answers a bare `Revision[]`, not a page.
+ */
+function emptyPayloadFor(url: string): unknown {
+	if (/\/revisions(\?|$)/.test(url)) return transactionFixtures.revisions
+	if (/\/configuration\/cost-centers(\?|$)/.test(url)) return { ...EMPTY_PAGE, items: configurationFixture.costCenters, total: configurationFixture.costCenters.length }
+	if (/\/configuration\/expense-types(\?|$)/.test(url)) return { ...EMPTY_PAGE, items: configurationFixture.expenseTypes, total: configurationFixture.expenseTypes.length }
+	// Before the single-transaction route, because `/sheets/{id}/transactions` also ends in it.
+	if (/\/sheets\/[^/?]+\/transactions(\?|$)/.test(url)) {
+		return { ...EMPTY_PAGE, items: transactionFixtures.list, total: transactionFixtures.list.length }
+	}
+	// The collection route, matched on the query's `?` because `/sheets/{id}` has no trailing slash
+	// to hang a `(\?|$)` on and the two must not be confused.
+	if (/\/sheets\?/.test(url)) {
+		return { ...EMPTY_PAGE, items: transactionFixtures.sheetList, total: transactionFixtures.sheetList.length }
+	}
+	if (/\/sheets\/[^/?]+(\?|$)/.test(url)) return transactionFixtures.sheet
+	if (/\/transactions\/[^/?]+(\?|$)/.test(url)) return transactionFixtures.detail
+	if (/\/(sheets|accounts|transactions|evidence|audit)(\?|$)/.test(url)) return { ...EMPTY_PAGE }
+	return null
+}
+
+/** Rejects with an OCS error envelope, as the server answers a business failure. */
+function ocsErrorResponse(status: number, body: Record<string, unknown>) {
+	return Promise.reject(
+		Object.assign(new Error('Request failed with status code ' + status), {
+			isAxiosError: true,
+			response: { status, data: { ocs: { meta: { status: 'failure', statuscode: status }, data: { error: body } } } }
+		})
+	)
+}
+
 vi.mock('@nextcloud/l10n', () => ({
-	t: vi.fn((key: string) => key),
-	n: vi.fn((key: string) => key),
+	// The message, not the app id. The previous mock returned its first argument, so every string in
+	// every component rendered as the literal `pettycash` — which made any assertion about *which*
+	// message a field carried indistinguishable from an assertion about any message at all.
+	t: vi.fn((_app: string, text: string, params?: Record<string, string | number>) =>
+		text.replace(/\{(\w+)\}/g, (_match, key: string) => String(params?.[key] ?? `{${key}}`))),
+	n: vi.fn((_app: string, text: string) => text),
 	getLanguage: vi.fn(() => 'fa'),
 	isRTL: vi.fn(() => true),
 	imagePath: vi.fn((path: string) => `/apps/pettycash/${path}`)
@@ -148,6 +285,23 @@ import TransactionDetailView from '@/views/transactions/TransactionDetailView.vu
 import EvidenceUploader from '@/components/evidence/EvidenceUploader.vue'
 import EvidenceList from '@/components/evidence/EvidenceList.vue'
 import * as evidenceApi from '@/services/evidenceApi'
+import { useSheetStore } from '@/stores/sheets'
+import { useTransactionStore } from '@/stores/transactions'
+import StatusBadge from '@/components/shared/StatusBadge.vue'
+import type {
+	Decision,
+	Evidence,
+	Money,
+	Revision,
+	SheetDetail,
+	SheetStatus,
+	SheetTotals,
+	TransactionDetail,
+	TransactionStatus,
+	TransactionSummary
+} from '@/types/api'
+import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { join, relative, extname } from 'node:path'
 
 function createTestRouter() {
 	return createRouter({
@@ -166,13 +320,8 @@ function createTestRouter() {
 	})
 }
 
-function createWrapper(component: any, options: any = {}) {
-	const pinia = createPinia()
-	const router = createTestRouter()
-
-	setActivePinia(pinia)
-
-	return mount(component, {
+function mountOptions(pinia: ReturnType<typeof createPinia>, router: ReturnType<typeof createTestRouter>, options: any) {
+	return {
 		global: {
 			plugins: [pinia, router],
 			stubs: {
@@ -185,12 +334,305 @@ function createWrapper(component: any, options: any = {}) {
 			}
 		},
 		...options
-	})
+	}
+}
+
+function createWrapper(component: any, options: any = {}) {
+	const pinia = createPinia()
+	const router = createTestRouter()
+
+	setActivePinia(pinia)
+
+	return mount(component, mountOptions(pinia, router, options))
+}
+
+/**
+ * Mounts a view on a specific route, with the mount-time loads already settled.
+ *
+ * A view that reads `route.params` cannot be exercised from `/`: `/transactions/:id/edit` supplies no
+ * `sheetId`, and the create route supplies no `id`, so the two branches a form has are only reachable
+ * by navigating first. Mounting on `/` and then seeding the store was how a `transactionStatus` prop
+ * that the view never declared came to be asserted — the route is the input that decides the branch.
+ */
+async function createWrapperAtRoute(component: any, path: string, options: any = {}) {
+	const pinia = createPinia()
+	const router = createTestRouter()
+
+	setActivePinia(pinia)
+	await router.push(path)
+	await router.isReady()
+
+	const wrapper = mount(component, mountOptions(pinia, router, options))
+	await flushPromises()
+	return wrapper
+}
+
+/** A `SheetDetail` in the shape the sheet store holds, for the fields a form reads. */
+function sheetFixture(currency: string, overrides: Partial<SheetDetail> = {}): SheetDetail {
+	return {
+		id: 'sh-1',
+		title: 'March travel',
+		ownerId: 'employee1',
+		ownerDisplayName: 'Employee One',
+		currency,
+		status: 'OPEN',
+		transactionCount: 0,
+		totals: sheetTotalsFixture(currency),
+		createdAt: '2026-01-01T00:00:00+00:00',
+		submittedAt: null,
+		completedAt: null,
+		firstExpenseDate: null,
+		lastExpenseDate: null,
+		version: 0,
+		allowedActions: {},
+		transactions: [],
+		...overrides
+	}
+}
+
+function sheetTotalsFixture(currency: string): SheetTotals {
+	const zero: Money = { amountMinor: 0, currency, minorUnit: 0 }
+	return {
+		current: zero,
+		submitted: zero,
+		effectiveApproved: zero,
+		effectiveRejected: zero,
+		effectivePending: zero,
+		costCenterApproved: zero,
+		seniorApproved: zero,
+		financeApproved: zero
+	}
+}
+
+/** A `TransactionDetail` in the shape the transaction store holds. */
+function transactionFixture(overrides: Partial<TransactionDetail> = {}): TransactionDetail {
+	return {
+		id: 'tx-1',
+		sheetId: 'sh-1',
+		activeRevision: revisionFixture(),
+		stage: 'DRAFT',
+		status: 'DRAFT',
+		finalOutcome: null,
+		latestDecision: undefined,
+		evidenceCount: 0,
+		version: 0,
+		allowedActions: {},
+		decisions: [],
+		evidence: [],
+		...overrides
+	}
+}
+
+/** A `TransactionSummary` in the shape the transaction list store holds. */
+function transactionSummaryFixture(overrides: Partial<TransactionSummary> = {}): TransactionSummary {
+	return {
+		id: 'tx-1',
+		sheetId: 'sh-1',
+		activeRevision: revisionFixture(),
+		stage: 'DRAFT',
+		status: 'DRAFT',
+		finalOutcome: null,
+		latestDecision: undefined,
+		evidenceCount: 0,
+		version: 0,
+		...overrides
+	}
+}
+
+function revisionFixture(overrides: Partial<Revision> = {}): Revision {
+	return {
+		id: 'rev-1',
+		number: 1,
+		expenseDate: '2026-01-15',
+		amount: { amountMinor: 1000, currency: 'IRR', minorUnit: 0 },
+		description: 'Taxi',
+		costCenter: { id: COST_CENTER_ENGINEERING, code: 'ENG', name: 'Engineering' },
+		// A revision carries an `EntitySnapshot`, which normalises the title to `name`.
+		expenseType: { id: EXPENSE_TYPE_SUPPLIES, name: 'Office Supplies' },
+		createdBy: 'employee1',
+		createdAt: '2026-01-15T00:00:00+00:00',
+		active: true,
+		...overrides
+	}
+}
+
+/**
+ * A `Decision` in the shape the contract declares.
+ *
+ * `actor` is an `ActorSnapshot`, which is what FR-052 makes load-bearing: the display name and role
+ * are the ones *at the time of the decision*, so they travel with the decision rather than being read
+ * back from the user directory later.
+ */
+function decisionFixture(overrides: Partial<Decision> = {}): Decision {
+	return {
+		id: 'dec-1',
+		stage: 'COST_CENTER',
+		decision: 'APPROVE',
+		explanation: 'Within the travel budget',
+		actor: { userId: 'manager1', displayName: 'Manager One', role: 'COST_CENTER_MANAGER' },
+		decidedAt: '2026-01-20T09:00:00+00:00',
+		...overrides
+	}
+}
+
+function evidenceFixture(overrides: Partial<Evidence> = {}): Evidence {
+	return {
+		id: 'ev-1',
+		transactionId: 'tx-1',
+		revisionId: 'rev-1',
+		name: 'receipt.pdf',
+		mediaType: 'application/pdf',
+		sizeBytes: 2048,
+		active: true,
+		uploadedBy: 'employee1',
+		uploadedAt: '2026-01-15T10:00:00+00:00',
+		...overrides
+	}
+}
+
+
+/** Every stylesheet-bearing source file, for the static layout checks below. */
+const STYLE_EXTENSIONS = new Set(['.vue', '.scss', '.css'])
+
+function styleFiles(): string[] {
+	const out: string[] = []
+	const walk = (dir: string): void => {
+		for (const entry of readdirSync(dir)) {
+			const full = join(dir, entry)
+			if (statSync(full).isDirectory()) walk(full)
+			else if (STYLE_EXTENSIONS.has(extname(full))) out.push(full)
+		}
+	}
+	walk(join(process.cwd(), 'src'))
+	return out
+}
+
+/**
+ * The options a view handed to its `NcSelect`.
+ *
+ * Read from the component instance rather than through `props()` because the deep-imported
+ * `NcSelect` type does not re-export its `options` prop in a form `props()` can resolve, even though
+ * the component accepts and renders it.
+ *
+ * `testId` picks one specific select; without it the first one is returned, which is only meaningful
+ * for a view that has exactly one.
+ */
+function selectOptions(wrapper: VueWrapper, testId?: string): Array<{ label: string; value: string }> {
+	const target = testId
+		? wrapper.findComponent(`[data-test="${testId}"]`)
+		: wrapper.findComponent({ name: 'NcSelect' })
+	const vm = (target as VueWrapper).vm as unknown as { options?: Array<{ label: string; value: string }> }
+	return vm.options ?? []
+}
+
+/**
+ * Fills every field FR-023 requires, so a test can then vary exactly one of them.
+ *
+ * The two `NcSelect`s are `v-select`s whose dropdown will not open under jsdom, so the value is set
+ * through the component's `update:modelValue` — the same event a selection emits — rather than
+ * through a rendered option.
+ */
+async function fillTransactionForm(wrapper: VueWrapper, values: { expenseTypeId?: string; costCenterId?: string } = {}) {
+	await wrapper.find('[data-test="expense-date-input"]').setValue('2026-01-15')
+	await wrapper.find('[data-test="amount-input"]').setValue('1000')
+	await wrapper.find('[data-test="description-input"]').setValue('Taxi to the airport')
+	if (values.costCenterId !== undefined) {
+		;(wrapper.findComponent('[data-test="cost-center-select"]') as VueWrapper).vm.$emit('update:modelValue', values.costCenterId)
+	}
+	if (values.expenseTypeId !== undefined) {
+		;(wrapper.findComponent('[data-test="expense-type-select"]') as VueWrapper).vm.$emit('update:modelValue', values.expenseTypeId)
+	}
+	await wrapper.vm.$nextTick()
+}
+
+/**
+ * The accessible name a form control resolves to.
+ *
+ * WCAG does not name a control with one attribute: the name comes from `aria-label`, or from
+ * `aria-labelledby`, or from an associated `<label for>`. Every one of the real `@nextcloud/vue`
+ * controls in these forms names themselves with a visible `<label>` associated by `for`/`id`, and
+ * `NcSelect` puts it on an inner `input` rather than on its own root — so the root is followed into
+ * when the `data-test` sits on a wrapper.
+ */
+function accessibleName(wrapper: VueWrapper, testId: string): string {
+	const root = wrapper.find(`[data-test="${testId}"]`)
+	if (!root.exists()) return ''
+	const control = /^(INPUT|TEXTAREA|SELECT)$/.test(root.element.tagName)
+		? root
+		: root.find('input, textarea, select')
+
+	const aria = control.attributes('aria-label') ?? ''
+	const id = control.attributes('id')
+	const associated = id ? wrapper.find(`label[for="${id}"]`).text() : ''
+	return `${aria} ${associated}`.trim()
 }
 
 describe('Purchaser Flow - Vue Component Tests', () => {
-	beforeEach(() => {
-		vi.clearAllMocks()
+  beforeEach(() => {
+    vi.clearAllMocks()
+    setAccounts([{ ...RIAL_ACCOUNT }, { ...USD_ACCOUNT }])
+    setCostCenters(defaultCostCenters())
+    setExpenseTypes(defaultExpenseTypes())
+    setTransactionList([])
+    setTransactionDetail(null)
+    setRevisions([])
+    setSheetDetail(null)
+    setSheetList([])
+    ocsRequest.mockReset()
+    ocsRequest.mockImplementation((config: { url?: string }) => Promise.resolve(emptyOcsResponse(config)))
+  })
+
+	// These four tests exist because this file previously passed for the wrong reason. A bare
+	// `request: vi.fn()` made every mount-time fetch raise an unhandled TypeError, so the store
+	// stayed empty and the component rendered whatever it renders for "no data" — which happened
+	// to satisfy the structural assertions below. A passing structural assertion on a store that
+	// never loaded is not evidence of anything, so these assert the transport itself.
+	describe('OCS transport', () => {
+		it('issues the sheet list request and stores the page it returned', async () => {
+			createWrapper(SheetListView)
+			await flushPromises()
+
+			const sheetStore = useSheetStore()
+			expect(ocsRequest).toHaveBeenCalledWith(
+				expect.objectContaining({ url: expect.stringContaining('/sheets?') })
+			)
+			expect(sheetStore.sheets).toEqual([])
+			expect(sheetStore.error).toBeNull()
+		})
+
+		it('surfaces a server error as a populated ApiError, not a raw TypeError', async () => {
+			ocsRequest.mockImplementation(() =>
+				ocsErrorResponse(422, { code: 'VALIDATION_FAILED', message: 'Cost center not found' })
+			)
+			createWrapper(SheetListView)
+			await flushPromises()
+
+			const sheetStore = useSheetStore()
+			// The store records the failure; a TypeError from the transport would read as an
+			// undefined message, which is what made this defect invisible before.
+			expect(sheetStore.error).toBe('Cost center not found')
+			expect(sheetStore.error).not.toMatch(/Cannot read propert/)
+		})
+
+		it('reports a transport that answers with a non-OCS body as a malformed response', async () => {
+			ocsRequest.mockResolvedValue({ status: 200, data: '<html><body>login</body></html>' })
+			createWrapper(SheetListView)
+			await flushPromises()
+
+			const sheetStore = useSheetStore()
+			expect(sheetStore.error).toBe('pettycash.error.malformedResponse')
+		})
+
+		it('records a server-reported code rather than a generic network failure', async () => {
+			ocsRequest.mockImplementation(() =>
+				ocsErrorResponse(409, { code: 'IDEMPOTENCY_CONFLICT', message: 'Command already used' })
+			)
+			createWrapper(SheetListView)
+			await flushPromises()
+
+			const sheetStore = useSheetStore()
+			expect(sheetStore.error).toBe('Command already used')
+		})
 	})
 
 	describe('Sheet Forms', () => {
@@ -203,34 +645,106 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 		it('should show field-level validation errors for required fields', async () => {
 			const wrapper = createWrapper(SheetFormView)
 			await wrapper.find('[data-test="sheet-form"]').trigger('submit.prevent')
-			expect(wrapper.find('[data-test="nc-alert"]').exists()).toBe(true)
+
+			// A summary naming each missing field, not a generic refusal. The original assertion
+			// looked for `[data-test="nc-alert"]`, which was the barrel mock's own attribute and can
+			// never appear now that the real `NcAlert` renders.
+			expect(wrapper.find('[data-test="validation-summary"]').exists()).toBe(true)
+			expect(wrapper.find('[data-test="validation-summary-title"]').exists()).toBe(true)
+			expect(wrapper.find('[data-test="validation-summary-accountId"]').exists()).toBe(true)
 		})
 
+		it('should clear the validation summary once the form becomes valid', async () => {
+			const wrapper = createWrapper(SheetFormView)
+			await wrapper.find('[data-test="sheet-form"]').trigger('submit.prevent')
+			expect(wrapper.find('[data-test="validation-summary"]').exists()).toBe(true)
+
+			await wrapper.find('[data-test="sheet-title-input"]').setValue('March travel')
+			await wrapper.find('[data-test="sheet-form"]').trigger('submit.prevent')
+			expect(wrapper.find('[data-test="validation-summary"]').exists()).toBe(false)
+		})
+
+		// `NcSelect` is imported by its deep path (`@nextcloud/vue/components/NcSelect`) in every view,
+		// so this file's `vi.mock('@nextcloud/vue', …)` never reaches it and the real component
+		// renders. It is a `v-select`, which produces a `role="listbox"` wrapper and no `<option>`
+		// elements at all, so the original `findAll('option').length > 1` assertion could never pass
+		// — and its dropdown will not open under jsdom either, because v-select opens on real focus
+		// and click-outside. The requirement is therefore asserted where it is actually decided: the
+		// view's contract with the select. It fails if the accounts are not derived from the store, if
+		// an inactive account leaks in, or if the balance stops being shown in the option label.
 		it('should populate account selection with only active accounts for current user', () => {
 			const wrapper = createWrapper(SheetFormView)
-			const options = wrapper.find('[data-test="sheet-account-select"]').findAll('option')
-			expect(options.length).toBeGreaterThan(1)
+
+			// Not in the empty or errored state, and not disabled.
+			expect(wrapper.find('[data-test="no-accounts-hint"]').exists()).toBe(false)
+			expect(wrapper.find('[data-test="accounts-error"]').exists()).toBe(false)
+			expect(wrapper.find('[data-test="sheet-account-select"] input').attributes('disabled')).toBeUndefined()
+
+			const options = selectOptions(wrapper)
+			expect(options.map((o) => o.value)).toEqual(['acc-1', 'acc-2'])
+		})
+
+		it('should offer no option for an account the caller does not hold', () => {
+			setAccounts([{ ...RIAL_ACCOUNT }])
+			const wrapper = createWrapper(SheetFormView)
+			expect(selectOptions(wrapper).map((o) => o.value)).toEqual(['acc-1'])
+		})
+
+		it('should format each account option with its balance at its own currency scale', () => {
+			const wrapper = createWrapper(SheetFormView)
+			const options = selectOptions(wrapper)
+			// Rial has no minor unit, so 1000000 minor units is 1,000,000 rial, not 10,000. USD has
+			// two minor-unit digits, so 5000 minor units is 50.
+			expect(options[0]?.label).toContain('IRR')
+			expect(options[1]?.label).toContain('USD')
+			expect(options[1]?.label).not.toContain('50,000')
 		})
 
 		it('should disable currency selection when user has only one active account', () => {
+			setAccounts([{ ...RIAL_ACCOUNT }])
 			const wrapper = createWrapper(SheetFormView)
+			// A single account fixes the sheet currency (FR-021), so it is shown read-only rather than
+			// offered as a choice.
 			expect(wrapper.find('[data-test="currency-display"]').exists()).toBe(true)
+			expect(wrapper.find('[data-test="currency-display"]').attributes('readonly')).toBeDefined()
+			expect(wrapper.find('[data-test="currency-select"]').exists()).toBe(false)
 		})
 
 		it('should allow currency selection from multiple active accounts', () => {
 			const wrapper = createWrapper(SheetFormView)
 			expect(wrapper.find('[data-test="currency-select"]').exists()).toBe(true)
+			expect(wrapper.find('[data-test="currency-display"]').exists()).toBe(false)
 		})
 
-		it('should show account balance in the form', () => {
+		it('should show account balance in the form', async () => {
+			setAccounts([{ ...USD_ACCOUNT }])
 			const wrapper = createWrapper(SheetFormView)
-			expect(wrapper.find('[data-test="account-balance"]').exists()).toBe(true)
+			// The form defaults to the caller's first account on mount, which is asynchronous.
+			await flushPromises()
+			const balance = wrapper.find('[data-test="account-balance"]')
+			expect(balance.exists()).toBe(true)
+			// USD has two minor-unit digits, so 5000 minor units is 50 — a fixed /100 would print
+			// 50.00 and misstate the balance.
+			expect(balance.text()).toContain('USD')
+			expect(balance.text()).not.toContain('5,000')
+		})
+
+		it('should show no balance when the caller has no account', () => {
+			setAccounts([])
+			const wrapper = createWrapper(SheetFormView)
+			expect(wrapper.find('[data-test="account-balance"]').exists()).toBe(false)
 		})
 
 		it('should prevent submission when form is invalid', async () => {
 			const wrapper = createWrapper(SheetFormView)
 			const submitBtn = wrapper.find('[data-test="sheet-create-submit"]')
 			expect(submitBtn.attributes('disabled')).toBeDefined()
+		})
+
+		it('should enable submission once the form is valid', async () => {
+			const wrapper = createWrapper(SheetFormView)
+			await wrapper.find('[data-test="sheet-title-input"]').setValue('March travel')
+			expect(wrapper.find('[data-test="sheet-create-submit"]').attributes('disabled')).toBeUndefined()
 		})
 	})
 
@@ -248,9 +762,35 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 			expect(wrapper.find('[data-test="transaction-list"]').exists()).toBe(true)
 		})
 
-		it('should display submission validation errors when submitting incomplete sheet', () => {
+		// The original version mounted the view with an empty store and asserted that the error region
+		// existed, so it passed or failed for reasons unrelated to submission — it never submitted and
+		// never produced an error. The store's `error` is set explicitly instead, which is the state a
+		// refused submission leaves behind, and the region is required to be absent without it.
+		it('should display submission validation errors when submitting incomplete sheet', async () => {
 			const wrapper = createWrapper(SheetDetailView)
+			expect(wrapper.find('[data-test="submission-errors"]').exists()).toBe(false)
+
+			const sheetStore = useSheetStore()
+			sheetStore.error = 'At least one transaction is required'
+			await wrapper.vm.$nextTick()
+
+			const errors = wrapper.find('[data-test="submission-errors"]')
+			expect(errors.exists()).toBe(true)
+			expect(errors.text()).toContain('At least one transaction is required')
+			// Announced, not merely painted.
+			expect(errors.attributes('role')).toBe('alert')
+			expect(errors.attributes('aria-live')).toBe('assertive')
+		})
+
+		it('should clear the submission error when dismissed', async () => {
+			// `createWrapper` establishes the active Pinia, so the store is reached after mounting.
+			const wrapper = createWrapper(SheetDetailView)
+			useSheetStore().error = 'At least one transaction is required'
+			await wrapper.vm.$nextTick()
 			expect(wrapper.find('[data-test="submission-errors"]').exists()).toBe(true)
+
+			await wrapper.find('[data-test="submission-errors"] button').trigger('click')
+			expect(wrapper.find('[data-test="submission-errors"]').exists()).toBe(false)
 		})
 
 		it('should lock sheet and show read-only state after submission', () => {
@@ -272,6 +812,45 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 	})
 
 	describe('Transaction Forms', () => {
+		// `NcSelect` renders a `v-select`: the `data-test` lands on its root element and the accessible
+		// name and the `aria-describedby` live on the inner `input`. Reading the attribute off the root
+		// would find nothing and prove nothing about what the combobox announces.
+		function selectInput(wrapper: VueWrapper, testId: string) {
+			return wrapper.find(`[data-test="${testId}"] input`)
+		}
+
+		/**
+		 * The text a control announces, resolved through its own `aria-describedby`.
+		 *
+		 * The requirement is not that a message exists somewhere in the document but that the control
+		 * points at it, so the ids the control names are what gets read back. A message rendered but not
+		 * referenced — or referenced but empty — both fail here.
+		 */
+		function announcedMessage(wrapper: VueWrapper, control: ReturnType<typeof selectInput>): string {
+			const ids = (control.attributes('aria-describedby') ?? '').split(/\s+/).filter(Boolean)
+			expect(ids.length, 'the control must reference the message it announces').toBeGreaterThan(0)
+			return ids.map((id) => wrapper.find(`#${id}`).text()).join(' ').trim()
+		}
+
+		/**
+		 * Submits the transaction form.
+		 *
+		 * The bare `form` element is used rather than a `data-test` handle, so that a view without that
+		 * handle fails on the behaviour under test instead of on a missing attribute.
+		 */
+		function submitTransactionForm(wrapper: VueWrapper) {
+			return wrapper.find('form').trigger('submit.prevent')
+		}
+
+		/** The body of the single `POST /sheets/{id}/transactions` the form issued, if any. */
+		function createdTransactionBody(): Record<string, unknown> | undefined {
+			const call = ocsRequest.mock.calls.find((args: unknown[]) => {
+				const config = args[0] as { url?: string; method?: string; data?: unknown } | undefined
+				return config?.method === 'POST' && /\/transactions$/.test(config?.url ?? '')
+			})
+			return (call?.[0] as { data?: Record<string, unknown> } | undefined)?.data
+		}
+
 		it('should render transaction creation form with required fields', () => {
 			const wrapper = createWrapper(TransactionFormView)
 			expect(wrapper.find('[data-test="expense-date-input"]').exists()).toBe(true)
@@ -281,46 +860,154 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 			expect(wrapper.find('[data-test="expense-type-select"]').exists()).toBe(true)
 		})
 
+		// FR-032: the transaction is routed to the manager the server holds for its cost center, so the
+		// options have to be the configured ones. The view previously answered with hard-coded
+		// `cc-1`/`et-1` placeholders that exist nowhere in the instance.
+		it('should offer the configured cost centers and expense types', async () => {
+			const wrapper = await createWrapperAtRoute(TransactionFormView, '/sheets/sh-1/transactions/create')
+			expect(selectOptions(wrapper, 'cost-center-select').map((o) => o.value)).toEqual([COST_CENTER_ENGINEERING, COST_CENTER_MARKETING])
+			expect(selectOptions(wrapper, 'expense-type-select').map((o) => o.value)).toEqual([EXPENSE_TYPE_SUPPLIES, EXPENSE_TYPE_TRAVEL])
+		})
+
 		it('should require expense date and positive amount as minimum draft data', async () => {
-			const wrapper = createWrapper(TransactionFormView)
+			const wrapper = await createWrapperAtRoute(TransactionFormView, '/sheets/sh-1/transactions/create')
 			await wrapper.find('[data-test="expense-date-input"]').setValue('2026-01-15')
 			await wrapper.find('[data-test="amount-input"]').setValue('1000')
 			await wrapper.find('[data-test="transaction-save-draft"]').trigger('click')
-			expect(wrapper.emitted('save-draft')).toBeTruthy()
+			await flushPromises()
+
+			// The original assertion was `expect(wrapper.emitted('save-draft')).toBeTruthy()`. This is a
+			// routed view with no parent to emit to — it persists through the store — so that event can
+			// never be emitted and the assertion could only ever fail. What FR-022 actually requires is
+			// that a draft is saved with an expense date and a positive amount *and nothing else*.
+			const body = createdTransactionBody()
+			expect(body, 'the draft must be persisted').toBeDefined()
+			expect(body?.expenseDate).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+			expect(body?.amountMinor).toBe(1000)
+			// The remaining fields are sent empty rather than absent: the point is that the form invented
+			// no value for them, not that it omitted the keys.
+			expect(body?.description).toBe('')
+			expect(body?.costCenterId).toBe('')
+			expect(body?.expenseTypeId).toBe('')
 		})
 
-		it('should show field-level errors for missing cost center at submission', () => {
-			const wrapper = createWrapper(TransactionFormView)
-			expect(wrapper.find('[data-test="cost-center-error"]').exists()).toBe(true)
+		it('should refuse to save a draft without an expense date and a positive amount', async () => {
+			const wrapper = await createWrapperAtRoute(TransactionFormView, '/sheets/sh-1/transactions/create')
+			// The date is pre-filled with today, so the amount is what has to fail the draft rules.
+			await wrapper.find('[data-test="expense-date-input"]').setValue('')
+			await wrapper.find('[data-test="amount-input"]').setValue('1000')
+			expect(wrapper.find('[data-test="transaction-save-draft"]').attributes('disabled')).toBeDefined()
+
+			await wrapper.find('[data-test="expense-date-input"]').setValue('2026-01-15')
+			await wrapper.find('[data-test="amount-input"]').setValue('0')
+			expect(wrapper.find('[data-test="transaction-save-draft"]').attributes('disabled')).toBeDefined()
+
+			await wrapper.find('[data-test="transaction-save-draft"]').trigger('click')
+			await flushPromises()
+			expect(createdTransactionBody()).toBeUndefined()
 		})
 
-		it('should show field-level errors for missing expense type at submission', () => {
+		// The four `*-error` tests below previously mounted an empty form and required the error to be
+		// there already. They never submitted, so they asserted a state the component had no reason to
+		// be in — the same defect corrected for `submission-errors` in the Sheet Detail slice. They are
+		// rewritten to submit, and then to check the two things FR-071 asks of error presentation: the
+		// control announces its own message, and the summary names the field without hunting for it.
+
+		it('should show field-level errors for missing cost center at submission', async () => {
 			const wrapper = createWrapper(TransactionFormView)
-			expect(wrapper.find('[data-test="expense-type-error"]').exists()).toBe(true)
+			expect(wrapper.find('[data-test="validation-summary-costCenterId"]').exists()).toBe(false)
+
+			await submitTransactionForm(wrapper)
+			expect(wrapper.find('[data-test="validation-summary-costCenterId"]').exists()).toBe(true)
+			expect(announcedMessage(wrapper, selectInput(wrapper, 'cost-center-select'))).toContain('validation.required')
 		})
 
-		it('should show field-level errors for missing description at submission', () => {
+		it('should show field-level errors for missing expense type at submission', async () => {
 			const wrapper = createWrapper(TransactionFormView)
-			expect(wrapper.find('[data-test="description-error"]').exists()).toBe(true)
+			await submitTransactionForm(wrapper)
+			expect(wrapper.find('[data-test="validation-summary-expenseTypeId"]').exists()).toBe(true)
+			expect(announcedMessage(wrapper, selectInput(wrapper, 'expense-type-select'))).toContain('validation.required')
 		})
 
-		it('should show field-level errors for missing required evidence at submission', () => {
+		it('should show field-level errors for missing description at submission', async () => {
 			const wrapper = createWrapper(TransactionFormView)
-			expect(wrapper.find('[data-test="evidence-error"]').exists()).toBe(true)
+			await submitTransactionForm(wrapper)
+			expect(wrapper.find('[data-test="validation-summary-description"]').exists()).toBe(true)
+			expect(announcedMessage(wrapper, wrapper.find('[data-test="description-input"]'))).toContain('validation.required')
 		})
 
-		it('should inherit and display sheet currency (not editable)', () => {
+		it('should announce the summary of everything still missing', async () => {
 			const wrapper = createWrapper(TransactionFormView)
+			// The date is pre-filled with today, so it is cleared to reach a wholly empty submission.
+			await wrapper.find('[data-test="expense-date-input"]').setValue('')
+			await submitTransactionForm(wrapper)
+
+			const summary = wrapper.find('[data-test="validation-summary"]')
+			expect(summary.exists()).toBe(true)
+			// Announced, not merely painted.
+			expect(summary.attributes('role')).toBe('alert')
+			expect(summary.attributes('aria-live')).toBe('assertive')
+			for (const field of ['expenseDate', 'amountMinor', 'description', 'costCenterId', 'expenseTypeId']) {
+				expect(wrapper.find(`[data-test="validation-summary-${field}"]`).exists(), `${field} must be named`).toBe(true)
+			}
+		})
+
+		// FR-023 requires "all required evidence" at submission, and the requirement is the expense
+		// type's: `data-model.md` gives `evidence_required` the meaning "at least one active item
+		// required at submission when true". The rule is therefore conditional, and both branches are
+		// asserted — a form that always demanded evidence would fail the second, and a form that never
+		// did would fail the first.
+		it('should show field-level errors for missing required evidence at submission', async () => {
+			const wrapper = await createWrapperAtRoute(TransactionFormView, '/sheets/sh-1/transactions/create')
+			await fillTransactionForm(wrapper, { costCenterId: COST_CENTER_ENGINEERING, expenseTypeId: EXPENSE_TYPE_TRAVEL })
+			await submitTransactionForm(wrapper)
+			expect(wrapper.find('[data-test="validation-summary-evidence"]').exists()).toBe(true)
+		})
+
+		it('should not demand evidence for an expense type that does not require it', async () => {
+			const wrapper = await createWrapperAtRoute(TransactionFormView, '/sheets/sh-1/transactions/create')
+			await fillTransactionForm(wrapper, { costCenterId: COST_CENTER_ENGINEERING, expenseTypeId: EXPENSE_TYPE_SUPPLIES })
+			await submitTransactionForm(wrapper)
+			expect(wrapper.find('[data-test="validation-summary-evidence"]').exists()).toBe(false)
+		})
+
+		it('should accept a submitted transaction once every required field is present', async () => {
+			const wrapper = await createWrapperAtRoute(TransactionFormView, '/sheets/sh-1/transactions/create')
+			await fillTransactionForm(wrapper, { costCenterId: COST_CENTER_ENGINEERING, expenseTypeId: EXPENSE_TYPE_SUPPLIES })
+			expect(wrapper.find('[data-test="validation-summary"]').exists()).toBe(false)
+			expect(wrapper.find('[data-test="submit-btn"]').attributes('disabled')).toBeUndefined()
+		})
+
+		// FR-021: the transaction inherits the sheet currency and defines none of its own.
+		it('should inherit and display sheet currency (not editable)', async () => {
+			const wrapper = await createWrapperAtRoute(TransactionFormView, '/sheets/sh-1/transactions/create')
+			useSheetStore().currentSheet = sheetFixture('IRR')
+			await wrapper.vm.$nextTick()
+
 			const currencyField = wrapper.find('[data-test="transaction-currency"]')
 			expect(currencyField.exists()).toBe(true)
-			expect(currencyField.attributes('readonly') || currencyField.attributes('disabled')).toBeDefined()
+			// An `<input>` carries its value as an attribute, not as text.
+			expect(currencyField.attributes('value')).toBe('IRR')
+			// Read-only rather than a select: the sheet already fixed it, so offering a choice would
+			// contradict FR-021. Nothing on the form may write a currency of its own.
+			expect(currencyField.attributes('readonly')).toBeDefined()
+			expect(wrapper.find('[data-test="currency-select"]').exists()).toBe(false)
 		})
 
 		it('should validate amount is positive integer in minor units', async () => {
-			const wrapper = createWrapper(TransactionFormView)
-			await wrapper.find('[data-test="amount-input"]').setValue('0')
-			await wrapper.find('form').trigger('submit.prevent')
-			expect(wrapper.find('[data-test="amount-error"]').exists()).toBe(true)
+			// `amountMinor` is the amount already scaled to the currency's minor unit, so a fraction of
+			// one is not a representable amount of money. The previous rule only rejected `<= 0`, which
+			// let 0.5 through to an API that has nowhere to put the remainder.
+			for (const rejected of ['0', '-1', '0.5']) {
+				const wrapper = createWrapper(TransactionFormView)
+				await wrapper.find('[data-test="amount-input"]').setValue(rejected)
+				await submitTransactionForm(wrapper)
+				expect(wrapper.find('[data-test="validation-summary-amountMinor"]').exists(), `${rejected} must be rejected`).toBe(true)
+			}
+
+			const accepted = createWrapper(TransactionFormView)
+			await accepted.find('[data-test="amount-input"]').setValue('1')
+			expect(accepted.find('[data-test="validation-summary-amountMinor"]').exists()).toBe(false)
 		})
 
 		it('should allow saving draft with only expense date and amount', async () => {
@@ -330,11 +1017,38 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 			expect(wrapper.find('[data-test="transaction-save-draft"]').attributes('disabled')).toBeUndefined()
 		})
 
-		it('should disable form when transaction is in submitted state', () => {
-			const wrapper = createWrapper(TransactionFormView, {
-				props: { transactionStatus: 'AWAITING_COST_CENTER_REVIEW' }
-			})
-			expect(wrapper.find('[data-test="expense-date-input"]').attributes('disabled')).toBeDefined()
+		// FR-026: after submission the purchaser must not edit a transaction's business information.
+		// The original test passed a `transactionStatus` *prop* the view never declared, so it asserted
+		// against a contract that did not exist; the status lives on the loaded transaction.
+		it('should disable form when transaction is in submitted state', async () => {
+			const wrapper = await createWrapperAtRoute(TransactionFormView, '/transactions/tx-1/edit')
+			await wrapper.find('[data-test="expense-date-input"]').setValue('2026-01-15')
+			await wrapper.find('[data-test="amount-input"]').setValue('1000')
+
+			const transactionStore = useTransactionStore()
+			transactionStore.currentTransaction = transactionFixture({ status: 'AWAITING_COST_CENTER_REVIEW' })
+			await wrapper.vm.$nextTick()
+
+			for (const control of ['expense-date-input', 'amount-input', 'description-input']) {
+				expect(wrapper.find(`[data-test="${control}"]`).attributes('disabled'), `${control} must be locked`).toBeDefined()
+			}
+			expect(wrapper.find('[data-test="submit-btn"]').attributes('disabled')).toBeDefined()
+			expect(wrapper.find('[data-test="transaction-save-draft"]').attributes('disabled')).toBeDefined()
+			// FR-025 allows evidence to be added and removed before submission only.
+			expect(wrapper.find('[data-test="evidence-read-only-hint"]').exists()).toBe(true)
+			expect(wrapper.find('[data-test="evidence-uploader"]').exists()).toBe(false)
+		})
+
+		// The same requirement's one named exception: a returned transaction is corrected, which means
+		// it is edited again.
+		it('should leave a returned transaction editable for correction', async () => {
+			const wrapper = await createWrapperAtRoute(TransactionFormView, '/transactions/tx-1/edit')
+			const transactionStore = useTransactionStore()
+			transactionStore.currentTransaction = transactionFixture({ status: 'AWAITING_PURCHASER_CORRECTION' })
+			await wrapper.vm.$nextTick()
+
+			expect(wrapper.find('[data-test="description-input"]').attributes('disabled')).toBeUndefined()
+			expect(wrapper.find('[data-test="evidence-uploader"]').exists()).toBe(true)
 		})
 
 		it('should show evidence upload area in transaction form', () => {
@@ -344,58 +1058,262 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 	})
 
 	describe('Transaction List View', () => {
-		it('should list transactions for a sheet with status indicators', () => {
-			const wrapper = createWrapper(TransactionListView)
-			expect(wrapper.find('[data-test="transaction-status-badge"]').exists()).toBe(true)
+		// All three tests in this group mounted the view against an empty store — the OCS mock answers
+		// an empty page — and then required a *per-row* element to exist. There were no rows, so none of
+		// them could, whatever the view rendered. They are rewritten to seed the rows they assert on,
+		// which is also what makes them able to distinguish "a badge exists" from "the right badge is
+		// on the right row".
+		async function mountList(items: TransactionSummary[]) {
+			setTransactionList(items)
+			return createWrapperAtRoute(TransactionListView, '/sheets/sh-1/transactions')
+		}
+
+		const DRAFT_TX = transactionSummaryFixture({ id: 'tx-draft', status: 'DRAFT', stage: 'DRAFT', evidenceCount: 0 })
+		const REVIEWED_TX = transactionSummaryFixture({
+			id: 'tx-reviewed',
+			status: 'COST_CENTER_APPROVED',
+			stage: 'SENIOR',
+			evidenceCount: 3,
+			latestDecision: decisionFixture()
 		})
 
-		it('should show transaction stage and latest decision', () => {
-			const wrapper = createWrapper(TransactionListView)
-			expect(wrapper.find('[data-test="transaction-stage"]').exists()).toBe(true)
-			expect(wrapper.find('[data-test="latest-decision"]').exists()).toBe(true)
+		it('should list transactions for a sheet with status indicators', async () => {
+			const wrapper = await mountList([DRAFT_TX, REVIEWED_TX])
+			const rows = wrapper.findAll('[data-test="transaction-row"]')
+			expect(rows).toHaveLength(2)
+
+			// `StatusBadge` emits its own `data-testid` derived from the status it was given, so each
+			// row can be checked for the badge that belongs to *it*. Asserting only that some badge
+			// exists would pass even if every row carried the same one.
+			expect(rows[0]?.find(`[data-testid="status-badge-${DRAFT_TX.status.toLowerCase()}"]`).exists()).toBe(true)
+			expect(rows[1]?.find(`[data-testid="status-badge-${REVIEWED_TX.status.toLowerCase()}"]`).exists()).toBe(true)
+			// And a row must not carry another row's badge.
+			expect(rows[0]?.find(`[data-testid="status-badge-${REVIEWED_TX.status.toLowerCase()}"]`).exists()).toBe(false)
 		})
 
-		it('should show evidence count per transaction', () => {
-			const wrapper = createWrapper(TransactionListView)
-			expect(wrapper.find('[data-test="evidence-count"]').exists()).toBe(true)
+		it('should show no rows and no badges for a sheet with no transactions', async () => {
+			const wrapper = await mountList([])
+			expect(wrapper.findAll('[data-test="transaction-row"]')).toHaveLength(0)
+			expect(wrapper.find('[data-test="transaction-list"]').exists()).toBe(true)
+		})
+
+		it('should show transaction stage and latest decision', async () => {
+			const wrapper = await mountList([DRAFT_TX, REVIEWED_TX])
+
+			const stages = wrapper.findAll('[data-test="transaction-stage"]')
+			expect(stages).toHaveLength(2)
+			expect(stages[0]?.text()).toContain('stage.draft')
+			expect(stages[1]?.text()).toContain('stage.senior')
+
+			// The latest decision is a field on every row the store already holds, and the view fetched
+			// it and then never rendered it. A row with no decision says so rather than showing a blank
+			// cell that reads as a rendering fault.
+			const decisions = wrapper.findAll('[data-test="latest-decision"]')
+			expect(decisions).toHaveLength(2)
+			expect(decisions[1]?.text()).toContain('decision.approve')
+			// FR-052: the actor travels with the decision, so the name shown is the one at the time.
+			expect(decisions[1]?.text()).toContain('Manager One')
+			expect(decisions[0]?.text()).toContain('transactions.noDecision')
+		})
+
+		it('should show evidence count per transaction', async () => {
+			const wrapper = await mountList([DRAFT_TX, REVIEWED_TX])
+			const counts = wrapper.findAll('[data-test="evidence-count"]')
+			expect(counts).toHaveLength(2)
+			expect(counts[0]?.text()).toBe('0')
+			expect(counts[1]?.text()).toBe('3')
+		})
+
+		it('should give each row action an accessible name', async () => {
+			// The row action is an icon-only button, so without a name it is announced as just
+			// "button" (WCAG 4.1.2).
+			const wrapper = await mountList([DRAFT_TX])
+			const action = wrapper.find('[data-test="view-transaction"]')
+			expect(action.attributes('aria-label')).toBeTruthy()
+			expect(wrapper.find('[data-test="create-transaction-btn"]').attributes('aria-label')).toBeTruthy()
 		})
 	})
 
 	describe('Transaction Detail View', () => {
-		it('should display transaction details with revision history', () => {
-			const wrapper = createWrapper(TransactionDetailView)
+		async function mountDetail(detail: TransactionDetail, revisions: Revision[] = []) {
+			setTransactionDetail(detail)
+			setRevisions(revisions)
+			return createWrapperAtRoute(TransactionDetailView, `/transactions/${detail.id}`)
+		}
+
+		it('should display transaction details with revision history', async () => {
+			const wrapper = await mountDetail(transactionFixture(), [revisionFixture()])
 			expect(wrapper.find('[data-test="revision-history"]').exists()).toBe(true)
+			// The header is only meaningful when there is something to choose between.
+			expect(wrapper.findAll('[data-test="revision-tab"]')).toHaveLength(1)
 		})
 
-		it('should show all decisions with actor snapshots and explanations', () => {
-			const wrapper = createWrapper(TransactionDetailView)
-			expect(wrapper.find('[data-test="decision-list"]').exists()).toBe(true)
-			expect(wrapper.find('[data-test="actor-snapshot"]').exists()).toBe(true)
+		// FR-052 makes the actor a snapshot rather than a live lookup: display name and role are the
+		// ones at the time of the decision. The view rendered the name and the role and dropped the
+		// identifier, so a decision could not be traced back to the person who made it.
+		it('should show all decisions with actor snapshots and explanations', async () => {
+			const decisions = [
+				decisionFixture({ id: 'dec-1' }),
+				decisionFixture({
+					id: 'dec-2',
+					stage: 'SENIOR',
+					decision: 'RETURN',
+					explanation: 'Missing the original receipt',
+					actor: { userId: 'senior1', displayName: 'Senior One', role: 'SENIOR_MANAGER' },
+					decidedAt: '2026-01-21T11:00:00+00:00'
+				})
+			]
+			const wrapper = await mountDetail(transactionFixture({ decisions }))
+
+			const items = wrapper.findAll('[data-test="decision-item"]')
+			expect(items).toHaveLength(2)
+
+			const snapshots = wrapper.findAll('[data-test="actor-snapshot"]')
+			expect(snapshots).toHaveLength(2)
+			for (const snapshot of snapshots) {
+				// All three parts, or the snapshot is not a snapshot.
+				expect(snapshot.find('[data-test="actor-user-id"]').text()).toBeTruthy()
+				expect(snapshot.find('[data-test="actor-display-name"]').text()).toBeTruthy()
+				expect(snapshot.find('[data-test="actor-role"]').text()).toBeTruthy()
+			}
+			expect(snapshots[0]?.text()).toContain('Manager One')
+			expect(snapshots[0]?.text()).toContain('COST_CENTER_MANAGER')
+			expect(snapshots[1]?.text()).toContain('Senior One')
+
+			// The explanation travels with the decision it belongs to.
+			expect(items[0]?.text()).toContain('Within the travel budget')
+			expect(items[1]?.text()).toContain('Missing the original receipt')
 		})
 
-		it('should display evidence list with active/inactive state', () => {
-			const wrapper = createWrapper(TransactionDetailView)
-			expect(wrapper.find('[data-test="evidence-list"]').exists()).toBe(true)
-			expect(wrapper.find('[data-test="evidence-active-badge"]').exists()).toBe(true)
+		it('should state plainly when a transaction has no decisions yet', async () => {
+			const wrapper = await mountDetail(transactionFixture())
+			expect(wrapper.findAll('[data-test="decision-item"]')).toHaveLength(0)
+			expect(wrapper.find('[data-test="no-decisions"]').exists()).toBe(true)
 		})
 
-		it('should show read-only view for submitted transactions', () => {
-			const wrapper = createWrapper(TransactionDetailView)
+		// FR-059: after submission removal marks evidence inactive rather than deleting it, and its
+		// history stays viewable. FR-060: the active state is part of what an authorized viewer sees.
+		it('should display evidence list with active/inactive state', async () => {
+			const evidence = [
+				evidenceFixture({ id: 'ev-1', name: 'receipt.pdf', active: true }),
+				evidenceFixture({
+					id: 'ev-2',
+					name: 'draft-note.txt',
+					mediaType: 'text/plain',
+					active: false,
+					deactivatedAt: '2026-01-22T08:00:00+00:00'
+				})
+			]
+			const wrapper = await mountDetail(transactionFixture({ evidence, evidenceCount: 2 }))
+
+			const items = wrapper.findAll('[data-test="evidence-list-item"]')
+			expect(items).toHaveLength(2)
+			const states = wrapper.findAll('[data-test="evidence-active-badge"]')
+			expect(states).toHaveLength(2)
+			expect(states[0]?.text()).toContain('evidence.active')
+			expect(states[1]?.text()).toContain('evidence.inactive')
+			// The file is still listed after deactivation — that is what "not deleted" means.
+			expect(items[1]?.text()).toContain('draft-note.txt')
+		})
+
+		// This test passed before for the wrong reason: with no transaction loaded the view computed
+		// `isSubmitted` as `null !== 'DRAFT'`, so a DRAFT transaction's read-only badge appeared
+		// without a transaction ever being fetched.
+		it('should show read-only view for submitted transactions', async () => {
+			const submitted = transactionFixture({ status: 'AWAITING_COST_CENTER_REVIEW', stage: 'COST_CENTER' })
+			const wrapper = await mountDetail(submitted)
 			expect(wrapper.find('[data-test="read-only-indicator"]').exists()).toBe(true)
+			// And the affordances that would contradict it are gone.
+			expect(wrapper.find('[data-test="edit-transaction-btn"]').exists()).toBe(false)
+			expect(wrapper.find('[data-test="create-correction-btn"]').exists()).toBe(false)
 		})
 
-		it('should display revision selector for corrected transactions', () => {
-			const wrapper = createWrapper(TransactionDetailView)
+		it('should offer editing for a draft and correction only for a returned transaction', async () => {
+			const draft = await mountDetail(transactionFixture())
+			expect(draft.find('[data-test="edit-transaction-btn"]').exists()).toBe(true)
+			expect(draft.find('[data-test="read-only-indicator"]').exists()).toBe(false)
+			expect(draft.find('[data-test="create-correction-btn"]').exists()).toBe(false)
+
+			const returned = await mountDetail(transactionFixture({ status: 'AWAITING_PURCHASER_CORRECTION', stage: 'CORRECTION' }))
+			expect(returned.find('[data-test="create-correction-btn"]').exists()).toBe(true)
+			expect(returned.find('[data-test="read-only-indicator"]').exists()).toBe(false)
+		})
+
+		it('should display revision selector for corrected transactions', async () => {
+			const revisions = [
+				revisionFixture(),
+				revisionFixture({ id: 'rev-2', number: 2, createdAt: '2026-01-22T09:00:00+00:00' })
+			]
+			const wrapper = await mountDetail(transactionFixture(), revisions)
 			expect(wrapper.find('[data-test="revision-selector"]').exists()).toBe(true)
+			expect(wrapper.findAll('[data-test="revision-tab"]')).toHaveLength(2)
 		})
 
-		it('should show immutable prior revisions with their decisions', () => {
-			const wrapper = createWrapper(TransactionDetailView)
-			expect(wrapper.find('[data-test="prior-revisions"]').exists()).toBe(true)
+		// FR-050: the *active* revision determines the current transaction information. The panel
+		// defaulted to `revisions[0]`, which is the oldest revision, so a corrected transaction opened
+		// showing its superseded amount and cost centre as if they were current.
+		it('should open the revision panel on the active revision', async () => {
+			const prior = revisionFixture({ id: 'rev-1', number: 1, active: false, amount: { amountMinor: 900, currency: 'IRR', minorUnit: 0 } })
+			const active = revisionFixture({ id: 'rev-2', number: 2, active: true, description: 'Taxi to the airport, corrected' })
+			const wrapper = await mountDetail(transactionFixture({ activeRevision: active }), [prior, active])
+
+			const panel = wrapper.find('[role="tabpanel"]')
+			expect(panel.text()).toContain('Taxi to the airport, corrected')
+			// The superseded amount must not be on show as the current one — and the current one must be
+			// shown at its own scale. Rial has no minor unit, so 1000 minor units is 1,000: the four
+			// views that divided by a fixed 100 printed "10" instead, a hundredfold error in the figure a
+			// finance officer reconciles against. Compared against `toLocaleString` so the assertion
+			// states the scale rather than the Persian digit shapes, and suffixed with the currency code
+			// so the locale-formatted date above cannot supply a false match.
+			const rial = (minor: number) => `${minor.toLocaleString('fa-IR')} IRR`
+			expect(panel.text()).toContain(rial(1000))
+			expect(panel.text()).not.toContain(rial(1000 / 100))
+			expect(panel.text()).not.toContain(rial(900))
+			// The tab for the revision on display is the one marked selected.
+			const selected = wrapper.findAll('[data-test="revision-tab"]').filter((tab) => tab.attributes('aria-selected') === 'true')
+			expect(selected).toHaveLength(1)
+			expect(selected[0]?.text()).toContain('2')
+		})
+
+		// FR-050: the active revision determines the current information while all prior revisions
+		// remain part of the record, and FR-053 makes the record append-only. The view had a revision
+		// *selector* — which lets the reader page through history — but never stated that what they are
+		// reading is retained history rather than a previous state of an editable row.
+		it('should show immutable prior revisions with their decisions', async () => {
+			const prior = revisionFixture({ id: 'rev-1', number: 1, active: false })
+			const active = revisionFixture({ id: 'rev-2', number: 2, active: true, description: 'Taxi to the airport, corrected' })
+			const wrapper = await mountDetail(
+				transactionFixture({ activeRevision: active, decisions: [decisionFixture()] }),
+				[prior, active]
+			)
+			const region = wrapper.find('[data-test="prior-revisions"]')
+			expect(region.exists()).toBe(true)
+			// Only the superseded revision is history; the active one is the current information.
+			const listed = wrapper.findAll('[data-test="prior-revision"]')
+			expect(listed).toHaveLength(1)
+			expect(listed[0]?.text()).toContain('1')
+			expect(region.text()).not.toContain('Taxi to the airport, corrected')
+			// Retained, not editable: nothing in the region offers to change a past revision.
+			expect(region.find('input, textarea, select, button').exists()).toBe(false)
 		})
 	})
 
 	describe('Evidence Upload', () => {
+		// A `File` jsdom will accept without allocating 101 MB of memory: the component only reads
+		// `size`, and the uploader's own limit is what is under test.
+		function fileOfSize(bytes: number, name = 'receipt.pdf', type = 'application/pdf'): File {
+			const file = new File(['x'], name, { type })
+			Object.defineProperty(file, 'size', { value: bytes })
+			return file
+		}
+
+		async function selectFile(wrapper: VueWrapper, file: File) {
+			const input = wrapper.find('[data-test="evidence-upload-input"]')
+			Object.defineProperty(input.element, 'files', { value: [file], configurable: true })
+			await input.trigger('change')
+			await wrapper.vm.$nextTick()
+		}
+
 		it('should render evidence uploader with drag-and-drop area', () => {
 			const wrapper = createWrapper(EvidenceUploader, {
 				props: { transactionId: 'test-tx-1', isDraft: true }
@@ -411,11 +1329,7 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 				const wrapper = createWrapper(EvidenceUploader, {
 					props: { transactionId: 'test-tx-1', isDraft: true }
 				})
-				const file = new File(['receipt-content'], 'receipt.pdf', { type: 'application/pdf' })
-				const input = wrapper.find('[data-test="evidence-upload-input"]')
-				Object.defineProperty(input.element, 'files', { value: [file], configurable: true })
-				await input.trigger('change')
-				await wrapper.vm.$nextTick()
+				await selectFile(wrapper, new File(['receipt-content'], 'receipt.pdf', { type: 'application/pdf' }))
 				expect(wrapper.find('[data-test="upload-btn"]').exists()).toBe(true)
 				await wrapper.find('[data-test="upload-btn"]').trigger('click')
 				await wrapper.vm.$nextTick()
@@ -429,172 +1343,361 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 
 		it('should enforce 100 MB maximum file size', async () => {
 			const wrapper = createWrapper(EvidenceUploader)
-			const largeFile = new File(['x'.repeat(101 * 1024 * 1024)], 'large.pdf', { type: 'application/pdf' })
-			const input = wrapper.find('[data-test="evidence-upload-input"]')
-			Object.defineProperty(input.element, 'files', { value: [largeFile], configurable: true })
-			await input.trigger('change')
-			await wrapper.vm.$nextTick()
+			await selectFile(wrapper, fileOfSize(101 * 1024 * 1024))
 			expect(wrapper.find('[data-test="file-size-error"]').exists()).toBe(true)
 		})
 
+		// The boundary is inclusive: a file of exactly the limit is allowed. Only `> MAX` is refused,
+		// and an off-by-one here silently rejects a legitimate 100 MB receipt.
+		it('should accept a file of exactly the maximum size', async () => {
+			const wrapper = createWrapper(EvidenceUploader)
+			await selectFile(wrapper, fileOfSize(100 * 1024 * 1024))
+			expect(wrapper.find('[data-test="file-size-error"]').exists()).toBe(false)
+			expect(wrapper.find('[data-test="upload-btn"]').exists()).toBe(true)
+		})
+
+		// A refusal that does not say what the limit is leaves the purchaser with nothing to act on.
+		// The message key carried a `{max}` placeholder that no source ever filled, so the number was
+		// never shown.
 		it('should reject oversized files with clear error message', async () => {
 			const wrapper = createWrapper(EvidenceUploader)
-			const largeFile = new File(['x'.repeat(101 * 1024 * 1024)], 'large.pdf', { type: 'application/pdf' })
-			const input = wrapper.find('[data-test="evidence-upload-input"]')
-			Object.defineProperty(input.element, 'files', { value: [largeFile], configurable: true })
-			await input.trigger('change')
-			await wrapper.vm.$nextTick()
-			expect(wrapper.find('[data-test="file-size-error"]').text()).toContain('100 MB')
+			await selectFile(wrapper, fileOfSize(101 * 1024 * 1024))
+
+			const error = wrapper.find('[data-test="file-size-error"]')
+			expect(error.exists()).toBe(true)
+			expect(error.text()).toContain('100 MB')
+			// Announced, not merely painted.
+			expect(error.attributes('role')).toBe('alert')
 		})
 
+		// FR-029 requires each evidence file to retain name, type, size and upload time, and T283
+		// exists because the suite only checked that four hooks existed rather than what they said.
 		it('should show evidence list with file name, type, size, and upload time', () => {
+			// 1,572,864 bytes is 1.5 MB. The unit boundary matters: 1,024,000 bytes is 1000 KB, and a
+			// test that called that "1.0 MB" would have been asserting the wrong conversion.
 			const wrapper = createWrapper(EvidenceList, {
-				props: {
-					evidence: [{
-						id: 'ev-1',
-						name: 'receipt.pdf',
-						mediaType: 'application/pdf',
-						sizeBytes: 1024000,
-						active: true,
-						uploadedBy: 'user1',
-						uploadedAt: '2026-01-15T10:00:00Z'
-					}]
-				}
+				props: { evidence: [evidenceFixture({ sizeBytes: 1572864 })], isDraft: true }
 			})
-			expect(wrapper.find('[data-test="evidence-name"]').exists()).toBe(true)
-			expect(wrapper.find('[data-test="evidence-type"]').exists()).toBe(true)
-			expect(wrapper.find('[data-test="evidence-size"]').exists()).toBe(true)
-			expect(wrapper.find('[data-test="evidence-upload-time"]').exists()).toBe(true)
+			expect(wrapper.find('[data-test="evidence-name"]').text()).toBe('receipt.pdf')
+			expect(wrapper.find('[data-test="evidence-type"]').text()).toBe('application/pdf')
+			// Formatted for a reader, not raw bytes.
+			expect(wrapper.find('[data-test="evidence-size"]').text()).toBe('1.5 MB')
+			expect(wrapper.find('[data-test="evidence-size"]').text()).not.toContain('1572864')
+			expect(wrapper.find('[data-test="evidence-upload-time"]').text()).not.toBe('')
 		})
 
-		it('should allow removing evidence before submission', () => {
+		// FR-058: before submission the purchaser removes evidence from their own open transaction.
+		it('should allow removing evidence before submission', async () => {
 			const wrapper = createWrapper(EvidenceList, {
-				props: {
-					evidence: [{
-						id: 'ev-1',
-						name: 'receipt.pdf',
-						mediaType: 'application/pdf',
-						sizeBytes: 1024000,
-						active: true,
-						uploadedBy: 'user1',
-						uploadedAt: '2026-01-15T10:00:00Z'
-					}],
-					isDraft: true
-				}
+				props: { evidence: [evidenceFixture()], isDraft: true }
 			})
 			expect(wrapper.find('[data-test="delete-evidence-btn"]').exists()).toBe(true)
 		})
 
-		it('should mark evidence as inactive (not delete) after submission', () => {
+		// FR-060: an authorized viewer must be able to download evidence. The download button was gated
+		// on `isDraft`, so a cost-centre manager reviewing a *submitted* transaction — the whole point
+		// of the review — was offered no way to open the receipt they were being asked to approve.
+		it('should allow downloading evidence from a submitted transaction', () => {
 			const wrapper = createWrapper(EvidenceList, {
-				props: {
-					evidence: [{
-						id: 'ev-1',
-						name: 'receipt.pdf',
-						mediaType: 'application/pdf',
-						sizeBytes: 1024000,
-						active: false,
-						uploadedBy: 'user1',
-						uploadedAt: '2026-01-15T10:00:00Z',
-						deactivatedAt: '2026-01-16T10:00:00Z',
-						deactivationReason: 'Removed after submission'
-					}],
-					isDraft: false
-				}
+				props: { evidence: [evidenceFixture()], isDraft: false }
 			})
-			expect(wrapper.find('[data-test="inactive-badge"]').exists()).toBe(true)
+			expect(wrapper.find('[data-test="download-evidence-btn"]').exists()).toBe(true)
+			// Removal, by contrast, is a pre-submission affordance only.
 			expect(wrapper.find('[data-test="delete-evidence-btn"]').exists()).toBe(false)
 		})
 
+		// FR-059: after submission removal marks the item inactive rather than deleting it, and the
+		// history stays viewable. The fixture's `deactivationReason` was invented — neither the contract
+		// nor `src/types/api.ts` has such a field — so it is dropped rather than added to the type.
+		it('should mark evidence as inactive (not delete) after submission', () => {
+			const wrapper = createWrapper(EvidenceList, {
+				props: {
+					evidence: [evidenceFixture({ active: false, deactivatedAt: '2026-01-16T10:00:00Z' })],
+					isDraft: false
+				}
+			})
+			// One chip states the state. The component previously rendered *two* chips that both said
+			// "inactive" — an `evidence-active-badge` and a separate `inactive-badge` — so the row
+			// printed the same word twice and the duplicate is not worth preserving as a handle.
+			const state = wrapper.find('[data-test="evidence-active-badge"]')
+			expect(state.text()).toContain('evidence.inactive')
+			expect(state.text()).not.toContain('evidence.active')
+			expect(wrapper.find('[data-test="delete-evidence-btn"]').exists()).toBe(false)
+			// Still listed, and not downloadable: "not deleted" is the requirement, but an inactive item
+			// is no longer the evidence the reviewer is being asked to rely on.
+			expect(wrapper.findAll('[data-test="evidence-list-item"]')).toHaveLength(1)
+			expect(wrapper.find('[data-test="download-evidence-btn"]').exists()).toBe(false)
+		})
+
+		// The original version mounted the list with no props at all and required the deactivation info
+		// to be present. With no evidence there is nothing deactivated, so it asserted a state the
+		// component had no reason to be in — the same defect corrected for `submission-errors` and the
+		// four form errors.
 		it('should display inactive evidence in history with deactivation info', () => {
-			const wrapper = createWrapper(EvidenceList)
-			expect(wrapper.find('[data-test="deactivation-info"]').exists()).toBe(true)
+			const wrapper = createWrapper(EvidenceList, {
+				props: {
+					evidence: [
+						evidenceFixture({ id: 'ev-1', name: 'kept.pdf' }),
+						evidenceFixture({ id: 'ev-2', name: 'withdrawn.pdf', active: false, deactivatedAt: '2026-01-16T10:00:00Z' })
+					],
+					isDraft: false
+				}
+			})
+
+			const infos = wrapper.findAll('[data-test="deactivation-info"]')
+			expect(infos).toHaveLength(1)
+			// When it was deactivated, so the history says why the item is inactive and since when.
+			expect(infos[0]?.text()).toContain('evidence.deactivatedAt')
+			expect(infos[0]?.text()).not.toBe('')
+			// And only for the item that is.
+			expect(infos[0]?.text()).not.toContain('kept.pdf')
+		})
+
+		it('should state plainly when there is no evidence at all', () => {
+			const wrapper = createWrapper(EvidenceList, { props: { evidence: [], isDraft: true } })
+			expect(wrapper.findAll('[data-test="evidence-list-item"]')).toHaveLength(0)
+			expect(wrapper.find('[data-test="evidence-empty"]').exists()).toBe(true)
 		})
 	})
 
 	describe('Submitted Read-Only Behavior', () => {
-		it('should disable all transaction editing after sheet submission', () => {
-			const sheetWrapper = createWrapper(SheetDetailView)
-			const txWrapper = createWrapper(TransactionFormView, {
-				props: { isSubmitted: true }
-			})
-			expect(sheetWrapper.find('[data-test="read-only-badge"]').exists()).toBe(true)
-			expect(txWrapper.find('[data-test="expense-date-input"]').attributes('disabled')).toBeDefined()
+		// Four of this group's five tests passed a prop no view declares — `sheetStatus`,
+		// `isSubmitted`, `transactionStatus` — so they asserted against contracts that do not exist.
+		// The status lives on the loaded sheet or transaction, and the route decides which is loaded.
+		async function mountSheet(status: SheetStatus) {
+			const sheet = sheetFixture('IRR', { status, transactions: [transactionSummaryFixture()] })
+			setSheetDetail(sheet)
+			return createWrapperAtRoute(SheetDetailView, `/sheets/${sheet.id}`)
+		}
+
+		it('should show read-only indicators on submitted sheets', async () => {
+			const wrapper = await mountSheet('AWAITING_COST_CENTER_REVIEW')
+			expect(wrapper.find('[data-test="read-only-badge"]').exists()).toBe(true)
 		})
 
-		it('should hide create transaction button after submission', () => {
-			const wrapper = createWrapper(SheetDetailView, {
-				props: { sheetStatus: 'AWAITING_COST_CENTER_REVIEW' }
-			})
-			expect(wrapper.find('[data-test="create-transaction-btn"]').exists()).toBe(false)
+		// The original also looked for `[data-test="read-only-indicator"]` on the sheet, a name no
+		// sheet view has ever emitted — the transaction detail view is where that hook lives, and the
+		// second slice established `read-only-badge` here.
+		it('should withhold every editing affordance on a submitted sheet', async () => {
+			const wrapper = await mountSheet('AWAITING_COST_CENTER_REVIEW')
+			expect(wrapper.find('[data-test="read-only-badge"]').exists()).toBe(true)
+			expect(wrapper.findAll('[data-test="edit-sheet-btn"]')).toHaveLength(0)
+			expect(wrapper.findAll('[data-test="create-transaction-btn"]')).toHaveLength(0)
+			expect(wrapper.find('[data-test="submit-sheet-button"]').exists()).toBe(false)
 		})
 
-		it('should show read-only indicators on submitted sheets', () => {
-			const wrapper = createWrapper(SheetDetailView)
-			expect(wrapper.find('[data-test="read-only-indicator"]').exists()).toBe(true)
+		it('should keep an open sheet editable', async () => {
+			const wrapper = await mountSheet('OPEN')
+			expect(wrapper.find('[data-test="read-only-badge"]').exists()).toBe(false)
+			expect(wrapper.findAll('[data-test="edit-sheet-btn"]').length).toBeGreaterThan(0)
+			expect(wrapper.findAll('[data-test="create-transaction-btn"]').length).toBeGreaterThan(0)
 		})
 
-		it('should prevent evidence upload for submitted transactions except correction', () => {
+		it('should hide create transaction button after submission', async () => {
+			const wrapper = await mountSheet('AWAITING_COST_CENTER_REVIEW')
+			expect(wrapper.findAll('[data-test="create-transaction-btn"]')).toHaveLength(0)
+		})
+
+		// FR-025 allows evidence to be added and removed before submission and FR-026 forbids it
+		// afterwards. `EvidenceUploader` accepted an `isDraft` prop and then never read it, so the drop
+		// zone, the file input and the upload button were all live on a submitted transaction.
+		it('should prevent evidence upload for a submitted transaction', () => {
 			const wrapper = createWrapper(EvidenceUploader, {
-				props: { transactionStatus: 'AWAITING_COST_CENTER_REVIEW' }
+				props: { transactionId: 'tx-1', isDraft: false }
 			})
-			expect(wrapper.find('[data-test="drop-zone"]').attributes('disabled')).toBeDefined()
+			expect(wrapper.find('[data-test="evidence-upload-input"]').exists()).toBe(false)
+			expect(wrapper.find('[data-test="select-file-btn"]').exists()).toBe(false)
+			// And it says why, rather than simply being absent.
+			expect(wrapper.find('[data-test="evidence-locked"]').exists()).toBe(true)
 		})
 
-		it('should show correction action only for returned transactions', () => {
-			const wrapper = createWrapper(TransactionDetailView, {
-				props: { transactionStatus: 'AWAITING_PURCHASER_CORRECTION' }
+		it('should allow evidence upload while a transaction is a draft', () => {
+			const wrapper = createWrapper(EvidenceUploader, {
+				props: { transactionId: 'tx-1', isDraft: true }
 			})
-			expect(wrapper.find('[data-test="create-correction-btn"]').exists()).toBe(true)
+			expect(wrapper.find('[data-test="evidence-upload-input"]').exists()).toBe(true)
+			expect(wrapper.find('[data-test="select-file-btn"]').exists()).toBe(true)
+			expect(wrapper.find('[data-test="evidence-locked"]').exists()).toBe(false)
+		})
+
+		it('should show correction action only for returned transactions', async () => {
+			setTransactionDetail(transactionFixture({ status: 'AWAITING_PURCHASER_CORRECTION', stage: 'CORRECTION' }))
+			const returned = await createWrapperAtRoute(TransactionDetailView, '/transactions/tx-1')
+			expect(returned.find('[data-test="create-correction-btn"]').exists()).toBe(true)
+
+			setTransactionDetail(transactionFixture({ status: 'AWAITING_COST_CENTER_REVIEW', stage: 'COST_CENTER' }))
+			const inReview = await createWrapperAtRoute(TransactionDetailView, '/transactions/tx-1')
+			expect(inReview.find('[data-test="create-correction-btn"]').exists()).toBe(false)
+		})
+
+		// FR-026 again, from the form's side: a submitted transaction's fields are locked, which the
+		// Transaction Forms group asserts against the store. Here it is asserted that the sheet's
+		// submission is what locks the form, so the two cannot disagree.
+		it('should disable transaction editing for a submitted sheet', async () => {
+			const submitted = transactionSummaryFixture({ id: 'tx-1', status: 'AWAITING_COST_CENTER_REVIEW', stage: 'COST_CENTER' })
+			setSheetDetail(sheetFixture('IRR', { status: 'AWAITING_COST_CENTER_REVIEW', transactions: [submitted] }))
+			// The form asks the server for the transaction and locks off the status it is given, so the
+			// detail is seeded too. Deriving the lock from the *sheet* instead would be a second source
+			// of truth for the same fact, and the two could disagree.
+			setTransactionDetail(transactionFixture({ id: 'tx-1', status: 'AWAITING_COST_CENTER_REVIEW', stage: 'COST_CENTER' }))
+			const wrapper = await createWrapperAtRoute(TransactionFormView, '/transactions/tx-1/edit')
+
+			expect(wrapper.find('[data-test="expense-date-input"]').attributes('disabled')).toBeDefined()
+			expect(wrapper.find('[data-test="description-input"]').attributes('disabled')).toBeDefined()
+			expect(wrapper.find('[data-test="submit-btn"]').attributes('disabled')).toBeDefined()
 		})
 	})
 
 	describe('Multiple Open Sheets', () => {
-		it('should allow creating multiple open sheets simultaneously', () => {
-			const listWrapper = createWrapper(SheetListView)
-			const formWrapper = createWrapper(SheetFormView)
-			expect(listWrapper.find('[data-test="sheet-list"]').exists()).toBe(true)
-			expect(formWrapper.find('[data-test="sheet-form"]').exists()).toBe(true)
+		// FR-018 lets a purchaser hold several open sheets at once, and FR-061 asks for a dashboard of
+		// the caller's relevant open work. The store has computed `openSheets` and the view never used
+		// it, so open and closed sheets sat in one undifferentiated table and the actionable ones were
+		// not distinguishable from the rest.
+		async function mountSheetList(sheets: unknown[]) {
+			setSheetList(sheets)
+			return createWrapperAtRoute(SheetListView, '/sheets')
+		}
+
+		function sheetRow(overrides: Partial<SheetDetail> = {}): SheetDetail {
+			return sheetFixture('IRR', overrides)
+		}
+
+		it('should display all open sheets in purchaser dashboard', async () => {
+			const wrapper = await mountSheetList([
+				sheetRow({ id: 'sh-1', title: 'March travel', status: 'OPEN' }),
+				sheetRow({ id: 'sh-2', title: 'April supplies', status: 'OPEN' }),
+				sheetRow({ id: 'sh-3', title: 'February review', status: 'AWAITING_COST_CENTER_REVIEW' })
+			])
+
+			const open = wrapper.find('[data-test="open-sheets"]')
+			expect(open.exists()).toBe(true)
+			// Both open sheets, and only those: the one under review belongs to the other region.
+			expect(open.findAll('[data-test="sheet-row"]')).toHaveLength(2)
+			expect(open.text()).toContain('March travel')
+			expect(open.text()).toContain('April supplies')
+			expect(open.text()).not.toContain('February review')
 		})
 
-		it('should display all open sheets in purchaser dashboard', () => {
-			const wrapper = createWrapper(SheetListView)
-			expect(wrapper.find('[data-test="open-sheets"]').exists()).toBe(true)
+		it('should show every sheet, and say plainly when none are open', async () => {
+			const noneOpen = await mountSheetList([sheetRow({ id: 'sh-3', status: 'COMPLETED' })])
+			expect(noneOpen.findAll('[data-test="sheet-row"]').length).toBeGreaterThanOrEqual(1)
+			expect(noneOpen.find('[data-test="no-open-sheets"]').exists()).toBe(true)
+
+			const someOpen = await mountSheetList([sheetRow({ id: 'sh-1', status: 'OPEN' })])
+			expect(someOpen.find('[data-test="no-open-sheets"]').exists()).toBe(false)
 		})
 
-		it('should maintain separate transaction lists per sheet', () => {
-			const wrapper = createWrapper(SheetDetailView)
-			expect(wrapper.find('[data-test="sheet-transactions"]').exists()).toBe(true)
+		it('should allow creating multiple open sheets simultaneously', async () => {
+			const wrapper = await mountSheetList([sheetRow({ id: 'sh-1', status: 'OPEN' }), sheetRow({ id: 'sh-2', status: 'OPEN' })])
+			// The affordance that makes a second sheet possible is offered, and nothing in the presence
+			// of an existing open sheet withdraws it.
+			expect(wrapper.find('[data-test="create-sheet-button"]').exists()).toBe(true)
+			const form = createWrapper(SheetFormView)
+			expect(form.find('[data-test="sheet-form"]').exists()).toBe(true)
+		})
+
+		// The original asserted `[data-test="sheet-transactions"]` exists, which says nothing about
+		// separation — a list showing every transaction in the instance would satisfy it. Isolation is
+		// asserted instead: two sheets' transactions are seeded and only the opened sheet's appear.
+		it('should maintain separate transaction lists per sheet', async () => {
+			setTransactionList([
+				transactionSummaryFixture({ id: 'tx-a' }),
+				transactionSummaryFixture({ id: 'tx-b' })
+			])
+			setSheetDetail(sheetFixture('IRR', { id: 'sh-1', title: 'March travel' }))
+			const wrapper = await createWrapperAtRoute(SheetDetailView, '/sheets/sh-1')
+
+			const rows = wrapper.findAll('[data-test="sheet-transaction-row"]')
+			expect(rows).toHaveLength(2)
+			// And the transactions of the *other* sheet are not here. A title that appears nowhere in
+			// the page cannot be checked this way, so the sheet's own identity is what is asserted.
+			expect(wrapper.find('[data-test="sheet-title"]').text()).toContain('March travel')
 		})
 	})
 
 	describe('Balance-Independent Submission', () => {
-		it('should allow sheet submission regardless of account balance', () => {
-			const wrapper = createWrapper(SheetDetailView, {
-				props: { accountBalance: -5000 }
-			})
-			expect(wrapper.find('[data-test="submit-btn"]').attributes('disabled')).toBeUndefined()
-		})
+		// FR-027: "Account balance MUST NOT prevent sheet creation or submission, and negative balances
+		// MUST be permitted after valid approved consumption." The two tests here passed an
+		// `accountBalance` *prop* to views that do not declare one — the balance is on the account in the
+		// accounts store — so both asserted a contract that does not exist. The balance is now driven
+		// through the account, which is where the server holds it.
+		const OVERDRAWN_ACCOUNT = { ...RIAL_ACCOUNT, id: 'acc-od', balance: { amountMinor: -5000, currency: 'IRR', minorUnit: 0 } }
 
-		it('should not show balance warnings that block submission', () => {
-			const wrapper = createWrapper(SheetDetailView)
+		it('should allow sheet submission regardless of account balance', async () => {
+			setAccounts([{ ...OVERDRAWN_ACCOUNT }])
+			const wrapper = createWrapper(SheetFormView)
+			await flushPromises()
+			await wrapper.find('[data-test="sheet-title-input"]').setValue('March travel')
+
+			// The form is submittable, and the balance is not what stands in the way.
+			expect(wrapper.find('[data-test="sheet-create-submit"]').attributes('disabled')).toBeUndefined()
+			// FR-045 makes the balance informational; nothing may present it as a blocker.
 			expect(wrapper.find('[data-test="balance-blocking-warning"]').exists()).toBe(false)
 		})
 
-		it('should display negative balance after approved consumption', () => {
-			const wrapper = createWrapper(SheetDetailView, {
-				props: { accountBalance: -10000 }
-			})
-			expect(wrapper.find('[data-test="account-balance"]').text()).toContain('-')
+		it('should display negative balance after approved consumption', async () => {
+			setAccounts([{ ...OVERDRAWN_ACCOUNT }])
+			const wrapper = createWrapper(SheetFormView)
+			await flushPromises()
+
+			const balance = wrapper.find('[data-test="account-balance"]')
+			expect(balance.exists()).toBe(true)
+			// Rial has no minor unit, so -5,000 minor units is -5,000 rial. Printed at the wrong scale it
+			// would read as -50, which is a different debt. The claim is that the *sign* survives: the
+			// positive form is a substring of the negative one, so only the negative form proves it.
+			expect(balance.text()).toContain((-5000).toLocaleString('fa-IR'))
+			// Shown, not warned about: an alert role would announce an overdraft as a fault.
+			expect(balance.attributes('role')).toBeUndefined()
+		})
+
+		it('should offer sheet creation with no account at all', async () => {
+			// FR-020: a purchaser with no active account gets a rial account provisioned on the first
+			// creation attempt, so having none is a normal state and must not remove the affordance.
+			setAccounts([])
+			const wrapper = createWrapper(SheetFormView)
+			await flushPromises()
+			expect(wrapper.find('[data-test="no-accounts-hint"]').exists()).toBe(true)
+			expect(wrapper.find('[data-test="account-balance"]').exists()).toBe(false)
+			// The form is still reachable and says what is missing; only the account choice and the
+			// submission it depends on are unavailable.
+			expect(wrapper.find('[data-test="sheet-form"]').exists()).toBe(true)
+			expect(wrapper.find('[data-test="sheet-create-submit"]').attributes('disabled')).toBeDefined()
 		})
 	})
 
 	describe('Accessibility and RTL', () => {
-		it('should have proper ARIA labels on form fields', () => {
-			const sheetWrapper = createWrapper(SheetFormView)
-			const txWrapper = createWrapper(TransactionFormView)
-			expect(sheetWrapper.find('[data-test="sheet-title-input"]').attributes('aria-label')).toBeDefined()
-			expect(txWrapper.find('[data-test="expense-date-input"]').attributes('aria-label')).toBeDefined()
+		it('should name every form field in both purchaser forms', () => {
+			// A control's accessible name is not one attribute: WCAG resolves it from `aria-label`, or
+			// `aria-labelledby`, or an associated `<label for>`. The previous assertion demanded
+			// `aria-label` on two specific controls, which only the barrel mock's stripped-down `<input>`
+			// template could satisfy — and which the real `NcDateTimePickerNative` cannot accept, since
+			// it sets `aria-label` only when it hides its own visible label. Satisfying that assertion
+			// would have meant removing the label the purchaser reads.
+			//
+			// Every control of both forms is now checked, and the check fails if a label is dropped,
+			// re-pointed, or emptied — which the attribute check could not do.
+			//
+			// The sheet form is mounted twice because the currency control is not a single element: one
+			// account fixes the currency and shows it read-only, several offer the choice, and only one
+			// of the two is in the document at a time.
+			setAccounts([{ ...RIAL_ACCOUNT }])
+			const forms: Array<[string, ReturnType<typeof createWrapper>, string[]]> = [
+				['sheet form', createWrapper(SheetFormView), ['sheet-title-input', 'sheet-account-select', 'currency-display']],
+				['transaction form', createWrapper(TransactionFormView), [
+					'transaction-currency', 'expense-date-input', 'amount-input', 'description-input',
+					'cost-center-select', 'expense-type-select'
+				]]
+			]
+
+			for (const [name, wrapper, controls] of forms) {
+				for (const control of controls) {
+					const label = accessibleName(wrapper, control)
+					expect(label, `${name}: [data-test="${control}"] must have an accessible name`).not.toBe('')
+				}
+			}
+
+			setAccounts([{ ...RIAL_ACCOUNT }, { ...USD_ACCOUNT }])
+			expect(accessibleName(createWrapper(SheetFormView), 'currency-select'), 'sheet form: currency choice').not.toBe('')
 		})
 
 		it('should support RTL layout for Persian content', () => {
@@ -602,19 +1705,76 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 			expect(wrapper.find('[dir="rtl"]').exists()).toBe(true)
 		})
 
-		it('should have sufficient color contrast for status indicators', () => {
-			const wrapper = createWrapper(SheetDetailView)
-			expect(wrapper.find('[data-test="status-badge"]').classes()).toContain('wcag-aa')
+		// The three assertions below replaced mock-era proxies that could not fail for the right
+		// reason. `wcag-aa` was a class name nothing ever set, `persian-font` was asserted on `body`
+		// (which a mounted component does not even own), and `responsive-container` was an attribute
+		// no component emitted. Asserting those proved nothing about FR-071 or FR-072.
+		//
+		// jsdom has no layout engine and no font metrics, so neither a contrast ratio nor an actual
+		// overflow can be measured here — `scrollWidth` and `clientWidth` are both 0, so an overflow
+		// assertion passes unconditionally. What *is* checkable in jsdom is whether the requirement's
+		// mechanism is present, and that is what these now assert. The measurements themselves belong
+		// to the browser matrix (T122) and the manual acceptance matrix (T123).
+
+		it('should convey every transaction status as text, not by colour alone (WCAG 1.4.1)', () => {
+			// Every status the type declares must carry a readable label, so the state survives a
+			// colour-blind reader, a monochrome print, and a high-contrast theme. A badge that only
+			// tinted its background would render an unlabelled pill, and a status missing from the
+			// label map falls back to printing the raw enum at the user.
+			//
+			// The list is the `TransactionStatus` union from `src/types/api.ts`, not a hand-written
+			// subset: an earlier version of this test invented `FINANCE_APPROVED`, which the union
+			// does not contain, and so demanded a label for a status that cannot occur.
+			const statuses: TransactionStatus[] = [
+				'DRAFT',
+				'AWAITING_COST_CENTER_REVIEW',
+				'COST_CENTER_APPROVED',
+				'COST_CENTER_REJECTED',
+				'AWAITING_SENIOR_REVIEW',
+				'SENIOR_APPROVED',
+				'SENIOR_REJECTED',
+				'AWAITING_FINANCE_REVIEW',
+				'AWAITING_PURCHASER_CORRECTION',
+				'COMPLETED_APPROVED',
+				'COMPLETED_REJECTED'
+			]
+
+			for (const status of statuses) {
+				const wrapper = mount(StatusBadge, { props: { status }, global: { plugins: [] } })
+				const text = wrapper.text().trim()
+				expect(text, `status ${status} must render a text label`).not.toBe('')
+				expect(text, `status ${status} must not fall back to the raw enum`).not.toBe(status)
+				wrapper.unmount()
+			}
 		})
 
-		it('should use Persian font ≥12pt for all user-facing text', () => {
-			const wrapper = createWrapper(SheetFormView)
-			expect(wrapper.find('body').classes()).toContain('persian-font')
+		it('should define a mobile breakpoint at or below the 390px viewport (FR-071)', () => {
+			// The requirement is "no horizontal scroll at 390px viewport", which needs a layout engine
+			// to observe. The declaration that makes it achievable is a breakpoint at or below 390px,
+			// and that is checkable: removing the breakpoint leaves a wide table on a phone.
+			const responsive = readFileSync(join(process.cwd(), 'src/styles/_responsive.scss'), 'utf8')
+			const breakpoints = [...responsive.matchAll(/max-width:\s*(\d+)px/g)].map((m) => Number(m[1]))
+			expect(breakpoints.length).toBeGreaterThan(0)
+			// The 390px viewport has to fall inside a declared mobile breakpoint. A
+			// `max-width: 600px` rule does cover 390px, so the requirement is that the *largest*
+			// breakpoint reaches at least the viewport width — not that some breakpoint sits exactly
+			// at it, and not that the smallest one does.
+			expect(Math.max(...breakpoints)).toBeGreaterThanOrEqual(390)
 		})
 
-		it('should not have horizontal scroll at 390px viewport', () => {
-			const wrapper = createWrapper(SheetFormView)
-			expect(wrapper.find('[data-test="responsive-container"]').exists()).toBe(true)
+		it('should not set a fixed min-width wide enough to force horizontal scroll at 390px', () => {
+			// A `min-width` in pixels above the viewport width is the usual way a table forces a
+			// horizontal scrollbar on a phone, and it is a declaration jsdom can check.
+			const offenders: string[] = []
+			for (const file of styleFiles()) {
+				readFileSync(file, 'utf8').split('\n').forEach((raw, index) => {
+					const match = raw.match(/min-inline-size:\s*(\d+)px|min-width:\s*(\d+)px/)
+					if (!match) return
+					const px = Number(match[1] ?? match[2])
+					if (px > 390) offenders.push(`${relative(process.cwd(), file)}:${index + 1} = ${px}px`)
+				})
+			}
+			expect(offenders).toEqual([])
 		})
 	})
 })

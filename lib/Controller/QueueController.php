@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace OCA\PettyCash\Controller;
 
-use Exception;
 use OCA\PettyCash\Application\Workflow\ManagementReviewService;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
@@ -32,7 +31,10 @@ class QueueController extends OCSController
     {
         try {
             $workflowStage = \OCA\PettyCash\Domain\Workflow\WorkflowStage::from($stage);
-        } catch (Exception) {
+        } catch (\ValueError|\TypeError) {
+            // `WorkflowStage::from()` is a backed-enum lookup, so an unknown stage
+            // raises \ValueError, which extends \Error rather than \Exception. A
+            // handler for `Exception` never sees it and the caller gets a 500.
             return new DataResponse(['error' => 'Invalid stage'], 400);
         }
 
@@ -48,7 +50,7 @@ class QueueController extends OCSController
             };
 
             return new DataResponse(['data' => $result]);
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             return new DataResponse(['error' => $e->getMessage()], 500);
         }
     }

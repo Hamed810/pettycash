@@ -60,26 +60,58 @@ final readonly class AppDataEvidenceStore implements PrivateFileStore
         $file->putContent($content);
     }
 
+    /**
+     * Resolve an opaque evidence key to the file it names.
+     *
+     * `putEvidence()` stores into nested folders and returns the full
+     * `evidence/<transaction>/<revision>/<filename>` key, so every read has to walk
+     * that same path. Handing the whole key to `getFile()` on the evidence folder
+     * treats it as one filename, which never resolves and surfaces as "AppData file
+     * not found" for every key this class wrote itself.
+     *
+     * @throws NotFoundException when any segment is absent
+     */
+    private function findFile(string $key): ISimpleFile
+    {
+        $segments = array_values(array_filter(
+            explode('/', $key),
+            static fn(string $segment): bool => $segment !== ''
+        ));
+
+        // The stored key is rooted at `evidence/…`, but the walk starts inside that
+        // folder, so the leading segment is already accounted for.
+        if (($segments[0] ?? null) === self::EVIDENCE_FOLDER) {
+            array_shift($segments);
+        }
+
+        if ($segments === []) {
+            throw new NotFoundException("Empty AppData key: {$key}");
+        }
+
+        $fileName = array_pop($segments);
+        $folder = $this->getEvidenceFolder();
+        foreach ($segments as $segment) {
+            $folder = $folder->getFolder($segment);
+        }
+
+        return $folder->getFile($fileName);
+    }
+
     #[\Override]
     public function read(string $key): string
     {
-        $folder = $this->getEvidenceFolder();
         try {
-            $file = $folder->getFile($key);
+            return $this->findFile($key)->getContent();
         } catch (NotFoundException) {
             throw new RuntimeException("AppData file not found: {$key}");
         }
-
-        return $file->getContent();
     }
 
     #[\Override]
     public function deleteDraft(string $key): void
     {
-        $folder = $this->getEvidenceFolder();
         try {
-            $file = $folder->getFile($key);
-            $file->delete();
+            $this->findFile($key)->delete();
         } catch (NotFoundException) {
             // Draft already deleted or never existed - idempotent
         }
@@ -88,9 +120,8 @@ final readonly class AppDataEvidenceStore implements PrivateFileStore
     #[\Override]
     public function exists(string $key): bool
     {
-        $folder = $this->getEvidenceFolder();
         try {
-            $folder->getFile($key);
+            $this->findFile($key);
             return true;
         } catch (NotFoundException) {
             return false;
@@ -149,10 +180,8 @@ final readonly class AppDataEvidenceStore implements PrivateFileStore
      */
     public function getFileSize(string $key): int
     {
-        $folder = $this->getEvidenceFolder();
         try {
-            $file = $folder->getFile($key);
-            return (int)$file->getSize();
+            return (int) $this->findFile($key)->getSize();
         } catch (NotFoundException) {
             throw new RuntimeException("AppData file not found: {$key}");
         }

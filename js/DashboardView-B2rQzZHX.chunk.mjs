@@ -1,2 +1,0 @@
-import{_ as r}from"./_plugin-vue_export-helper-usYdp4eJ.chunk.mjs";import{c as s,a as o,o as t}from"./pettycash-main.mjs";const e={},n={"aria-labelledby":"dashboard-heading"};function d(i,a){return t(),s("section",n,[...a[0]||(a[0]=[o("h2",{id:"dashboard-heading"}," Dashboard ",-1),o("p",null,"Petty Cash is ready for configuration.",-1)])])}const f=r(e,[["render",d]]);export{f as default};
-//# sourceMappingURL=DashboardView-B2rQzZHX.chunk.mjs.map
