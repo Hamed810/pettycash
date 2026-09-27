@@ -2839,3 +2839,69 @@ because it materially undermines every future PHP verification in this repositor
   `http.spec.ts` and `typography.spec.ts` are green. T120 remains open with its FR-071 typography half done
   and its RTL/theme/card/contrast scope untouched, and T116/T122/T123 still own the browser-measured half of
   FR-071/FR-072. No new task: those are already tracked.
+
+## Phase 38: Convergence (Three Passes Found the Same Defect, and It Is Not an Account Defect)
+
+Run after implementation passes 3 and 4 (T057, T063). Both passes were contract tests over endpoints
+`appinfo/routes.php` declared, and both found the same shape of failure: **a declared route whose
+controller method does not exist answers HTTP 500.** That is worse than an absent route — the contract
+says the endpoint exists and a caller can construct the request — and it is now the third independent
+instance of one defect class rather than three coincidences.
+
+### Convergence Findings
+
+| ID | Gap Type | Severity | Source | Evidence | Remaining Work | Owned by |
+|---|---|---|---|---|---|---|
+| F1 | partial | HIGH | contracts/ocs-api.yaml, FR-010–017/FR-031/FR-065–069 | **15 of 41 declared routes resolve to a method that does not exist**: `evidence#links`, `evidence#deactivateLink`; all 11 `configuration#*` (no `ConfigurationController` exists at all); `report#show`, `export#create`. Every one answers 500. | Build them | T087, T096, T106–T112, T207 — **all already open, nothing appended** |
+| F2 | partial | MEDIUM | FR-027, FR-040 | The reconciliation repository has **no port method and no adapter method anywhere**: `AccountRepository` declares four reads and a `save`. T057 moved the ledger *further* from reconciliation, not closer, because a settlement now writes a movement whose authority is a stored decision. | Decide what reconciliation means here | T060 — already open, blocked on a maintainer decision |
+| F3 | partial | LOW | contracts/ocs-api.yaml | `OcsErrorMapper::map()` maps only `CommandConflict`, `InvalidArgumentException` and `LogicException`, so it has no vocabulary for a conflict that is neither an idempotency conflict nor a validation failure. T063's `AccountController` therefore hand-rolls a five-arm catch chain, and the next conflict endpoint will repeat it. | Give the mapper the vocabulary, or document the rule | **unowned — appended as T292** |
+| F4 | partial | LOW | tasks.md bookkeeping | `T184` is still `[ ]` with the note "(missing)" although `tests/Integration/Workflow/FinanceSettlementTest.php` exists and its child `T056` is complete — the state `T185` was in until this run corrected it the same way. | Mark it, with the reason | **unowned — appended as T293** |
+| F5 | partial | MEDIUM | FR-060, FR-071, FR-072 | The Playwright chain (T171, T053's three browser clauses, T054, T066, T076, T089, T099, T114, T122) is blocked on a browser-login credential. The `finance` fixture's `FINANCE` role grant and T291's actor-gate gap are the same single-identity limit seen from two directions. | A second acting identity in the harness | T171 and the tasks it names — already open, unchanged |
+
+**Summary metrics**: 41 declared routes and their controller methods checked mechanically; the US3
+finance slice checked against FR-015/FR-027/FR-034–FR-043 and the contract; the error-mapping
+vocabulary checked across all 9 controllers; the error-status mapping in `OcsErrorMapper` checked
+against every `catch` chain in `lib/Controller/` (no other controller mis-orders its catches, because
+the five that catch only `\Throwable` delegate to the mapper, which resolves the same precedence
+correctly — the T063 defect was local to the chain it introduced). Findings: 5 partial, 0 missing, 0
+contradicts, 0 unrequested. By severity: 1 HIGH, 2 MEDIUM, 2 LOW. **Three of the five are already owned
+by open tasks, so only T292 and T293 are appended** — appending the rest would duplicate T087, T096,
+T106–T112, T060 and T171.
+
+### What the two passes changed about the picture
+
+**The US3 finance slice is now built and verified, and the last open item in it is a decision rather
+than code.** T056, T057, T061, T062 and T063 are complete; T060 needs a maintainer to say what
+reconciliation is; T065's remaining clauses need a real browser. Nothing else in US3 is actionable
+without one of those two answers.
+
+**The "declared route answers 500" class is a measurement gap, not a code gap.** F1's 15 routes were
+never exercised by a test, because the suites that would have caught them did not exist — and a
+declared route that answers 500 is invisible until something calls it. T063's own test file begins
+with a `…IsReachable` assertion for exactly that reason, and F1 is the argument for doing the same for
+every remaining declared route before the surfaces behind T087, T096 and T106–T112 are built: a
+reachability assertion per route is cheap, and it converts "nobody noticed" into a failing test.
+
+### MEDIUM — the error mapper has no vocabulary for a plain conflict
+
+- [ ] T292 [LOW] Give `OcsErrorMapper` the vocabulary for a conflict that is neither an idempotency
+  conflict nor a validation failure, or record the rule that a new conflict endpoint hand-rolls its own
+  catch chain. `map()` resolves `CommandConflict` → 409, `InvalidArgumentException` → 422,
+  `LogicException` → 403 and everything else → 500, and T063 needed three new exception types
+  (`AccountAlreadyExists`, `StaleAccountVersion`, `UnknownAccount`) to reach 409 and 404 at all — each
+  one a `RuntimeException`, so the mapper would have answered 500 for all of them. The controller then
+  has to remember which catch must come before which, and in T063's case the order *was* the bug:
+  `InvalidArgumentException` extends `LogicException`, so one `catch (\Exception)` silently turned a 409
+  into a 422. No other controller mis-orders its catches, because the five that catch only `\Throwable`
+  delegate here and the mapper resolves the same precedence correctly — which is the argument for
+  putting the whole vocabulary in one place rather than in each endpoint (partial)
+
+### LOW — a parent task still claims work its child completed
+
+- [ ] T293 [LOW] Correct `T184`'s state, because it is still `[ ]` with the note "(missing)" while
+  `tests/Integration/Workflow/FinanceSettlementTest.php` exists, holds 29 tests, and its child `T056` is
+  complete. `T185` was in exactly this state and was corrected by the T057 pass, following the
+  treatment `T183` already had ("exists; T055 already `[x]`"), so `T184` is the last of that shape
+  rather than a deliberate judgement. This is a bookkeeping fix and must not be read as new test
+  evidence: the file was written and verified by the T056 pass, whose report is
+  `docs/reports/T056.md` (partial)
