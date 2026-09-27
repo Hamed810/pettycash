@@ -1,4 +1,7 @@
-# T109 pre-implementation findings — what is established, and what remains
+# T109 pre-implementation findings — T109 is BLOCKED on the font asset
+
+**Status: BLOCKED.** T109 remains `[ ]`. The portable options in the installed dependency are exhausted and
+none supplies a font. No font was vendored and no repository font location was invented. See §0.
 
 **Task**: T109 (`lib/Infrastructure/Export/PdfExporter.php`) — **not started, nothing built**
 **Feature**: PettyCash V1 Core Workflow (`specs/001-pettycash-v1-core`)
@@ -7,6 +10,27 @@
 
 No code was written. Every finding below was established mechanically, so the next pass does not repeat
 the discovery. Read this before starting T109.
+
+## 0. Conclusion: no portable font path exists in the installed dependency
+
+The brief asked me to inspect "the installed `tecnickcom/tcpdf` package". **There is no such package.**
+Exhausting every portable option:
+
+| Option | Result |
+|---|---|
+| `tecnickcom/tcpdf` bundled fonts | **Package absent.** `find / -type d -name tcpdf` returns nothing. It is not on the filesystem at all. |
+| Any font file in `vendor/` | **Zero.** No `.ttf`, `.otf`, `.ttc`, `.afm`, `.pfb` anywhere. |
+| `tc-lib-pdf-font` bundled fonts | **None shipped.** `doc/FONTS.md`: the assets "must be generated before they can be used" via `make -C vendor/tecnickcom/tc-lib-pdf-font deps fonts`. |
+| Is that generation wired up here? | **No.** It must be added to the *consuming* project's `post-install-cmd` / `post-update-cmd` / `post-autoload-dump`. This repo's `composer.json` has only lint/cs/psalm/test scripts. |
+| Does `Buffer` search a directory? | **No.** Its entire public surface is `__construct, isSubsetMode, getFonts, getEncDiffs, isValidKey, getFont, addSubsetChar, addUsedGid, add, addFont`. No path, no autodetection — a font file path must always be supplied. |
+| The library's own answer for shared environments | Generate fonts "once into a persistent directory **outside** `vendor/`" and point `K_PATH_FONTS` at it — i.e. a machine-specific path, which this feature must not depend on. |
+| A Persian/Arabic example in the package | **None.** So there is not even evidence the generated set would cover Persian. |
+| A webfont already vendored by the project | **None.** No font files under `src/`, `css/`, `l10n/`; no `@font-face`. |
+
+The real API, found by reading the package's own Quick Start rather than assuming TCPDF's: the font assets
+live in `K_PATH_FONTS`, registration is `$pdf->font->insert($pdf->pon, 'family', '', 12)`, output is
+`$pdf->getOutPDFString()`. The familiar `AddFont` / `SetFont` / `Output` / `setPrintHeader` do **not** exist —
+writing to the assumed TCPDF API would not resolve.
 
 ## 1. The brief's dependency claim is wrong — corrected
 
