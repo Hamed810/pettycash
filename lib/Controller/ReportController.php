@@ -10,7 +10,9 @@ use OCA\PettyCash\Application\Reporting\DashboardQuery;
 use OCA\PettyCash\Application\Reporting\ReportFilter;
 use OCA\PettyCash\Application\Reporting\ReportQuery;
 use OCA\PettyCash\Application\Reporting\ReportScope;
+use OCA\PettyCash\Application\DataIntegrity\UnreadableRecordData;
 use OCA\PettyCash\Application\Reporting\UnsupportedFilterField;
+use OCA\PettyCash\Infrastructure\Nextcloud\TechnicalLogger;
 use OCA\PettyCash\Domain\Account\Repository\AccountRepository;
 use OCA\PettyCash\Domain\Audit\Repository\AuditEventRepository;
 use OCA\PettyCash\Domain\Configuration\Repository\CostCenterRepository;
@@ -70,6 +72,7 @@ class ReportController extends OCSController
         private AccountRepository $accounts,
         private EvidenceRepository $evidence,
         private AuditEventRepository $auditEvents,
+        private TechnicalLogger $logger,
         private OcsErrorMapper $ocsErrorMapper,
         private Clock $clock
     ) {
@@ -108,6 +111,29 @@ class ReportController extends OCSController
                 $inScope,
                 $columns,
                 $summary
+            ));
+        } catch (UnreadableRecordData $e) {
+            // A record's stored data is incomplete, so the report cannot be produced. Answered 422
+            // rather than left as a 500: this is a fault in the data, not a fault in the request, and
+            // the caller can act on being told so. Left as a 500 it read as "the server is broken",
+            // which sent the previous investigation after permission and filter problems instead of
+            // after the currency reference that was actually missing.
+            //
+            // The count is deliberately **not** stated. The read aborts on the first unresolvable
+            // record, so the number of affected rows is not knowable without a tolerant read that
+            // returns a count -- a domain port change, deliberately not bundled into this fix. Saying
+            // "one or more" is the truth; a number would be a guess.
+            //
+            // Logged in full, because the exception names the revision and that is what an operator
+            // needs -- and it is exactly why the message is not echoed to the caller.
+            $this->logger->unexpected($e);
+
+            return $this->ocsErrorMapper->validation(sprintf(
+                'The %s report cannot be produced: one or more stored records are incomplete and cannot '
+                . 'be read (a record references a currency that no longer exists). This is a data fault, '
+                . 'not a permission or filter problem. An administrator can identify the affected '
+                . 'records from the application log.',
+                $reportType
             ));
         } catch (UnsupportedFilterField $e) {
             // A filter this report cannot answer is a client error, and the contract's response for

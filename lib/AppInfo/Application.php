@@ -401,6 +401,7 @@ final class Application extends App implements IBootstrap
                 $c->query(AccountRepository::class),
                 $c->query(EvidenceRepository::class),
                 $c->query(AuditEventRepository::class),
+                $c->query(\OCA\PettyCash\Infrastructure\Nextcloud\TechnicalLogger::class),
                 $c->query(OcsErrorMapper::class),
                 $c->query(\OCA\PettyCash\Domain\Shared\Clock::class)
             );

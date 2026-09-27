@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace OCA\PettyCash\Infrastructure\Persistence\Expense;
 
+use OCA\PettyCash\Application\DataIntegrity\UnreadableRecordData;
+
 use DateTimeImmutable;
 use DateTimeZone;
 use LogicException;
@@ -227,7 +229,10 @@ final class DbTransactionRevisionRepository implements TransactionRevisionReposi
 
         $row = $qb->executeQuery()->fetchAssociative();
         if ($row === false || !isset($row['code']) || $row['code'] === '') {
-            throw new LogicException(
+            // Typed rather than a bare LogicException, so a caller that can explain the failure to a
+            // client -- a report -- can recognise it. The ids stay in the message because this one is
+            // for the log, not for a response body.
+            throw new UnreadableRecordData(
                 'Cannot resolve the currency of transaction revision ' . $revisionDbId
                 . ' from its sheet; the amount has no valid currency'
             );

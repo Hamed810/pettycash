@@ -3773,7 +3773,7 @@ cause, grouped so the masking defect and the masked defect are both owned.
   `InvalidArgumentException extends LogicException` let a broad catch swallow validation failures.
   Reopened rather than duplicated: T029 is the task that owns OCS error mapping. (contradicts)
 
-- [ ] T308 Restore `transactions`, `process` and `evidence` reports, and settle whether the currency
+- [x] T308 Restore `transactions`, `process` and `evidence` reports, and settle whether the currency
   join failure is a product or a fixture defect, per FR-065 and US7/AC2 (missing). Three of the seven
   report subjects answer `403` and return no data; `sheets`, `accounts`, `cost-centers` and `audit`
   answer `200`. The throw is `DbTransactionRevisionRepository::resolveCurrencyCode()`
@@ -3899,3 +3899,36 @@ cause, grouped so the masking defect and the masked defect are both owned.
   is to exclude the unreadable row and report how many were excluded rather than return nothing -- the
   same shape as T307. That is a change to how a report answers, not a cleanup, so it is deliberately
   left as the remaining half of this task rather than folded into a cleanup commit.
+
+  **Product half delivered as Option B (refuse with 422), per the user's decision.**
+
+  Added `Application/DataIntegrity/UnreadableRecordData` and had
+  `DbTransactionRevisionRepository::resolveCurrencyCode()` throw it instead of a bare `LogicException`.
+  It **extends `LogicException` deliberately**, so every other caller keeps exactly the classification
+  it had -- with T029's `LogicException => 403` arm gone, those callers still answer 500 and still log in
+  full. The type exists so a caller that *can* explain itself can recognise the fault rather than every
+  caller guessing what a `LogicException` meant.
+
+  `ReportController` catches it, logs the exception through `TechnicalLogger::unexpected()` (so the
+  revision id is recorded for an operator), and answers **422** with a message that says a record is
+  incomplete and that it is a data fault rather than a permission or filter problem -- and does **not**
+  echo the internal message.
+
+  **The count is deliberately not stated.** The read aborts on the first unresolvable record, so how many
+  rows are affected is not knowable without a tolerant read that returns a count, which is the domain
+  port change Option A required. "One or more" is the truth; a number would be a guess.
+
+  **Verification, and its limit -- stated rather than glossed.** Full suite **630 tests, 2777 assertions,
+  1 pre-existing T275 failure**: no regression, and the healthy report shape still passes
+  (`testAReportAnswersTheContractsPageShape`). The 422 path itself is **not covered by a committed
+  test**, because triggering it requires a record with a dangling `currency_id` -- the exact fault T308
+  exists to remove. A one-off injector was attempted to verify it end to end and abandoned: it writes
+  invalid data into the shared MariaDB that the live contract suite also uses, and a probe whose
+  failure mode is "leaves a landmine that breaks three reports" is the same trade that produced the
+  seven sheets in the first place. The probe's inserts all failed before writing and the database was
+  re-verified clean afterwards: 0 dangling sheets, 0 probe rows.
+
+  So the 422 behaviour rests on the code path and the healthy-path regression check, not on a
+  behavioural test. If that is not acceptable, the honest route is to make the runner's cleanup
+  provably safe first and then add a scoped corrupt-row fixture -- which is Option A's verification
+  problem, and worth doing before the next data-integrity fault is diagnosed from scratch.
