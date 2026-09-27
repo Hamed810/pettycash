@@ -94,7 +94,7 @@ use OCP\IUserManager;
 use OCP\IUserSession;
 
 $scenario = $argv[1] ?? '';
-$scenarios = ['configuration', 'account', 'expense', 'command', 'retention'];
+$scenarios = ['configuration', 'account', 'expense', 'command', 'retention', 'appdata'];
 if (!in_array($scenario, $scenarios, true)) {
     fwrite(STDERR, 'Unknown scenario ' . var_export($scenario, true) . '; expected one of ' . implode(', ', $scenarios) . ".\n");
     exit(1);
@@ -274,12 +274,24 @@ try {
         ),
         'command' => scenarioCommand($commandResults, $db, $track, $commandIdFor),
         'retention' => scenarioRetention($auditEvents, $db, $actorUid, $now, $track, $surrogateIdOf),
+        'appdata' => scenarioAppDataExportStore(),
     };
 } catch (Throwable $e) {
     fwrite(STDERR, $e::class . ': ' . $e->getMessage() . "\n" . $e->getTraceAsString() . "\n");
     echo json_encode(['error' => $e->getMessage()]);
     exit(1);
 } finally {
+    // AppData artifacts are swept by the same discipline as database rows, and for the same reason: the
+    // scenario runs against the shared instance, and a generated export is a real file on disk that
+    // would otherwise outlive the run. `deleteAll()` is a blanket call, so a partially completed build
+    // cannot leak by leaving a file the sweep does not know about.
+    try {
+        $appData = \OCP\Server::get(\OCP\Files\AppData\IAppDataFactory::class)->get('pettycash');
+        (new \OCA\PettyCash\Infrastructure\Nextcloud\AppDataExportStore($appData))->deleteAll();
+    } catch (Throwable $e) {
+        fwrite(STDERR, 'AppData sweep failed: ' . $e->getMessage() . "\n");
+    }
+
     // Two sweeps, because one is not enough.
     //
     // By surrogate key is precise but incomplete: a row is only registered once its id has been
@@ -1223,6 +1235,297 @@ function scenarioRetention(
             // Reported under the logical name, so the assertions never depend on the prefix either.
             $report['schema'][$logical] = $columns;
         }
+    }
+
+    return $report;
+}
+
+/**
+ * `AppDataExportStore` against a real `IAppData`-backed filesystem.
+ *
+ * ## Why this scenario exists
+ *
+ * T110 was marked complete on a claim that did not hold: `contracts/exports.md` requires "generated
+ * artifacts use private transient application storage" and the implementation wrote to the host's
+ * *shared* `sys_get_temp_dir()`. Convergence caught it, the store was reworked onto `IAppData`, and
+ * then the honest position was that **every** test for it still ran against an in-memory double — the
+ * same gap T236 was created for, where thirteen doubles hid nine broken repositories.
+ *
+ * The parts most likely to be wrong are exactly the parts a double cannot see: whether
+ * `getFolder`/`newFolder`/`newFile` compose the way the adapter assumes, whether
+ * `stream_copy_to_stream()` into `ISimpleFile::write()` actually works, and whether a file written
+ * through that stream is readable through `ISimpleFile::read()` afterwards.
+ *
+ * ## Why distinctness is proven by ordering rather than by path
+ *
+ * "The persisted artifact is not the scratch file" cannot be checked by comparing paths, because
+ * `ISimpleFolder` deliberately does not expose an absolute path. It is proven by the stronger fact
+ * instead: the scratch file is **deleted** by the exporter's `finally`, and the artifact is still there
+ * afterwards. If the artifact were the scratch file, deleting the scratch would have deleted it.
+ *
+ * Usage: php tests/Integration/Persistence/roundtrip-runner.php appdata
+ */
+function scenarioAppDataExportStore(): array
+{
+    $appData = \OCP\Server::get(\OCP\Files\AppData\IAppDataFactory::class)->get('pettycash');
+    $store = new \OCA\PettyCash\Infrastructure\Nextcloud\AppDataExportStore($appData);
+
+    $report = [];
+
+    // --- 1. scratchPath returns a real, writable, non-app-data location ---
+    $scratch = $store->scratchPath('probe.zip');
+    $isFile = is_file($scratch);
+    $isWritable = $isFile && is_writable($scratch);
+    $scratchDir = dirname($scratch);
+
+    // --- 2. persist() through a real IAppData, by stream ---
+    $payload = random_bytes(4096) . 'pettycash-appdata-probe';
+    file_put_contents($scratch, $payload);
+    $artifact = 'probe-' . bin2hex(random_bytes(6)) . '.zip';
+    $store->persist($artifact, $scratch);
+
+    $exists = $store->exists($artifact);
+    $size = $store->size($artifact);
+
+    // --- 3. read back through the real ISimpleFile::read() stream ---
+    $handle = $store->read($artifact);
+    $readBack = '';
+    if (is_resource($handle)) {
+        $readBack = (string) stream_get_contents($handle);
+        fclose($handle);
+    }
+    $identical = $readBack === $payload;
+    $shaOfStored = sha1($readBack);
+    $shaOfOriginal = sha1($payload);
+
+    // --- 4. the artifact is a file object with a name and a size the folder agrees with ---
+    $folder = $appData->getFolder('exports');
+    $listing = array_map(
+        static fn ($child): string => $child->getName(),
+        array_values(array_filter(
+            $folder->getDirectoryListing(),
+            static fn ($child): bool => $child instanceof \OCP\Files\SimpleFS\ISimpleFile
+        ))
+    );
+
+    // --- 5. replace semantics: persisting the same name again overwrites ---
+    $store->persist($artifact, $scratch);
+    $sizeAfterReplace = $store->size($artifact);
+    $replacement = 'a much shorter replacement payload';
+    file_put_contents($scratch, $replacement);
+    $store->persist($artifact, $scratch);
+    $sizeAfterSecondReplace = $store->size($artifact);
+    $replacementMatched = (string) stream_get_contents($store->read($artifact)) === $replacement;
+
+    // --- 6. delete() removes exactly one artifact ---
+    $other = 'probe-other-' . bin2hex(random_bytes(6)) . '.zip';
+    file_put_contents($scratch, 'other');
+    $store->persist($other, $scratch);
+    $beforeDelete = $store->size($other);
+    $store->delete($other);
+    $otherGone = !$store->exists($other);
+    $probeStillThere = $store->exists($artifact);
+    $deleteOfAbsentIsQuiet = true;
+    try {
+        $store->delete('probe-never-existed-' . bin2hex(random_bytes(4)) . '.zip');
+    } catch (Throwable) {
+        $deleteOfAbsentIsQuiet = false;
+    }
+
+    // --- 7. the whole exporter path, end to end on a real filesystem ---
+    // The probe's own scratch is removed *before* the exporter runs, so the scratch diff below can
+    // only ever contain files the exporter itself created. The first version of this scenario globbed
+    // after the build without unlinking its own probe, and reported the probe's file as a leaked
+    // scratch — a probe artefact that would have been read as a product defect.
+    if (is_file($scratch)) {
+        @unlink($scratch);
+    }
+    $scratchBefore = glob(sys_get_temp_dir() . '/pettycash-export-*') ?: [];
+
+    $exporter = new \OCA\PettyCash\Infrastructure\Export\EvidenceArchiveExporter($store);
+    $entry = new \OCA\PettyCash\Infrastructure\Export\EvidenceArchiveEntry(
+        'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa',
+        'receipt.pdf',
+        'application/pdf',
+        9,
+        str_repeat('b', 64),
+        true,
+        'probe-actor',
+        'کاربر آزمایشی',
+        new DateTimeImmutable('2026-03-15T10:30:00+00:00'),
+        'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb',
+        1,
+        'cccccccc-3333-4333-8333-cccccccccccc',
+        'dddddddd-4444-4444-8444-dddddddddddd',
+        'Probe Sheet',
+        'probe/scratch-evidence.pdf'
+    );
+
+    $result = $exporter->build([$entry], static fn (): string => 'pdf-bytes');
+    $exporterArtifact = $result->artifactName;
+    $exporterStored = $store->exists($exporterArtifact);
+    $exporterBytes = '';
+    $exporterHandle = $store->read($exporterArtifact);
+    if (is_resource($exporterHandle)) {
+        $exporterBytes = (string) stream_get_contents($exporterHandle);
+        fclose($exporterHandle);
+    }
+    $exporterIsZip = substr($exporterBytes, 0, 2) === 'PK';
+    $exporterZipSize = strlen($exporterBytes);
+
+    // Read the manifest back out of the *stored* archive rather than scanning the raw bytes. A ZIP
+    // member is deflated by default, so the first version of this probe looked for plaintext in the
+    // archive file and concluded the Persian text had been lost, when it was merely compressed. The
+    // first version of that check therefore proved nothing either way.
+    $manifestText = '';
+    $manifestMembers = [];
+    $evidenceMemberBytes = '';
+    $extracted = tempnam(sys_get_temp_dir(), 'pettycash-probe-zip-');
+    if ($extracted !== false && $exporterIsZip) {
+        file_put_contents($extracted, $exporterBytes);
+        $zip = new ZipArchive();
+        if ($zip->open($extracted) === true) {
+            for ($i = 0; $i < $zip->numFiles; $i++) {
+                $name = (string) $zip->getNameIndex($i);
+                $manifestMembers[] = $name;
+                if ($name === 'manifest.csv') {
+                    $manifestText = (string) $zip->getFromIndex($i);
+                } elseif (str_ends_with($name, 'receipt.pdf')) {
+                    $evidenceMemberBytes = (string) $zip->getFromIndex($i);
+                }
+            }
+            $zip->close();
+        }
+        @unlink($extracted);
+    }
+    $manifestPresent = $manifestText !== '';
+    $persianPresent = str_contains($manifestText, 'کاربر آزمایشی');
+    $manifestHasSheetTitle = str_contains($manifestText, 'Probe Sheet');
+    $evidenceContentMatches = $evidenceMemberBytes === 'pdf-bytes';
+
+    // Scratch files the exporter created must all be gone. The exporter names them itself, so this is
+    // asserted by pattern rather than by asking the store what it handed out.
+    $scratchAfter = array_values(array_filter(
+        glob(sys_get_temp_dir() . '/pettycash-export-*') ?: [],
+        static fn (string $path): bool => is_file($path)
+    ));
+    // Only files that appeared *during* the build count as leaked.
+    $leftoverScratch = array_values(array_diff($scratchAfter, $scratchBefore));
+
+    // --- 7b. scratch cleanup when the build FAILS, on the real filesystem ---
+    //
+    // The unit test covers this against the double; this proves it against the real path. A build that
+    // throws must not leave a partially assembled archive in the shared system temp directory, and a
+    // half-written evidence archive lying around is exactly the kind of thing the contract's
+    // "removed after streaming" exists to prevent.
+    $scratchBaseline = glob(sys_get_temp_dir() . '/pettycash-export-*') ?: [];
+    $failingExporter = new \OCA\PettyCash\Infrastructure\Export\EvidenceArchiveExporter($store);
+    $failurePropagated = false;
+    $failureMessage = '';
+    $artifactsBeforeFailure = count($store->exists('probe-bulk-a.zip') ? ['x'] : []);
+    try {
+        $failingExporter->build([$entry], static function (): string {
+            throw new RuntimeException('deliberate reader failure for the cleanup probe');
+        });
+    } catch (Throwable $e) {
+        $failurePropagated = true;
+        $failureMessage = $e->getMessage();
+    }
+    $scratchAfterFailure = array_values(array_filter(
+        glob(sys_get_temp_dir() . '/pettycash-export-*') ?: [],
+        static fn (string $p): bool => is_file($p)
+    ));
+    $leakedOnFailure = array_values(array_diff($scratchAfterFailure, $scratchBaseline));
+
+    // --- 8. deleteAll() empties the folder ---
+    //
+    // Checked inside the scenario rather than after it, because the runner's own `finally` calls
+    // `deleteAll()` — so a test that simply asserted the folder was empty afterwards would be asserting
+    // its own cleanup, and would pass even if `deleteAll()` did nothing at all.
+    $bulkA = $store->scratchPath('bulk-a.zip');
+    $bulkB = $store->scratchPath('bulk-b.zip');
+    file_put_contents($bulkA, 'bulk artifact one');
+    file_put_contents($bulkB, 'bulk artifact two');
+    $store->persist('probe-bulk-a.zip', $bulkA);
+    $store->persist('probe-bulk-b.zip', $bulkB);
+    $beforeBulk = $store->size('probe-bulk-a.zip') !== null && $store->size('probe-bulk-b.zip') !== null;
+    $store->deleteAll();
+    $afterBulk = $store->exists('probe-bulk-a.zip') || $store->exists('probe-bulk-b.zip')
+        || $store->exists($exporterArtifact);
+    foreach ([$bulkA, $bulkB] as $bulk) {
+        if (is_file($bulk)) {
+            @unlink($bulk);
+        }
+    }
+
+    $report = [
+        'store' => get_class($store),
+        'failure' => [
+            'propagated' => $failurePropagated,
+            'message' => $failureMessage,
+            'leakedScratch' => $leakedOnFailure,
+            'noScratchLeak' => $leakedOnFailure === [],
+        ],
+        'deleteAll' => [
+            'hadArtifacts' => $beforeBulk,
+            'nothingLeft' => !$afterBulk,
+        ],
+        'scratch' => [
+            'isFile' => $isFile,
+            'isWritable' => $isWritable,
+            'inSystemTemp' => $scratchDir === rtrim(sys_get_temp_dir(), '/'),
+        ],
+        'persist' => [
+            'exists' => $exists,
+            'size' => $size,
+            'sizeMatchesSource' => $size === strlen($payload),
+            'readBackIdentical' => $identical,
+            'shaOfStored' => $shaOfStored,
+            'shaOfOriginal' => $shaOfOriginal,
+            'shaMatches' => $shaOfStored === $shaOfOriginal,
+        ],
+        'folder' => [
+            'listing' => $listing,
+            'listingIncludesArtifact' => in_array($artifact, $listing, true),
+            'listingIsAllFiles' => count($listing) > 0,
+        ],
+        'replace' => [
+            'sizeAfterFirstReplace' => $sizeAfterReplace,
+            'sizeAfterSecondReplace' => $sizeAfterSecondReplace,
+            'replacementMatched' => $replacementMatched,
+        ],
+        'delete' => [
+            'sizeBeforeDelete' => $beforeDelete,
+            'otherGone' => $otherGone,
+            'unrelatedStillThere' => $probeStillThere,
+            'deleteOfAbsentIsQuiet' => $deleteOfAbsentIsQuiet,
+        ],
+        'exporter' => [
+            'artifactName' => $exporterArtifact,
+            'stored' => $exporterStored,
+            'artifactBytes' => $result->artifactBytes,
+            'actualBytes' => $exporterZipSize,
+            'sizeAgrees' => $result->artifactBytes === $exporterZipSize,
+            'isZip' => $exporterIsZip,
+            'manifestPresent' => $manifestPresent,
+            'manifestMembers' => $manifestMembers,
+            'manifestText' => $manifestText,
+            'persianPresent' => $persianPresent,
+            'manifestHasSheetTitle' => $manifestHasSheetTitle,
+            'evidenceContentMatches' => $evidenceContentMatches,
+            'manifestRows' => $result->manifestRowCount(),
+            'memberPaths' => $result->memberPaths,
+            'leftoverScratchFiles' => $leftoverScratch,
+            // The distinctness proof: the scratch is gone, the artifact survived.
+            'scratchRemoved' => $leftoverScratch === [],
+            'artifactOutlivedScratch' => $exporterStored && $leftoverScratch === [],
+        ],
+    ];
+
+    // Remove the probe scratch last. The runner's `finally` sweeps the AppData side; this is the disk
+    // side, and leaving a stray temp file behind is the same litter problem.
+    if (is_file($scratch)) {
+        @unlink($scratch);
     }
 
     return $report;
