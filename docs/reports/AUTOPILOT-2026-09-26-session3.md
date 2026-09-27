@@ -1,15 +1,15 @@
 # Autopilot run — 2026-09-26 session 3
 
 **Feature**: PettyCash V1 Core Workflow (`specs/001-pettycash-v1-core`)
-**Status**: 4 implementation passes + 1 early convergence
-**Implementation passes executed**: 4 of 50
+**Status**: 5 implementation passes + 1 early convergence
+**Implementation passes executed**: 5 of 50
 **Convergence passes executed**: 2 (the initial one in session 2, plus an early one here)
 **Predecessors**: `docs/reports/AUTOPILOT-2026-09-26.md` (passes 1–3), `AUTOPILOT-2026-09-26-session2.md` (passes 1–2)
 
 ## Controller state
 
 ```text
-implementation_total = 4
+implementation_total = 5
 implementation_since_convergence = 0
 last_convergence_outcome = tasks_appended
 ```
@@ -103,9 +103,9 @@ conclusion — a third currency was the fix.
 
 | Gate | Session 2 end | After pass 3 (T057) | After pass 4 (T063) |
 |---|---|---|---|
-| `scripts/dev/phpunit` | 234 / 1170 / 1 failure (T275) | 255 / 1367 / 1 failure | **270 / 1435 / 1 failure (T275)** |
+| `scripts/dev/phpunit` | 234 / 1170 / 1 failure (T275) | 255 / 1367 / 1 failure | **270 / 1438 / 1 failure (T275)** |
 | `FinanceReviewControllerTest.php` | absent | 21 / 196 | 21 / 196 |
-| `AccountWriteControllerTest.php` | absent | — | 15 / 68 |
+| `AccountWriteControllerTest.php` | absent | — | 15 / 71 |
 | `npx vitest run` | 214 / 214 | 214 / 214 | 214 / 214 |
 | `npm run typecheck` / `lint` | clean | clean | clean |
 
@@ -115,7 +115,7 @@ isolation against code neither pass touched.
 
 ## Verification discipline
 
-Twelve mutations across the two passes, each applied, **verified to have applied before its result was
+Fourteen mutations across the three passes, each applied, **verified to have applied before its result was
 read**, run, and reverted. Three survived and are recorded as gaps rather than papered over: the FR-015
 gate (T291), and the two mutually redundant duplicate-account guards in T063, where removing either
 alone leaves the 409 intact and only removing both breaks it.
@@ -139,13 +139,32 @@ One operational note for whoever reads the log next: `/var/www/html/data/nextclo
 and still being appended to. It was not truncated — that is shared state and not this repository's to
 trim — but reading it means `tail -c`, never `cat`.
 
+### Pass 5 — T292 and T293, both complete
+
+**T292**: `OCA\PettyCash\Application\Conflict` is a marker carrying `errorCode()`;
+`AccountAlreadyExists` and `StaleAccountVersion` implement it, and `OcsErrorMapper::map()` gained one arm.
+`AccountController::charge()` lost its `StaleAccountVersion` arm, so the hand-rolled four-clause catch
+ordering is **gone** rather than merely reordered — which was F3's point. Removing the mapper's arm fails
+1 contract test; the two conflict codes are now asserted in the responses. **Moving the arm after
+`LogicException` fails nothing**, because both conflicts are `RuntimeException`s and match neither arm
+however they are ordered: the precedence is right today and unpinned for a future `Conflict` that is
+also a `LogicException`.
+
+A direct unit test of the mapper turned out to be **impossible in this harness** — the unit bootstrap
+loads no `OCP\*` class, so `Http::STATUS_*` is not even defined there, and a hand-written stand-in for
+the framework would be testing the stand-in. The arm is pinned only through the real HTTP path. The
+attempted test file was deleted rather than left failing or weakened.
+
+**T293**: `T184` marked complete with its evidence attributed to `docs/reports/T056.md` and an explicit
+note that it is a bookkeeping correction, not new test evidence.
+
 ## Next pass
 
-**T292** — give `OcsErrorMapper` the vocabulary for a plain conflict, or record the rule that a new
-conflict endpoint hand-rolls its own catch chain. Small, safe, and dependency-free.
+The run now needs a maintainer decision before it can go further. **T060**'s reconciliation semantics is
+the one blocking a task inside US3, and a second acting identity for the harness (**T171**/**T291**) is
+the one blocking the E2E chain and the actor gates. The configuration, evidence-link, and report/export
+surfaces (T087, T096, T106–T112) are buildable but each carries a design question the artifacts do not
+settle, and are better started as an explicit, scoped decision than as an implementation pass.
 
-After it, **T293** (bookkeeping). Then the run needs a maintainer decision before it can go further:
-**T060**'s reconciliation semantics, and a second acting identity for the harness (**T171**/**T291**).
-The configuration, evidence-link, and report/export surfaces (T087, T096, T106–T112) are buildable but
-each carries a design question the artifacts do not settle, and are better started as an explicit,
-scoped decision than as an implementation pass.
+**Convergence is next in the cadence** and would run before any further implementation, since
+`implementation_since_convergence` is 0 and the next pass would be pass 6.

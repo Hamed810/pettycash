@@ -6,7 +6,6 @@ namespace OCA\PettyCash\Controller;
 
 use OCA\PettyCash\Application\Account\AccountAlreadyExists;
 use OCA\PettyCash\Application\Account\AccountService;
-use OCA\PettyCash\Application\Account\StaleAccountVersion;
 use OCA\PettyCash\Application\Account\UnknownAccount;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Infrastructure\Http\OcsErrorMapper;
@@ -94,8 +93,12 @@ class AccountController extends OCSController
                 ['currency' => [$e->getMessage()]]
             );
         } catch (AccountAlreadyExists $e) {
+            // A `Conflict`, so the mapper would answer this correctly through the `\Throwable` arm
+            // below. It keeps an arm only so the *message* survives: `map()` is right to replace an
+            // internal message with `pettycash.error.unexpected`, but a conflict here is a caller-
+            // correctable fact, not a fault, and the sentence is the whole answer.
             return new DataResponse(
-                ['error' => ['code' => 'ACCOUNT_ALREADY_EXISTS', 'message' => $e->getMessage()]],
+                ['error' => ['code' => $e->errorCode(), 'message' => $e->getMessage()]],
                 Http::STATUS_CONFLICT
             );
         } catch (\LogicException $e) {
@@ -179,11 +182,6 @@ class AccountController extends OCSController
             );
         } catch (UnknownAccount $e) {
             return $this->ocsErrorMapper->notFound($e->getMessage(), $commandId);
-        } catch (StaleAccountVersion $e) {
-            return new DataResponse(
-                ['error' => ['code' => 'ACCOUNT_VERSION_CONFLICT', 'message' => $e->getMessage()]],
-                Http::STATUS_CONFLICT
-            );
         } catch (\InvalidArgumentException $e) {
             // Checked before `\LogicException`, which is its parent: an invalid field is a 422 and a
             // refused actor is a 403, and the reverse of this order silently turns every validation
@@ -196,6 +194,9 @@ class AccountController extends OCSController
         } catch (\LogicException $e) {
             return $this->ocsErrorMapper->forbidden($e->getMessage(), $commandId);
         } catch (\Throwable $e) {
+            // A `Conflict` — a stale version, a pair that already exists — reaches the mapper, which
+            // answers 409 with the code the exception names. It used to need an arm of its own here,
+            // which is how this method came to depend on the order of four catch clauses.
             return $this->ocsErrorMapper->map($e, $commandId);
         }
     }

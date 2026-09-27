@@ -101,7 +101,14 @@ final class AccountWriteControllerTest extends TestCase
     {
         $this->createdAccount('EUR');
 
-        $this->assertEquals(409, $this->createAccount('EUR')->getStatusCode());
+        $response = $this->createAccount('EUR');
+
+        $this->assertEquals(409, $response->getStatusCode());
+        $this->assertSame(
+            'ACCOUNT_ALREADY_EXISTS',
+            $this->error($response)['code'] ?? null,
+            'the conflict names itself, so a client can tell it from any other 409'
+        );
     }
 
     /**
@@ -254,6 +261,17 @@ final class AccountWriteControllerTest extends TestCase
             409,
             $response->getStatusCode(),
             'a charge against a version the account has moved past must be refused'
+        );
+        $this->assertSame(
+            'ACCOUNT_VERSION_CONFLICT',
+            $this->error($response)['code'] ?? null,
+            'the conflict says which conflict it is, and that the caller reloads and retries'
+        );
+        $this->assertNotSame(
+            422,
+            $response->getStatusCode(),
+            'a conflict must not be reported as a validation failure: it is the version that is stale, '
+            . 'not the request, and only one of the two tells the caller what to do'
         );
     }
 
@@ -419,6 +437,23 @@ final class AccountWriteControllerTest extends TestCase
         }
 
         return $ids;
+    }
+
+    /**
+     * The contract's `Error` body, which is where a refusal states its stable code.
+     *
+     * The stale-version code is produced by `OcsErrorMapper` from the exception itself — that arm
+     * did not exist before T292, and this is what pins it. It cannot be pinned by a unit test: the
+     * unit bootstrap loads no `OCP\*` class, so `OcsErrorMapper`'s `Http::STATUS_*` constants are not
+     * even defined there, and a hand-written stand-in for the framework would be testing the stand-in.
+     *
+     * @return array<string, mixed>
+     */
+    private function error(ResponseInterface $response): array
+    {
+        $body = json_decode((string) $response->getBody(), true);
+
+        return $body['ocs']['data']['error'] ?? [];
     }
 
     /**

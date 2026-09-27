@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace OCA\PettyCash\Application\Account;
 
+use OCA\PettyCash\Application\Conflict;
 use RuntimeException;
 
 /**
@@ -14,4 +15,10 @@ use RuntimeException;
  * accounts, but one *per currency* — `pettycash_accounts_user_currency_uniq` is what enforces that,
  * and this is the application saying so rather than a unique-index error escaping to the caller.
  */
-final class AccountAlreadyExists extends RuntimeException {}
+final class AccountAlreadyExists extends RuntimeException implements Conflict
+{
+    public function errorCode(): string
+    {
+        return 'ACCOUNT_ALREADY_EXISTS';
+    }
+}

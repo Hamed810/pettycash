@@ -7,6 +7,7 @@ namespace OCA\PettyCash\Infrastructure\Http;
 use InvalidArgumentException;
 use LogicException;
 use OCA\PettyCash\Application\Command\CommandConflict;
+use OCA\PettyCash\Application\Conflict;
 use OCP\AppFramework\Http;
 use OCA\PettyCash\Infrastructure\Nextcloud\TechnicalLogger;
 use OCP\AppFramework\Http\DataResponse;
@@ -31,6 +32,16 @@ final class OcsErrorMapper
     {
         [$status, $code] = match (true) {
             $error instanceof CommandConflict => [Http::STATUS_CONFLICT, 'IDEMPOTENCY_CONFLICT'],
+            // A conflict the application names itself, so the code comes from the exception rather
+            // than from a table here.
+            //
+            // This arm is what lets a controller catch only `\Throwable` and still answer 409 for a
+            // stale version or an existing pair. Without it, every such endpoint had to hand-roll a
+            // catch arm — and hand-rolled arms are where T063's bug lived: `InvalidArgumentException`
+            // extends `LogicException`, so one broad `catch (\Exception)` added for an unrelated case
+            // silently swallowed every validation failure and answered 422 where the contract
+            // requires a 409.
+            $error instanceof Conflict => [Http::STATUS_CONFLICT, $error->errorCode()],
             $error instanceof InvalidArgumentException => [Http::STATUS_UNPROCESSABLE_ENTITY, 'VALIDATION_FAILED'],
             $error instanceof LogicException => [Http::STATUS_FORBIDDEN, 'FORBIDDEN'],
             default => [Http::STATUS_INTERNAL_SERVER_ERROR, 'UNEXPECTED_FAILURE'],

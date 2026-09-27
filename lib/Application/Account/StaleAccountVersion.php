@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace OCA\PettyCash\Application\Account;
 
+use OCA\PettyCash\Application\Conflict;
 use RuntimeException;
 
 /**
@@ -14,4 +15,10 @@ use RuntimeException;
  * officers make at the same moment, and a lost update here is money that vanishes from the ledger —
  * so the version is checked rather than trusted.
  */
-final class StaleAccountVersion extends RuntimeException {}
+final class StaleAccountVersion extends RuntimeException implements Conflict
+{
+    public function errorCode(): string
+    {
+        return 'ACCOUNT_VERSION_CONFLICT';
+    }
+}

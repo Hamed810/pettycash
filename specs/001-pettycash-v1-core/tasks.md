@@ -739,7 +739,7 @@ feature implementation.
 ### Phase 5 Completion — US3 Finance Settlement (Priority: P1)
 
 - [x] T183 [US3] Mark T055 complete - `FinanceDecisionPolicyTest.php` exists with 10 passing tests in `tests/Unit/Domain/Workflow/FinanceDecisionPolicyTest.php` (missing)
-- [ ] T184 [P] [US3] Create `FinanceSettlementTest.php` integration tests for fixed row-lock order, exactly-one consumption, command replay, conflicting UUID, simultaneous approvals, rollback per T056 in `tests/Integration/Workflow/FinanceSettlementTest.php` (missing)
+- [X] T184 [P] [US3] Create `FinanceSettlementTest.php` integration tests for fixed row-lock order, exactly-one consumption, command replay, conflicting UUID, simultaneous approvals, rollback per T056 in `tests/Integration/Workflow/FinanceSettlementTest.php` (complete — the file exists with 29 tests / 149 assertions covering all six cases T056 names; T056 already `[x]`, and the evidence is in `docs/reports/T056.md`. Corrected by T293, which is a bookkeeping fix and **not** new test evidence)
 - [X] T185 [P] [US3] Create `FinanceReviewControllerTest.php` contract tests for shared finance queue and decisions per T057 in `tests/Contract/Controller/FinanceReviewControllerTest.php` (complete — the file exists with 21 tests covering the shared queue and the finance decision responses; T057 already `[x]`, and the details of what it found are recorded there)
 - [ ] T186 [P] [US3] Create `FinanceReview.spec.ts` Vue tests for shared queue, senior-decision restrictions, settlement feedback per FR-071 in `tests/Frontend/Component/FinanceReview.spec.ts` (missing)
 - [x] T187 [P] [US3] Align `AccountMovement` domain with minor units (not Money), positive magnitude, unique command ID, unique consumption source per T059 in `lib/Domain/Account/AccountMovement.php` (partial)
@@ -2884,7 +2884,7 @@ reachability assertion per route is cheap, and it converts "nobody noticed" into
 
 ### MEDIUM — the error mapper has no vocabulary for a plain conflict
 
-- [ ] T292 [LOW] Give `OcsErrorMapper` the vocabulary for a conflict that is neither an idempotency
+- [X] T292 [LOW] Give `OcsErrorMapper` the vocabulary for a conflict that is neither an idempotency
   conflict nor a validation failure, or record the rule that a new conflict endpoint hand-rolls its own
   catch chain. `map()` resolves `CommandConflict` → 409, `InvalidArgumentException` → 422,
   `LogicException` → 403 and everything else → 500, and T063 needed three new exception types
@@ -2898,7 +2898,7 @@ reachability assertion per route is cheap, and it converts "nobody noticed" into
 
 ### LOW — a parent task still claims work its child completed
 
-- [ ] T293 [LOW] Correct `T184`'s state, because it is still `[ ]` with the note "(missing)" while
+- [X] T293 [LOW] Correct `T184`'s state, because it is still `[ ]` with the note "(missing)" while
   `tests/Integration/Workflow/FinanceSettlementTest.php` exists, holds 29 tests, and its child `T056` is
   complete. `T185` was in exactly this state and was corrected by the T057 pass, following the
   treatment `T183` already had ("exists; T055 already `[x]`"), so `T184` is the last of that shape
