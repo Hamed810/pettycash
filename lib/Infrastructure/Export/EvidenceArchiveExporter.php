@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace OCA\PettyCash\Infrastructure\Export;
 
+use OCA\PettyCash\Application\Port\TransientExportStore;
 use RuntimeException;
 use ZipArchive;
 
@@ -75,8 +76,10 @@ final class EvidenceArchiveExporter
 
     private readonly int $maxFileBytes;
 
-    public function __construct(?int $maxFileBytes = null)
-    {
+    public function __construct(
+        private readonly TransientExportStore $store,
+        ?int $maxFileBytes = null
+    ) {
         $this->maxFileBytes = $maxFileBytes ?? self::MAX_FILE_BYTES;
     }
 
@@ -88,21 +91,46 @@ final class EvidenceArchiveExporter
      */
     public function build(array $entries, callable $reader): EvidenceArchiveResult
     {
-        $archivePath = tempnam(sys_get_temp_dir(), 'pettycash-evidence-');
-        if ($archivePath === false) {
-            throw new RuntimeException('Could not create a temporary file for the evidence archive');
-        }
+        $artifactName = $this->artifactName();
+        $scratchPath = $this->store->scratchPath($artifactName);
 
         try {
-            return $this->buildInto($archivePath, $entries, $reader);
+            $result = $this->buildInto($scratchPath, $entries, $reader);
+
+            // The artifact is moved into app-private transient storage before the scratch is removed,
+            // so the file that persists is never the file the archive was assembled in. The contract
+            // requires private transient application storage; the scratch path exists only because
+            // ZipArchive has no stream API.
+            $this->store->persist($artifactName, $scratchPath);
+            $bytes = $this->store->size($artifactName);
+
+            return new EvidenceArchiveResult(
+                $artifactName,
+                $bytes ?? 0,
+                $result->manifestRows,
+                $result->omitted,
+                $result->memberPaths,
+                $this->maxFileBytes
+            );
         } finally {
-            // Removed whether or not the build succeeded. The archive is transient by contract
-            // ("generated artifacts use private transient application storage and are removed after
-            // streaming"), and a group export can be large enough that leaving one behind matters.
-            if (is_file($archivePath)) {
-                @unlink($archivePath);
+            // Removed whether or not the build succeeded. A group export can be large enough that
+            // leaving a copy in the shared system temp directory matters, and scratch is scratch.
+            if (is_file($scratchPath)) {
+                @unlink($scratchPath);
             }
         }
+    }
+
+    /**
+     * A unique artifact name, so two concurrent group exports cannot overwrite one another.
+     *
+     * A random suffix rather than a timestamp or a counter: two exports started in the same second must
+     * not collide, and a predictable name in a shared storage location is a name another process could
+     * pre-empt.
+     */
+    private function artifactName(): string
+    {
+        return 'evidence-' . bin2hex(random_bytes(8)) . '.zip';
     }
 
     /**
@@ -157,13 +185,13 @@ final class EvidenceArchiveExporter
             $zip->close();
         }
 
-        $bytes = file_get_contents($archivePath);
-        if ($bytes === false) {
-            throw new RuntimeException('Could not read back the generated evidence archive');
-        }
+        // The archive is not read back here. Its size is taken from the file on disk, which is what
+        // `persist()` will move, and the bytes are read later by whoever streams it.
+        $size = filesize($archivePath);
 
         return new EvidenceArchiveResult(
-            $bytes,
+            '',
+            $size === false ? 0 : $size,
             $manifestRows,
             $omitted,
             $memberPaths,

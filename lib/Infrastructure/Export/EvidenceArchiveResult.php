@@ -8,26 +8,32 @@ namespace OCA\PettyCash\Infrastructure\Export;
  * What a grouped evidence archive actually contains.
  *
  * The contract states two rules that pull in opposite directions and cannot both be checked from the
- * ZIP bytes alone: "the manifest lists only files actually present in the archive", and "the
+ * archive alone: "the manifest lists only files actually present in the archive", and "the
  * manifest-to-file mapping is complete". A consumer of a group export needs to know which evidence was
- * requested, which made it into the archive, and — when those differ — **why**. Returning the archive
- * bytes alone would force that question to be answered by trusting the manifest, which is precisely the
- * thing the contract forbids.
+ * requested, which made it into the archive, and — when those differ — **why**. Reporting the manifest
+ * alone would force that question to be answered by trusting the manifest, which is precisely the thing
+ * the contract forbids.
  *
  * So the omissions travel with the result. An omission is a file the caller asked for that is not in
- * the archive, each with a reason. `OmittedReason::NOT_READABLE` and `OmittedReason::OVER_SIZE_LIMIT`
- * are the two the build can produce.
+ * the archive, each with a reason; the exporter produces `NOT_READABLE` and `OVER_SIZE_LIMIT`.
+ *
+ * The result carries the **name** of the archive in the transient store, not its bytes. Holding the
+ * bytes here would put a PHP memory limit in the middle of a group export whose size `contracts/exports.md`
+ * does not cap and whose per-file ceiling is 100 MB, and it would also mean the artifact had been read
+ * back out of app-private storage for no reason. Reading it is the streaming layer's job.
  */
 final readonly class EvidenceArchiveResult
 {
     /**
-     * @param string $zipBytes the complete archive
+     * @param string $artifactName name of the archive in the transient store, not its bytes
+     * @param int $artifactBytes size of the stored archive
      * @param list<array<string, string>> $manifestRows one row per file actually in the archive, in archive order
      * @param list<array{evidencePublicId: string, reason: string}> $omitted requested files that are not in the archive
      * @param list<string> $memberPaths archive-relative path of every file member, in archive order
      */
     public function __construct(
-        public string $zipBytes,
+        public string $artifactName,
+        public int $artifactBytes,
         public array $manifestRows,
         public array $omitted,
         public array $memberPaths,

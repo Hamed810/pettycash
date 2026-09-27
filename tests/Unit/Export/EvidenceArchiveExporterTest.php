@@ -9,6 +9,7 @@ use InvalidArgumentException;
 use OCA\PettyCash\Infrastructure\Export\CsvExporter;
 use OCA\PettyCash\Infrastructure\Export\EvidenceArchiveEntry;
 use OCA\PettyCash\Infrastructure\Export\EvidenceArchiveExporter;
+use OCA\PettyCash\Tests\TestDoubles\InMemoryTransientExportStore;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 use ZipArchive;
@@ -41,11 +42,20 @@ final class EvidenceArchiveExporterTest extends TestCase
     private const REVISION = '33333333-3333-4333-8333-333333333333';
     private const EVIDENCE = '44444444-4444-4444-8444-444444444444';
 
+    private InMemoryTransientExportStore $store;
+
     private EvidenceArchiveExporter $exporter;
 
     protected function setUp(): void
     {
-        $this->exporter = new EvidenceArchiveExporter();
+        $this->store = new InMemoryTransientExportStore();
+        $this->exporter = new EvidenceArchiveExporter($this->store);
+    }
+
+    /** The stored archive's bytes, read back the way a streaming layer would. */
+    private function artifact(string $name): string
+    {
+        return $this->store->artifactBytes($name);
     }
 
     // ===== Manifest-to-file completeness =====
@@ -55,7 +65,7 @@ final class EvidenceArchiveExporterTest extends TestCase
         $result = $this->buildOne();
 
         self::assertSame(1, $result->fileCount());
-        self::assertTrue($this->zipHas($result->zipBytes, EvidenceArchiveExporter::MANIFEST_NAME));
+        self::assertTrue($this->zipHas($this->artifact($result->artifactName), EvidenceArchiveExporter::MANIFEST_NAME));
     }
 
     public function testTheManifestHasOneRowPerFileAndTheMappingIsComplete(): void
@@ -95,7 +105,7 @@ final class EvidenceArchiveExporterTest extends TestCase
 
         // A storage path is an internal detail. Publishing it hands the recipient the AppData layout,
         // which is the thing FR-060's secrecy and ADR-001 exist to protect.
-        self::assertStringNotContainsString('roundtrip/', $result->zipBytes);
+        self::assertStringNotContainsString('roundtrip/', $this->artifact($result->artifactName));
         self::assertStringNotContainsString(
             'storageKey',
             (new CsvExporter())->export($result->manifestRows)
@@ -120,9 +130,75 @@ final class EvidenceArchiveExporterTest extends TestCase
 
         self::assertTrue($result->isEmpty());
         self::assertTrue($result->manifestMatchesArchive());
-        $manifest = $this->zipRead($result->zipBytes, EvidenceArchiveExporter::MANIFEST_NAME);
+        $manifest = $this->zipRead($this->artifact($result->artifactName), EvidenceArchiveExporter::MANIFEST_NAME);
         self::assertStringContainsString('sheetPublicId', (string) $manifest);
         self::assertStringContainsString('archivePath', (string) $manifest);
+    }
+
+    // ===== The artifact lives in app-private transient storage, not the system temp directory =====
+
+    public function testTheArchiveIsPersistedIntoTheTransientStore(): void
+    {
+        $result = $this->buildOne();
+
+        // contracts/exports.md: "Generated artifacts use private transient application storage". The
+        // previous implementation assembled the archive in the host's shared system temp directory and
+        // called that compliant; this asserts the artifact actually reaches the store.
+        self::assertSame(1, $this->store->persistCount());
+        self::assertTrue($this->store->exists($result->artifactName));
+        self::assertSame([$result->artifactName], $this->store->artifactNames());
+    }
+
+    public function testTheStoredArtifactIsAReadableZip(): void
+    {
+        $result = $this->buildOne();
+        $bytes = $this->artifact($result->artifactName);
+
+        self::assertSame('PK', substr($bytes, 0, 2), 'the persisted artifact must be a ZIP');
+        self::assertTrue($this->zipHas($bytes, EvidenceArchiveExporter::MANIFEST_NAME));
+    }
+
+    public function testTheResultCarriesTheArtifactNameAndNotTheArchiveBytes(): void
+    {
+        $result = $this->buildOne();
+
+        // Asserted structurally as well as behaviourally. Holding the archive in the result would put a
+        // PHP memory limit in the middle of a group export whose size the contract does not cap, and it
+        // would mean reading a multi-megabyte artifact out of app-private storage for no reason.
+        self::assertObjectNotHasProperty('zipBytes', $result);
+        self::assertStringEndsWith('.zip', $result->artifactName);
+        self::assertGreaterThan(0, $result->artifactBytes);
+    }
+
+    public function testTheArtifactSizeMatchesWhatWasStored(): void
+    {
+        $result = $this->buildOne();
+
+        self::assertSame(
+            $this->store->size($result->artifactName),
+            $result->artifactBytes,
+            'the reported size must be the stored size, not the pre-persist one'
+        );
+    }
+
+    public function testTwoBuildsGetDistinctArtifactNames(): void
+    {
+        $first = $this->buildOne();
+        $second = $this->buildOne();
+
+        // A timestamp or a counter would collide for two exports started in the same second, and one
+        // overwriting the other is a download that serves the wrong evidence.
+        self::assertNotSame($first->artifactName, $second->artifactName);
+        self::assertCount(2, $this->store->artifactNames());
+    }
+
+    public function testNoArchiveIsLeftBehindInTheSystemTempDirectory(): void
+    {
+        $this->buildOne();
+
+        // The whole point of the fix: the archive must not survive in the host's shared temp directory.
+        self::assertSame([], glob(sys_get_temp_dir() . '/pettycash-evidence-*') ?: []);
+        self::assertSame([], $this->store->survivingScratchFiles());
     }
 
     // ===== Omission, not a lying manifest =====
@@ -167,7 +243,7 @@ final class EvidenceArchiveExporterTest extends TestCase
 
     public function testAFileOverTheSizeLimitIsRefusedRatherThanArchived(): void
     {
-        $exporter = new EvidenceArchiveExporter(maxFileBytes: 10);
+        $exporter = new EvidenceArchiveExporter($this->store, maxFileBytes: 10);
         $entry = $this->entry();
         // Claims 999999 bytes; the ceiling is 10.
         $result = $exporter->build([$entry], static fn (): string => 'far too many bytes');
@@ -190,7 +266,7 @@ final class EvidenceArchiveExporterTest extends TestCase
 
     public function testAFileExactlyAtTheCeilingIsArchived(): void
     {
-        $exporter = new EvidenceArchiveExporter(maxFileBytes: 5);
+        $exporter = new EvidenceArchiveExporter($this->store, maxFileBytes: 5);
         $entry = new EvidenceArchiveEntry(
             self::EVIDENCE, 'exact.bin', 'application/octet-stream', 5, 'c', true,
             'u', 'n', new DateTimeImmutable(), self::TRANSACTION, 1, self::REVISION, self::SHEET, 't', 'k'
@@ -205,7 +281,7 @@ final class EvidenceArchiveExporterTest extends TestCase
 
     public function testAFileOneByteOverTheCeilingIsRefused(): void
     {
-        $exporter = new EvidenceArchiveExporter(maxFileBytes: 5);
+        $exporter = new EvidenceArchiveExporter($this->store, maxFileBytes: 5);
         $entry = new EvidenceArchiveEntry(
             self::EVIDENCE, 'over.bin', 'application/octet-stream', 6, 'c', true,
             'u', 'n', new DateTimeImmutable(), self::TRANSACTION, 1, self::REVISION, self::SHEET, 't', 'k'
@@ -329,7 +405,7 @@ final class EvidenceArchiveExporterTest extends TestCase
         );
 
         $result = $this->exporter->build([$entry], static fn (): string => 'bytes');
-        $manifest = (string) $this->zipRead($result->zipBytes, EvidenceArchiveExporter::MANIFEST_NAME);
+        $manifest = (string) $this->zipRead($this->artifact($result->artifactName), EvidenceArchiveExporter::MANIFEST_NAME);
 
         // The manifest is a CSV, so it inherits the CSV exporter's formula escaping. A sheet title is
         // user-controlled and a recipient double-clicking the manifest would otherwise evaluate it.
@@ -339,7 +415,7 @@ final class EvidenceArchiveExporterTest extends TestCase
     public function testTheManifestPreservesPersianText(): void
     {
         $result = $this->buildOne();
-        $manifest = (string) $this->zipRead($result->zipBytes, EvidenceArchiveExporter::MANIFEST_NAME);
+        $manifest = (string) $this->zipRead($this->artifact($result->artifactName), EvidenceArchiveExporter::MANIFEST_NAME);
 
         self::assertStringContainsString('باربر', $manifest);
     }
@@ -369,19 +445,18 @@ final class EvidenceArchiveExporterTest extends TestCase
 
     // ===== No transient residue =====
 
-    public function testTheTemporaryArchiveIsRemovedAfterTheBuild(): void
+    public function testTheScratchFileIsRemovedAfterTheBuild(): void
     {
-        $before = $this->tempFileCount();
-
         $this->exporter->build([$this->entry()], static fn (): string => 'bytes');
 
-        // A group export can be large, and the contract requires transient artifacts to be removed.
-        self::assertSame($before, $this->tempFileCount());
+        // Asserted on what survived on disk rather than on a cleanup method having been called, because
+        // a build that reported cleaning up and left the file is the failure mode.
+        self::assertCount(1, $this->store->scratchPaths());
+        self::assertSame([], $this->store->survivingScratchFiles());
     }
 
-    public function testTheTemporaryArchiveIsRemovedEvenWhenTheBuildFails(): void
+    public function testTheScratchFileIsRemovedEvenWhenTheBuildFails(): void
     {
-        $before = $this->tempFileCount();
         $exploding = function (): string {
             throw new RuntimeException('storage exploded');
         };
@@ -393,7 +468,22 @@ final class EvidenceArchiveExporterTest extends TestCase
             // expected
         }
 
-        self::assertSame($before, $this->tempFileCount());
+        self::assertSame([], $this->store->survivingScratchFiles());
+    }
+
+    public function testNothingIsPersistedWhenTheBuildFails(): void
+    {
+        $exploding = function (): string {
+            throw new RuntimeException('storage exploded');
+        };
+
+        try {
+            $this->exporter->build([$this->entry()], $exploding);
+        } catch (RuntimeException) {
+            // expected
+        }
+
+        self::assertSame(0, $this->store->persistCount(), 'a failed build must not leave a half-written artifact');
     }
 
     // ===== Helpers =====
@@ -473,12 +563,5 @@ final class EvidenceArchiveExporterTest extends TestCase
         file_put_contents($path, $bytes);
 
         return $path;
-    }
-
-    private function tempFileCount(): int
-    {
-        $files = glob(sys_get_temp_dir() . '/pettycash-evidence-*') ?: [];
-
-        return count($files);
     }
 }

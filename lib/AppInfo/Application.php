@@ -13,6 +13,7 @@ use OCA\PettyCash\Application\Port\AuditWriter;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Application\Port\PrivateFileStore;
 use OCA\PettyCash\Application\Port\RetentionPolicyStore;
+use OCA\PettyCash\Application\Port\TransientExportStore;
 use OCA\PettyCash\Application\Port\TransactionManager;
 use OCA\PettyCash\Application\Port\UserDirectory;
 use OCA\PettyCash\Application\Audit\RetentionPolicyService;
@@ -36,6 +37,7 @@ use OCA\PettyCash\Domain\Workflow\Repository\WorkflowDecisionRepository;
 use OCA\PettyCash\Infrastructure\Nextcloud\AppDataEvidenceStore;
 use OCA\PettyCash\Infrastructure\Nextcloud\NextcloudAdministratorCheck;
 use OCA\PettyCash\Infrastructure\Nextcloud\NextcloudCurrentUser;
+use OCA\PettyCash\Infrastructure\Nextcloud\AppDataExportStore;
 use OCA\PettyCash\Infrastructure\Nextcloud\NextcloudRetentionPolicyStore;
 use OCA\PettyCash\Infrastructure\Nextcloud\NextcloudUserDirectory;
 use OCA\PettyCash\Infrastructure\Nextcloud\SystemClock;
@@ -340,6 +342,13 @@ final class Application extends App implements IBootstrap
                 $c->query(AuditWriter::class),
                 $c->query(\OCA\PettyCash\Domain\Shared\Clock::class)
             );
+        });
+
+        // Private transient storage for generated export artifacts. contracts/exports.md requires
+        // "private transient application storage", and plan.md names IAppData, so the grouped-evidence
+        // exporter persists there rather than in the host's shared system temp directory.
+        $context->registerService(TransientExportStore::class, function ($c) {
+            return new AppDataExportStore($c->query(IAppData::class));
         });
 
         $context->registerService(FinanceSettlementService::class, function ($c) {
