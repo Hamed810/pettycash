@@ -3669,3 +3669,34 @@ exist. These four are uncovered.
   and transactions by id; **date-range filtering is not implemented** and a `filters` object is parsed
   but not applied, so a request that supplies only `filters` and no `ids` is refused rather than silently
   unfiltered. That remainder is unowned by any task and needs one.
+## Phase 44: Convergence
+
+One finding, surfaced by implementing T302 and explicitly recorded there as unowned.
+
+- [ ] T306 Narrow an export's rows by `ExportRequest.filters`, or refuse a `filters`-only request
+  naming what enumeration is not implemented, per FR-068. T302 made `ids` authoritative and made
+  `ExportController::rowsForSelection()` read `filters` -- but only as the boolean "did the caller ask
+  for something", so a `filters` object narrows nothing. A request carrying only `filters` is therefore
+  refused (correct, since enumerating every sheet is not implemented), and a request carrying `ids`
+  *and* `filters` silently ignores the filter half: the caller gets the ids they named, unfiltered,
+  which is the same "accepted and discarded" defect T302 closed for `ids`, now reopened for `filters`.
+  `ReportFilter` already models the fields involved (`from`, `to`, `statuses`, `currencyCodes`,
+  `costCenterDbIds`, `actorUids`, `eventTypes`) and `ReportQuery` already owns a private filter
+  implementation, so the domain rule exists and needs exposing rather than rewriting -- and the
+  narrowing must be applied there, not in the controller, or there will be two definitions of what a
+  filter means. (missing)
+
+- [ ] T307 **CRITICAL** — Reconcile `ReportQuery::applyFilter()`'s expected row keys with the rows the
+  report and export controllers actually emit, and reopen T106 and T112 whose completion evidence this
+  invalidates. The filter rule reads `currencyCode`, `actorUid`, `costCenterDbId`, `eventType` and
+  `createdBy`; the sheets/transactions/accounts/process/evidence rows emit `currency` and `ownerUid`,
+  and only the audit branch emits `actorUid`. So every currency, actor and cost-centre filter compares
+  against a key that is never present, `in_array('', ['IRR'])` is false, and **the filter drops every
+  row while returning `200`**. Measured on the live endpoint: `GET /reports/sheets` returns
+  `total: 100`, the same request with `filters={"currencyCodes":["IRR"]}` returns `total: 0`, and with
+  `filters={"actorUids":["employee1"]}` returns `total: 0` — on a sheet set that is entirely IRR and
+  entirely owned by `employee1`. FR-064 requires filtering sheets by status, date, **currency and
+  creator**; status and date work, currency and creator silently return nothing, which is worse than
+  refusing them. This is a domain defect, not a controller one: the right fix is one agreed row
+  vocabulary owned by `ReportQuery` and consumed by both the report and export paths, rather than
+  renaming keys in each producer until they happen to agree. (contradicts)
