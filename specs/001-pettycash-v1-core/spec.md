@@ -237,8 +237,15 @@ records and fields allowed for that role.
 3. **Given** a user requests a sheet, transaction, report, audit, or evidence export, **When** the
    export is generated, **Then** it contains only information the user may view and preserves links
    among sheets, transactions, revisions, decisions, audit events, and evidence.
-4. **Given** a group of records is selected, **When** an export is requested in a supported format,
-   **Then** the system produces a complete grouped export in Excel, CSV, or PDF as applicable.
+4. **Given** a group of records is selected, **When** an export is requested with a supported
+   `fileFormat`, **Then** the system produces a complete grouped export in that format, and refuses a
+   format it cannot yet produce with an explanation naming the reason.
+   The supported `fileFormat` values are `csv`, `xlsx` and `zip`; `pdf` is supported only once a
+   Persian-capable font is available, and until then a `pdf` request is refused rather than answered
+   with a document that cannot be read.
+   The field is named `fileFormat` and not `format` because the response-envelope format is selected by
+   a request parameter of that name, so a request field called `format` would silently change the shape
+   of the response instead of describing the export.
 
 ---
 
@@ -490,7 +497,13 @@ of all primary workflow actions.
 - **FR-065**: Reports MUST cover sheets, transactions, cost centers, petty-cash balances and
   movements, current process status, evidence, and history within the requester's access scope.
 - **FR-066**: Authorized users MUST be able to export permitted reports, sheets, transactions,
-  audit histories, and evidence in Excel, CSV, and PDF where applicable.
+  audit histories, and evidence in a supported `fileFormat` (`csv`, `xlsx`, or `zip`; `pdf` once a
+  Persian-capable font is available), and a format that cannot yet be produced MUST be refused with a
+  reason rather than answered with an unreadable or empty document.
+- **FR-068**: Group exports MUST honour the records the caller selected. A selection the system cannot
+  satisfy MUST be refused with a reason; it MUST NOT be answered with an export that omits the selected
+  records. A filter the report's records cannot answer MUST also be refused, never reported as an empty
+  result.
 - **FR-067**: A complete sheet export MUST preserve the relationships among sheet information,
   transactions, decisions, revisions, audit events, and evidence.
 - **FR-068**: Group exports MUST support selected sheets, date ranges, cost center transactions, and

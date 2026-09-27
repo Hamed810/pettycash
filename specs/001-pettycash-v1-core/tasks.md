@@ -3603,7 +3603,7 @@ exist. These four are uncovered.
   because it sits in the spec. The choice belongs to the spec owner: a verification task, or an
   explicit deferral. (missing)
 
-- [ ] T305 Reconcile US7/AC4 with what the export endpoint can actually produce, and pin the request
+- [x] T305 Reconcile US7/AC4 with what the export endpoint can actually produce, and pin the request
   field name in the spec. AC4 asserts a grouped export "in Excel, CSV, or PDF as applicable", but T109
   is still open and `ExportController` refuses `pdf` with a reason, so the acceptance scenario is
   currently unsatisfiable. The scenario also says "a supported format" without naming the field, which
@@ -3730,3 +3730,28 @@ One finding, surfaced by implementing T302 and explicitly recorded there as unow
   producer emits those columns. That is the correct answer today and a real capability gap -- FR-064's
   cost-centre filtering and the spec's creator filter have no data behind them -- and it is unowned by
   any task.
+
+  **Delivered** by amending `specs/001-pettycash-v1-core/spec.md` in place, per the user's choice
+  against creating a new `specs/002-*` feature. The contradiction was never "the spec is missing a
+  feature", it was two sentences in an existing spec that the implementation could not satisfy, so a
+  new feature directory would have left it exactly where it was.
+
+  - **US7/AC4** now names the request field (`fileFormat`), states the supported values
+    (`csv`, `xlsx`, `zip`; `pdf` only once a Persian-capable font exists), requires a refusal with a
+    reason for a format that cannot yet be produced, and records *why* the field is not called `format`:
+    the response-envelope format is selected by a request parameter of that name, so a field called
+    `format` silently changes the shape of the response instead of describing the export. That is the
+    OCS collision T112 hit, stated in the spec so it cannot recur unnoticed.
+  - **FR-066** carried the identical drift ("in Excel, CSV, and PDF where applicable") one screen
+    earlier. Left alone it would have contradicted the amended AC4, so it was corrected in the same
+    voice: supported `fileFormat` values, and a refusal for one that cannot yet be produced.
+  - **FR-068** gained the rule its implementation already follows, so the code is now described rather
+    than merely correct: a selection the system cannot satisfy MUST be refused, MUST NOT be answered
+    with an export that omits the selected records, and a filter the report cannot answer MUST be
+    refused rather than reported as an empty result. Those are T302's and T307's behaviours, written
+    down as requirements.
+
+  Terminology drift closed: the spec said "Excel" where the contract's enum says `xlsx`.
+
+  **Verified**: `spec.md` and `contracts/ocs-api.yaml` now agree on the field name (3 mentions each),
+  and the contract declares no bare `format:` request field.
