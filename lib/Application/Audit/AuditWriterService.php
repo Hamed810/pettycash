@@ -11,7 +11,6 @@ use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Application\Port\UserDirectory;
 use OCA\PettyCash\Domain\Audit\AuditEvent;
 use OCA\PettyCash\Domain\Audit\Repository\AuditEventRepository;
-use OCA\PettyCash\Domain\Shared\ActorSnapshot;
 
 final class AuditWriterService implements AuditWriter
 {
@@ -51,72 +50,4 @@ final class AuditWriterService implements AuditWriter
         $this->auditRepository->save($auditEvent);
     }
 
-    public function appendTransaction(
-        string $eventType,
-        ActorSnapshot $actor,
-        string $stage,
-        ?int $sheetId = null,
-        ?int $transactionId = null,
-        ?int $revisionId = null,
-        ?int $decisionId = null,
-        ?string $explanation = null,
-        array $before = [],
-        array $after = [],
-        ?string $commandId = null
-    ): void {
-        $auditEvent = new AuditEvent(
-            \OCA\PettyCash\Domain\Shared\Uuid::random()->__toString(),
-            $sheetId,
-            $transactionId,
-            $revisionId,
-            $stage,
-            $decisionId,
-            'transaction',
-            null,
-            $eventType,
-            $actor->uid,
-            $actor->displayName,
-            $actor->role->value,
-            $explanation,
-            json_encode($before),
-            json_encode($after),
-            $commandId,
-            new DateTimeImmutable('now', new DateTimeZone('UTC'))
-        );
-
-        $this->auditRepository->save($auditEvent);
-    }
-
-    public function appendConfiguration(
-        string $eventType,
-        ActorSnapshot $actor,
-        string $entityType,
-        string $entityId,
-        ?string $explanation = null,
-        array $before = [],
-        array $after = [],
-        ?string $commandId = null
-    ): void {
-        $auditEvent = new AuditEvent(
-            \OCA\PettyCash\Domain\Shared\Uuid::random()->__toString(),
-            null,
-            null,
-            null,
-            'CONFIGURATION',
-            null,
-            $entityType,
-            $entityId,
-            $eventType,
-            $actor->uid,
-            $actor->displayName,
-            $actor->role->value,
-            $explanation,
-            json_encode($before),
-            json_encode($after),
-            $commandId,
-            new DateTimeImmutable('now', new DateTimeZone('UTC'))
-        );
-
-        $this->auditRepository->save($auditEvent);
-    }
 }

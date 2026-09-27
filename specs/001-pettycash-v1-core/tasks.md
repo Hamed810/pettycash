@@ -71,7 +71,7 @@ and client foundations that block every user story.
 - [x] T025 Implement Nextcloud user-directory, current-user, administrator, clock, technical-log, and private AppData adapters in `lib/Infrastructure/Nextcloud/`
 - [x] T026 Implement centralized object authorization and role-scoped query policies from the tested matrix in `lib/Application/Security/AuthorizationService.php` (enforce: self-review permitted when user holds required review role + scope + stage permission; ownership grants purchaser rights only; cost-center/senior/finance scope checks; admin no finance without finance role - explicit deny for admin attempting finance actions per FR-007)
 - [x] T027 Implement command UUID payload hashing, replay, and conflict handling in `lib/Application/Command/IdempotencyService.php`
-- [x] T028 Implement transaction and configuration audit writers that snapshot UID, display name, role, stage, revision, explanation, command ID, and canonical before/after JSON in `lib/Application/Audit/`
+- [ ] T028 Implement transaction and configuration audit writers that snapshot UID, display name, role, stage, revision, explanation, command ID, and canonical before/after JSON in `lib/Application/Audit/` (**reopened by T295 — the configuration writer this task claims does not exist and never ran.** Only the transaction side is real: `AuditWriterService::append()`, the method the `AuditWriter` port declares and the only one any of the six production call sites uses. The configuration side was `appendConfiguration()`, it had **zero** call sites, and `DbAuditEventRepository::save()` targets `pettycash_transaction_audit` unconditionally, so even if it had been called it would have written a configuration event into the *transaction* stream, against FR-056. `grep -rn pettycash_configuration_audit lib/ --include=*.php` returns the migration and nothing else, so the table is created and permanently empty. T296 has since deleted the dead method, leaving no configuration writer at all; **T294** owns writing one that reaches the right table)
 - [x] T029 Implement consistent OCS error mapping for validation, forbidden, hidden-not-found, stale state, idempotency conflict, and unexpected failures in `lib/Infrastructure/Http/OcsErrorMapper.php`
 - [x] T030 Create the typed frontend OCS client, canonical error model, command-ID generator, pagination types, and no-automatic-mutation-retry behavior in `src/services/http.ts`, `src/types/api.ts`, and `src/types/permissions.ts`
 
@@ -446,8 +446,8 @@ unchanged.
 
 ### Tests for User Story 4
 
-- [ ] T067 [P] [US4] Write failing revision tests for `revision_number starts at 1; unique per transaction`, submitted revision immutability, correction ownership, supersedes linkage, and active-revision switching in `tests/Unit/Domain/Expense/TransactionRevisionTest.php`
-- [ ] T068 [P] [US4] Write failing integration tests for return-to-correction, new-revision activation, manager snapshot refresh, full-path restart, retained completed sibling transactions, and atomic audit insertion in `tests/Integration/Workflow/TransactionCorrectionTest.php`
+- [x] T067 [P] [US4] Write failing revision tests for `revision_number starts at 1; unique per transaction`, submitted revision immutability, correction ownership, supersedes linkage, and active-revision switching in `tests/Unit/Domain/Expense/TransactionRevisionTest.php` (complete — **corrected by T298, case 1: the checkbox was stale, not the work.** `git log -L` shows `e074cff` (2026-09-22) *created* this line as `[ ]` and it was never checked, while T195 asserted "T067 already `[x]`" on 2026-09-26 — a claim that was false the day it was written. The file exists with **11 tests** and was re-measured green this run as part of the 18-test / 49-assertion pair with T068. Nothing reopened it and no note gives a reason to leave it open, so the state was simply never updated. Per T293's precedent this is a bookkeeping correction and **not** new test evidence)
+- [x] T068 [P] [US4] Write failing integration tests for return-to-correction, new-revision activation, manager snapshot refresh, full-path restart, retained completed sibling transactions, and atomic audit insertion in `tests/Integration/Workflow/TransactionCorrectionTest.php` (complete — **corrected by T298, case 1**, on the same evidence as T067: created `[ ]` by `e074cff`, never checked, and T196 asserted "T068 already `[x]`" when it was not. The file now holds **9 tests**, not the 7 T196 recorded, and the pair is green)
 - [ ] T069 [P] [US4] Write failing contract and Vue tests for correction creation/update/resubmit, returned queue, read-only prior revisions, and field/evidence validation in `tests/Contract/Controller/CorrectionControllerTest.php` and `tests/Frontend/Component/TransactionCorrection.spec.ts`
 
 ### Implementation for User Story 4
@@ -547,7 +547,7 @@ evidence; verify every report/export contains all permitted and zero out-of-scop
 
 - [x] T105 [US7] Implement indexed sheet summary and totals projections using active revisions and immutable decisions without storing independent mutable totals in `lib/Infrastructure/Persistence/Expense/SheetSummaryQuery.php` (done - `SheetSummaryQuery` reads one flat row per (active revision, decision) pair through the join on `active_revision_id` and `pettycash_workflow_decisions_revision_stage_uniq`, with `sheet_id` leading `pettycash_transactions_sheet_state_idx`, and hands the rows to the domain's already-tested `SheetTotals::fromRows()`. The reduction rules are deliberately **not** restated in SQL: the most-advanced-decision precedence and the fact that a return makes a transaction pending live in the domain, and duplicating them in SQL would give one rule two implementations that drift. Only decisions on the **active** revision are read — a decision on a superseded revision stays in the database as FR-050 history but no longer describes the current outcome. The precedence rule itself had no home in the domain at all, so it is now `SheetTotals::effectiveOutcome(finance, senior, costCenter)`, asserted case by case in `tests/Unit/Domain/Expense/SheetTotalsTest.php` (8 data-provider cases plus the returned-transaction case where the transaction is pending while its earlier stage approvals still count) — 11/11 green)
 - [ ] T106 [P] [US7] Implement role-scoped dashboard and report query services with server-side filters and maximum page size 100 in `lib/Application/Reporting/DashboardQuery.php` and `lib/Application/Reporting/ReportQuery.php` (config audit visibility per role scope: admins all, finance charged accounts, managers assigned cost centers)
-- [ ] T107 [P] [US7] Implement native streaming CSV with spreadsheet-formula escaping in `lib/Infrastructure/Export/CsvExporter.php`
+- [X] T107 [P] [US7] Implement native streaming CSV with spreadsheet-formula escaping in `lib/Infrastructure/Export/CsvExporter.php` (complete — 33 tests in `tests/Unit/Export/CsvExporterTest.php`. **The design decision is that escaping keys on the PHP type, not the string content.** The standard hardening advice — prefix any cell starting with `=`, `+`, `-` or `@` — applied naively to a report of petty-cash amounts turns every negative into text, and a financial export that mangles its own numbers is worse than none. So `int` and `float` are always written plainly and only `string` is escaped. The cost is a rule for callers: pass numbers as numbers. The benefit is that the case hardening actually exists for — a description or explanation a user typed — is covered, and `-1234.56` survives. Three defects were found and fixed while writing the tests, one of them in the exporter: `array_merge` on `array_keys()` does not deduplicate, so the header union produced `a,b,a` with a trailing cell per repeated key. RFC 4180 output (`escape: ''`) rather than PHP's backslash default, because that default is deprecated and will change, and a report consumed by a script in another language should not need to know which escape character this application chose. Mutation-verified three ways. Not registered in the container: no consumer exists until T111) (complete)
 - [ ] T108 [P] [US7] Implement XLSX export with the six-sheet complete-sheet layout from `contracts/exports.md` in `lib/Infrastructure/Export/XlsxExporter.php`
 - [ ] T109 [P] [US7] Implement standard Persian RTL PDF export with an approved embedded font and no custom letterhead/signature in `lib/Infrastructure/Export/PdfExporter.php`
 - [ ] T110 [P] [US7] Implement grouped evidence ZIP export with safe archive paths and a UTF-8 relationship manifest in `lib/Infrastructure/Export/EvidenceArchiveExporter.php` (enforce 100 MB max file size per FR-074; no advanced restrictions per FR-030)
@@ -754,7 +754,7 @@ feature implementation.
 ### Phase 6 Completion — US4 Correction (Priority: P1)
 
 - [x] T195 [US4] Mark T067 complete - `TransactionRevisionTest.php` exists with 11 passing tests in `tests/Unit/Domain/Expense/TransactionRevisionTest.php` (missing)
-- [x] T196 [US4] Mark T068 complete - `TransactionCorrectionTest.php` exists with 7 passing tests in `tests/Integration/Workflow/TransactionCorrectionTest.php` (missing)
+- [x] T196 [US4] Mark T068 complete - `TransactionCorrectionTest.php` exists with 9 passing tests in (count corrected by T298: the file grew after this note was written) `tests/Integration/Workflow/TransactionCorrectionTest.php` (missing)
 - [ ] T197 [P] [US4] Create `CorrectionControllerTest.php` and `TransactionCorrection.spec.ts` contract/Vue tests per T069 in `tests/Contract/Controller/` and `tests/Frontend/Component/` (missing)
 - [x] T198 [US4] Implement `CreateCorrectionDraft.php` correction-draft creation, owner-only editing, immutable prior revision cloning, supersedes linkage per T070 in `lib/Application/Expense/CreateCorrectionDraft.php` (missing)
 - [x] T199 [US4] Implement `ResubmitCorrection.php` atomic correction validation, active-revision activation, manager snapshots, cost-center rerouting, state projection, audit per T071 in `lib/Application/Workflow/ResubmitCorrection.php` (missing)
@@ -1930,15 +1930,15 @@ appended here as work for `/speckit.implement` to perform and verify.
   | T178 | `lib/Application/Workflow/ManagementReviewService.php` | exists; T050 already `[x]` |
   | T179 | `lib/Controller/ReviewController.php` | exists; T051 already `[x]` |
   | T180 | `src/services/reviewsApi.ts`, `src/stores/reviews.ts` | both exist; T052 already `[x]` |
-  | T181 | `src/views/reviews/*`, `src/components/review/*` | exist; T053 already `[x]` |
+  | T181 | `src/views/reviews/*`, `src/components/review/*` | exist; **T053 is open**, reopened by T286 — the three browser-measured FR-071 clauses cannot be settled under jsdom and belong to T116/T122/T123 (corrected by T298, case 2) |
   | T183 | `tests/Unit/Domain/Workflow/FinanceDecisionPolicyTest.php` | exists; T055 already `[x]` |
   | T187 | `lib/Domain/Account/AccountMovement.php` | exists; T059 already `[x]` |
   | T189 | `lib/Application/Workflow/FinanceSettlementService.php` | exists; T061 already `[x]` |
   | T190 | `lib/Application/Workflow/FinanceQueue.php` | exists; T062 already `[x]` |
   | T191 | `lib/Controller/ReviewController.php`, `lib/Controller/AccountController.php` | both exist; T063 already `[x]` |
   | T192 | `src/services/accountsApi.ts`, `src/stores/accounts.ts` | both exist |
-  | T195 | `tests/Unit/Domain/Expense/TransactionRevisionTest.php` | exists; T067 already `[x]` |
-  | T196 | `tests/Integration/Workflow/TransactionCorrectionTest.php` | exists; T068 already `[x]` |
+  | T195 | `tests/Unit/Domain/Expense/TransactionRevisionTest.php` | exists; **T067 was open** and is now `[x]`, corrected by T298 case 1 — it was never checked when this row was written |
+  | T196 | `tests/Integration/Workflow/TransactionCorrectionTest.php` | exists; **T068 was open** and is now `[x]`, corrected by T298 case 1 — it was never checked when this row was written |
   | T198 | `lib/Application/Expense/CreateCorrectionDraft.php` | exists |
   | T199 | `lib/Application/Workflow/ResubmitCorrection.php` | exists |
 
@@ -3188,7 +3188,7 @@ what keeps T093 and T139 from being built on an assumption that turns out to be 
 
 ### HIGH — a completed task claims a writer that does not work
 
-- [ ] T295 [HIGH] Correct `T028`'s state and record why, because it is marked `[x]` and reads
+- [X] T295 [HIGH] Correct `T028`'s state and record why, because it is marked `[x]` and reads
   "Implement transaction and configuration audit writers that snapshot UID, display name, role, stage,
   revision, explanation, command ID, and canonical before/after JSON in `lib/Application/Audit/`", but
   the configuration writer it claims does not run and would not work if it did: `appendConfiguration()`
@@ -3198,11 +3198,11 @@ what keeps T093 and T139 from being built on an assumption that turns out to be 
   positive in the one record a reviewer is most likely to trust. Convergence may not rewrite existing
   task state, so the correction is a task rather than an edit. Mark T028 `[ ]` and cross-reference
   T294 and T296, with the evidence: `grep -rn appendConfiguration lib/ tests/` returns only the
-  declaration, and `grep -rn pettycash_configuration_audit lib/` returns only the migration. (contradicts)
+  migration. T028 is now `[ ]` with the reason inline. **The evidence T295 cited has moved on since it was written, because T296 ran first in this pass and deleted the dead method outright** — so `appendConfiguration` no longer has even a declaration, and the only three remaining references to the name in the repository are the guard assertions in `tests/Unit/Audit/AuditWriterSurfaceTest.php` that keep it from coming back. The claim T295 made is therefore stronger than when it was written, not weaker: there is now no configuration writer of any kind. (contradicts)
 
 ### MEDIUM — two dead audit-writer paths, each of which would corrupt the actor role
 
-- [ ] T296 [MEDIUM] Remove `AuditWriterService::appendTransaction()` and
+- [X] T296 [MEDIUM] Remove `AuditWriterService::appendTransaction()` and
   `appendConfiguration()`, or repair them, because both are dead code that is also wrong.
   `ActorSnapshot::$role` is typed `string` (`lib/Domain/Shared/ActorSnapshot.php:9`), but
   `appendTransaction()` line 79 and `appendConfiguration()` line 112 both evaluate `$actor->role->value`.
@@ -3212,7 +3212,7 @@ what keeps T093 and T139 from being built on an assumption that turns out to be 
   `'actor_role' => '...'` as a string, so nothing currently takes the broken path — which is exactly why
   this survived. The port declares only `append()`, so these two methods are outside the contract
   everything else is written against, and deleting them is the smaller change; the alternative is to type
-  `ActorSnapshot::$role` as `Role` and let the callers pass the enum. Do not do both. (partial)
+  `ActorSnapshot::$role` as `Role` and let the callers pass the enum. Do not do both. (complete — **deleted**, the smaller option, along with the now-unused `ActorSnapshot` import. `AuditWriterService` is 56 lines and declares only `__construct` and `append()`. `ActorSnapshot` itself is **kept**: an initial `grep 'new ActorSnapshot('` returned zero and looked like a second dead class, but `WorkflowDecision::actor()` constructs it by fully-qualified name and `FinanceSettlementService`/`ManagementReviewService` import it, so it is live. Its `$role` stays a `string` — re-typing it to the `Role` enum was the rejected alternative, and doing both is what the task forbids. Guard: `tests/Unit/Audit/AuditWriterSurfaceTest.php`, 5 tests, including a tree-wide scan for `$actor->role->value` that deliberately exempts `RoleAssignment::$role`, where reading `->value` is correct because that property *is* the enum. Reintroducing the removed method with the original bug fails **3**) (partial)
 
 ### MEDIUM — the domain advertises an optionality the schema forbids
 
@@ -3242,3 +3242,61 @@ what keeps T093 and T139 from being built on an assumption that turns out to be 
 - Psalm reports `AuditWriterService.php:79` and `:112` as `Expected type 'object'. Found 'string'`. That
   is F3, and it is the only genuinely new static-analysis signal in this area; the surrounding 758
   errors are the repository's pre-existing baseline.
+
+## Phase 40: Convergence (Three Task Notes Assert a Completion That Never Happened)
+
+Run at the start of an Autopilot run resumed from checkpoint `ac1a12c`. The last two convergences
+worked the route and audit-writer surface, so this one assessed the US4/US5/US7 slice surface instead,
+which neither had examined, plus a mechanical cross-check of task notes against task states.
+
+### Convergence Findings
+
+| ID | Gap Type | Severity | Source | Evidence | Remaining Work | Owned by |
+|---|---|---|---|---|---|---|
+| F1 | contradicts | HIGH | T032, T195, T196 | Three notes assert a task is `[x]` that is not | Correct each in the direction its own evidence shows | **appended as T298** |
+| F2 | missing | MEDIUM | T032 | US5 configuration slice absent entirely | Build | T081–T089, T205 — open |
+| F3 | missing | MEDIUM | T032 | US7 export slice and report/dashboard queries absent entirely | Build | T105–T111, T155, T207 — open |
+| F4 | contradicts | CRITICAL | FR-056 | Nothing writes `pettycash_configuration_audit` | Route it | T294 — open |
+| F5 | partial | MEDIUM | FR-052 | Two dead audit-writer methods, zero call sites | Remove or repair | T296 — open |
+
+**Summary metrics**: 81 FRs + 14 SCs + 9 US acceptance sets + 5 constitution principles; the US4, US5
+and US7 slice surfaces checked file-by-file against their owning tasks; every task note claiming
+another task's completion cross-checked against that task's actual checkbox. Findings: 5 — 2 missing,
+3 contradicts/partial; 1 CRITICAL, 1 HIGH, 3 MEDIUM. One appended. F2 and F3 are large bodies of work
+and are **not** appended: T081–T089 and T105–T111 already own them precisely, and recording them again
+would create exactly the duplicate task this workflow is required to avoid.
+
+### HIGH — three notes assert a completion that never happened
+
+- [X] T298 [HIGH] Correct three task notes that assert a completion which never occurred, in **two
+  different directions**, because the evidence points opposite ways in each case and a single blanket
+  "reconcile the state" would get one of them backwards.
+
+  **Case 1 — T067 and T068: the checkbox is wrong, and should be marked `[x]`.**
+  `git log -L` shows `e074cff` (2026-09-22) *created* both lines as `- [ ] T067` and `- [ ] T068`, and
+  they have never been checked since. Yet T195 and T196 were added as `[x]` on 2026-09-26 (commit
+  `4f7710c`) with notes asserting that T067 and T068 were already complete — claims that were false the
+  moment they were written. The deliverables exist and **pass**: `TransactionRevisionTest.php` holds 11
+  tests and `TransactionCorrectionTest.php` holds 9, and the pair is 18 tests / 49 assertions green
+  under `scripts/dev/phpunit`. Nothing reopened them, and no note gives a reason to leave them open, so
+  the checkboxes are stale rather than deliberate. Mark both `[x]`, and correct T196's "7 passing tests"
+  to 9, since the file grew after that note was written.
+
+  **Case 2 — T053: the checkbox is right and the note is wrong.** T032's table at line 1933 records
+  T032's table cell for T181, which recorded the US2 frontend task as already complete. T053 is open
+  and correctly so: T286 reopened it, because its three browser-measured FR-071 clauses (no horizontal
+  scroll at 390px, WCAG AA contrast, the ≥12pt floor as a measurement) cannot be settled under jsdom and
+  belong to T116/T122/T123. Only the note is inaccurate. Correct T032's table cell to say T053 is open
+  and why, so a later pass reading the table does not treat T053 as evidence that the US2 frontend is
+  finished.
+
+  **Why this is one task and not two.** Both cases are the same defect — a note asserting a state that
+  is not true — and both live in the same two tables. Splitting them would mean two passes editing the
+  same lines for no gain. The instruction that they move in opposite directions is the substance, and it
+  is what makes this a task rather than a blanket tidy-up: marking T053 complete would be a
+  false completion, and leaving T067/T068 unchecked is a false gap.
+
+  **What this is not.** Per T293's precedent, correcting a checkbox is a bookkeeping fix and must not be
+  read as new test evidence. The 18 tests were written and verified by earlier passes; this records that
+  the record finally matches the code. Convergence may not rewrite existing task state, hence a task
+  rather than an edit. (complete — **case 1**: T067 and T068 marked `[x]` with the `git log -L` history inline, and T196's "7 passing tests" corrected to 9 since the file grew. **Case 2**: T032's table cell for T181 rewritten to say T053 is **open** and why, rather than "already `[x]`". The mechanical cross-check that found all three is now itself guarded by `tests/Unit/Workflow/TaskStateConsistencyTest.php`, so a fourth instance fails the suite instead of waiting to be found by hand. (contradicts)
