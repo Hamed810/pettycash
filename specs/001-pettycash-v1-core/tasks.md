@@ -2811,15 +2811,36 @@ because it materially undermines every future PHP verification in this repositor
 
 ### MEDIUM — a replayed finance decision does not report the account effect
 
-- [ ] T290 [MEDIUM] Store the account mutation in the command result, because T057 made a replayed
+- [X] T290 [MEDIUM] Store the account mutation in the command result, because T057 made a replayed
   finance decision answer 201 again (it used to be refused with 409 — see T057) but the response for a
-  replay is rebuilt from `IdempotencyService`'s stored result, which holds only
-  `['transaction_id' => …]`. The decision and the transaction are read back correctly, and the ledger
-  is right — nothing is spent twice — but the contract's `accountMutation` is absent, so a client that
-  retries after a timeout cannot learn from the reply that money moved and has to re-read the ledger.
-  The stored result is written inside the same transaction as the settlement, so it cannot be
-  enriched after the fact without a second write; the fix is for the settlement to return the movement
-  and account through the idempotency payload it stores.
+  replay is rebuilt from `IdempotencyService`'s stored result, which held only
+  `['transaction_id' => …]`. The decision and the transaction were read back correctly, and the ledger
+  was right — nothing was spent twice — but the contract's `accountMutation` was absent, so a client
+  that retried after a timeout could not learn from the reply that money moved and had to re-read the
+  ledger.
+
+  **Delivered, and the fix was in the routing rather than in the storage.** The stored result now names
+  the movement it wrote (`movement_id`), and on a replay the settlement reads that movement back through
+  `AccountMovementRepository::findByCommandId()` — which needed no new port method, because the
+  movement's `command_id` *is* the command id, the same fact the unique index already makes safe — and
+  follows the account from the movement's own public id. The stored result is still consulted, so a
+  replay of a **reject** reports no account effect rather than attaching whichever consumption happened
+  to share the command id.
+
+  **The routing was the real defect, and it is why the first attempt at this failed.** `ReviewController`
+  chose the service from the transaction's *current* stage, which the first attempt has already advanced
+  — a settled transaction reports `FINAL` — so a replayed finance decision was handed to
+  `ManagementReviewService`, which has no account in it and therefore could not reconstruct the effect
+  its first attempt caused. The controller now routes on the stage the **command** was issued against,
+  read back from the decision the command already recorded. One root-cause fix, rather than teaching two
+  services to recover the other's state.
+
+  **Three tests, and both halves are load-bearing.** The replay reports the same movement id **and** the
+  same resulting balance — present-but-different would be worse than absent, since it would describe a
+  balance recomputed as if it were about to be spent again — and a replayed rejection reports no account
+  mutation at all. Removing `movement_id` from the stored result fails **1**; restoring the
+  current-stage routing fails **1**. `scripts/dev/phpunit` is 272 tests / 1447 assertions / 1 failure
+  (T275).
 
 ### MEDIUM — the finance-only charge rule is implemented but unverified
 

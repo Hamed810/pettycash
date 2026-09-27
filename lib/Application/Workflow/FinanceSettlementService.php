@@ -110,7 +110,7 @@ final readonly class FinanceSettlementService
                 'command_id' => $commandId,
             ];
 
-            $this->idempotencyService->execute($commandId, $payload, function () use (
+            $storedResult = $this->idempotencyService->execute($commandId, $payload, function () use (
                 $transactionPublicId,
                 $actorUid,
                 $decision,
@@ -279,7 +279,19 @@ final readonly class FinanceSettlementService
                 // sheet can never be completed against a transaction whose settlement rolled back.
                 $this->recalculateSheet($transaction->sheetId);
 
-                return ['transaction_id' => $transactionPublicId];
+                // The movement is named in the stored result so a replay can report the account
+                // effect its first attempt caused.
+                //
+                // Until this, the stored result held only the transaction id, so a client that
+                // retried after a timeout got the decision and the transaction back with no
+                // `accountMutation` — the one member that says money moved. Nothing was wrong with
+                // the ledger on a replay; the answer was simply incomplete, and the fix is to record
+                // what was written rather than to re-read the ledger afterwards and hope the newest
+                // row is the right one.
+                return [
+                    'transaction_id' => $transactionPublicId,
+                    'movement_id' => $recordedMovement?->id,
+                ];
             });
 
             // Reload and return the transaction
@@ -296,6 +308,29 @@ final readonly class FinanceSettlementService
             }
             if ($recordedDecision === null) {
                 throw new LogicException('The recorded decision could not be found for this command');
+            }
+
+            // The account effect of a replay, read back through the ports that already exist for it.
+            //
+            // `AccountMovementRepository::findByCommandId()` needs no new method because the movement's
+            // `command_id` **is** the command id — the same reason the unique index on that column makes
+            // a replay safe — and the movement carries its account's public id, so the account follows
+            // from it. The stored result is only consulted to confirm the first attempt really did
+            // write a movement: without it, a replay of a *reject* would report whichever consumption
+            // happened to share the command id, which is none.
+            if ($recordedMovement === null && !empty($storedResult['movement_id'])) {
+                $recordedMovement = $this->movementRepository->findByCommandId($commandId);
+                if ($recordedMovement === null) {
+                    throw new LogicException(
+                        'The command result names a movement that cannot be read back'
+                    );
+                }
+                $recordedAccount = $this->accountRepository->findByPublicId(
+                    (string) $recordedMovement->accountPublicId
+                );
+                if ($recordedAccount === null) {
+                    throw new LogicException('The settled movement names an account that cannot be read back');
+                }
             }
 
             return new DecisionOutcome($transaction, $recordedDecision, $recordedMovement, $recordedAccount);

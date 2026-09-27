@@ -12,6 +12,7 @@ use OCA\PettyCash\Application\Workflow\FinanceSettlementService;
 use OCA\PettyCash\Application\Workflow\ManagementReviewService;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Domain\Workflow\Decision;
+use OCA\PettyCash\Domain\Workflow\Repository\WorkflowDecisionRepository;
 use OCA\PettyCash\Domain\Workflow\WorkflowStage;
 use OCA\PettyCash\Infrastructure\Http\AccountPayloadFormatter;
 use OCA\PettyCash\Infrastructure\Http\OcsErrorMapper;
@@ -30,7 +31,8 @@ class ReviewController extends OCSController
         private CurrentUser $currentUser,
         private OcsErrorMapper $ocsErrorMapper,
         private TransactionPayloadFormatter $payloadFormatter,
-        private AccountPayloadFormatter $accountFormatter
+        private AccountPayloadFormatter $accountFormatter,
+        private WorkflowDecisionRepository $decisionRepository
     ) {
         parent::__construct('pettycash', $request);
     }
@@ -161,6 +163,20 @@ class ReviewController extends OCSController
             }
 
             $stage = $transaction->stage;
+
+            // Route on the stage the **command** was issued against, not the transaction's current
+            // one.
+            //
+            // A replay arrives after the first attempt has already decided, so the transaction has
+            // moved on: a settled transaction reports `FINAL`, and a management decision leaves the
+            // transaction at the next stage. Routing on the current stage therefore sent a replayed
+            // *finance* decision to `ManagementReviewService`, which is not merely untidy — the
+            // account effect its first attempt caused was then reconstructed by a service that has no
+            // account in it, so the reply for the same command described two different things.
+            $recorded = $this->decisionRepository->findByCommandId($commandId);
+            if ($recorded !== null) {
+                $stage = $recorded->stage;
+            }
 
             if ($stage === WorkflowStage::Finance) {
                 $outcome = $this->financeSettlementService->recordDecision(

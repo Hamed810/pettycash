@@ -512,6 +512,61 @@ final class FinanceReviewControllerTest extends TestCase
         $this->assertSame($firstDecision, $secondDecision, 'both responses report the one decision that was recorded');
     }
 
+    /**
+     * Both responses report the account effect, not only the first.
+     *
+     * A client that retried after a timeout is the case this is about: it holds no first response, so
+     * a replay without `accountMutation` tells it that the approval happened and not that money moved,
+     * and the only way to learn the rest is to go and read the ledger. The stored command result used
+     * to hold only the transaction id, which is why the first response had it and the second did not.
+     *
+     * The mutation must be the *same* one — the same movement id and the same resulting balance — and
+     * not merely present, because a replay that reported a fresh zero-valued movement would be worse
+     * than one that reported nothing.
+     */
+    public function testAReplayedFinanceApprovalReportsTheSameAccountMutation(): void
+    {
+        $commandId = ContractFixtures::commandId();
+
+        $first = $this->data($this->postDecision(ContractFixtures::transactionId(), 'APPROVE', null, ContractFixtures::transactionVersion(), $commandId));
+        $second = $this->data($this->postDecision(ContractFixtures::transactionId(), 'APPROVE', null, ContractFixtures::transactionVersion(), $commandId));
+
+        $this->assertArrayHasKey(
+            'accountMutation',
+            $second,
+            'a replay reports the money that moved, not only that the decision was recorded'
+        );
+        $this->assertSame(
+            $first['accountMutation']['movement']['id'] ?? null,
+            $second['accountMutation']['movement']['id'] ?? null,
+            'it is the one movement the first attempt wrote'
+        );
+        $this->assertSame(
+            $first['accountMutation']['account']['balance']['amountMinor'] ?? null,
+            $second['accountMutation']['account']['balance']['amountMinor'] ?? null,
+            'and the balance it left, not a balance recomputed as if it were about to be spent again'
+        );
+    }
+
+    /**
+     * A replay of a decision that moved no money still reports no account effect, rather than
+     * attaching whichever consumption happened to share the command id.
+     */
+    public function testAReplayedRejectionReportsNoAccountMutation(): void
+    {
+        $commandId = ContractFixtures::commandId();
+
+        $first = $this->data($this->postDecision(ContractFixtures::transactionId(), 'REJECT', 'Not reimbursable', ContractFixtures::transactionVersion(), $commandId));
+        $second = $this->data($this->postDecision(ContractFixtures::transactionId(), 'REJECT', 'Not reimbursable', ContractFixtures::transactionVersion(), $commandId));
+
+        $this->assertArrayNotHasKey('accountMutation', $first, 'a rejection moves no money');
+        $this->assertArrayNotHasKey(
+            'accountMutation',
+            $second,
+            'and a replay of it must not invent one'
+        );
+    }
+
     // ===== HELPERS =====
 
     /** @return array<string, mixed> */
