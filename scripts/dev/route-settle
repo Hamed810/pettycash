@@ -1,0 +1,327 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Refuse to let a PHPUnit run report a result while Nextcloud may still be
+# serving a stale route table.
+#
+# WHY THIS EXISTS
+#
+# `scripts/dev/opcache-settle` covers stale *bytecode*. It does not cover stale
+# *routing*, and the two fail in different ways.
+#
+# Nextcloud's `CachingRouter::findMatchingRoute()` does not re-read
+# `appinfo/routes.php` per request. It caches the **entire serialized root route
+# collection** — every enabled app, not just this one — under the key
+# `host#baseUrl#rootCollection`, for `$this->config->getSystemValueBool('debug')
+# ? 3 : 3600` seconds. `Router::loadRoutes()` does re-read each app's
+# `appinfo/routes.php`, but only when the cached collection is absent, so the
+# file on disk being current does not make the served routes current.
+#
+# Observed directly, not inferred: renaming a route from `session#dashboard` to
+# `dashboard#index` passed `opcache-settle` (which correctly reported `settled`)
+# and then answered `500` with
+# `ReflectionException: SessionController::dashboard() does not exist`, from a
+# `nextcloud.log` entry timestamped *after* the edit. A healthy application
+# reported a broken one. That is the same failure mode T288 documented for
+# bytecode, in a cache T288 did not reach — see `tasks.md` T300.
+#
+# WHY IT BLOCKS INSTEAD OF WAITING
+#
+# The opcache wait is 60 seconds and is provably sufficient, so it waits. This
+# one has a 3600-second TTL: an hour of blocked verification after every route
+# edit is not a cost anyone pays twice. So this script does not sleep. It
+# *refuses*, prints the single command that resolves it, and exits non-zero.
+#
+# That is deliberate. T288's rule is that a run which cannot be verified is
+# blocked on purpose rather than reported green, and this is the same rule
+# applied to a cache with no cheap settle. The alternative — warning and
+# continuing — is precisely the failure that produced the false 500.
+#
+# WHY THE DETECTION IS PROVABLE
+#
+# Let `M` be the mtime of this app's `appinfo/routes.php` and `T` the moment the
+# cached collection was written. A *stale* entry is one written before the edit,
+# i.e. `T < M`, and a live entry is one whose TTL has not expired, i.e.
+# `T >= now - TTL`. A stale entry is therefore possible exactly when
+# `now - TTL < M`, and impossible once `now - M >= TTL`. No assumption is made
+# about when the entry was written, so the test cannot be defeated by a cache
+# that happens to be fresh.
+#
+# Note the scope: the cached collection is global, so *any* app's `routes.php`
+# edit invalidates it, including ones this repository does not own. The script
+# watches this app's own file because that is the one this repository can be
+# held responsible for; a change made in a sibling app in the same lab will
+# still be caught, because the next run here recomputes the bound.
+#
+# WHY CLEARING NEEDS ESCALATION, AND WHY IT IS NOT DONE AUTOMATICALLY
+#
+# `occ` cannot do it. Under CLI, `ICacheFactory::createLocal()` returns an
+# array-backed cache, so clearing there empties nothing that Apache's `mod_php`
+# is serving; Apache's local cache is APCu, per worker process. The only
+# mechanism that reaches it is signalling the Apache master (PID 1 in this
+# image) with `SIGUSR2`, which recycles the workers and drops their APCu
+# contents. That is a privileged action on shared environment state — this
+# repository is a guest in a lab it does not own — and `scripts/dev/in-container`
+# is deliberately `--user www-data`, so this script cannot send it either.
+#
+# So `--clear` prints the exact command and exits without running it. A human
+# runs it. See `AGENTS.md`; the volume and container rules are unchanged by
+# this script because it never touches either.
+#
+# USAGE
+#
+#   scripts/dev/route-settle              # verify, or block with the fix
+#   scripts/dev/route-settle --status     # report only; exit 3 if outstanding
+#   scripts/dev/route-settle --clear      # print the command that clears it
+#
+# `scripts/dev/phpunit` runs the verification automatically. It is exposed
+# separately so an agent can settle once and then run several suites.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+MODE=verify
+case "${1:-}" in
+  --status) MODE=status ;;
+  --clear) MODE=clear ;;
+  '') ;;
+  *) echo "route-settle: unknown argument '$1'" >&2; exit 2 ;;
+esac
+
+# Canonical container path for this repository, per AGENTS.md. Never
+# /var/www/html/apps/pettycash.
+readonly APP_DIR=/var/www/html/custom_apps/pettycash
+readonly ROUTES_FILE=appinfo/routes.php
+
+# Written by scripts/dev/route-cache-clear once Apache's workers have actually
+# been recycled. Container /tmp rather than anything in the repository, so
+# recording a clear never dirties the working tree, and it survives the Apache
+# restart it is recording (only the container's lifetime ends it).
+readonly MARKER=/tmp/pettycash-route-cache-cleared
+
+# The TTL CachingRouter uses when `debug` is false. Read from the container
+# rather than hardcoded, and cross-checked against the shipped source, because
+# this number is the entire proof: a wrong TTL in either direction produces a
+# false "settled" or a pointless block.
+readonly EXPECTED_TTL=3600
+
+read_container() {
+  "$SCRIPT_DIR/in-container" "$@"
+}
+
+# The value `debug` implies, cross-checked against the shipped CachingRouter so
+# a Nextcloud upgrade that changes the TTL is caught here rather than silently
+# invalidating the bound.
+# Extracted with PHP rather than grep on purpose: the expression being matched
+# contains single quotes (`getSystemValueBool('debug')`), and a grep pattern
+# holding those inside a single-quoted `sh -c` argument terminates the outer
+# quote. That produced an empty result and a hard failure on the first run --
+# the right failure mode for the wrong reason.
+#
+# The pattern therefore uses `.\w+.` where the quoted `'debug'` argument sits.
+# The PHP below is inside bash single quotes, so backslashes reach it literally
+# and are written once, not doubled.
+shipped_ttl() {
+  local value
+  value="$(read_container php -r '
+    $file = "/var/www/html/lib/private/Route/CachingRouter.php";
+    if (!is_file($file)) { exit(1); }
+    $src = file_get_contents($file);
+    if (!preg_match("/getSystemValueBool\(.\w+.\)\s*\?\s*(\d+)\s*:\s*(\d+)/", $src, $m)) {
+      fwrite(STDERR, "route-settle: the debug TTL expression is no longer in the shape this" . PHP_EOL);
+      fwrite(STDERR, "route-settle: script recognises; re-derive the bound before trusting a run." . PHP_EOL);
+      exit(1);
+    }
+    echo $m[1], " ", $m[2], PHP_EOL;
+  ')" || return 1
+  printf '%s' "$value"
+}
+
+newest_routes_mtime() {
+  local value
+  value="$(read_container sh -c '
+    cd '"$APP_DIR"' || exit 1
+    stat -c %Y '"$ROUTES_FILE"'
+  ')" || return 1
+  case "$value" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  printf '%s' "$value"
+}
+
+now_epoch() {
+  local value
+  value="$(read_container date +%s)" || return 1
+  case "$value" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  printf '%s' "$value"
+}
+
+print_clear_command() {
+  cat >&2 <<'MSG'
+route-settle: clearing it requires one privileged command, which this repository
+route-settle: does not run on its own. Apache is PID 1 in the Nextcloud
+route-settle: container; SIGUSR2 recycles its workers and drops their APCu
+route-settle: route cache. It reloads the same configuration and does not touch
+route-settle: containers, volumes or data.
+
+route-settle:     docker exec -u root docker-nextcloud-1 kill -USR2 1
+
+route-settle: Then re-run. (`docker exec ... php -r 'apcu_clear_cache();'` does
+route-settle: NOT work: it clears the CLI's cache, not the mod_php workers'.)
+MSG
+}
+
+# The epoch at which the route cache was last cleared, or empty if never.
+#
+# An empty result is normal and is not an error: it just means the time-based
+# bound below is the only evidence available. It is validated as strictly as
+# every other value here, because an unvalidated marker would be a way to make
+# this script report "settled" on a run that was never verified -- the exact
+# false confidence the script exists to remove.
+cleared_at() {
+  local value
+  value="$("$SCRIPT_DIR/in-container" sh -c '
+    test -f '"$MARKER"' && cat '"$MARKER"' || true
+  ')" || true
+  case "$value" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  printf '%s' "$value"
+}
+
+# --- TTL: read it, and refuse to proceed if the environment is not the one the
+# --- proof assumes. A wrong TTL here is a false "settled", so this is checked
+# --- rather than assumed.
+SHIPPED="$(shipped_ttl)" || {
+  echo "route-settle: could not read the route-cache TTL from CachingRouter.php." >&2
+  echo "route-settle: Without it the settle bound cannot be computed, so a run" >&2
+  echo "route-settle: cannot be called trustworthy. Start the Nextcloud container." >&2
+  exit 1
+}
+
+# CachingRouter states the TTL twice: the `debug` value first, the production one
+# second. The production value is the larger of the pair, and it is read from the
+# shipped source rather than trusted from the constant above, so a Nextcloud
+# upgrade that changes the lifetime moves the bound instead of silently
+# invalidating the proof.
+TTL=0
+for candidate in $SHIPPED; do
+  case "$candidate" in
+    ''|*[!0-9]*)
+      echo "route-settle: could not parse a TTL out of CachingRouter.php" >&2
+      echo "route-settle: (got '$SHIPPED'). Re-derive the bound before trusting a run." >&2
+      exit 1
+      ;;
+  esac
+  if [ "$candidate" -gt "$TTL" ]; then
+    TTL="$candidate"
+  fi
+done
+
+if [ "$TTL" -eq 0 ]; then
+  echo "route-settle: CachingRouter.php reported no usable TTL (got '$SHIPPED')." >&2
+  exit 1
+fi
+
+if [ "$TTL" != "$EXPECTED_TTL" ]; then
+  # Not fatal on its own -- the bound above is computed from the shipped value --
+  # but EXPECTED_TTL is the number written into the header's proof, so a
+  # divergence means the proof needs rewriting rather than trusting.
+  echo "route-settle: warning: CachingRouter TTL is ${TTL}s, not the ${EXPECTED_TTL}s this" >&2
+  echo "route-settle: script's proof assumes. Using the shipped ${TTL}s; update the header." >&2
+fi
+
+# With `debug` on, the effective TTL is the *small* number in that expression, so
+# a 3600s bound would over-block rather than under-block. Detected rather than
+# assumed, because assuming it is what would make this script quietly wrong.
+if read_container sh -c 'grep -qE "^[[:space:]]*.?debug.?[[:space:]]*=>[[:space:]]*true" /var/www/html/config/config.php' 2>/dev/null; then
+  echo "route-settle: 'debug' is enabled in config.php, so the route cache TTL is" >&2
+  echo "route-settle: the short debug value, not ${TTL}s. This script's bound does" >&2
+  echo "route-settle: not model that; re-derive it before trusting a run." >&2
+  exit 1
+fi
+
+if [ "$MODE" = clear ]; then
+  # Delegates rather than duplicating: the clear and the marker it writes have to
+  # be one action, or the marker can disagree with what actually happened.
+  exec "$SCRIPT_DIR/route-cache-clear"
+fi
+
+# --- The bound itself. Every value validated first: an empty command
+# --- substitution inside $(( )) is 0, which would compute a deadline in the
+# --- past and report "settled" on a run that was never checked.
+MTIME="$(newest_routes_mtime)" || {
+  echo "route-settle: could not read the mtime of $ROUTES_FILE under $APP_DIR." >&2
+  echo "route-settle: Without it there is no way to know whether a stale route" >&2
+  echo "route-settle: collection can still be served. Start the Nextcloud container." >&2
+  exit 1
+}
+
+NOW="$(now_epoch)" || exit 1
+
+AGE=$(( NOW - MTIME ))
+if [ "$AGE" -lt 0 ]; then
+  # Clock skew between the host-mounted file and the container's clock. Not
+  # something to guess past.
+  echo "route-settle: $ROUTES_FILE has an mtime ${AGE}s in the future relative to" >&2
+  echo "route-settle: the container clock. Treating the route cache as outstanding." >&2
+  if [ "$MODE" = status ]; then
+    exit 3
+  fi
+  print_clear_command
+  exit 1
+fi
+
+# A recorded clear outranks the time-based bound. The workers that held the
+# pre-edit collection are gone as soon as the recycle completed, so once the
+# marker is newer than the edit no stale entry can be in flight -- and blocking
+# for the remaining hour would be reporting "not yet done" for work that is done.
+CLEARED=""
+if [ -n "${ROUTE_CACHE_MARKER:-}" ]; then
+  # Overridable so the precedence can be exercised without a real Apache restart.
+  # Validated exactly like the file marker: unvalidated, a non-numeric override
+  # reached `[:` as an integer expression and leaked a raw shell error, which is
+  # both ugly and a sign the value was trusted further than it should be.
+  case "$ROUTE_CACHE_MARKER" in
+    ''|*[!0-9]*)
+      echo "route-settle: ignoring ROUTE_CACHE_MARKER='$ROUTE_CACHE_MARKER' (not an epoch)." >&2
+      ;;
+    *) CLEARED="$ROUTE_CACHE_MARKER" ;;
+  esac
+fi
+if [ -z "$CLEARED" ]; then
+  CLEARED="$(cleared_at || true)"
+fi
+
+if [ -n "$CLEARED" ]; then
+  if [ "$CLEARED" -gt "$MTIME" ]; then
+    if [ "$MODE" = status ]; then
+      echo "route-settle: settled (route cache cleared at ${CLEARED}, after $ROUTES_FILE was last changed)."
+    else
+      echo "route-settle: settled; the route cache was cleared after $ROUTES_FILE changed."
+    fi
+    exit 0
+  fi
+  # A marker older than the edit settles nothing: the edit is newer than the last
+  # clear, so the bound below still applies.
+fi
+
+if [ "$AGE" -lt "$TTL" ]; then
+  REMAINING=$(( TTL - AGE ))
+  if [ "$MODE" = status ]; then
+    echo "route-settle: ${REMAINING}s of route-cache exposure left (TTL=${TTL}s, $ROUTES_FILE changed ${AGE}s ago)."
+    exit 3
+  fi
+  echo "route-settle: $ROUTES_FILE changed ${AGE}s ago and a stale route collection" >&2
+  echo "route-settle: can be served for up to ${TTL}s (CachingRouter TTL). Blocking" >&2
+  echo "route-settle: this run: an OCS result from now would not be evidence." >&2
+  print_clear_command
+  exit 1
+fi
+
+if [ "$MODE" = status ]; then
+  echo "route-settle: settled (TTL=${TTL}s; $ROUTES_FILE last changed ${AGE}s ago)."
+else
+  echo "route-settle: settled; Nextcloud cannot be serving a pre-edit route collection."
+fi

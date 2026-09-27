@@ -150,6 +150,8 @@ Use the repository development wrappers instead:
 | Run one PHP test file | `scripts/dev/phpunit tests/Unit/FooTest.php` |
 | List PHP tests | `scripts/dev/phpunit --list-tests` |
 | Settle Apache's opcode cache | `scripts/dev/opcache-settle` |
+| Settle Nextcloud's route cache | `scripts/dev/route-settle` |
+| Clear Nextcloud's route cache | `scripts/dev/route-cache-clear` |
 | OCC | `scripts/dev/occ <args>` |
 | Composer | `scripts/dev/composer <args>` |
 | Arbitrary container command | `scripts/dev/in-container <cmd>` |
@@ -208,6 +210,44 @@ Rules:
 Do not "fix" a slow or surprising contract-test result by waiting a minute and re-running
 to see whether it goes away, and do not conclude a fix did not work from a run taken
 inside the window. Settle first, then measure.
+
+## Route Cache Settling (MANDATORY)
+
+Settling the opcode cache is **not sufficient** for an OCS contract result.
+
+Nextcloud's `CachingRouter` does not re-read `appinfo/routes.php` per request. It
+caches the whole serialized route collection — every enabled app, not only this one —
+for 3600 seconds. So after a change to `appinfo/routes.php`, a request can be
+dispatched by a route table that predates the edit, while the file on disk is
+correct and `opcache-settle` reports `settled`.
+
+This produced a real false result here (T300): renaming a route passed
+`opcache-settle` and then answered `500` with
+`ReflectionException: SessionController::dashboard() does not exist`, from a
+`nextcloud.log` entry timestamped *after* the edit. A healthy application reported a
+broken one.
+
+Rules:
+
+- `scripts/dev/route-settle` verifies it. `scripts/dev/phpunit` runs it
+  automatically whenever the selected tests include the contract suite, and blocks
+  the run with a non-zero exit when a stale collection could still be served.
+- It **blocks** rather than waits. The opcache wait is 60s and provably
+  sufficient; this TTL is 3600s, so blocking an hour is not acceptable. The fix is
+  one command.
+- `scripts/dev/route-cache-clear` performs the clear: it signals `SIGUSR2` to the
+  Apache master (PID 1 in this image), waits for the workers to return, and records
+  the moment. The record matters — without it `route-settle` could not distinguish
+  "not yet cleared" from "already cleared" and would block for the rest of the hour
+  after a successful clear.
+- The container name is `docker-nextcloud-1`, per the pinned compose project.
+
+`docker exec ... php -r 'apcu_clear_cache();'` does **not** work: it clears the CLI's
+cache, not the `mod_php` workers'. `occ` cannot either — under CLI
+`ICacheFactory::createLocal()` is array-backed, not APCu.
+
+A contract result obtained while `route-settle` reports outstanding is not evidence,
+in the same way and for the same reason a result inside the opcache window is not.
 
 Do not guess container paths.
 

@@ -3380,3 +3380,72 @@ rationale.
   disagreement). T294 is the one that decides whether there is anything for this to scope over; the two
   are best settled together, since a charge's configuration audit event is exactly where the subject
   identity lands. (missing)
+
+## Phase 42: Convergence
+
+Two findings from the T111/T112 implementation passes. Both are verification-integrity problems rather
+than missing features, and the first one is the reason the second one was hard to act on.
+
+- [x] T300 Extend `scripts/dev/opcache-settle` (or add a sibling wrapper) to also settle Nextcloud's
+  **local route cache**, and document in `AGENTS.md` that an OCS contract result is only evidence once
+  this cache is settled too, per T288's integrity requirement. `scripts/dev/opcache-settle` settles
+  `opcache` for `lib/` and `appinfo/` and reports `settled` — but Nextcloud's `CachingRouter` resolves
+  each incoming URL through `$cacheFactory->createLocal('route')`, a **local** cache (APCu under
+  `mod_php`) holding the URL-to-route-name mapping. `Router::loadRoutes()` re-reads `appinfo/routes.php`
+  on every request, so the route *definitions* are always current while the *match* can be stale.
+  Observed directly: renaming a route (`session#dashboard` to `dashboard#index`) passed the settle and
+  then returned `500` with `ReflectionException: SessionController::dashboard() does not exist`, from a
+  `nextcloud.log` entry timestamped after the edit — a healthy application reporting a broken one. T288
+  established that an unsettled cache makes a PHP result a lie in either direction; this is the same
+  defect in a cache T288 did not reach, so every future route change can silently mis-report. The cache
+  has no CLI-side clear (`occ` uses an array local cache, not Apache's APCu), so clearing it needs a
+  signal to the Apache master process — which `scripts/dev/in-container` cannot send, because it is
+  deliberately `--user www-data` and the container refuses the signal. Decide the supported mechanism
+  (a wrapper that signals PID 1, or an explicit documented escalation) rather than leaving each agent to
+  discover this. (missing)
+
+- [ ] T301 Record in T112's task note that `/api/v1/dashboard` resolves to a **role stub**, and extend
+  `RouteResolutionTest` so a resolved route is not treated as a working endpoint, per US7/AC1. The route
+  resolves and `session#dashboard` is absent from `KNOWN_UNRESOLVED`, so the guard reports the dashboard
+  requirement met — but `SessionController::dashboard()` returns `['userId' => $uid]` for each held role
+  and computes no figure at all, and `DashboardQuery` is referenced nowhere in `lib/AppInfo/Application.php`
+  or any controller. So US7/AC1's role-aware dashboard is unbuilt behind a green check: the guard can see
+  that a method exists, not that it does its job. Two planning inconsistencies land in the same place and
+  cannot be fixed by editing T112 in place (convergence is append-only): T112's task line names
+  `lib/Controller/DashboardController.php`, while the ownership note inside `RouteResolutionTest` says T112
+  creates only `ReportController` and `ExportController`; and that note ends mid-sentence at
+  "`session#dashboard` is already routed", so it never states what should happen to the stub. Note also
+  that `DashboardController`, once built, will make this finding stale in the other direction — the
+  `figures` it returns are computed from **paged** repository reads (`findByOwnerUid(..., int $limit = 100)`
+  and friends) and no domain repository has a count query, so a figure is a window size, not an instance
+  total; `ManagementReviewService::getCostCenterQueue()` has the same property today. Any replacement has
+  to say so in the response rather than let a window size pose as a total. (partial)
+
+  **Delivered**: `scripts/dev/route-settle` (verifies, or blocks with the fix;
+  `--status` exits 3 while outstanding) and `scripts/dev/route-cache-clear` (signals
+  `SIGUSR2` to the Apache master, waits for the workers, then records the moment in
+  `/tmp/pettycash-route-cache-cleared` inside the container). `scripts/dev/phpunit` runs
+  the verification whenever the selected tests include `tests/Contract`, checking **all**
+  arguments rather than the first so a mixed run stays protected. `AGENTS.md` documents it
+  under "Route Cache Settling (MANDATORY)".
+
+  The bound is provable rather than guessed: a stale entry is one written before the edit
+  (`T < M`) that has not yet expired (`T >= now - TTL`), so it is possible exactly when
+  `now - M < TTL`. The TTL is read out of the shipped `CachingRouter.php` instead of
+  trusted from a constant, and the script refuses to run if `debug` is enabled, since that
+  selects the short TTL this proof does not model.
+
+  The first design was wrong and the evidence showed it: `route-settle` originally
+  printed the clearing command and exited. After a real clear it **still blocked**, because
+  its rule is mtime-based and cannot know a clear happened — so an operator who did the
+  right thing was told to do it again for another 47 minutes. That is the same
+  "cannot tell not-yet-done from already-done" failure as T288, and it is why the clear
+  records itself. A recorded clear newer than the edit now settles immediately.
+
+  Verified: boundary is exact (3599s -> exit 3, 3601s -> exit 0); the settled path and the
+  blocking path both observed live; `phpunit tests/Unit/...` passes while
+  `phpunit tests/Contract/...` exits 1 with no tests run; a marker older than the edit does
+  not settle, a newer one does, and a non-numeric marker is rejected with a message rather
+  than reaching `[:` as an integer. The clear was run once against
+  `docker-nextcloud-1` and the 23-test contract suite passed through the wrapper afterwards.
+  Full suite 593 tests, 2316 assertions, 1 pre-existing T275 failure.

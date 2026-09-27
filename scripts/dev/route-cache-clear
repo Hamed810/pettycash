@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Clear Nextcloud's route cache, and record that it happened.
+#
+# WHY THIS EXISTS
+#
+# `scripts/dev/route-settle` refuses to let a contract-test run proceed while a
+# stale route collection could still be served. Its bound is
+# `now - mtime(appinfo/routes.php) < 3600`, because that is the honest
+# time-based answer: nothing observable from outside tells you when the cache
+# entry was written.
+#
+# That bound has a consequence, which is why this script exists. Once the cache
+# *has* been cleared, the stale entry is gone -- but the mtime has not changed,
+# so the settle script keeps blocking for the rest of the hour. An operator who
+# did exactly the right thing would be told to do it again, and again. That is
+# the same failure this repository keeps running into in a new place: a check
+# that cannot tell "not yet done" from "already done", reporting the first as
+# the second.
+#
+# So the clear records itself. This script signals the Apache master with
+# SIGUSR2, waits for the workers to come back, and only then writes a marker with
+# that moment's epoch. The settle script treats the route cache as settled when
+# the marker is newer than `appinfo/routes.php`, which is exactly the condition
+# under which no pre-edit collection can be in flight.
+#
+# The marker is written last, on purpose. A marker written before the recycle
+# finished would claim a clear that had not happened, which is the failure this
+# whole mechanism exists to prevent.
+#
+# WHY SIGUSR2, AND WHY PID 1
+#
+# `occ` cannot do this. Under CLI, `ICacheFactory::createLocal()` returns an
+# array-backed cache, so clearing there empties nothing that Apache's `mod_php`
+# serves; Apache's local cache is APCu, one instance per worker. The only
+# mechanism that reaches it is recycling the workers. SIGUSR2 is Apache's
+# graceful restart: in-flight requests are allowed to finish, the configuration
+# is re-read unchanged, and no container, volume, database or file is touched.
+#
+# In this image Apache is PID 1, so the signal goes there rather than to a pidfile.
+#
+# SCOPE AND PERMISSION
+#
+# This sends a signal to a process in a container this repository does not own.
+# It is listed here explicitly so the boundary is visible rather than implied:
+# it stops and re-reads Apache, changes no configuration, and deletes nothing.
+# The alternatives are worse -- an hour-long block on every contract run after a
+# route edit, or a `routes.php` change that silently mis-reports for an hour.
+#
+# USAGE
+#
+#   scripts/dev/route-cache-clear
+#
+# Then re-run the suite. `scripts/dev/route-settle --status` will confirm.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# The canonical container name, and load-bearing: the lab's compose project is
+# pinned to `docker`, so every container carries that prefix. `nextcloud` does not
+# exist here, and guessing it produced a clean "No such container" failure on the
+# first run -- which is the right failure, from the wrong hardcoding.
+readonly CONTAINER=docker-nextcloud-1
+readonly MARKER=/tmp/pettycash-route-cache-cleared
+
+# Apache recycles its workers asynchronously, so the master can accept the signal
+# a moment before the new workers are serving. Waiting for the worker count to
+# return is the cheapest available proof that the recycle happened, and writing
+# the marker only after it is what keeps the marker honest.
+readonly WORKERS_BEFORE="$("$SCRIPT_DIR/in-container" sh -c 'ps -eo comm | grep -c apache2' || true)"
+
+case "$WORKERS_BEFORE" in
+  ''|*[!0-9]*)
+    echo "route-cache-clear: could not count Apache workers in the container." >&2
+    echo "route-cache-clear: Start the Nextcloud container and try again; the marker" >&2
+    echo "route-cache-clear: must not be written for a recycle that did not happen." >&2
+    exit 1
+    ;;
+esac
+
+if [ "$WORKERS_BEFORE" -lt 2 ]; then
+  echo "route-cache-clear: only ${WORKERS_BEFORE} Apache process(es) visible; this does" >&2
+  echo "route-cache-clear: not look like a running Apache, so no signal was sent." >&2
+  exit 1
+fi
+
+echo "route-cache-clear: signalling SIGUSR2 to the Apache master in ${CONTAINER} (graceful reload)."
+
+# The one privileged action. It is a signal, not a mutation: same configuration,
+# in-flight requests finish, nothing is deleted.
+if ! docker exec -u root "${CONTAINER}" kill -USR2 1; then
+  echo "route-cache-clear: could not signal the Apache master." >&2
+  echo "route-cache-clear: Needs access to the '${CONTAINER}' container as root." >&2
+  echo "route-cache-clear: No marker was written, so route-settle will keep blocking --" >&2
+  echo "route-cache-clear: which is the correct outcome for a clear that did not happen." >&2
+  exit 1
+fi
+
+# Wait for the recycle. Bounded, because an unbounded wait in a verification
+# helper is its own kind of hang; on timeout we report and write no marker.
+deadline=$(( $(date +%s) + 30 ))
+workers="$WORKERS_BEFORE"
+while [ "$(date +%s)" -lt "$deadline" ]; do
+  sleep 1
+  workers="$("$SCRIPT_DIR/in-container" sh -c 'ps -eo comm | grep -c apache2' || echo 0)"
+  case "$workers" in
+    ''|*[!0-9]*) workers=0 ;;
+  esac
+  # The master plus its workers: back to the original count means the new workers
+  # are up. A count of zero means the master is gone, which is not a success.
+  if [ "$workers" -ge "$WORKERS_BEFORE" ]; then
+    break
+  fi
+done
+
+if [ "$workers" -lt "$WORKERS_BEFORE" ]; then
+  echo "route-cache-clear: Apache did not return to ${WORKERS_BEFORE} processes within 30s" >&2
+  echo "route-cache-clear: (now ${workers}). No marker was written." >&2
+  exit 1
+fi
+
+# The marker is written last, and only now. Its value is the moment the workers
+# were back, which is the earliest instant at which no pre-edit APCu entry can
+# still be held: the old workers are gone by definition once the new ones serve.
+now="$("$SCRIPT_DIR/in-container" date +%s)" || exit 1
+case "$now" in
+  ''|*[!0-9]*)
+    echo "route-cache-clear: could not read the container clock; no marker written." >&2
+    exit 1
+    ;;
+esac
+
+if ! "$SCRIPT_DIR/in-container" sh -c "printf '%s\n' '$now' > '$MARKER'"; then
+  echo "route-cache-clear: workers recycled but the marker could not be written at" >&2
+  echo "route-cache-clear: $MARKER. The clear did happen; route-settle will still block" >&2
+  echo "route-cache-clear: until the mtime bound expires, because it cannot tell." >&2
+  exit 1
+fi
+
+echo "route-cache-clear: Apache recycled (${workers} processes); route cache cleared."
+echo "route-cache-clear: marked at epoch ${now}. Re-run the suite."
