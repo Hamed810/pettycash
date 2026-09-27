@@ -565,7 +565,7 @@ evidence; verify every report/export contains all permitted and zero out-of-scop
   `IAppData` entirely and reported the real path `/appdata_oculd8krif6b/pettycash/exports/`. No shared temp or
   AppData litter after the run)
 - [x] T111 [US7] Implement export orchestration, transient AppData cleanup, and authorization-before-generation in `lib/Application/Reporting/ExportService.php`
-- [x] T112 [US7] Add dashboard, report, and export OCS routes/controllers in `appinfo/routes.php`, `lib/Controller/DashboardController.php`, `lib/Controller/ReportController.php`, and `lib/Controller/ExportController.php` — **record this contract gap while building it, do not resolve it by inventing a type.** `contracts/ocs-api.yaml`'s `/reports/{reportType}` enum is exactly `[sheets, transactions, cost-centers, accounts, process, evidence, audit]`, but **FR-065 names petty-cash balances and movements as report subjects and FR-056 requires configuration audit to be visible**, and none of the three appears in the enum. `accounts` is the only plausible home for balances and movements, but the contract does not say so, and configuration audit has no type at all. T106 originally sidestepped this by advertising `balances`, `movements` and `configuration_audit`; that was corrected, because a report type is part of the OCS surface and an undeclared one is a contract violation rather than a naming preference. **The choice belongs to the contract:** either extend the enum, or record that these subjects are reachable through `accounts` and under what filter. `ReportQuery::SUPPORTED_TYPES` is asserted as the contract's exact list, so the day the enum changes this task's test says so. Also note the contract's `ExportRequest.resource` enum is a *different* set again (`[sheet, sheets, transactions, report, audit, evidence]`), so the two surfaces do not share a vocabulary. **And T299 lands here:** resolving which accounts a finance officer has charged is not derivable from the current schema, and this task's orchestration layer is where that decision has to be made — see T299 for the two routes and their costs. `report#show` and `export#create` are 2 of the 15 routes `RouteResolutionTest` reports as unresolved; `session#dashboard` is already routed
+- [ ] T112 [US7] Add dashboard, report, and export OCS routes/controllers in `appinfo/routes.php`, `lib/Controller/DashboardController.php`, `lib/Controller/ReportController.php`, and `lib/Controller/ExportController.php` — **record this contract gap while building it, do not resolve it by inventing a type.** `contracts/ocs-api.yaml`'s `/reports/{reportType}` enum is exactly `[sheets, transactions, cost-centers, accounts, process, evidence, audit]`, but **FR-065 names petty-cash balances and movements as report subjects and FR-056 requires configuration audit to be visible**, and none of the three appears in the enum. `accounts` is the only plausible home for balances and movements, but the contract does not say so, and configuration audit has no type at all. T106 originally sidestepped this by advertising `balances`, `movements` and `configuration_audit`; that was corrected, because a report type is part of the OCS surface and an undeclared one is a contract violation rather than a naming preference. **The choice belongs to the contract:** either extend the enum, or record that these subjects are reachable through `accounts` and under what filter. `ReportQuery::SUPPORTED_TYPES` is asserted as the contract's exact list, so the day the enum changes this task's test says so. Also note the contract's `ExportRequest.resource` enum is a *different* set again (`[sheet, sheets, transactions, report, audit, evidence]`), so the two surfaces do not share a vocabulary. **And T299 lands here:** resolving which accounts a finance officer has charged is not derivable from the current schema, and this task's orchestration layer is where that decision has to be made — see T299 for the two routes and their costs. `report#show` and `export#create` are 2 of the 15 routes `RouteResolutionTest` reports as unresolved; `session#dashboard` is already routed
 - [ ] T113 [P] [US7] Implement dashboard/report API services, stores, filters, tables/cards, and export controls in `src/services/dashboardApi.ts`, `src/services/reportsApi.ts`, `src/stores/dashboard.ts`, `src/stores/reports.ts`, `src/views/DashboardView.vue`, and `src/views/reports/ReportsView.vue` (all elements visible without horizontal scroll at 390px viewport; WCAG AA contrast; ≥12pt Persian font per FR-071)
 - [ ] T114 [US7] Add dashboard, filtering, totals, report-scope, CSV/XLSX/PDF, and grouped-evidence export Playwright journeys in `tests/E2E/reporting-export.spec.ts` (verify p95 <3s, error rate <0.1%, zero data loss per FR-073)
 
@@ -3510,3 +3510,35 @@ than missing features, and the first one is the reason the second one was hard t
 
   Also unaddressed here, and left for convergence: the guard's dispatch check skips `POST` routes, so
   `export#create` is confirmed to resolve and to answer, but nothing keeps it answering in future.
+
+
+  **REOPENED — the export half does not meet `contracts/ocs-api.yaml`, and the contradiction is in
+  the contract rather than the code.** Two independent blockers, both verified at the source level
+  instead of inferred:
+
+  1. **`ExportRequest.format` cannot be sent to an OCS route.** `Request::getFormat()`
+     (`lib/private/AppFramework/Http/Request.php:903`) reads `getParam('format')` **first** and only
+     falls back to the `Accept` header when that param is null. `OCSMiddleware` then does
+     `$format === null || !$controller->isResponderRegistered($format) ? 'xml' : $format`
+     (`OCSMiddleware.php:114-116`). A request carrying the contract's own `format` field therefore
+     always beats `Accept: application/json`, fails the responder lookup, and the endpoint answers
+     **XML**. Measured: body with `format` -> XML; body without -> JSON; `format` in the query string
+     -> XML; `?format=json` together with a body `format` -> XML. No client-side workaround exists, and
+     no other endpoint here receives a `format` field, which is why every other POST kept answering JSON.
+  2. **The declared `200` cannot be produced by an OCS route at all.** The contract declares
+     `text/csv` / `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` /
+     `application/pdf` / `application/zip` -- the raw artifact. Every OCS route is wrapped by
+     `OCSMiddleware` in a `V2Response` envelope, so a bare artifact body is unreachable from a route
+     registered in the `ocs` section. The committed implementation returns an OCS JSON envelope with
+     the bytes base64-encoded (`e4fe450`), which deviates in the opposite direction.
+
+  **Decision required, and it belongs to the contract owner rather than to implementation:** either
+  amend the contract to an OCS-compatible shape -- an OCS JSON envelope carrying the encoded artifact,
+  and a field name that is not OCS's reserved `format` -- or move `/exports` out of the `ocs` section
+  into a plain `routes` entry, which makes both the raw artifact and the `format` field name available
+  but changes the route's public surface and how it is authenticated.
+
+  The report and dashboard halves are unaffected and remain correct: `GET /reports/*` answers `200`
+  with a contract-shaped `ReportPage`, and the guard's stale-entry check reports exactly `report#show`
+  and `export#create` as resolved. The checkbox is reopened rather than left ticked because a task
+  whose verification is known-incomplete must not read as done.
