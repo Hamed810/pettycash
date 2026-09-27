@@ -128,6 +128,14 @@ final class DbAuditEventRepository implements AuditEventRepository
                     'occurred_at' => $qb->createNamedParameter($event->occurredAt->format('Y-m-d H:i:s')),
                 ])
                 ->executeStatement();
+
+            // Neither key came back. The insert writes `public_id` from `$event->id`, but the
+            // surrogate key and the `publicId` mirror were both left null, so an audit event that had
+            // just been appended could not be found again by either `findById()` or
+            // `findByPublicId()` — and `AuditWriterService::append()` is the only way the application
+            // records business history. Found by T236's real-database round trip.
+            $event->dbId = (int) $qb->getLastInsertId();
+            $event->publicId = $event->id;
         }
     }
 

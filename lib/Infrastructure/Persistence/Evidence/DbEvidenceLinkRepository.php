@@ -97,7 +97,13 @@ final class DbEvidenceLinkRepository implements EvidenceLinkRepository
                 ])
                 ->executeStatement();
             
-            $link->dbId = $qb->getLastInsertId();
+            $link->dbId = (int) $qb->getLastInsertId();
+            // The insert writes `public_id` from the aggregate's own `id`, but never assigned it
+            // back to the `publicId` mirror, so an aggregate that had just been saved reported
+            // `publicId === null` and every `findByPublicId()` on it could not resolve the row it
+            // had written. `mapRow()` sets the mirror on the way back in; this sets it on the way
+            // out. Found by T236's real-database round trip.
+            $link->publicId = $link->id;
         }
     }
 

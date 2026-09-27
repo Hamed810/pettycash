@@ -30,6 +30,12 @@ use OCA\PettyCash\Domain\Shared\Uuid;
  * controller is the layer the project rules forbid holding them: FR-015 says **finance** charges an
  * account, and FR-013 says an administrator manages accounts for users, so who may do what is a rule
  * about the domain and not about HTTP.
+ *
+ * The `Account` and `Movement` arrays themselves are `AccountPayloadFormatter`'s, not this class's.
+ * That class used to live in `Infrastructure/Http/`, where this one could not reach it without
+ * inverting the layer direction, so this service grew its own copies — three of the account shape and
+ * three of the movement shape by T289, two of them private twins of each other inside this one file.
+ * They are gone; the reasoning is in the formatter.
  */
 final class AccountService
 {
@@ -39,20 +45,23 @@ final class AccountService
         private CurrencyRepository $currencies,
         private RoleAssignmentRepository $roleAssignments,
         private IdempotencyService $idempotency,
-        private CurrentUser $currentUser
+        private CurrentUser $currentUser,
+        private AccountPayloadFormatter $payload
     ) {}
 
     /**
      * The caller's active accounts, in the shape `contracts/ocs-api.yaml` requires: an `Account`
      * carrying a `Money` balance whose `minorUnit` is the configured fraction digits for that
-     * currency, never a value guessed from a built-in table.
+     * currency, never a value guessed from a built-in table. The shape itself is
+     * `AccountPayloadFormatter::account()`, shared with the endpoints that report the same aggregate
+     * after writing it.
      *
      * An empty page is a valid answer: having no account is a normal state the purchaser UI must be
      * able to render, not an error. Only the active projection is exposed, which is what selecting
      * an account for a new sheet requires; listing inactive accounts is part of the finance and
      * administration surface owned by T085 and T088.
      *
-     * @return array{items: list<array{id: string, userId: string, balance: array{amountMinor: int, currency: string, minorUnit: int}, active: bool, version: int}>, page: int, pageSize: int, total: int}
+     * @return array{items: list<array<string, mixed>>, page: int, pageSize: int, total: int}
      */
     public function listForUser(string $userUid, int $page = 1, int $pageSize = 25): array
     {
@@ -65,17 +74,7 @@ final class AccountService
 
         $items = [];
         foreach ($this->accounts->findActiveByUserUid($userUid) as $account) {
-            $items[] = [
-                'id' => $account->id,
-                'userId' => $account->userUid,
-                'balance' => [
-                    'amountMinor' => $account->balance()->minorUnits(),
-                    'currency' => (string) $account->currencyCode(),
-                    'minorUnit' => $account->currency->minorUnit,
-                ],
-                'active' => $account->active,
-                'version' => $account->lockVersion,
-            ];
+            $items[] = $this->payload->account($account);
         }
 
         $total = count($items);
@@ -102,7 +101,7 @@ final class AccountService
      * `total` is the account's full movement count rather than the size of the requested page,
      * which is what lets the view offer pagination and say how much history exists.
      *
-     * @return array{items: list<array{id: string, type: string, amount: array{amountMinor: int, currency: string, minorUnit: int}, balanceAfter: array{amountMinor: int, currency: string, minorUnit: int}, description: string, sourceRevisionId: ?string, occurredAt: string}>, page: int, pageSize: int, total: int}
+     * @return array{items: list<array<string, mixed>>, page: int, pageSize: int, total: int}
      */
     public function listMovements(
         string $userUid,
@@ -127,12 +126,6 @@ final class AccountService
             throw new LogicException('Account has not been persisted');
         }
 
-        // The fraction digits come from the account's own currency configuration. `Money` carries the
-        // amount and the currency code but not the scale, and a scale guessed from a built-in table
-        // is what prints a rial amount a hundred times too small.
-        $minorUnit = $account->currency->minorUnit;
-        $currency = (string) $account->currencyCode;
-
         $all = $this->movements->findByAccountId($account->dbId);
         $total = count($all);
         // One query for the whole ledger and slice it, the same trade `listForUser` makes: the
@@ -142,27 +135,7 @@ final class AccountService
 
         $items = [];
         foreach ($ledgerPage as $movement) {
-            $items[] = [
-                'id' => $movement->id,
-                'type' => $movement->type->value,
-                'amount' => [
-                    'amountMinor' => $movement->amount->minorUnits(),
-                    'currency' => $currency,
-                    'minorUnit' => $minorUnit,
-                ],
-                'balanceAfter' => [
-                    'amountMinor' => $movement->balanceAfter->minorUnits(),
-                    'currency' => $currency,
-                    'minorUnit' => $minorUnit,
-                ],
-                'description' => $movement->description,
-                'sourceRevisionId' => $movement->sourceRevisionId,
-                // An unpersisted movement carries no timestamp; `now` is wrong for it, but a movement
-                // read back from the database always has one, and the field is not nullable in the
-                // contract, so the aggregate's own value is preferred and only then defaulted.
-                'occurredAt' => ($movement->occurredAt ?? new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
-                    ->format(\DateTimeInterface::ATOM),
-            ];
+            $items[] = $this->payload->movement($movement, $account);
         }
 
         return [
@@ -230,7 +203,7 @@ final class AccountService
             throw $e;
         }
 
-        return $this->accountPayload($account);
+        return $this->payload->account($account);
     }
 
     /**
@@ -311,57 +284,9 @@ final class AccountService
                 $this->movements->save($movement);
                 $this->accounts->save($account);
 
-                return [
-                    'account' => $this->accountPayload($account),
-                    'movement' => $this->movementPayload($movement, $account),
-                ];
+                return $this->payload->mutation($account, $movement);
             }
         );
-    }
-
-    /**
-     * @return array<string, mixed> the contract's `Account`
-     */
-    private function accountPayload(\OCA\PettyCash\Domain\Account\PettyCashAccount $account): array
-    {
-        return [
-            'id' => $account->id,
-            'userId' => $account->userUid,
-            'balance' => [
-                'amountMinor' => $account->balance()->minorUnits(),
-                'currency' => (string) $account->currencyCode(),
-                'minorUnit' => $account->currency->minorUnit,
-            ],
-            'active' => $account->active,
-            'version' => $account->lockVersion,
-        ];
-    }
-
-    /**
-     * @return array<string, mixed> the contract's `Movement`
-     */
-    private function movementPayload(
-        \OCA\PettyCash\Domain\Account\AccountMovement $movement,
-        \OCA\PettyCash\Domain\Account\PettyCashAccount $account
-    ): array {
-        return [
-            'id' => $movement->id,
-            'type' => $movement->type->value,
-            'amount' => [
-                'amountMinor' => $movement->amount->minorUnits(),
-                'currency' => (string) $account->currencyCode(),
-                'minorUnit' => $account->currency->minorUnit,
-            ],
-            'balanceAfter' => [
-                'amountMinor' => $movement->balanceAfter->minorUnits(),
-                'currency' => (string) $account->currencyCode(),
-                'minorUnit' => $account->currency->minorUnit,
-            ],
-            'description' => $movement->description,
-            'sourceRevisionId' => $movement->sourceRevisionId,
-            'occurredAt' => ($movement->occurredAt ?? new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
-                ->format(\DateTimeInterface::ATOM),
-        ];
     }
 
     private function hasRole(string $userUid, Role $role): bool

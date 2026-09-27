@@ -102,9 +102,7 @@ final class SheetSubmissionTest extends TestCase
             'Engineering',
             'Engineering department',
             new DateTimeImmutable('2026-01-01', new DateTimeZone('UTC')),
-            null,
-            'test-manager',
-            'test-senior'
+            null
         );
         $costCenter->id = 1;
         

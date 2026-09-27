@@ -111,7 +111,13 @@ final class DbWorkflowDecisionRepository implements WorkflowDecisionRepository
                 ])
                 ->executeStatement();
             
-            $decision->dbId = $qb->getLastInsertId();
+            $decision->dbId = (int) $qb->getLastInsertId();
+            // The insert writes `public_id` from `$decision->id`, but never assigned it back to the
+            // aggregate's own `publicId` mirror, so a decision that had just been saved reported
+            // `publicId === null` and `findByPublicId(null)` could not find the row it had written.
+            // `mapRow()` sets the mirror on the way back in; this sets it on the way out. Found by
+            // T236's real-database round trip.
+            $decision->publicId = $decision->id;
         }
     }
 

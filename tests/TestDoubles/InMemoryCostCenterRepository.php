@@ -68,22 +68,6 @@ final class InMemoryCostCenterRepository implements CostCenterRepository
         return array_filter($this->costCenters, fn($cc) => $cc->isValidOn($date));
     }
 
-    /**
-     * @return list<CostCenter>
-     */
-    public function findByManagerUid(string $managerUid, DateTimeImmutable $date): array
-    {
-        return array_filter($this->costCenters, fn($cc) => $cc->managerUid === $managerUid && $cc->isValidOn($date));
-    }
-
-    /**
-     * @return list<CostCenter>
-     */
-    public function findBySeniorManagerUid(string $seniorManagerUid, DateTimeImmutable $date): array
-    {
-        return array_filter($this->costCenters, fn($cc) => $cc->seniorManagerUid === $seniorManagerUid && $cc->isValidOn($date));
-    }
-
     public function save(CostCenter $costCenter): void
     {
         if ($costCenter->id === null) {

@@ -11,6 +11,7 @@ use OCA\PettyCash\Application\Port\UserDirectory;
 use OCA\PettyCash\Domain\Configuration\RoleAssignment;
 use OCA\PettyCash\Domain\Configuration\Repository\RoleAssignmentRepository;
 use OCA\PettyCash\Domain\Shared\Enum\Role;
+use OCA\PettyCash\Domain\Shared\Uuid;
 use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\IDBConnection;
 
@@ -93,6 +94,12 @@ final class DbRoleAssignmentRepository implements RoleAssignmentRepository
         $now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
         $currentUser = $this->currentUser->uid();
 
+        // No optimistic lock here, and that is not an oversight. `data-model.md` gives Role Assignment
+        // `id`, `public_id`, `user_uid`, `role`, `cost_center_id`, the validity window, `active` and
+        // the audit columns — and no `lock_version`. This repository wrote the column on both the
+        // insert and the update, so every role-assignment write failed with "Unknown column
+        // 'lock_version'", which is the state `T236`'s real-database round trip found. Concurrent
+        // administration of assignments is guarded by the unique public id and by T082's own rules.
         if ($existing) {
             $qb->update('pettycash_role_assignments')
                 ->set('user_uid', $qb->createNamedParameter($roleAssignment->userUid))
@@ -103,13 +110,19 @@ final class DbRoleAssignmentRepository implements RoleAssignmentRepository
                 ->set('active', $qb->createNamedParameter($roleAssignment->active, IQueryBuilder::PARAM_BOOL))
                 ->set('updated_at', $qb->createNamedParameter($now, IQueryBuilder::PARAM_DATETIME_IMMUTABLE))
                 ->set('updated_by', $qb->createNamedParameter($currentUser))
-                ->set('lock_version', $qb->createNamedParameter($existing->lockVersion + 1))
                 ->where($qb->expr()->eq('id', $qb->createNamedParameter($existing->id)))
-                ->andWhere($qb->expr()->eq('lock_version', $qb->createNamedParameter($existing->lockVersion)))
                 ->executeStatement();
         } else {
+            // `public_id` is NOT NULL with no default, and nothing upstream mints one: an assignment is
+            // keyed by its user and role, and the surrogate `id` is assigned by the database. This
+            // insert did not supply the column at all, so every write failed on the constraint. No
+            // test noticed, because all 13 repository doubles accept the aggregate as it stands. The
+            // repository mints it here, which is the contract `mapRow()` already reads back.
+            $publicId = $roleAssignment->publicId ?? (string) Uuid::random();
+
             $qb->insert('pettycash_role_assignments')
                 ->values([
+                    'public_id' => $qb->createNamedParameter($publicId),
                     'user_uid' => $qb->createNamedParameter($roleAssignment->userUid),
                     'role' => $qb->createNamedParameter($roleAssignment->role->value),
                     'cost_center_id' => $roleAssignment->costCenterId ? $qb->createNamedParameter($roleAssignment->costCenterId) : $qb->createNamedParameter(null),
@@ -120,9 +133,11 @@ final class DbRoleAssignmentRepository implements RoleAssignmentRepository
                     'created_by' => $qb->createNamedParameter($currentUser),
                     'updated_at' => $qb->createNamedParameter($now, IQueryBuilder::PARAM_DATETIME_IMMUTABLE),
                     'updated_by' => $qb->createNamedParameter($currentUser),
-                    'lock_version' => $qb->createNamedParameter(0),
                 ])
                 ->executeStatement();
+
+            $roleAssignment->publicId = $publicId;
+            $roleAssignment->id = (int) $qb->getLastInsertId();
         }
     }
 
@@ -140,7 +155,6 @@ final class DbRoleAssignmentRepository implements RoleAssignmentRepository
         $roleAssignment->createdBy = $row['created_by'] ?? null;
         $roleAssignment->updatedAt = isset($row['updated_at']) ? new DateTimeImmutable($row['updated_at']) : null;
         $roleAssignment->updatedBy = $row['updated_by'] ?? null;
-        $roleAssignment->lockVersion = (int) ($row['lock_version'] ?? 0);
         $roleAssignment->id = (int) $row['id'];
         $roleAssignment->publicId = $row['public_id'] ?? null;
         return $roleAssignment;

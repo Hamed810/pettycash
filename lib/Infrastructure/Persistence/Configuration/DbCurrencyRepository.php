@@ -103,6 +103,12 @@ final class DbCurrencyRepository implements CurrencyRepository
         $currency->updatedAt = isset($row['updated_at']) ? new DateTimeImmutable($row['updated_at']) : null;
         $currency->updatedBy = $row['updated_by'] ?? null;
         $currency->lockVersion = (int) ($row['lock_version'] ?? 0);
+        // Every other configuration repository assigns the surrogate key and the public id it just
+        // read. This one assigned neither, so a currency that had been saved and then re-read looked
+        // unpersisted to any caller that checks `id`, and `pettycash_currencies` has no `public_id`
+        // column at all — `data-model.md` keys a currency by its code — so only the surrogate key
+        // applies here. Found by T236's real-database round trip.
+        $currency->id = (int) $row['id'];
         return $currency;
     }
 

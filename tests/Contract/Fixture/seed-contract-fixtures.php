@@ -567,17 +567,20 @@ upsert($db, 'pettycash_role_assignments', 'public_id', FIXTURE_IDS['seniorRole']
     'active' => true,
 ], $audit));
 
-// The FINANCE role, granted only in the `finance` state.
+// The FINANCE role, granted in every state to the acting user.
+//
+// It is unconditional, and that is the point worth knowing: a fixture that always passes a role
+// gate makes the gate's *refusals* unobservable, which is why the FR-015 charge actor gate is
+// covered at `tests/Integration/Account/AccountChargeAuthorizationTest.php` rather than over HTTP.
+// T291 is the open task for the endpoint-level half of that coverage.
 //
 // It carries no cost center, which is the schema's own way of saying the role is not
 // scoped: `pettycash_role_assignments.cost_center_id` is nullable and the finance
-// queue is the one queue a cost-centre-scoped read cannot narrow. Granting it in
-// every state would also make the *refusals* unobservable, because a role gate
-// cannot be tested by a fixture that always passes it.
+// queue is the one queue a cost-centre-scoped read cannot narrow.
 //
-// It is not removed in the other states, and does not have to be: `canReview()`
-// resolves the required role from the transaction's own stage, so holding FINANCE
-// changes nothing about a cost-centre or senior stage decision.
+// It does not have to be withdrawn in the other states: `canReview()` resolves the
+// required role from the transaction's own stage, so holding FINANCE changes nothing
+// about a cost-centre or senior stage decision.
 upsert($db, 'pettycash_role_assignments', 'public_id', FIXTURE_IDS['financeRole'], array_merge([
     'public_id' => FIXTURE_IDS['financeRole'],
     'user_uid' => $userUid,

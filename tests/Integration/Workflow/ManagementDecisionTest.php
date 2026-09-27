@@ -105,9 +105,7 @@ final class ManagementDecisionTest extends TestCase
             'Test Cost Center',
             'Test description',
             new DateTimeImmutable('2026-01-01', new DateTimeZone('UTC')),
-            null,
-            $managerUid,
-            'senior-1'
+            null
         );
         $costCenter->id = 1;
 

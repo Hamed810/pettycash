@@ -10,6 +10,7 @@ use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Application\Port\UserDirectory;
 use OCA\PettyCash\Domain\Configuration\CostCenter;
 use OCA\PettyCash\Domain\Configuration\Repository\CostCenterRepository;
+use OCA\PettyCash\Domain\Shared\Uuid;
 use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\IDBConnection;
 
@@ -87,40 +88,6 @@ final class DbCostCenterRepository implements CostCenterRepository
         return array_map([$this, 'mapRow'], $rows);
     }
 
-    /** @return list<CostCenter> */
-    public function findByManagerUid(string $managerUid, DateTimeImmutable $date): array
-    {
-        $qb = $this->connection->getQueryBuilder();
-        $qb->select('*')
-            ->from('pettycash_cost_centers')
-            ->where($qb->expr()->eq('manager_uid', $qb->createNamedParameter($managerUid)))
-            ->andWhere($qb->expr()->eq('active', $qb->createNamedParameter(true, IQueryBuilder::PARAM_BOOL)))
-            ->andWhere($qb->expr()->lte('valid_from', $qb->createNamedParameter($date->format('Y-m-d'))))
-            ->andWhere($qb->expr()->orX(
-                $qb->expr()->isNull('valid_to'),
-                $qb->expr()->gte('valid_to', $qb->createNamedParameter($date->format('Y-m-d')))
-            ));
-        $rows = $qb->executeQuery()->fetchAllAssociative();
-        return array_map([$this, 'mapRow'], $rows);
-    }
-
-    /** @return list<CostCenter> */
-    public function findBySeniorManagerUid(string $seniorManagerUid, DateTimeImmutable $date): array
-    {
-        $qb = $this->connection->getQueryBuilder();
-        $qb->select('*')
-            ->from('pettycash_cost_centers')
-            ->where($qb->expr()->eq('senior_manager_uid', $qb->createNamedParameter($seniorManagerUid)))
-            ->andWhere($qb->expr()->eq('active', $qb->createNamedParameter(true, IQueryBuilder::PARAM_BOOL)))
-            ->andWhere($qb->expr()->lte('valid_from', $qb->createNamedParameter($date->format('Y-m-d'))))
-            ->andWhere($qb->expr()->orX(
-                $qb->expr()->isNull('valid_to'),
-                $qb->expr()->gte('valid_to', $qb->createNamedParameter($date->format('Y-m-d')))
-            ));
-        $rows = $qb->executeQuery()->fetchAllAssociative();
-        return array_map([$this, 'mapRow'], $rows);
-    }
-
     public function save(CostCenter $costCenter): void
     {
         $qb = $this->connection->getQueryBuilder();
@@ -135,8 +102,6 @@ final class DbCostCenterRepository implements CostCenterRepository
                 ->set('valid_from', $qb->createNamedParameter($costCenter->validFrom->format('Y-m-d')))
                 ->set('valid_to', $costCenter->validTo ? $qb->createNamedParameter($costCenter->validTo->format('Y-m-d')) : $qb->createNamedParameter(null))
                 ->set('active', $qb->createNamedParameter($costCenter->active, IQueryBuilder::PARAM_BOOL))
-                ->set('manager_uid', $costCenter->managerUid ? $qb->createNamedParameter($costCenter->managerUid) : $qb->createNamedParameter(null))
-                ->set('senior_manager_uid', $costCenter->seniorManagerUid ? $qb->createNamedParameter($costCenter->seniorManagerUid) : $qb->createNamedParameter(null))
                 ->set('updated_at', $qb->createNamedParameter($now, IQueryBuilder::PARAM_DATETIME_IMMUTABLE))
                 ->set('updated_by', $qb->createNamedParameter($currentUser))
                 ->set('lock_version', $qb->createNamedParameter($existing->lockVersion + 1))
@@ -144,16 +109,22 @@ final class DbCostCenterRepository implements CostCenterRepository
                 ->andWhere($qb->expr()->eq('lock_version', $qb->createNamedParameter($existing->lockVersion)))
                 ->executeStatement();
         } else {
+            // `pettycash_cost_centers.public_id` is NOT NULL with no default, and this insert did not
+            // supply it, so every cost-center write failed on the column constraint before it could
+            // fail on the two that did not exist. No aggregate in `Domain/Configuration/` mints one —
+            // `code` is the natural key and the surrogate `id` is assigned by the database — so the
+            // repository mints it here, which is the same contract `mapRow()` already reads back.
+            $publicId = $costCenter->publicId ?? (string) Uuid::random();
+
             $qb->insert('pettycash_cost_centers')
                 ->values([
+                    'public_id' => $qb->createNamedParameter($publicId),
                     'code' => $qb->createNamedParameter($costCenter->code()),
                     'name' => $qb->createNamedParameter($costCenter->name),
                     'description' => $qb->createNamedParameter($costCenter->description),
                     'valid_from' => $qb->createNamedParameter($costCenter->validFrom->format('Y-m-d')),
                     'valid_to' => $costCenter->validTo ? $qb->createNamedParameter($costCenter->validTo->format('Y-m-d')) : $qb->createNamedParameter(null),
                     'active' => $qb->createNamedParameter($costCenter->active, IQueryBuilder::PARAM_BOOL),
-                    'manager_uid' => $costCenter->managerUid ? $qb->createNamedParameter($costCenter->managerUid) : $qb->createNamedParameter(null),
-                    'senior_manager_uid' => $costCenter->seniorManagerUid ? $qb->createNamedParameter($costCenter->seniorManagerUid) : $qb->createNamedParameter(null),
                     'created_at' => $qb->createNamedParameter($now, IQueryBuilder::PARAM_DATETIME_IMMUTABLE),
                     'created_by' => $qb->createNamedParameter($currentUser),
                     'updated_at' => $qb->createNamedParameter($now, IQueryBuilder::PARAM_DATETIME_IMMUTABLE),
@@ -161,6 +132,9 @@ final class DbCostCenterRepository implements CostCenterRepository
                     'lock_version' => $qb->createNamedParameter(0),
                 ])
                 ->executeStatement();
+
+            $costCenter->publicId = $publicId;
+            $costCenter->id = (int) $qb->getLastInsertId();
         }
     }
 
@@ -171,9 +145,7 @@ final class DbCostCenterRepository implements CostCenterRepository
             $row['name'],
             $row['description'] ?? null,
             new DateTimeImmutable($row['valid_from']),
-            $row['valid_to'] ? new DateTimeImmutable($row['valid_to']) : null,
-            $row['manager_uid'] ?? null,
-            $row['senior_manager_uid'] ?? null
+            $row['valid_to'] ? new DateTimeImmutable($row['valid_to']) : null
         );
         $costCenter->active = (bool) $row['active'];
         $costCenter->createdAt = isset($row['created_at']) ? new DateTimeImmutable($row['created_at']) : null;

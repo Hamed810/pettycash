@@ -12,8 +12,10 @@ use OCA\PettyCash\Application\Evidence\EvidenceService;
 use OCA\PettyCash\Application\Port\AuditWriter;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Application\Port\PrivateFileStore;
+use OCA\PettyCash\Application\Port\RetentionPolicyStore;
 use OCA\PettyCash\Application\Port\TransactionManager;
 use OCA\PettyCash\Application\Port\UserDirectory;
+use OCA\PettyCash\Application\Audit\RetentionPolicyService;
 use OCA\PettyCash\Application\Security\AuthorizationService;
 use OCA\PettyCash\Application\Workflow\FinanceQueue;
 use OCA\PettyCash\Application\Workflow\FinanceSettlementService;
@@ -34,6 +36,7 @@ use OCA\PettyCash\Domain\Workflow\Repository\WorkflowDecisionRepository;
 use OCA\PettyCash\Infrastructure\Nextcloud\AppDataEvidenceStore;
 use OCA\PettyCash\Infrastructure\Nextcloud\NextcloudAdministratorCheck;
 use OCA\PettyCash\Infrastructure\Nextcloud\NextcloudCurrentUser;
+use OCA\PettyCash\Infrastructure\Nextcloud\NextcloudRetentionPolicyStore;
 use OCA\PettyCash\Infrastructure\Nextcloud\NextcloudUserDirectory;
 use OCA\PettyCash\Infrastructure\Nextcloud\SystemClock;
 use OCA\PettyCash\Infrastructure\Nextcloud\TechnicalLogger;
@@ -55,6 +58,7 @@ use OCA\PettyCash\Infrastructure\Persistence\Evidence\DbEvidenceRepository;
 use OCA\PettyCash\Infrastructure\Persistence\NextcloudTransactionManager;
 use OCA\PettyCash\Infrastructure\Persistence\Workflow\DbWorkflowDecisionRepository;
 use OCP\AppFramework\App;
+use OCP\IAppConfig;
 use OCP\AppFramework\Bootstrap\IBootContext;
 use OCP\AppFramework\Bootstrap\IBootstrap;
 use OCP\AppFramework\Bootstrap\IRegistrationContext;
@@ -321,6 +325,20 @@ final class Application extends App implements IBootstrap
                 $c->query(ExpenseTransactionRepository::class),
                 $c->query(RoleAssignmentRepository::class),
                 $c->query(CurrentUser::class)
+            );
+        });
+
+        // Audit retention policy (FR-057). Registered explicitly because the store is a Nextcloud
+        // IAppConfig adapter, which the container cannot construct on its own.
+        $context->registerService(RetentionPolicyStore::class, function ($c) {
+            return new NextcloudRetentionPolicyStore($c->query(IAppConfig::class));
+        });
+
+        $context->registerService(RetentionPolicyService::class, function ($c) {
+            return new RetentionPolicyService(
+                $c->query(RetentionPolicyStore::class),
+                $c->query(AuditWriter::class),
+                $c->query(\OCA\PettyCash\Domain\Shared\Clock::class)
             );
         });
 

@@ -186,6 +186,15 @@ final class DbAccountMovementRepository implements AccountMovementRepository
                 'occurred_at' => $qb->createNamedParameter($now, IQueryBuilder::PARAM_DATETIME_IMMUTABLE),
             ])
             ->executeStatement();
+
+            // Deliberately no `$movement->dbId = …` here, unlike the other repositories.
+            //
+            // `AccountMovement` is a `final readonly` aggregate, so its database identity cannot be
+            // assigned after construction — and that is correct rather than an omission: a movement
+            // is a fact, not a mutable record, and the caller gets a *new* instance carrying the
+            // surrogate key back from `mapRow()` on the next read. Finding a just-written movement
+            // by `findByCommandId()` is the same path a replayed command takes, so it is the one
+            // that has to work, and it does.
     }
 
     /**

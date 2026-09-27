@@ -484,7 +484,7 @@ snapshots remain unchanged.
 ### Implementation for User Story 5
 
 - [ ] T081 [P] [US5] Implement currency administration with immutable historical references and rial default identification in `lib/Application/Configuration/CurrencyService.php`
-- [ ] T082 [P] [US5] Implement cost-center and effective-dated manager/senior assignment administration with future-routing behavior in `lib/Application/Configuration/CostCenterService.php`
+- [ ] T082 [P] [US5] Implement cost-center and effective-dated manager/senior assignment administration with future-routing behavior in `lib/Application/Configuration/CostCenterService.php` (**read this before starting** — T236's real-database round trip found that `DbCostCenterRepository` was writing `manager_uid` and `senior_manager_uid`, columns that exist in no migration and in no table, so every cost-center write failed with `Unknown column 'manager_uid'` and had never been executed by any test. `data-model.md` gives `CostCenter` no manager, and states the relationship as "Has effective-dated cost-center-manager and senior-manager **role assignments**", so the fields and the two dead port methods `findByManagerUid()` / `findBySeniorManagerUid()` were **removed** rather than given columns. Managers are rows in `pettycash_role_assignments` scoped by `cost_center_id`, and `ManagementReviewService::getManagedCostCenterCodes()` already resolves a reviewer's scope that way. **So this task must create role assignments, not set properties on a cost center** — passing a manager uid to `CostCenter::create()` is no longer possible, and `T077`'s "exactly one effective manager and senior manager" is a rule about assignments. `RoleAssignment` also has no `lock_version`, in the data model and in the table alike)
 - [ ] T083 [P] [US5] Implement expense-type administration including `evidence_required` and inactive historical retention in `lib/Application/Configuration/ExpenseTypeService.php`
 - [ ] T084 [P] [US5] Implement shared-queue finance-role assignment administration and host-user validation in `lib/Application/Configuration/FinanceAssignmentService.php`
 - [ ] T085 [US5] Implement idempotent default rial account provisioning, additional currency accounts, activation state, and finance account charging in `lib/Application/Account/AccountAdministrationService.php`
@@ -521,7 +521,7 @@ attempt audit mutation, and verify scoped timeline/table history and preserved a
 - [ ] T097 [P] [US6] Implement audit/evidence API services and stores in `src/services/evidenceApi.ts`, `src/services/auditApi.ts`, and `src/stores/audit.ts`
 - [ ] T098 [US6] Implement audit timeline/table, revision history, active/inactive evidence list, preview/download, and link-management components in `src/components/audit/`, `src/components/evidence/`, and `src/views/audit/AuditView.vue` (all elements visible without horizontal scroll at 390px viewport; WCAG AA contrast; ≥12pt Persian font per FR-071)
 - [ ] T099 [US6] Add disabled-actor, immutable-history, evidence-deactivation, authorization, and optional public-link Playwright journeys in `tests/E2E/audit-evidence.spec.ts`
-- [ ] T100 [US6] Document audit retention as archival/availability policy that never deletes or rewrites business history in `docs/audit-retention.md`
+- [X] T100 [US6] Document audit retention as archival/availability policy that never deletes or rewrites business history in `docs/audit-retention.md` (complete — states the policy, where it is enforced and by which test, and a `What is **not** enforced` section covering the three things a reader could otherwise over-read: that MariaDB itself is not append-only, that no V1 process acts on `isArchivable()` (verified: zero production callers), and that the compliance report is a diagnostic that neutralises a sub-floor value on read rather than correcting what is stored. Every claim mechanically verified against the code before being written. **Corrected after the fact:** the first draft described configuration audit as a working separate stream. T139's investigation found that nothing writes `pettycash_configuration_audit` at all and that `appendConfiguration()` is dead code that would route into the transaction table, so the document now carries a per-stream state table and an `Open items` entry saying so, rather than describing the requirement as the implementation)
 
 **Checkpoint**: Complete history is viewable only within scope, evidence is never physically
 removed after submission, and no supported interface mutates audit.
@@ -608,7 +608,7 @@ full specification traceability after all selected story phases are complete.
 - [ ] T134 Complete requirement-to-test traceability for FR-001 through FR-076 and SC-001 through SC-012 in `specs/001-pettycash-v1-core/checklists/traceability.md` (include clarified FR-002, FR-030, FR-034, FR-055, FR-056, FR-071, FR-072, FR-073, FR-074)
 - [ ] T135 Perform the final constitution compliance, compatibility, documentation, and release-readiness review and record all approved exceptions or confirm none in `specs/001-pettycash-v1-core/checklists/release-readiness.md` (verify measurable RTL criteria, performance targets, authorization matrix, config audit scope, advisory decision behavior, evidence 100 MB limit, advanced evidence restrictions V2 deferral, browser targets)
 - [ ] T137 [P] Write failing test verifying no scheduled job or background process advances stale transactions (no auto-escalation per FR-045) in `tests/Integration/Workflow/NoAutoEscalationTest.php`
-- [ ] T138 [P] Write failing integration test verifying audit records younger than 7 years are never archived or deleted (FR-057 7-year retention floor) in `tests/Integration/Audit/RetentionPolicyTest.php`
+- [X] T138 [P] Write failing integration test verifying audit records younger than 7 years are never archived or deleted (FR-057 7-year retention floor) in `tests/Integration/Audit/RetentionPolicyTest.php` (complete — 15 tests. Real-database half writes a young and a ten-year-old row through `DbAuditEventRepository` in a new `retention` scenario of `roundtrip-runner.php` and evaluates the real policy against the values read back out of MariaDB; the ten-year-old row is the control that makes the young row's protection mean something. Structural half asserts by reflection that no public method on `AuditEventRepository`, `AuditRetentionPolicy` or `RetentionPolicyService` is a removal or rewrite path, and that the real schema has no archive/deletion column. Mutation-verified both ways. Unblocked by T237)
 - [ ] T139 [P] Write failing integration test verifying configuration audit visibility per role scope (admins see all, finance see charged accounts, managers see assigned cost centers per FR-055/FR-056) and transaction/config audit separation (explicit test: transaction audit queries never return configuration audit events and vice versa per FR-056) in `tests/Integration/Audit/ConfigAuditScopeTest.php`
 
 **Checkpoint**: All mandatory checks pass, documentation matches behavior, no unresolved
@@ -1015,11 +1015,116 @@ divergences.
 
 ### CRITICAL — Constitution V: persistence must have integration tests
 
-- [ ] T236 [CRITICAL] Add integration tests that run against the real MariaDB schema and exercise the 14 production repositories in `lib/Infrastructure/Persistence/` (`DbAccountRepository`, `DbAccountMovementRepository`, `DbAuditEventRepository`, `DbCommandResultRepository`, `DbCostCenterRepository`, `DbCurrencyRepository`, `DbEvidenceLinkRepository`, `DbEvidenceRepository`, `DbExpenseSheetRepository`, `DbExpenseTransactionRepository`, `DbExpenseTypeRepository`, `DbRoleAssignmentRepository`, `DbTransactionRevisionRepository`, `DbWorkflowDecisionRepository`) in `tests/Integration/Persistence/`, asserting at minimum that a saved aggregate is retrievable through its own join keys and that a revision, decision, and audit row are linked to the correct parent after a round trip; every current test substitutes one of 13 `InMemory*` doubles, so no test executes the real persistence layer, which violates Constitution V ("persistence, revisions, audit records ... MUST have automated integration tests when a suitable harness exists") and is the demonstrated root cause of the accumulated defects fixed in T229, T230, T232, and T234 plus the still-open `DbAccountMovementRepository` hardcoded `$accountId = 1` and `DbAccountRepository` currency-join syntax error in T188 (missing)
+- [X] T236 [CRITICAL] Add integration tests that run against the real MariaDB schema and exercise the 14 production repositories in `lib/Infrastructure/Persistence/` (`DbAccountRepository`, `DbAccountMovementRepository`, `DbAuditEventRepository`, `DbCommandResultRepository`, `DbCostCenterRepository`, `DbCurrencyRepository`, `DbEvidenceLinkRepository`, `DbEvidenceRepository`, `DbExpenseSheetRepository`, `DbExpenseTransactionRepository`, `DbExpenseTypeRepository`, `DbRoleAssignmentRepository`, `DbTransactionRevisionRepository`, `DbWorkflowDecisionRepository`) in `tests/Integration/Persistence/`, asserting at minimum that a saved aggregate is retrievable through its own join keys and that a revision, decision, and audit row are linked to the correct parent after a round trip; every current test substitutes one of 13 `InMemory*` doubles, so no test executes the real persistence layer, which violates Constitution V ("persistence, revisions, audit records ... MUST have automated integration tests when a suitable harness exists") and is the demonstrated root cause of the accumulated defects fixed in T229, T230, T232, and T234 plus the still-open `DbAccountMovementRepository` hardcoded `$accountId = 1` and `DbAccountRepository` currency-join syntax error in T188 (complete)
+
+  **Both defects this task named as evidence were already fixed** — `DbAccountMovementRepository` no
+  longer hardcodes an account id, and `DbAccountRepository` selects its currency columns with
+  `selectAlias()` rather than an inline `c.code as currency_code` string — so neither is redone here.
+  What the task got right was the diagnosis underneath them.
+
+  ## The harness
+
+  `tests/Integration/Persistence/roundtrip-runner.php` runs in its own process, bootstraps the
+  Nextcloud server, performs the round trips, prints what it observed as JSON, and deletes every row
+  it created. `RepositoryRoundTripTest` (26 tests, 150 assertions) asserts on that JSON. The split is
+  deliberate: assertions live in PHPUnit so a failure names the figure MariaDB actually held, and a
+  bug in the runner cannot turn a broken repository green by agreeing with itself.
+
+  A subprocess is the only option, and the reason is already documented in
+  `seed-contract-fixtures.php`: `tests/bootstrap.php` wires a container of in-memory doubles, and
+  loading `lib/base.php` into the PHPUnit process would replace the global server and break every
+  other suite. The runner also has to put a user in the session itself, because every
+  `Db*Repository::save()` stamps `created_by` from `CurrentUser::uid()` and `NextcloudCurrentUser`
+  refuses to invent one.
+
+  Four scenarios, so four bootstraps: `configuration`, `account`, `expense`, `command`. All 14
+  repositories are covered. The whole file runs in 0.75s.
+
+  ## What it found: nine repositories were defective, three of them fatally
+
+  This is the part that justifies the task. A double accepts whatever aggregate it is handed, so none
+  of the following was visible to any test that had ever run.
+
+  | Repository | Defect | Consequence |
+  |---|---|---|
+  | `DbCostCenterRepository` | wrote `manager_uid` and `senior_manager_uid` — in no migration, in no table, and in neither `data-model.md` nor the `CostCenter` aggregate's own relationship | **every cost-center write failed** with `Unknown column 'manager_uid'` |
+  | `DbRoleAssignmentRepository` | wrote `lock_version` on insert and update, which the table does not have (`Version010000…:64` passes `auditColumns($table, false)`) and `data-model.md` does not declare | **every role-assignment write failed** |
+  | `DbCostCenterRepository` | insert omitted `public_id`, which is `NOT NULL` with no default | cost-center write failed on the constraint |
+  | `DbExpenseTypeRepository` | insert omitted `public_id` | expense-type write failed on the constraint |
+  | `DbRoleAssignmentRepository` | insert omitted `public_id` | role-assignment write failed on the constraint |
+  | `DbAuditEventRepository` | `save()` assigned neither the surrogate key nor the `publicId` mirror | an appended audit event could not be found again by `findById()` or `findByPublicId()` |
+  | `DbCurrencyRepository` | `mapRow()` never assigned the surrogate key | a re-read currency looked unpersisted |
+  | `DbWorkflowDecisionRepository` | `save()` never assigned the `publicId` mirror | `findByPublicId()` could not resolve the row just written |
+  | `DbEvidenceRepository`, `DbEvidenceLinkRepository`, `DbExpenseSheetRepository`, `DbExpenseTransactionRepository`, `DbTransactionRevisionRepository` | same `publicId` mirror gap on insert | five more rows unresolvable by public id after saving |
+
+  **All nine are fixed.** The three fatal write paths are the headline: cost-center, role-assignment
+  and expense-type administration could not have written a single row, and no test had ever executed
+  one. They are latent rather than live only because the endpoints that would call them are still
+  open (`T087`); the moment `T082` lands they would have failed on first use.
+
+  **Two of the fixes are removals rather than additions, and the approved artifacts decided the
+  direction.** A cost center has no manager: `data-model.md` gives it `id`, `public_id`, `code`,
+  `name`, `description`, the validity window, `active`, the audit columns and `lock_version`, and
+  states the relationship as "Has effective-dated cost-center-manager and senior-manager **role
+  assignments**". `ManagementReviewService::getManagedCostCenterCodes()` already resolves a
+  reviewer's scope through `RoleAssignmentRepository`, never through the cost center. So
+  `CostCenter::$managerUid`/`$seniorManagerUid` and the port's `findByManagerUid()`/
+  `findBySeniorManagerUid()` were removed rather than given columns — leaving the fields in place
+  while nothing persisted them would be the worse version of the same defect, because `T082` would
+  create a cost center, pass manager uids, and watch them vanish. The test now asserts the
+  relationship that replaced them: a senior-manager assignment scoped to a cost center resolves back
+  to it. Likewise `RoleAssignment` has no `lock_version` in `data-model.md` and the migration agrees,
+  so the repository stopped writing it.
+
+  **`AccountMovement` is the one repository deliberately left alone.** It is a `final readonly`
+  aggregate, so its database identity cannot be assigned after construction, and that is correct
+  rather than an omission: a movement is a fact, and the caller gets a new instance carrying the
+  surrogate key from `mapRow()` on the next read. `findByCommandId()` is the lookup that has to work
+  — it is the path a replayed command takes — and it is asserted.
+
+  ## Verification that it is not a vacuous pass
+
+  Both halves were checked by breaking the code, not by reading the test.
+
+  | Mutation | Result |
+  |---|---|
+  | Put `manager_uid` back into the cost-center insert | fails **5** — the round trip reports `Unknown column 'manager_uid'` |
+  | Make `supersedes` read back as the surrogate key instead of the public UUID | fails **1**, `testASecondRevisionSupersedesTheFirstByPublicId` |
+
+  The first proves the harness really executes SQL against MariaDB; the second proves the assertions
+  bite on stored *values*, which a test that only asserted "no exception" would have missed.
+
+  ## Shared-database hygiene
+
+  The runner deletes every row it creates, in a `finally`, in reverse insertion order — and it needs
+  **two** sweeps, which the first version of this file learned the hard way. Sweeping by surrogate key
+  is precise but incomplete: a row is only registered once its id resolves, so a failure *between* the
+  insert and the registration leaks it. The first runs of this file leaked **32 rows** into the shared
+  MariaDB that way, all of them removed by `roundtrip-leftovers.php --delete`, which matches only
+  fingerprints this runner writes. The fingerprint sweep now runs as well, so a crash anywhere still
+  cleans up. `roundtrip-leftovers.php` is kept because a shared environment needs a way to check.
+
+  Per-run uniqueness is load-bearing in the same way: `pettycash_account_movements.command_id`,
+  `pettycash_evidence_links.token_hash` and `pettycash_command_results.command_id` are all UNIQUE and
+  all three repositories are deliberately idempotent per command id, so a fixed value made every run
+  after the first a silent no-op — the row was never written and the runner reported one left over
+  from the previous run.
+
+  **Result**: `scripts/dev/phpunit` is 311 tests / 1620 assertions / 1 failure (T275, unchanged).
+  The 27 account, 23 finance-review, management-review and purchaser contract suites all still pass
+  over real HTTP, which is the evidence that nine repository repairs did not change a single response.
+  Report: `docs/reports/T236.md`.
+
+  **One thing this task did not repair, deliberately.** `AuditEvent` carries `entityType` and
+  `entityId`, and `AuditWriterService` writes both keys — but `pettycash_transaction_audit` has
+  **neither** column, so on the transaction-audit path they are silently discarded. That is not this
+  task's to decide: `T253` is open and owns exactly this reconciliation for configuration audit, and
+  widening it is recorded there rather than duplicated here.
+
 
 ### MEDIUM — plan-mandated audit retention policy
 
-- [ ] T237 [HIGH] Implement the two classes `plan.md` mandates for FR-057 audit retention: the `AuditRetentionPolicy` domain value object with the hard-coded 7-year minimum floor in `lib/Domain/Audit/AuditRetentionPolicy.php`, and `RetentionPolicyService` for policy configuration and compliance verification in `lib/Application/Audit/RetentionPolicyService.php`; neither exists today (`lib/Domain/Audit/` contains only `AuditEvent.php` and `Repository/`, and a filename search for `*RetentionPolicy*` returns nothing) and no existing task creates either class, so the open tasks T138 (`tests/Integration/Audit/RetentionPolicyTest.php`) and T100 (`docs/audit-retention.md`) would both assert against a nonexistent subject per plan.md lines 229-230 and Constitution IV (missing)
+- [X] T237 [HIGH] Implement the two classes `plan.md` mandates for FR-057 audit retention: the `AuditRetentionPolicy` domain value object with the hard-coded 7-year minimum floor in `lib/Domain/Audit/AuditRetentionPolicy.php`, and `RetentionPolicyService` for policy configuration and compliance verification in `lib/Application/Audit/RetentionPolicyService.php`; neither exists today (`lib/Domain/Audit/` contains only `AuditEvent.php` and `Repository/`, and a filename search for `*RetentionPolicy*` returns nothing) and no existing task creates either class, so the open tasks T138 (`tests/Integration/Audit/RetentionPolicyTest.php`) and T100 (`docs/audit-retention.md`) would both assert against a nonexistent subject per plan.md lines 229-230 and Constitution IV (complete — `AuditRetentionPolicy`, `RetentionPolicyService`, the `RetentionPolicyStore` port and its `IAppConfig` adapter, all container-registered; 37 tests across `tests/Unit/Domain/Audit/AuditRetentionPolicyTest.php` and `tests/Integration/Audit/RetentionPolicyServiceTest.php`, mutation-verified. T138 keeps its own filename and its real-repository scope)
 
 ### LOW — declared structure vs reality
 
@@ -1275,6 +1380,21 @@ reproduced against the running container and database, not inferred.
   before that work lands; whichever direction is chosen must be applied consistently to the
   migration, the writer, and the data model, and must not rewrite existing audit rows
   (contradicts)
+
+  **Extended by T236, which found the same disagreement on the transaction-audit side and in the
+  opposite direction.** `pettycash_transaction_audit` has **no** `entity_type` and no `entity_id`
+  column at all, and `DbAuditEventRepository` never writes either — so on the transaction path
+  `AuditEvent::$entityType` and `AuditEvent::$entityId` are accepted by the domain, handed to
+  `AuditWriterService::append()`, and then silently discarded, while the read back reports `""` and
+  `null`. Confirmed against the live table, not inferred. The subject on that path is carried instead
+  by `sheet_id` / `transaction_id` / `revision_id` plus `before_json` / `after_json`, which is what
+  `data-model.md` declares, so the two fields are redundant with the foreign keys rather than lost
+  information — but the redundancy is invisible at every layer, and whoever builds the audit timeline
+  under `T093`/`T154` will meet both spellings. **The reconciliation now has to cover the transaction
+  table as well as the configuration one, and either direction must be applied to the migration, the
+  writer, the aggregate and the data model together.** Not repaired by T236, which is why this task
+  stays open.
+
 
 ### MEDIUM — the migration-safety test cannot fail and never runs a migration
 
@@ -1729,7 +1849,7 @@ because their controllers do not exist, and a further 2 route targets name actio
 
 ### MEDIUM — nothing detects a registered route whose controller or action does not exist
 
-- [ ] T272 [MEDIUM] Add a structural test that parses every `['name' => '…#…']` entry in
+- [X] T272 [MEDIUM] Add a structural test that parses every `['name' => '…#…']` entry in
   `appinfo/routes.php` and asserts that the named controller class exists in `lib/Controller/` and
   declares the named public action, so that a route registered ahead of its implementation fails
   the suite instead of returning an opaque HTTP 500 at runtime. Nineteen of the 41 distinct route
@@ -1744,7 +1864,13 @@ because their controllers do not exist, and a further 2 route targets name actio
   Constitution V requires the integration boundaries to be verified rather than assumed. The test
   must be written so that it reports the full unresolved set as data, and it may legitimately stay
   red until T087, T112, and T096 land, in which case it must be recorded as an expected-failure
-  list owned by those task IDs rather than deleted (partial)
+  list owned by those task IDs rather than deleted (complete — `tests/Integration/RouteResolutionTest.php`, 8 tests. The assertion is
+  inverted rather than left red: the test asserts the set of unresolved routes is **exactly** the
+  documented, task-owned `KNOWN_UNRESOLVED` list of 15, so it fails both when a new route is registered
+  ahead of its implementation and when a task lands and leaves a stale entry. Parses tokens rather than
+  reflecting, because `tests/bootstrap.php` does not bootstrap Nextcloud and autoloading a controller
+  dies on its own `extends OCP\AppFramework\Controller`. Mutation-verified in four directions. Also
+  asserts T235's two unrouted duplicate controllers by name)
 
 ## Phase 31: Convergence (Traceability Range Excludes the Schema and Portability Requirements)
 
@@ -2797,17 +2923,65 @@ because it materially undermines every future PHP verification in this repositor
 
 ### MEDIUM — the account payload projection now exists twice
 
-- [ ] T289 [MEDIUM] Move the account and movement projections out of `AccountService`, because
+- [X] T289 [MEDIUM] Move the account and movement projections out of `AccountService`, because
   `AccountPayloadFormatter` in `lib/Infrastructure/Http/` was added by T057 to report
   `AccountMutationResult` on a finance decision, and `AccountService::listForUser()` and
   `listMovements()` still build the same two arrays inline. Two copies of one shape is how
   `TransactionPayloadFormatter` came to exist in the first place: the transaction payload had a flat
   `revision` object and no `allowedActions`, `decisions` or `evidence`, and every affected template
   dereferenced `undefined` on a live response. T057 could not simply make the service delegate, because
-  `AccountService` sits in the Application layer and taking an `Infrastructure\Http` dependency would
+  `AccountService` sits in the Application layer and taking an `Infrastructure.Http` dependency would
   invert the direction the layer rules set; the formatter's docblock says so rather than leaving the
   duplication looking accidental. The move is to relocate the projection to a layer both can depend on,
   or to have the controllers format from the aggregates and drop it from the service.
+
+  **Delivered, and the count was worse than the task recorded.** Before this pass `lib/` held **three**
+  definitions of the `Account` shape and **three** of the `Movement` shape, not two: `AccountService`
+  had grown private twins of both *and* kept its original inline copies in `listForUser()` and
+  `listMovements()`, so it held four of the six between it and the formatter.
+
+  **The option taken was the first one — relocate — and the second was rejected on a concrete
+  ground.** Having the controllers format from the aggregates is what `TransactionPayloadFormatter`
+  and `SheetPayloadFormatter` already do, so it is the consistent direction; it cannot be applied to
+  the two writes, though. `createFor()` and `charge()` return through `IdempotencyService`, so their
+  arrays are not only the response but the *stored* result a replay is answered from. Rebuilding them
+  from identifiers instead would make a replay report the account balance **as of the replay** rather
+  than as of the charge — present-but-different, which is worse than absent, and the exact failure
+  T290 names in its own task text. The Application layer is the one layer the service and the
+  controllers can both depend on, so `AccountPayloadFormatter` moved to
+  `lib/Application/Account/AccountPayloadFormatter.php` and the service delegates to it in all four
+  methods. `lib/Infrastructure/Http/AccountPayloadFormatter.php` is deleted; `ReviewController` takes
+  the new namespace. All six copies are gone, and the service holds none.
+
+  **The guard is structural, and deliberately so.** A behavioural test cannot see this defect: both
+  copies build the same array, so a projection that has drifted from its twin still answers every
+  assertion anyone can make about the endpoint, and the two differ only in the field one of them
+  forgot. `tests/Integration/Account/AccountPayloadSingleDefinitionTest.php` therefore reads the source
+  and fails if `'balanceAfter' =>`, `'sourceRevisionId' =>` or `'userId' => $account->userUid` is
+  written outside the formatter, naming the offending file. Those are the **quoted array-key** forms on
+  purpose: the bare member names are also property names on the `AccountMovement` aggregate and column
+  names in the persistence adapter, and the first version of this test matched them and reported four
+  offenders, three of them innocent. A behavioural half sits alongside it, because a text match cannot
+  tell a projection that is *called* from one that merely exists.
+
+  **Both halves are load-bearing, and each was checked by mutation rather than by reading.** Restoring
+  the inline array in `listForUser()` fails **1** (the structural half; the behavioural half passes,
+  because the two copies were byte-identical). Making the ledger row lose `sourceRevisionId` *after*
+  formatting fails **1** (the behavioural half; the structural half passes, because the mutation adds
+  no array key). Neither guard alone is sufficient, which is the reason there are two.
+
+  **Result**: `scripts/dev/phpunit` is 278 tests / 1456 assertions / 1 failure (T275, unchanged). The
+  27 account contract tests and the 23 finance-review contract tests pass over real HTTP, which is the
+  evidence that the responses are byte-identical rather than merely plausible — including the replayed
+  charge and the `accountMutation` on a finance decision, the two paths that read a stored result.
+  Report: `docs/reports/T289.md`.
+
+  **Left alone deliberately**: `SheetPayloadFormatter` and `TransactionPayloadFormatter` stay in
+  `Infrastructure/Http/`. Neither has a duplicate, and `plan.md` declares that directory as "stream
+  responses and error mapping", so the three payload formatters arguably do not belong there at all —
+  but reconciling the declared structure is T238's and T264's open work and moving two more classes
+  here would be unrequested work in a task about one duplication. Noted, not done.
+
 
 ### MEDIUM — a replayed finance decision does not report the account effect
 
@@ -2853,6 +3027,37 @@ because it materially undermines every future PHP verification in this repositor
   `FINANCE` role and an authenticated request as that user, which the current `.env.testing` single
   credential cannot express — so this is a harness gap, not a product one, and it belongs with the
   other multi-identity work rather than being asserted around.
+
+  **Partly advanced, and the remaining half is a provisioning decision rather than code.** The rule
+  itself is now covered where it can fail, in
+  `tests/Integration/Account/AccountChargeAuthorizationTest.php` — 7 tests over `AccountService::charge()`,
+  which is where the gate is written. Both permissions the rule grants and the refusal are asserted,
+  plus the two effective-date directions and the fact that a *different* real role (a manager) is still
+  a refusal, because a gate written as "does this actor have any role" would pass every other test in
+  the file. Removing the gate fails **5**; dropping only the administrator branch fails **1**;
+  ignoring the effective window fails **2**.
+
+  **Two things this does not do, stated so it is not read as more than it is.** It is not
+  endpoint-level coverage: whether the route answers 403 to a caller without the role is a different
+  assertion over real HTTP as a real second identity, and that is the half still open. And the
+  `hasRole()` check on `$assignment->active` is *not* covered — it is unreachable through the port,
+  because `DbRoleAssignmentRepository::findActiveByUserUid` and `isValidOn()` both filter on it, and a
+  test of it would be a test of a double violating its own contract. The effective window itself *is*
+  covered, and is not the same thing: that is what the expired and not-yet-effective cases measure.
+
+  **Why the endpoint half is not simply written.** It needs a second Nextcloud identity and a second
+  credential in the gitignored `.env.testing`, which means minting an app password against the shared
+  container — a shared-environment write, and one that changes what every future run of the contract
+  suite requires to be provisioned. That is a maintainer decision, not an implementation detail, and
+  it is the same single-identity limit `T171` and the Playwright chain are blocked on. **Next action is
+  that decision, not more code.**
+
+  **One correction made along the way.** `tests/Contract/Fixture/seed-contract-fixtures.php` described
+  the `FINANCE` grant as "granted only in the `finance` state" and then said two paragraphs later that
+  it is not withdrawn in the other states. The code grants it unconditionally. The comment is now
+  accurate, and it says why the grant being unconditional is the reason this gate is not covered over
+  HTTP — which is the fact a reader of this task most needs and the one that was wrong.
+
 
 ### MEDIUM — recorded for awareness, deliberately not appended
 
@@ -2926,3 +3131,114 @@ reachability assertion per route is cheap, and it converts "nobody noticed" into
   rather than a deliberate judgement. This is a bookkeeping fix and must not be read as new test
   evidence: the file was written and verified by the T056 pass, whose report is
   `docs/reports/T056.md` (partial)
+
+## Phase 39: Convergence (Configuration Audit Is Not Written, and the Task That Claims It Is, Is Checked)
+
+Run early during Autopilot implementation pass 4, after T100. Pass 4 was attempting T139 and could
+not proceed: T139's subject is T093's `AuditQueryService`, which does not exist, so there is nothing for
+a role-scoped configuration audit query to be scoped over. Investigating *why* produced four findings
+that no open task owns, three of them about a requirement — FR-056 — that no test in the repository
+currently exercises at all.
+
+### Convergence Findings
+
+| ID | Gap Type | Severity | Source | Evidence | Remaining Work | Owned by |
+|---|---|---|---|---|---|---|
+| F1 | contradicts | CRITICAL | FR-056, FR-017 | Nothing writes `pettycash_configuration_audit` | Route it | **appended as T294** |
+| F2 | contradicts | HIGH | T028, Constitution V | T028 is `[x]` on a false claim | Correct the record | **appended as T295** |
+| F3 | partial | MEDIUM | FR-052 | Two dead audit-writer paths, both writing a null actor role | Remove or repair | **appended as T296** |
+| F4 | contradicts | MEDIUM | FR-052, data-model.md | `command_id` nullable in the domain, NOT NULL in the schema | Reconcile | **appended as T297** |
+
+**Summary metrics**: the audit-writer chain (`AuditWriter` port, `AuditWriterService`,
+`AuditEventRepository`, `DbAuditEventRepository`, migrations `Version0100`–`Version0103`) checked against
+FR-017, FR-051, FR-052, FR-055, FR-056 and Constitution IV; the task-state record for that chain checked
+against the code. Findings: 4 — 1 CRITICAL, 1 HIGH, 2 MEDIUM; 0 missing, 4 contradicts/partial. All four
+are appended, because T086 (write on every mutation), T093 (query service), T253 (subject-identity
+naming) and T139 (verification) each own a *neighbouring* piece of this and none owns the routing defect,
+the false completion claim, the dead paths, or the nullability mismatch. Appending them separately is
+what keeps T093 and T139 from being built on an assumption that turns out to be false.
+
+### CRITICAL — configuration audit is never written to its own table
+
+- [ ] T294 [CRITICAL] Make configuration audit actually reach `pettycash_configuration_audit`, because
+  FR-056 requires transaction audit and configuration audit to remain separately identifiable and
+  nothing in the application writes the configuration table at all. `DbAuditEventRepository` hardcodes
+  `pettycash_transaction_audit` in all seven of its methods — the six reads at lines 28, 39, 51, 65, 79
+  and 93, and `save()` at line 112 — and the class has no notion of which stream it is addressing, so
+  `save()` cannot write a configuration event even if a caller asked it to.
+  `AuditWriterService::appendConfiguration()` (line 90) is the intended writer and is **never called**:
+  all six production call sites use the `AuditWriter` port's `append()` instead, which writes
+  `stage: DRAFT` into the transaction table. So the table created at
+  `lib/Migration/Version010200Date20260920000000.php:34` is permanently empty, FR-017's requirement that
+  sensitive configuration changes record a separate configuration audit history is unimplemented, and
+  FR-055's role-scoped configuration audit visibility has no subject to scope over.
+
+  **What this must settle, and why it is not simply a new repository class.** The choice is between
+  giving the repository a stream discriminator (one class, two tables, `save()` taking the target) and
+  adding a sibling `ConfigurationAuditEventRepository` with its own port, so the domain types and ports
+  stop being interchangeable. The second is the one the artifacts lean toward: `data-model.md` gives
+  Transaction Audit Event and Configuration Audit Event separate sections, and T253 already owns the
+  `subject_type`/`subject_public_id` versus `entity_type`/`entity_id` disagreement that a shared
+  repository would have to paper over. **T253 should be settled first**, because whichever names win
+  must be the ones T294 writes and the ones T093 queries.
+
+  This task owns the write path and the routing. T086 (write before/after on every configuration
+  mutation, in the same transaction) and T093 (the role-scoped query) remain open and must be built on
+  whatever T294 lands, not alongside it. (contradicts)
+
+### HIGH — a completed task claims a writer that does not work
+
+- [ ] T295 [HIGH] Correct `T028`'s state and record why, because it is marked `[x]` and reads
+  "Implement transaction and configuration audit writers that snapshot UID, display name, role, stage,
+  revision, explanation, command ID, and canonical before/after JSON in `lib/Application/Audit/`", but
+  the configuration writer it claims does not run and would not work if it did: `appendConfiguration()`
+  has zero call sites, and T296 shows it would write a null actor role. Constitution V requires that
+  documentation and task status agree with the code, and Delivery item 8 makes a task complete only when
+  implementation, tests, documentation and task status all agree — so a checked box here is a false
+  positive in the one record a reviewer is most likely to trust. Convergence may not rewrite existing
+  task state, so the correction is a task rather than an edit. Mark T028 `[ ]` and cross-reference
+  T294 and T296, with the evidence: `grep -rn appendConfiguration lib/ tests/` returns only the
+  declaration, and `grep -rn pettycash_configuration_audit lib/` returns only the migration. (contradicts)
+
+### MEDIUM — two dead audit-writer paths, each of which would corrupt the actor role
+
+- [ ] T296 [MEDIUM] Remove `AuditWriterService::appendTransaction()` and
+  `appendConfiguration()`, or repair them, because both are dead code that is also wrong.
+  `ActorSnapshot::$role` is typed `string` (`lib/Domain/Shared/ActorSnapshot.php:9`), but
+  `appendTransaction()` line 79 and `appendConfiguration()` line 112 both evaluate `$actor->role->value`.
+  On PHP 8.5 that emits `Attempt to read property "value" on string` and evaluates to `null`, so either
+  method would persist a **null actor role** where FR-052 requires the actor's role at the time of the
+  event to be retained. All six production call sites use the `AuditWriter` port's `append()` and pass
+  `'actor_role' => '...'` as a string, so nothing currently takes the broken path — which is exactly why
+  this survived. The port declares only `append()`, so these two methods are outside the contract
+  everything else is written against, and deleting them is the smaller change; the alternative is to type
+  `ActorSnapshot::$role` as `Role` and let the callers pass the enum. Do not do both. (partial)
+
+### MEDIUM — the domain advertises an optionality the schema forbids
+
+- [ ] T297 [MEDIUM] Reconcile `command_id` nullability between the `AuditEvent` domain type and the
+  audit tables, because `AuditEvent::__construct()` types `$commandId` as `?string` while
+  `lib/Migration/Version010200Date20260920000000.php:47` declares `command_id` with no
+  `notnull => false`, making it NOT NULL. Every real insert must therefore supply one, so the domain's
+  nullable type describes a state the database rejects — and the first two runs of T138's retention
+  scenario failed on exactly that (`Column 'command_id' cannot be null`) before the scenario began
+  passing a real UUID. `data-model.md` lists `command_id` as "Correlation/idempotency reference", which
+  reads as optional, so the nullable domain type may be the intended design and the schema the error;
+  the same migration gives the two audit tables `entity_id(64)` and `subject`-shaped columns
+  non-nullable too, which T253 is already reconciling for the configuration table. Settle this together
+  with T253 rather than separately, and apply the answer to **both** audit tables — the transaction
+  table is the one with the live NOT NULL constraint today. (contradicts)
+
+### MEDIUM — recorded for awareness, deliberately not appended
+
+- T139 still cannot be written, and T294/T293 are the reason rather than the cure: T139 asserts that
+  transaction audit queries never return configuration events and vice versa, and today there are no
+  configuration events to leak, so the test would pass vacuously. It is tracked, and it becomes
+  meaningful only once T294 lands. No new task — appending one would duplicate T139.
+- `docs/audit-retention.md` described configuration audit as a working separate stream when T100 was
+  written. The document has been corrected to carry a per-stream state table and an `Open items` entry
+  saying that only the transaction table is written. Recorded here so the correction is traceable to
+  this finding rather than looking like an unexplained edit.
+- Psalm reports `AuditWriterService.php:79` and `:112` as `Expected type 'object'. Found 'string'`. That
+  is F3, and it is the only genuinely new static-analysis signal in this area; the surrounding 758
+  errors are the repository's pre-existing baseline.

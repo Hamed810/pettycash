@@ -10,6 +10,7 @@ use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Application\Port\UserDirectory;
 use OCA\PettyCash\Domain\Configuration\ExpenseType;
 use OCA\PettyCash\Domain\Configuration\Repository\ExpenseTypeRepository;
+use OCA\PettyCash\Domain\Shared\Uuid;
 use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\IDBConnection;
 
@@ -85,8 +86,16 @@ final class DbExpenseTypeRepository implements ExpenseTypeRepository
                 ->andWhere($qb->expr()->eq('lock_version', $qb->createNamedParameter($existing->lockVersion)))
                 ->executeStatement();
         } else {
+            // `public_id` is NOT NULL with no default, and nothing upstream mints one: an expense type
+            // is keyed by its title and the surrogate `id` is assigned by the database. This insert
+            // did not supply the column at all, so every write failed on the constraint. No test
+            // noticed, because all 13 repository doubles accept the aggregate as it stands. The
+            // repository mints it here, which is the contract `mapRow()` already reads back.
+            $publicId = $expenseType->publicId ?? (string) Uuid::random();
+
             $qb->insert('pettycash_expense_types')
                 ->values([
+                    'public_id' => $qb->createNamedParameter($publicId),
                     'title' => $qb->createNamedParameter($expenseType->title),
                     'description' => $qb->createNamedParameter($expenseType->description),
                     'evidence_required' => $qb->createNamedParameter($expenseType->evidenceRequired, IQueryBuilder::PARAM_BOOL),
@@ -98,6 +107,9 @@ final class DbExpenseTypeRepository implements ExpenseTypeRepository
                     'lock_version' => $qb->createNamedParameter(0),
                 ])
                 ->executeStatement();
+
+            $expenseType->publicId = $publicId;
+            $expenseType->id = (int) $qb->getLastInsertId();
         }
     }
 

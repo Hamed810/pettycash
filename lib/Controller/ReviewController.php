@@ -6,15 +6,15 @@ namespace OCA\PettyCash\Controller;
 
 use InvalidArgumentException;
 use LogicException;
+use OCA\PettyCash\Application\Account\AccountPayloadFormatter;
+use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Application\Workflow\DecisionOutcome;
 use OCA\PettyCash\Application\Workflow\FinanceQueue;
 use OCA\PettyCash\Application\Workflow\FinanceSettlementService;
 use OCA\PettyCash\Application\Workflow\ManagementReviewService;
-use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Domain\Workflow\Decision;
 use OCA\PettyCash\Domain\Workflow\Repository\WorkflowDecisionRepository;
 use OCA\PettyCash\Domain\Workflow\WorkflowStage;
-use OCA\PettyCash\Infrastructure\Http\AccountPayloadFormatter;
 use OCA\PettyCash\Infrastructure\Http\OcsErrorMapper;
 use OCA\PettyCash\Infrastructure\Http\TransactionPayloadFormatter;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
@@ -264,8 +264,8 @@ class ReviewController extends OCSController
 
         if ($outcome->hasAccountMutation()) {
             $result['accountMutation'] = $this->accountFormatter->mutation(
-                $outcome->movement,
-                $outcome->account
+                $outcome->account,
+                $outcome->movement
             );
         }
 
