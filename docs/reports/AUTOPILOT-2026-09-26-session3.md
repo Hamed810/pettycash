@@ -1,16 +1,16 @@
 # Autopilot run — 2026-09-26 session 3
 
 **Feature**: PettyCash V1 Core Workflow (`specs/001-pettycash-v1-core`)
-**Status**: 5 implementation passes + 1 early convergence
-**Implementation passes executed**: 5 of 50
+**Status**: 6 implementation passes + 1 early convergence — stopped on maintainer input
+**Implementation passes executed**: 6 of 50
 **Convergence passes executed**: 2 (the initial one in session 2, plus an early one here)
 **Predecessors**: `docs/reports/AUTOPILOT-2026-09-26.md` (passes 1–3), `AUTOPILOT-2026-09-26-session2.md` (passes 1–2)
 
 ## Controller state
 
 ```text
-implementation_total = 5
-implementation_since_convergence = 0
+implementation_total = 6
+implementation_since_convergence = 1
 last_convergence_outcome = tasks_appended
 ```
 
@@ -103,8 +103,8 @@ conclusion — a third currency was the fix.
 
 | Gate | Session 2 end | After pass 3 (T057) | After pass 4 (T063) |
 |---|---|---|---|
-| `scripts/dev/phpunit` | 234 / 1170 / 1 failure (T275) | 255 / 1367 / 1 failure | **270 / 1438 / 1 failure (T275)** |
-| `FinanceReviewControllerTest.php` | absent | 21 / 196 | 21 / 196 |
+| `scripts/dev/phpunit` | 234 / 1170 / 1 failure (T275) | 255 / 1367 / 1 failure | **272 / 1447 / 1 failure (T275)** |
+| `FinanceReviewControllerTest.php` | absent | 21 / 196 | **23 / 205** |
 | `AccountWriteControllerTest.php` | absent | — | 15 / 71 |
 | `npx vitest run` | 214 / 214 | 214 / 214 | 214 / 214 |
 | `npm run typecheck` / `lint` | clean | clean | clean |
@@ -115,7 +115,7 @@ isolation against code neither pass touched.
 
 ## Verification discipline
 
-Fourteen mutations across the three passes, each applied, **verified to have applied before its result was
+Sixteen mutations across the four passes, each applied, **verified to have applied before its result was
 read**, run, and reverted. Three survived and are recorded as gaps rather than papered over: the FR-015
 gate (T291), and the two mutually redundant duplicate-account guards in T063, where removing either
 alone leaves the 409 intact and only removing both breaks it.
@@ -158,9 +158,41 @@ attempted test file was deleted rather than left failing or weakened.
 **T293**: `T184` marked complete with its evidence attributed to `docs/reports/T056.md` and an explicit
 note that it is a bookkeeping correction, not new test evidence.
 
+### Pass 6 — T290, complete
+
+The replayed finance decision now reports the account effect its first attempt caused. The stored
+command result names the movement it wrote; a replay reads it back through `findByCommandId()` (no new
+port method — the movement's `command_id` *is* the command id) and follows the account from the
+movement's own public id. The stored result is still consulted, so a replayed **reject** reports no
+account effect rather than attaching whichever consumption shares the command id.
+
+**The fix was in the routing, not the storage, and the first attempt proved it.** `ReviewController`
+chose the service from the transaction's *current* stage, which the first attempt has already advanced,
+so a replayed finance decision went to `ManagementReviewService` — which has no account in it and so
+could not reconstruct what its first attempt caused. The controller now routes on the stage the
+**command** was issued against. One root-cause fix instead of teaching two services to recover each
+other's state. Removing `movement_id` from the stored result fails 1 test; restoring current-stage
+routing fails 1.
+
+## Why the run stopped here
+
+Not a failure and not a context cutoff: **every remaining open task needs a decision that is not the
+agent's to make**, and none of them is small enough to start on a stated assumption.
+
+| Task | Needs |
+|---|---|
+| **T060** | A definition of "reconciliation". `AccountRepository` has no reconciliation method and neither adapter has one. |
+| **T291**, **T171** | A second acting identity. The single `.env.testing` credential is an app password: it authenticates OCS and is never accepted by the login form, so no HTTP request in the contract suite can be a *refusal*. |
+| **T087**, **T096**, **T106–T112** | Each is a multi-endpoint admin or reporting surface whose validation rules and FR-017 audit semantics the artifacts do not settle. Starting them on a guess is what produced the original `TransactionPayloadFormatter` divergence. |
+| **T235** | `QueueController` and `ReturnsController` are unrouted. Routing them invents endpoints the contract does not declare; removing them deletes code. Either is a maintainer's call. |
+| **T065**, **T236**, **T237**, **T134**, **T273** | Browser credentials, or repository-wide reconciliation in nature. |
+
+T235 is the sharpest example of why assumption is the wrong move here: the two controllers are dead
+code, and the cheap-looking fix — adding routes for them — would create endpoints no contract declares.
+
 ## Next pass
 
-The run now needs a maintainer decision before it can go further. **T060**'s reconciliation semantics is
+Requires maintainer input before another implementation pass is safe. **T060**'s reconciliation semantics is
 the one blocking a task inside US3, and a second acting identity for the harness (**T171**/**T291**) is
 the one blocking the E2E chain and the actor gates. The configuration, evidence-link, and report/export
 surfaces (T087, T096, T106–T112) are buildable but each carries a design question the artifacts do not
