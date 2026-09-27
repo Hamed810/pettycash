@@ -3581,7 +3581,7 @@ Four findings from the `/speckit.analyze` pass and the T112 export work. A1/A2/A
 they are already recorded on T112, T299 and T253/T294, and convergence does not duplicate tasks that
 exist. These four are uncovered.
 
-- [ ] T302 Honour the group-export selection that `POST /exports` currently accepts and discards, per
+- [x] T302 Honour the group-export selection that `POST /exports` currently accepts and discards, per
   FR-068 and `ExportRequest`, and cover it with a test that fails when the selection is ignored.
   `ExportController::create()` calls `ExportService::generate($scope, $resource, $fileFormat, [])` with a
   literal empty row set, so `ids` and `filters` are read by nobody and a caller that selects two sheets
@@ -3636,3 +3636,36 @@ exist. These four are uncovered.
   This is the second time in two passes that a requirement turned out to be enforced but unrecorded.
   FR-068 (T302) was the first. The pattern suggests the traceability gap is systematic across this
   spec rather than incidental, which is worth a convergence finding of its own.
+
+  **Delivered.** `ExportController` now resolves `ExportRequest.ids` and `.filters` and the
+  established invariant is that a selection is **honoured or refused, never accepted and discarded**.
+  For `sheet`/`sheets`/`transactions` the selection becomes real, scope-checked rows. For `report`,
+  `audit` and `evidence`, which do not resolve a selection yet, a request carrying one is refused with a
+  reason naming what *is* supported, rather than answered with an artifact that omits it. A sheets or
+  transactions export with **no** selection is also refused: an empty artifact answers "you have no
+  sheets" when the truth is "I was not asked which sheets".
+
+  Two ordering properties were established deliberately:
+  - **Servability before selection.** `ExportService::authorization()` is consulted first, so a `pdf`
+    request is refused with the T109 font reason rather than with a selection complaint that hides it.
+  - **A missing id and a foreign id are the same refusal**, matching `AccountController`'s treatment of a
+    foreign ledger, so the endpoint cannot be used to confirm the existence of records the caller may not
+    see (FR-003).
+
+  Added `Application/Reporting/UnsupportedSelection` so "cannot satisfy this selection" is distinguishable
+  from "malformed request", both still answering 422 per the contract.
+
+  **Verified**: 19 tests / 314 assertions green, including five new FR-068 cases. Proven by mutation:
+  restoring `$rows = []` -- the original defect -- fails
+  `testAnExportHonoursTheSelectedIds` (`rowCount` 0, not 1) and turns both refusal tests from 422 into
+  200. Full suite **623 tests, 2719 assertions, 1 pre-existing T275 failure**.
+
+  Two T112-era tests were updated rather than worked around: they exported `sheets` with no selection
+  and asserted an empty-but-valid artifact, which T302 deliberately makes a refusal. They now pass the
+  selection they always meant to pass.
+
+  **Known limitation, stated**: `report`, `audit` and `evidence` selections are refused rather than
+  implemented. FR-068's "selected sheets, date ranges, cost center transactions" is honoured for sheets
+  and transactions by id; **date-range filtering is not implemented** and a `filters` object is parsed
+  but not applied, so a request that supplies only `filters` and no `ids` is refused rather than silently
+  unfiltered. That remainder is unowned by any task and needs one.

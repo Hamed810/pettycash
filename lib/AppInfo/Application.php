@@ -412,6 +412,8 @@ final class Application extends App implements IBootstrap
                 $c->query(CurrentUser::class),
                 $c->query(DashboardQuery::class),
                 $c->query(ExportService::class),
+                $c->query(ExpenseSheetRepository::class),
+                $c->query(ExpenseTransactionRepository::class),
                 $c->query(OcsErrorMapper::class)
             );
         });

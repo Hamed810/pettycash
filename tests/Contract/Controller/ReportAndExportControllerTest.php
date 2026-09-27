@@ -26,6 +26,9 @@ use Psr\Http\Message\ResponseInterface;
  */
 final class ReportAndExportControllerTest extends TestCase
 {
+    /** The contract fixture's sheet, which the acting user owns. */
+    private const FIXTURE_SHEET_ID = '55555555-5555-4555-8555-555555555555';
+
     private Client $client;
 
     protected function setUp(): void
@@ -125,7 +128,13 @@ final class ReportAndExportControllerTest extends TestCase
 
     public function testAConformingExportRequestAnswersJson(): void
     {
-        $response = $this->post('/exports', ['resource' => 'sheets', 'fileFormat' => 'csv'], $this->commandId());
+        $response = $this->post('/exports', [
+            'resource' => 'sheets',
+            'fileFormat' => 'csv',
+            // Selects, so the request is servable and this test measures the envelope. The selection
+            // behaviour itself is T302's subject and has its own tests below.
+            'ids' => [self::FIXTURE_SHEET_ID],
+        ], $this->commandId());
 
         $this->assertEquals(200, $response['status'], json_encode($response['data']));
         // The regression this file is for: with a field named `format`, this envelope was XML.
@@ -134,7 +143,14 @@ final class ReportAndExportControllerTest extends TestCase
 
     public function testACsvExportAnswersTheContractsResultShape(): void
     {
-        $data = $this->post('/exports', ['resource' => 'sheets', 'fileFormat' => 'csv'], $this->commandId())['data'];
+        $data = $this->post('/exports', [
+            'resource' => 'sheets',
+            'fileFormat' => 'csv',
+            // Added by T302: an export with no selection is refused, because an empty
+            // artifact answers "you have no sheets" when it should say "I was not asked
+            // which sheets".
+            'ids' => [self::FIXTURE_SHEET_ID],
+        ], $this->commandId())['data'];
 
         foreach (['artifactName', 'mediaType', 'format', 'byteSize', 'rowCount', 'data'] as $key) {
             $this->assertArrayHasKey($key, $data, "ExportResult requires '{$key}'");
@@ -152,7 +168,14 @@ final class ReportAndExportControllerTest extends TestCase
 
     public function testAnExportRemovesItsArtifactOnceStreamed(): void
     {
-        $data = $this->post('/exports', ['resource' => 'sheets', 'fileFormat' => 'csv'], $this->commandId())['data'];
+        $data = $this->post('/exports', [
+            'resource' => 'sheets',
+            'fileFormat' => 'csv',
+            // Added by T302: an export with no selection is refused, because an empty
+            // artifact answers "you have no sheets" when it should say "I was not asked
+            // which sheets".
+            'ids' => [self::FIXTURE_SHEET_ID],
+        ], $this->commandId())['data'];
 
         // "Generated artifacts ... are removed after streaming." Asserted, not assumed: a controller
         // that streamed and forgot would leave every export in transient storage.
@@ -195,6 +218,91 @@ final class ReportAndExportControllerTest extends TestCase
 
         $this->assertEquals(422, $response['status']);
         $this->assertStringContainsString('T109', $response['message']);
+    }
+
+    // ===== FR-068: the selection is honoured, or refused =====
+
+    /**
+     * The regression T302 records. `ExportRequest.ids` and `.filters` were declared, documented, and
+     * read by nobody: the controller generated from a literal empty row set, so this request used to
+     * answer `200` with a correctly-shaped artifact containing none of the sheet it named. Asserted on
+     * `rowCount` *and* on the CSV body, because a correct count with the wrong rows would still be a
+     * silently wrong answer.
+     */
+    public function testAnExportHonoursTheSelectedIds(): void
+    {
+        $response = $this->post('/exports', [
+            'resource' => 'sheets',
+            'fileFormat' => 'csv',
+            'ids' => [self::FIXTURE_SHEET_ID],
+        ], $this->commandId());
+
+        $this->assertEquals(200, $response['status'], json_encode($response['data']));
+        $this->assertSame(1, $response['data']['rowCount'], 'exactly the selected sheet must be exported');
+
+        $csv = (string) base64_decode((string) $response['data']['data'], true);
+        $this->assertStringContainsString(self::FIXTURE_SHEET_ID, $csv, 'the artifact must contain the selected sheet');
+    }
+
+    public function testExportingEverySheetIsRefusedRatherThanAnsweredEmpty(): void
+    {
+        $response = $this->post('/exports', ['resource' => 'sheets', 'fileFormat' => 'csv'], $this->commandId());
+
+        // The important half: a 422 with a reason, not a 200 whose `rowCount: 0` reads as a measured
+        // result. An empty artifact would be indistinguishable from "you have no sheets".
+        $this->assertEquals(422, $response['status']);
+        $this->assertStringContainsString('selection', $response['message']);
+    }
+
+    /**
+     * A missing id and a foreign id must be indistinguishable, or this endpoint confirms the
+     * existence of records the caller may not see (FR-003).
+     */
+    public function testAnUnknownIdIsRefused(): void
+    {
+        $unknown = $this->post('/exports', [
+            'resource' => 'sheets',
+            'fileFormat' => 'csv',
+            'ids' => ['11111111-1111-4111-8111-111111111111'],
+        ], $this->commandId());
+
+        $foreign = $this->post('/exports', [
+            'resource' => 'sheets',
+            'fileFormat' => 'csv',
+            'ids' => ['99999999-9999-4999-8999-999999999999'],
+        ], $this->commandId());
+
+        $this->assertEquals(422, $unknown['status']);
+        $this->assertEquals(422, $foreign['status']);
+    }
+
+    /**
+     * `report`, `audit` and `evidence` do not resolve a selection yet. The point of T302 is that this
+     * is now visible as a refusal instead of an artifact that quietly omits the selection.
+     */
+    public function testASelectionForAnUnwiredResourceIsRefusedWithAReason(): void
+    {
+        $response = $this->post('/exports', [
+            'resource' => 'report',
+            'fileFormat' => 'csv',
+            'ids' => [self::FIXTURE_SHEET_ID],
+        ], $this->commandId());
+
+        $this->assertEquals(422, $response['status']);
+        $this->assertStringContainsString('not supported yet', $response['message']);
+        $this->assertStringContainsString('sheet', $response['message'], 'the reason should name what does work');
+    }
+
+    public function testANonStringIdIsRefused(): void
+    {
+        $response = $this->post('/exports', [
+            'resource' => 'sheets',
+            'fileFormat' => 'csv',
+            'ids' => [42],
+        ], $this->commandId());
+
+        $this->assertEquals(422, $response['status']);
+        $this->assertStringContainsString('UUID', $response['message']);
     }
 
     // ===== helpers =====
