@@ -511,6 +511,60 @@ final class RepositoryRoundTripTest extends TestCase
     /**
      * @return array<string, mixed>
      */
+    /**
+     * The runner's fingerprint sweep must be able to reach a sheet.
+     *
+     * Seven sheets titled "Round Trip Sheet" survived from before that sweep existed, and because the
+     * sweep had no `pettycash_sheets` predicate they were unreachable forever: the by-id sweep needs a
+     * prior `$track`, and a row leaked *between* its insert and its registration never gets one. The
+     * currencies they pointed at *were* swept by name, which is what turned a harmless leak into seven
+     * dangling `sheets.currency_id` values -- and those made `GET /reports/transactions`,
+     * `/reports/process` and `/reports/evidence` return no data at all.
+     *
+     * Asserted against the runner's source because the predicate list is the thing that was wrong, and
+     * because the alternative -- running a scenario and then inspecting the database for leftovers --
+     * depends on test ordering that PHPUnit does not guarantee. The order is asserted too: sheets must
+     * be swept before the currencies they reference, or the sweep re-creates the dangling row it exists
+     * to remove.
+     */
+    public function testTheFingerprintSweepCanReachALeakedSheet(): void
+    {
+        $runner = file_get_contents(__DIR__ . '/roundtrip-runner.php');
+        $this->assertIsString($runner, 'the runner must be readable');
+
+        $this->assertMatchesRegularExpression(
+            "/\['pettycash_sheets',\s*'title',\s*'eq',\s*'Round Trip Sheet'\]/",
+            $runner,
+            'the fingerprint sweep must match sheets by title, or a leaked sheet is unreachable'
+        );
+
+        $sheetAt = strpos($runner, "['pettycash_sheets', 'title', 'eq', 'Round Trip Sheet']");
+        $currencyAt = strpos($runner, "['pettycash_currencies', 'name', 'eq', 'Round Trip Currency']");
+        $this->assertIsInt($sheetAt);
+        $this->assertIsInt($currencyAt);
+        $this->assertLessThan(
+            $currencyAt,
+            $sheetAt,
+            'sheets must be swept before the currencies they reference'
+        );
+    }
+
+    /**
+     * The companion diagnostic had the identical blind spot, so it would have reported a clean
+     * database while the seven broken sheets sat in it.
+     */
+    public function testTheLeftoversDiagnosticCanSeeALeakedSheet(): void
+    {
+        $helper = file_get_contents(__DIR__ . '/roundtrip-leftovers.php');
+        $this->assertIsString($helper);
+
+        $this->assertMatchesRegularExpression(
+            "/\['pettycash_sheets'/",
+            $helper,
+            'the leftover diagnostic must count sheets, or a leak is invisible'
+        );
+    }
+
     private function report(string $scenario): array
     {
         if (isset(self::$reports[$scenario])) {

@@ -319,10 +319,23 @@ try {
             ->executeStatement();
     }
 
+    // Order is load-bearing, and it was wrong for sheets.
+    //
+    // `pettycash_sheets` is swept here, by title, because it was the one table this runner creates that
+    // the fingerprint sweep could not reach: the by-id sweep needs a prior `$track`, and a sheet leaked
+    // *between* its insert and its registration is therefore unreachable forever. Seven such sheets
+    // ("Round Trip Sheet", 2026-09-27 03:38-03:41) survived from before this sweep existed, and the
+    // currency rows they referenced *were* swept by name -- which is what turned a harmless leak into
+    // seven sheets with a dangling `currency_id`, and that dangling row is what made
+    // `GET /reports/transactions`, `/reports/process` and `/reports/evidence` return no data at all.
+    //
+    // So sheets must be swept BEFORE the currencies they point at. Deleting the currency first would
+    // re-create the dangling reference this entry exists to clean up.
     foreach ([
         ['pettycash_evidence', 'appdata_key', 'like', 'roundtrip/%'],
         ['pettycash_cost_centers', 'name', 'eq', 'Round Trip Cost Center'],
         ['pettycash_expense_types', 'title', 'like', 'Round Trip Expense %'],
+        ['pettycash_sheets', 'title', 'eq', 'Round Trip Sheet'],
         ['pettycash_currencies', 'name', 'eq', 'Round Trip Currency'],
         ['pettycash_currencies', 'name', 'eq', 'Round Trip Account Currency'],
         ['pettycash_transaction_audit', 'explanation', 'like', 'Retention probe %'],

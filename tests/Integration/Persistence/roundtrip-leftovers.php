@@ -38,6 +38,14 @@ $predicates = [
     ['pettycash_expense_types', static function ($qb) {
         return $qb->expr()->like('title', $qb->createNamedParameter('Round Trip Expense %'));
     }],
+    // Before the currencies, for the same reason the runner's own sweep lists it there: a sheet whose
+    // currency has been swept is a dangling `sheets.currency_id`, and that is what made
+    // `GET /reports/transactions`, `/reports/process` and `/reports/evidence` return no data. This
+    // diagnostic had the same blind spot as the sweep -- it counted cost centres, expense types and
+    // currencies, and would have reported a clean database while seven broken sheets sat in it.
+    ['pettycash_sheets', static function ($qb) {
+        return $qb->expr()->eq('title', $qb->createNamedParameter('Round Trip Sheet'));
+    }],
     ['pettycash_currencies', static function ($qb) {
         return $qb->expr()->eq('name', $qb->createNamedParameter('Round Trip Currency'));
     }],

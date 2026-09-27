@@ -3856,3 +3856,46 @@ cause, grouped so the masking defect and the masked defect are both owned.
 
   T029 (the masking 403) is fixed, so the remaining fault is now visible as a logged 500 rather than a
   permission refusal.
+
+  **Harness half delivered; the product half stays open, so this task remains `[ ]`.**
+
+  *Root cause, determined from evidence before patching, as required.* The earlier hypothesis --
+  sheet-less transactions -- was **wrong**: `pettycash_transactions WHERE sheet_id IS NULL` returns 0
+  rows, and so does the orphan-revision probe. The cause is in the runner's cleanup:
+
+  1. `roundtrip-runner.php` creates one sheet (`:671`), tracks it by surrogate id (`:679`), and
+     `DbExpenseSheetRepository::save()` does populate `dbId` (`:121`), so the by-id sweep should have
+     caught it. It did not, because the seven survivors are timestamped 2026-09-27 03:38-03:41 --
+     hours before this session, from runs that predate the fingerprint sweep the file's own header
+     describes adding "precisely" after 32 rows leaked.
+  2. The fingerprint sweep had **no `pettycash_sheets` predicate at all**, so a sheet leaked between its
+     insert and its registration was unreachable forever: the by-id sweep needs a prior `$track`, and
+     the fingerprint sweep had no entry to fall back to.
+  3. The sweep *did* delete `pettycash_currencies` by name. That is what converted a harmless leak into
+     seven sheets with a dangling `currency_id` -- and that dangling row is what destroyed three report
+     subjects. **The sweep order created the fault it was meant to prevent.**
+
+  *Fixes.* The fingerprint sweep now matches `['pettycash_sheets', 'title', 'eq', 'Round Trip Sheet']`,
+  positioned **before** the currency predicates, because sweeping a currency first would re-create the
+  dangling reference the entry exists to remove. `roundtrip-leftovers.php` gained the same predicate --
+  it had the identical blind spot and would have reported a clean database while seven broken sheets sat
+  in it. The seven orphans and their dependents were then removed through that predicate: 7 sheets, 4
+  transactions, 8 revisions, 3 audit rows, leaving 0 dangling sheets. The audit count for the acting user
+  fell 4 -> 1, which is the 3 audit rows that belonged to the deleted transactions.
+
+  *Verified on the live endpoint.* All seven report subjects now answer `200`: `transactions` total 4,
+  `process` total 6 (one row per workflow stage), `evidence` total 0, `sheets` total 100, `accounts` 2,
+  `cost-centers` 9, `audit` 1. Before the sweep, `transactions`, `process` and `evidence` answered 403
+  with an internal message.
+
+  *Guards, proven by mutation.* Two tests in `RepositoryRoundTripTest` assert the sweep can reach a
+  sheet and that it is ordered before the currencies, and a third asserts the leftover diagnostic can
+  see one. Removing the predicate fails them. Full suite **630 tests, 2777 assertions, 1 pre-existing
+  T275 failure**.
+
+  *What is still open, and why it is not bundled here.* A single record whose currency cannot be
+  resolved still destroys three whole reports. With the trigger gone that is latent rather than active,
+  but a genuinely dangling `sheets.currency_id` in production would reproduce it, and the honest answer
+  is to exclude the unreadable row and report how many were excluded rather than return nothing -- the
+  same shape as T307. That is a change to how a report answers, not a cleanup, so it is deliberately
+  left as the remaining half of this task rather than folded into a cleanup commit.
