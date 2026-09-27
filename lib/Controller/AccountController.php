@@ -4,9 +4,13 @@ declare(strict_types=1);
 
 namespace OCA\PettyCash\Controller;
 
+use OCA\PettyCash\Application\Account\AccountAlreadyExists;
 use OCA\PettyCash\Application\Account\AccountService;
+use OCA\PettyCash\Application\Account\StaleAccountVersion;
+use OCA\PettyCash\Application\Account\UnknownAccount;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Infrastructure\Http\OcsErrorMapper;
+use OCP\AppFramework\Http;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
 use OCP\AppFramework\Http\DataResponse;
 use OCP\AppFramework\OCSController;
@@ -53,6 +57,146 @@ class AccountController extends OCSController
             );
         } catch (\Throwable $e) {
             return $this->ocsErrorMapper->map($e, $this->request->getHeader('X-PettyCash-Command-ID'));
+        }
+    }
+
+    /**
+     * Open a petty-cash account.
+     *
+     * `userId` is the one identifier in this controller taken from a request rather than from the
+     * trusted session, so the service refuses a `userId` that is neither the caller nor an
+     * administrator (FR-013, FR-014). The answer is 201 with the contract's `Account`; a pair that
+     * already has an active account in that currency is a 409, and an unsupported or inactive
+     * currency a 422 — a refusal that must not be a bare 500, because the caller's next action
+     * differs in each case.
+     */
+    #[NoAdminRequired]
+    public function create(
+        string $userId,
+        string $currency,
+        ?string $commandId = null
+    ): DataResponse {
+        $commandId ??= $this->request->getHeader('X-PettyCash-Command-ID');
+
+        try {
+            $uid = $this->currentUser->uid();
+            if ($uid === '') {
+                return $this->ocsErrorMapper->forbidden('No authenticated user in session');
+            }
+
+            $account = $this->accountService->createFor($uid, $userId, $currency);
+
+            return new DataResponse($account, Http::STATUS_CREATED);
+        } catch (\InvalidArgumentException $e) {
+            return $this->ocsErrorMapper->validation(
+                $e->getMessage(),
+                $commandId,
+                ['currency' => [$e->getMessage()]]
+            );
+        } catch (AccountAlreadyExists $e) {
+            return new DataResponse(
+                ['error' => ['code' => 'ACCOUNT_ALREADY_EXISTS', 'message' => $e->getMessage()]],
+                Http::STATUS_CONFLICT
+            );
+        } catch (\LogicException $e) {
+            return $this->ocsErrorMapper->forbidden($e->getMessage(), $commandId);
+        } catch (\Throwable $e) {
+            return $this->ocsErrorMapper->map($e, $commandId);
+        }
+    }
+
+    /**
+     * FR-015: fund an account, answering with the charge movement and the account it left behind.
+     *
+     * `expectedVersion` is required and is not optional-with-a-default. Funding is the one write two
+     * finance officers make at the same moment, and a charge applied to a balance that has since
+     * moved is a lost update: money that is in the ledger and not in the account. A missing version
+     * is a 400 rather than a silent "whatever it is now".
+     */
+    #[NoAdminRequired]
+    public function charge(
+        string $accountId,
+        int $amountMinor,
+        string $description,
+        string $occurredAt,
+        int $expectedVersion,
+        ?string $commandId = null
+    ): DataResponse {
+        $commandId ??= $this->request->getHeader('X-PettyCash-Command-ID');
+
+        if ($commandId === null || trim($commandId) === '') {
+            return $this->ocsErrorMapper->badRequest(
+                'Required fields are missing',
+                null,
+                ['commandId' => ['commandId is required']]
+            );
+        }
+
+        try {
+            $uid = $this->currentUser->uid();
+            if ($uid === '') {
+                return $this->ocsErrorMapper->forbidden('No authenticated user in session');
+            }
+
+            // The request's own shape is validated here, where the field names are still known, and
+            // the service keeps its own checks as a defence. `DateTimeImmutable` throws a plain
+            // `\Exception`, which no domain type distinguishes, so an unparseable date is turned into
+            // a field error here rather than being allowed to reach the generic mapping.
+            try {
+                $moment = new \DateTimeImmutable($occurredAt);
+            } catch (\Exception $e) {
+                return $this->ocsErrorMapper->validation(
+                    'occurredAt is not a valid date-time',
+                    $commandId,
+                    ['occurredAt' => ['occurredAt must be an ISO 8601 date-time']]
+                );
+            }
+
+            $fieldErrors = [];
+            if ($amountMinor < 1) {
+                $fieldErrors['amountMinor'] = ['amountMinor must be at least 1'];
+            }
+            if (trim($description) === '') {
+                $fieldErrors['description'] = ['description is required'];
+            } elseif (strlen($description) > 1000) {
+                $fieldErrors['description'] = ['description must be at most 1000 characters'];
+            }
+            if ($fieldErrors !== []) {
+                return $this->ocsErrorMapper->validation('Required fields are missing', $commandId, $fieldErrors);
+            }
+
+            return new DataResponse(
+                $this->accountService->charge(
+                    $uid,
+                    $accountId,
+                    $amountMinor,
+                    $description,
+                    $moment,
+                    $expectedVersion,
+                    $commandId
+                ),
+                Http::STATUS_CREATED
+            );
+        } catch (UnknownAccount $e) {
+            return $this->ocsErrorMapper->notFound($e->getMessage(), $commandId);
+        } catch (StaleAccountVersion $e) {
+            return new DataResponse(
+                ['error' => ['code' => 'ACCOUNT_VERSION_CONFLICT', 'message' => $e->getMessage()]],
+                Http::STATUS_CONFLICT
+            );
+        } catch (\InvalidArgumentException $e) {
+            // Checked before `\LogicException`, which is its parent: an invalid field is a 422 and a
+            // refused actor is a 403, and the reverse of this order silently turns every validation
+            // failure into a refusal.
+            return $this->ocsErrorMapper->validation(
+                $e->getMessage(),
+                $commandId,
+                ['amountMinor' => [$e->getMessage()]]
+            );
+        } catch (\LogicException $e) {
+            return $this->ocsErrorMapper->forbidden($e->getMessage(), $commandId);
+        } catch (\Throwable $e) {
+            return $this->ocsErrorMapper->map($e, $commandId);
         }
     }
 

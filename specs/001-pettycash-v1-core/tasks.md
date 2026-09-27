@@ -377,7 +377,55 @@ movements, balances, final states, and rollback.
   and untouched. `npx vitest run` is 214/214 and `npm run check` exits 0. Report:
   `docs/reports/T061.md`.
 - [x] T062 [US3] Implement shared finance queue queries and decision restrictions without cost-center scoping in `lib/Application/Workflow/FinanceQueue.php`
-- [ ] T063 [US3] Add finance queue, finance decision, account summary, and movement OCS routes/controllers in `appinfo/routes.php`, `lib/Controller/ReviewController.php`, and `lib/Controller/AccountController.php` (**reopened by the US3 slice** — `appinfo/routes.php` declares four account routes and `AccountController` implemented one, so `account#create`, `account#charge` and `account#movements` all resolved to a method that did not exist and answered **HTTP 500**. `movements` is implemented and covered here; **`create` and `charge` are still missing and still 500**)
+- [X] T063 [US3] Add finance queue, finance decision, account summary, and movement OCS routes/controllers in `appinfo/routes.php`, `lib/Controller/ReviewController.php`, and `lib/Controller/AccountController.php` (**reopened by the US3 slice** — `appinfo/routes.php` declares four account routes and `AccountController` implemented one, so `account#create`, `account#charge` and `account#movements` all resolved to a method that did not exist and answered **HTTP 500**. `movements` is implemented and covered here; **`create` and `charge` are still missing and still 500**) (complete — all four declared account routes are implemented and covered; `docs/reports/T063.md`)
+
+  **`create` and `charge` are built and tested, and a declared route no longer answers 500.** 15 contract
+  tests in `tests/Contract/Controller/AccountWriteControllerTest.php`, separate from the read tests
+  because an account is money and both of these write it. The charge tests prepare the `finance`
+  fixture state because that is the only state granting the acting user the `FINANCE` role FR-015
+  requires, and preparing it explicitly is what makes the assertions independent of suite order.
+
+  **Two authorization rules, both taken from the spec rather than invented.** FR-015 says **finance**
+  charges an account, so the charge requires the `FINANCE` role (an administrator is admitted too,
+  since FR-013 puts account funding with administrators and the spec's journey has one person doing
+  both). FR-013/FR-014 put account opening with a user for themselves and an administrator for others,
+  so `create` admits the caller's own `userId` or an administrator's, and refuses anybody else's —
+  which is the one identifier in this controller taken from the request rather than the session.
+  **Ownership is deliberately *not* the rule for a charge**: the first draft of that test asserted it,
+  and FR-015 says finance charges "a **selected user** petty-cash account", so charging somebody else's
+  account is the normal case. The corrected test asserts the 404 for an account that is not there.
+
+  **A charge is a ledger entry, not a number.** The movement carries the caller's `description` and
+  `occurredAt` — `AccountMovement` is `readonly`, so both are now constructor arguments rather than
+  assignments after the fact, and a charge entered from a handover note is dated to the handover. The
+  command id runs through the same `IdempotencyService` the decision path uses, and the **stored
+  response** is returned for a replay, so a retried charge neither double-pays nor loses the movement
+  it already wrote. `expectedVersion` is required and checked: funding is the one write two finance
+  officers make at once, and a charge against a balance that has since moved is a lost update.
+
+  **The catch order in the controller was the bug, not a detail.** `InvalidArgumentException` extends
+  `LogicException`, so a single `catch (\Exception)` for a bad `occurredAt` silently turned the stale
+  version's 409 into a 422. The specific catches come first, and the request's own shape is validated
+  in the controller where the field names are still known.
+
+  **Fixture work this needed.** A third currency: the acting user already held an IRR and a USD
+  account, and FR-014 allows one per currency, so **every** create collided with the seed and the
+  endpoint could only ever be observed in its refusal — which is how a 409 was the first thing these
+  tests saw. Accounts the suites open are now removed on every seed, and the movement cleanup covers
+  every account the user holds rather than only the primary one, since a charge against the USD
+  account leaves its movement behind just as a settlement does.
+
+  **Mutations, and two that survived — which is the useful part.** Removing the version check fails 1;
+  removing the movement save fails 2; forcing `occurredAt` to `now` fails 1. **Removing the
+  FR-015 finance gate fails nothing**, because the only fixture user of this suite holds `FINANCE` — the
+  rule is implemented and correct but unverified over HTTP, and is recorded as T291 rather than claimed.
+  **The duplicate-account 409 rests on one of two guards, not both**: removing the pre-check leaves the
+  answer intact (the unique-index catch produces the same 409), removing the catch leaves it intact (the
+  pre-check does), and only removing both breaks it. The pre-check is the clearer path and the catch is
+  the one that survives a concurrent race, so both stay, but neither is independently pinned and this
+  file does not pretend otherwise.
+
+  `scripts/dev/phpunit` is **270 tests / 1435 assertions / 1 failure**, the failure being T275 alone.
 - [x] T064 [P] [US3] Implement finance/account typed API services and stores in `src/services/reviewsApi.ts`, `src/services/accountsApi.ts`, `src/stores/reviews.ts`, and `src/stores/accounts.ts`
 - [ ] T065 [US3] Implement finance review, purchaser balance, and account movement views with explicit settled-versus-management labels in `src/views/reviews/FinanceReviewView.vue`, `src/views/accounts/AccountView.vue`, and `src/components/review/` (all elements visible without horizontal scroll at 390px viewport; WCAG AA contrast; ≥12pt Persian font per FR-071) (**partial** — the three views and `SettlementLabel.vue` are built and verified; the same three browser-measured clauses block the remainder that blocked `T053`, and are recorded in `docs/reports/US3-finance-slice.md`)
 - [ ] T066 [US3] Add shared-queue, restriction, negative-balance (explicit test: approved consumption exceeding account balance results in negative balance per FR-027), idempotency, concurrency, and forced-rollback Playwright/API journeys in `tests/E2E/finance-settlement.spec.ts` (verify p95 <3s, error rate <0.1%, zero data loss per FR-073)
@@ -2772,6 +2820,18 @@ because it materially undermines every future PHP verification in this repositor
   The stored result is written inside the same transaction as the settlement, so it cannot be
   enriched after the fact without a second write; the fix is for the settlement to return the movement
   and account through the idempotency payload it stores.
+
+### MEDIUM — the finance-only charge rule is implemented but unverified
+
+- [ ] T291 [MEDIUM] Cover the FR-015 actor gate for `POST /accounts/{id}/charges` with a test that can
+  actually fail, because T063 implemented the rule — only `FINANCE` or an administrator may charge — and
+  **removing it fails nothing**. The reason is the fixture: the contract user is a finance officer, and
+  the only state that grants the `FINANCE` role is `finance`, which the charge tests have to prepare
+  because the rule is real. A refusal is therefore unobservable over HTTP with one user, exactly as
+  T057 found for the finance queue. What is needed is a second acting identity that holds no
+  `FINANCE` role and an authenticated request as that user, which the current `.env.testing` single
+  credential cannot express — so this is a harness gap, not a product one, and it belongs with the
+  other multi-identity work rather than being asserted around.
 
 ### MEDIUM — recorded for awareness, deliberately not appended
 

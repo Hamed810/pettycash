@@ -10,6 +10,7 @@ use OCA\PettyCash\Domain\Account\Repository\AccountMovementRepository;
 use OCA\PettyCash\Domain\Account\Repository\AccountRepository;
 use OCA\PettyCash\Domain\Configuration\Currency;
 use OCA\PettyCash\Domain\Configuration\Repository\CurrencyRepository;
+use OCA\PettyCash\Domain\Configuration\Repository\RoleAssignmentRepository;
 use OCA\PettyCash\Domain\Shared\Uuid;
 use PHPUnit\Framework\TestCase;
 
@@ -43,8 +44,17 @@ final class AccountServiceTest extends TestCase
             : new \OCA\PettyCash\Tests\TestDoubles\InMemoryAccountMovementRepository();
         // The movement repository is a second constructor dependency because `listMovements()` is
         // the ledger read; passing only the account repository would make every test in this file die
-        // in `setUp()` rather than on a behaviour.
-        $this->service = new AccountService($this->accounts, $this->movements);
+        // in `setUp()` rather than on a behaviour. The four the writes need are passed as
+        // containers too, so the reads this file exercises are not standing on a stub that happens
+        // to satisfy a constructor.
+        $this->service = new AccountService(
+            $this->accounts,
+            $this->movements,
+            $this->container->query(CurrencyRepository::class),
+            $this->container->query(RoleAssignmentRepository::class),
+            $this->container->query(\OCA\PettyCash\Application\Command\IdempotencyService::class),
+            $this->container->query(\OCA\PettyCash\Application\Port\CurrentUser::class)
+        );
         $this->userUid = 'account-service-test-user';
         // minorUnit 3 is deliberately a scale no hardcoded currency table would guess, so a
         // regression to a built-in IRR/USD/EUR/GBP lookup is detected rather than tolerated.

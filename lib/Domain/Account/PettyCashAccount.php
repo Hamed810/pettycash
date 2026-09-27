@@ -41,8 +41,12 @@ final class PettyCashAccount
         return $this->currencyCode;
     }
 
-    public function charge(Money $amount, string $commandId): AccountMovement
-    {
+    public function charge(
+        Money $amount,
+        string $commandId,
+        string $description = 'Account charge',
+        ?DateTimeImmutable $occurredAt = null
+    ): AccountMovement {
         if (!$this->active) {
             throw new InvalidArgumentException('Cannot charge inactive account');
         }
@@ -52,9 +56,10 @@ final class PettyCashAccount
         $movement = AccountMovement::createCharge(
             $this->newMovementId(),
             $amount,
-            'Account charge',
+            $description,
             $this,
-            $commandId
+            $commandId,
+            $occurredAt
         );
         $this->balanceMinor = $movement->balanceAfter()->minorUnits();
         return $movement;

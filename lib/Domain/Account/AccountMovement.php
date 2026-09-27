@@ -75,7 +75,8 @@ final readonly class AccountMovement
         Money $amount,
         string $description,
         PettyCashAccount $account,
-        ?string $commandId = null
+        ?string $commandId = null,
+        ?DateTimeImmutable $occurredAt = null
     ): self {
         $commandId = $commandId ?? (string)Uuid::random();
         $balanceAfter = $account->balance()->add($amount);
@@ -88,7 +89,11 @@ final readonly class AccountMovement
             $description,
             $commandId,
             null,
-            new DateTimeImmutable('now', new DateTimeZone('UTC')),
+            // The moment the money was handed over, which `contracts/ocs-api.yaml` requires as
+            // `occurredAt` and which is not necessarily the moment the command was sent: a charge
+            // entered from a handover note is dated to the handover. `now` remains the default so
+            // every existing caller is unchanged.
+            $occurredAt ?? new DateTimeImmutable('now', new DateTimeZone('UTC')),
             null,
             null,
             $account->id

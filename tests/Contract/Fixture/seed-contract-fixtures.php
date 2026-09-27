@@ -105,8 +105,7 @@ const FIXTURE_IDS = [
     // plain string that matches no Nextcloud account on purpose: the endpoint compares it to the
     // session uid and never resolves it, so a real user would be needed by nothing.
     'foreignAccount'  => 'abababab-1111-4111-8111-111111111111',
-    'secondCurrency'  => '99999999-9999-4999-8999-999999999999',
-    'managerRole'     => 'bbbbbbbb-1111-4111-8111-111111111111',
+    'secondCurrency'  => '99999999-9999-4999-8999-999999999999',    'managerRole'     => 'bbbbbbbb-1111-4111-8111-111111111111',
     'seniorRole'      => 'bbbbbbbb-2222-4222-8222-222222222222',
     'evidence'        => 'cccccccc-1111-4111-8111-111111111111',
     // Two ledger rows on the primary account, one of each movement type.
@@ -467,6 +466,19 @@ upsert($db, 'pettycash_currencies', 'code', 'IRR', array_merge([
 upsert($db, 'pettycash_currencies', 'code', 'USD', array_merge([
     'code' => 'USD',
     'name' => 'US Dollar',
+    'minor_unit' => 2,
+    'active' => true,
+], $audit));
+
+// A third, so "open an account" has a currency the acting user does not already hold one in.
+//
+// The fixture gives the user an IRR account and a USD account, and FR-014 allows exactly one active
+// account per currency. With only those two configured, every create would collide with the seed and
+// the endpoint could be observed only in its refusal — which is how a 409 came to be the first thing
+// these tests saw. `minor_unit => 2` keeps it distinguishable from the rial's 0.
+upsert($db, 'pettycash_currencies', 'code', 'EUR', array_merge([
+    'code' => 'EUR',
+    'name' => 'Euro',
     'minor_unit' => 2,
     'active' => true,
 ], $audit));
@@ -977,22 +989,50 @@ deleteWhere($db, 'pettycash_evidence', 'transaction_id', $transactionDbId);
 deleteWhere($db, 'pettycash_transaction_audit', 'transaction_id', $transactionDbId);
 deleteWhere($db, 'pettycash_transaction_audit', 'sheet_id', $sheetDbId);
 
-// Ledger rows a settlement wrote, as opposed to the two the fixture seeds.
+// Accounts a suite opened, as opposed to the three the fixture seeds.
 //
-// A finance approval records a real consumption, and the account row above is reset to
-// its opening balance on every run. A movement that survived the reset would then
-// describe a balance the account no longer holds: the newest movement's
-// `balanceAfter` and the account's own `balance` are two separate reads of the same
-// fact, and `AccountControllerTest` asserts they agree. Leaving them to be cleaned by
-// hand would also make the ledger's contents depend on whether the finance suite had
-// run first.
-$settlementMovements = $db->getQueryBuilder()->delete('pettycash_account_movements');
-$settlementMovements->where($settlementMovements->expr()->eq('account_id', $settlementMovements->createNamedParameter($accountDbId)))
-    ->andWhere($settlementMovements->expr()->notIn('public_id', $settlementMovements->createNamedParameter(
-        [FIXTURE_IDS['chargeMovement'], FIXTURE_IDS['consumptionMovement']],
+// `POST /accounts` creates a real account, and `pettycash_accounts_user_currency_uniq` makes it
+// permanent: once a run has opened one in a currency, every later run of the same state collides with
+// it, so the endpoint could only ever be observed in its refusal and the suite's own result depended
+// on whether it had run before.
+$openedAccounts = $db->getQueryBuilder()->delete('pettycash_accounts');
+$openedAccounts->where($openedAccounts->expr()->eq('user_uid', $openedAccounts->createNamedParameter($userUid)))
+    ->andWhere($openedAccounts->expr()->notIn('public_id', $openedAccounts->createNamedParameter(
+        [FIXTURE_IDS['account'], FIXTURE_IDS['secondAccount'], FIXTURE_IDS['foreignAccount']],
         \OCP\DB\QueryBuilder\IQueryBuilder::PARAM_STR_ARRAY
     )))
     ->executeStatement();
+
+// Ledger rows a settlement or a charge wrote, as opposed to the two the fixture seeds.
+//
+// Every account the acting user holds, not only the primary one: a charge against the USD account
+// leaves its movement behind just as a settlement against the IRR account does, and a surviving
+// movement describes a balance its account no longer holds — the newest movement's `balanceAfter` and
+// the account's own `balance` are two separate reads of the same fact, and
+// `AccountControllerTest` asserts they agree.
+$userAccountIds = [];
+$userAccountSelect = $db->getQueryBuilder();
+$userAccountRows = $userAccountSelect->select('id')
+    ->from('pettycash_accounts')
+    ->where($userAccountSelect->expr()->eq('user_uid', $userAccountSelect->createNamedParameter($userUid)))
+    ->executeQuery()
+    ->fetchAllAssociative();
+foreach ($userAccountRows as $userAccountRow) {
+    $userAccountIds[] = (int) $userAccountRow['id'];
+}
+
+if ($userAccountIds !== []) {
+    $settlementMovements = $db->getQueryBuilder()->delete('pettycash_account_movements');
+    $settlementMovements->where($settlementMovements->expr()->in('account_id', $settlementMovements->createNamedParameter(
+        $userAccountIds,
+        \OCP\DB\QueryBuilder\IQueryBuilder::PARAM_INT_ARRAY
+    )))
+        ->andWhere($settlementMovements->expr()->notIn('public_id', $settlementMovements->createNamedParameter(
+            [FIXTURE_IDS['chargeMovement'], FIXTURE_IDS['consumptionMovement']],
+            \OCP\DB\QueryBuilder\IQueryBuilder::PARAM_STR_ARRAY
+        )))
+        ->executeStatement();
+}
 
 // --- Transactions awaiting finance review ----------------------------------
 //
