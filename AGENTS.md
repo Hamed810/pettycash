@@ -254,27 +254,50 @@ If a command fails because of a path or executable error, do not switch executio
 
 # Docker Infrastructure Ownership
 
-The Docker infrastructure is NOT managed by the PettyCash repository.
+The Docker infrastructure is NOT managed by the PettyCash repository, and it is not owned by
+any single application repository. It is a **shared local development lab** used by both
+PTS and PettyCash.
 
-Docker Compose owner:
+Lab location:
 
-`/home/ubuntu/projects/pts-nextcloud/pts/docker/`
+`/home/ubuntu/projects/nextcloud-lab/`
 
 Compose file:
 
-`/home/ubuntu/projects/pts-nextcloud/pts/docker/compose.yaml`
+`/home/ubuntu/projects/nextcloud-lab/compose.yaml`
 
 The PettyCash repository:
 
 - contains application code only
 - consumes the existing Nextcloud runtime
 - does not own Docker lifecycle
+- mounts at `/var/www/html/custom_apps/pettycash`; PTS mounts at `.../custom_apps/pts`
 
 Never assume:
 
 `/home/ubuntu/projects/pettycash/docker-compose.yml`
 
 is the runtime source.
+
+## Compose project name is pinned, and it is load-bearing
+
+The lab's `compose.yaml` sets `name: docker`. That is not a typo and not a cosmetic choice.
+It is the project name the environment has always had — it was derived from the compose
+file previously living in a directory called `docker/` — and it is the prefix for every
+container, network and volume:
+
+- containers `docker-nextcloud-1`, `docker-db-1`, `docker-nextcloud-volume-init-1`
+- network `docker_default`
+- volumes `docker_pts-nextcloud` (Nextcloud install, config, all user data) and
+  `docker_pts-db` (MariaDB data)
+
+If the project name changes, Compose looks for differently-named volumes, does not find
+them, and Docker creates **empty** ones — a blank Nextcloud with an empty database while
+the real data sits unused. Renaming the project and its volumes is a deliberate migration
+requiring its own backup and verification, never an incidental edit.
+
+Container names therefore remain `docker-*` even though the lab directory is
+`nextcloud-lab`. That is expected.
 
 ---
 
@@ -316,17 +339,21 @@ docker ps -a
 
 4. Do not run Docker Compose from the PettyCash repository.
 
-5. Use the existing Docker infrastructure at:
+5. Use the existing shared Docker lab at:
 
-`/home/ubuntu/projects/pts-nextcloud/pts/docker/`
+`/home/ubuntu/projects/nextcloud-lab/`
 
 6. Use the existing Compose file:
 
-`/home/ubuntu/projects/pts-nextcloud/pts/docker/compose.yaml`
+`/home/ubuntu/projects/nextcloud-lab/compose.yaml`
 
 7. Do not recreate containers or volumes unless explicitly instructed.
 
-8. After recovery, continue using `scripts/dev/*` wrappers for PHP/Nextcloud commands.
+8. Do not run `docker compose down -v` or any command that removes a named volume. Plain
+`docker compose down` stops the lab and keeps all data; `-v` deletes the Nextcloud
+installation and the database.
+
+9. After recovery, continue using `scripts/dev/*` wrappers for PHP/Nextcloud commands.
 
 ---
 

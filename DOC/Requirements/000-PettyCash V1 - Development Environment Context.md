@@ -18,13 +18,18 @@ PettyCash V1 - Development Environment Context
 
 ├── pettycash_legacy_backup │ └── نسخه قبلی PettyCash 2.0.1
 
-└── pts-nextcloud └── محیط توسعه Nextcloud
+├── pts-nextcloud │ └── اپلیکیشن PTS
+
+└── nextcloud-lab └── محیط توسعه مشترک Nextcloud (Docker)
+
+نکته: محیط Docker دیگر داخل هیچ مخزن اپلیکیشنی نیست و توسط هر دو پروژه
+PTS و PettyCash به صورت مشترک استفاده می شود.
 
 2- محیط Docker Nextcloud
 
 مسیر Docker Compose:
 
-/home/ubuntu/projects/pts-nextcloud/pts/docker
+/home/ubuntu/projects/nextcloud-lab
 
 فایل های اصلی:
 
@@ -52,20 +57,20 @@ Image: mariadb:11.4
 
 اجرای occ:
 
-docker exec –user www-data docker-nextcloud-1 php occ
+docker exec --user www-data docker-nextcloud-1 php occ
 
 لیست App ها:
 
-docker exec –user www-data docker-nextcloud-1 php occ app:list
+docker exec --user www-data docker-nextcloud-1 php occ app:list
 
 بررسی PettyCash:
 
-docker exec –user www-data docker-nextcloud-1 php occ app:list | grep
+docker exec --user www-data docker-nextcloud-1 php occ app:list | grep
 petty
 
 Restart Nextcloud:
 
-cd /home/ubuntu/projects/pts-nextcloud/pts/docker
+cd /home/ubuntu/projects/nextcloud-lab
 
 docker compose restart nextcloud
 
@@ -96,6 +101,16 @@ Volume ها:
 docker_pts-nextcloud
 
 docker_pts-db
+
+نام پروژه Compose:
+
+docker
+
+این نام در compose.yaml به صورت صریح (name: docker) تثبیت شده است و پیشوند
+تمام Container، Network و Volume هاست. تغییر آن باعث می شود Compose Volume
+هایی با نام دیگری بجوید، پیدا نکند، و Docker به صورت خودکار Volume خالی
+بسازد؛ یعنی یک Nextcloud کاملاً جدید با دیتابیس خالی در حالی که داده واقعی
+کنار گذاشته شده است.
 
 هشدار:
 
@@ -132,11 +147,14 @@ PTS App:
 
 Host:
 
-/home/ubuntu/projects/pts-nextcloud/pts
+/home/ubuntu/projects/pts-nextcloud
 
 Container:
 
 /var/www/html/custom_apps/pts
+
+نکته: مسیر Host هر دو اپ، ریشه مخزن آن هاست و با bind mount به
+custom_apps متصل می شود.
 
 7- وضعیت PettyCash V1
 
