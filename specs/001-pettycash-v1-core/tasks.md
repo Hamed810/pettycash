@@ -72,7 +72,7 @@ and client foundations that block every user story.
 - [x] T026 Implement centralized object authorization and role-scoped query policies from the tested matrix in `lib/Application/Security/AuthorizationService.php` (enforce: self-review permitted when user holds required review role + scope + stage permission; ownership grants purchaser rights only; cost-center/senior/finance scope checks; admin no finance without finance role - explicit deny for admin attempting finance actions per FR-007)
 - [x] T027 Implement command UUID payload hashing, replay, and conflict handling in `lib/Application/Command/IdempotencyService.php`
 - [ ] T028 Implement transaction and configuration audit writers that snapshot UID, display name, role, stage, revision, explanation, command ID, and canonical before/after JSON in `lib/Application/Audit/` (**reopened by T295 — the configuration writer this task claims does not exist and never ran.** Only the transaction side is real: `AuditWriterService::append()`, the method the `AuditWriter` port declares and the only one any of the six production call sites uses. The configuration side was `appendConfiguration()`, it had **zero** call sites, and `DbAuditEventRepository::save()` targets `pettycash_transaction_audit` unconditionally, so even if it had been called it would have written a configuration event into the *transaction* stream, against FR-056. `grep -rn pettycash_configuration_audit lib/ --include=*.php` returns the migration and nothing else, so the table is created and permanently empty. T296 has since deleted the dead method, leaving no configuration writer at all; **T294** owns writing one that reaches the right table)
-- [x] T029 Implement consistent OCS error mapping for validation, forbidden, hidden-not-found, stale state, idempotency conflict, and unexpected failures in `lib/Infrastructure/Http/OcsErrorMapper.php`
+- [ ] T029 Implement consistent OCS error mapping for validation, forbidden, hidden-not-found, stale state, idempotency conflict, and unexpected failures in `lib/Infrastructure/Http/OcsErrorMapper.php`
 - [x] T030 Create the typed frontend OCS client, canonical error model, command-ID generator, pagination types, and no-automatic-mutation-retry behavior in `src/services/http.ts`, `src/types/api.ts`, and `src/types/permissions.ts`
 
 **Checkpoint**: All foundational tests pass; migrations install safely; shared services resolve from
@@ -3755,3 +3755,40 @@ One finding, surfaced by implementing T302 and explicitly recorded there as unow
 
   **Verified**: `spec.md` and `contracts/ocs-api.yaml` now agree on the field name (3 mentions each),
   and the contract declares no bare `format:` request field.
+## Phase 45: Convergence
+
+Normal convergence, bounded to the US7 reporting/export slice. One reopened task and one novel root
+cause, grouped so the masking defect and the masked defect are both owned.
+
+- [ ] T029 Implement consistent OCS error mapping for validation, forbidden, hidden-not-found, stale
+  state, idempotency conflict (**reopened**). `OcsErrorMapper::map()` classifies
+  `$error instanceof LogicException => [403, 'FORBIDDEN']`, and only the 500 branch suppresses the
+  message. Any `LogicException` that is not an `InvalidArgumentException` is therefore reported to the
+  caller as a *permission refusal* **and** has its internal message echoed verbatim. Verified
+  consequence: `GET /reports/transactions`, `/reports/process` and `/reports/evidence` all answer `403`
+  with the body `Cannot resolve the currency of transaction revision 7 from its sheet` -- a persistence
+  failure presented as an authorization decision, disclosing an internal revision id. A client that
+  caches the 403 stops retrying, and an operator reading it goes looking for a permissions problem that
+  does not exist. This is the same over-broad classification shape as T063's bug, where
+  `InvalidArgumentException extends LogicException` let a broad catch swallow validation failures.
+  Reopened rather than duplicated: T029 is the task that owns OCS error mapping. (contradicts)
+
+- [ ] T308 Restore `transactions`, `process` and `evidence` reports, and settle whether the currency
+  join failure is a product or a fixture defect, per FR-065 and US7/AC2 (missing). Three of the seven
+  report subjects answer `403` and return no data; `sheets`, `accounts`, `cost-centers` and `audit`
+  answer `200`. The throw is `DbTransactionRevisionRepository::resolveCurrencyCode()`
+  (`lib/Infrastructure/Persistence/Expense/DbTransactionRevisionRepository.php:210-235`), a private
+  helper that joins `pettycash_transaction_revisions -> pettycash_transactions -> pettycash_sheets ->
+  pettycash_currencies` and throws a `LogicException` when the join yields no currency. The failure is
+  masked as a 403 by T029, so it has never surfaced as the persistence fault it is.
+
+  **The cause is deliberately not asserted.** Two candidates remain and they need opposite fixes:
+  a *product* defect, where a dangling `sheets.currency_id` is reachable and hydration should not fail
+  the whole report; or a *fixture* defect, where seeded sheets reference a currency row that does not
+  exist. Reporting this as a product gap without settling that would send the fix in the wrong
+  direction, so the first step is to determine which, and the fix follows from the answer.
+
+  Not the method T230 repaired: T230 fixed `getTransactionDbId()` at lines 120-125 (a hardcoded `0`
+  placeholder used as a join key). This is a different, private helper on the read path, so T230 stays
+  closed. T102 correctly remains open -- it requires `process` and `evidence` coverage, and those two
+  subjects cannot return rows until this is fixed.
