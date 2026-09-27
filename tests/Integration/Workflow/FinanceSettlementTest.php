@@ -159,7 +159,7 @@ final class FinanceSettlementTest extends TestCase
     {
         $tx = $this->seniorApprovedTransaction('tx-1');
 
-        $settled = $this->service()->recordDecision($tx->id, Decision::Approve, '', $this->commandId(), $tx->lockVersion);
+        $settled = $this->service()->recordDecision($tx->id, Decision::Approve, '', $this->commandId(), $tx->lockVersion)->transaction;
 
         $movement = $this->movements->allOfType(MovementType::Consumption)[0];
         $financeDecision = $settled->getDecisions()[count($settled->getDecisions()) - 1];
@@ -180,7 +180,7 @@ final class FinanceSettlementTest extends TestCase
     {
         $tx = $this->seniorApprovedTransaction('tx-1');
 
-        $settled = $this->service()->recordDecision($tx->id, Decision::Approve, '', $this->commandId(), $tx->lockVersion);
+        $settled = $this->service()->recordDecision($tx->id, Decision::Approve, '', $this->commandId(), $tx->lockVersion)->transaction;
 
         $found = $this->movements->findBySourceRevisionId((string) $settled->revision()->publicId);
 
@@ -442,7 +442,7 @@ final class FinanceSettlementTest extends TestCase
         self::assertSame(TransactionStageExpectations::FINANCE_STAGE, $tx->stage->value);
         self::assertSame(TransactionStatus::SeniorApproved, $tx->status);
 
-        $settled = $this->service()->recordDecision($tx->id, Decision::Approve, '', $this->commandId(), $tx->lockVersion);
+        $settled = $this->service()->recordDecision($tx->id, Decision::Approve, '', $this->commandId(), $tx->lockVersion)->transaction;
 
         self::assertSame(TransactionStatus::CompletedApproved, $settled->status);
         self::assertSame('APPROVED', $settled->finalOutcome);
@@ -467,7 +467,7 @@ final class FinanceSettlementTest extends TestCase
             'Also not allowable',
             $this->commandId(),
             $tx->lockVersion
-        );
+        )->transaction;
 
         self::assertSame(TransactionStatus::CompletedRejected, $settled->status);
         self::assertCount(0, $this->movements->all(), 'FR-041: a rejected transaction moves no money');
@@ -739,6 +739,7 @@ final class FinanceSettlementTest extends TestCase
             $this->container->query(AccountMovementRepository::class),
             $this->container->query(\OCA\PettyCash\Domain\Configuration\Repository\CostCenterRepository::class),
             $this->container->query(RoleAssignmentRepository::class),
+            $this->container->query(WorkflowDecisionRepository::class),
             $this->container->query(AuditWriter::class),
             $this->container->query(\OCA\PettyCash\Application\Command\IdempotencyService::class),
             $this->container->query(CurrentUser::class),

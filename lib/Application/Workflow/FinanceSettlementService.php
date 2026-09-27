@@ -33,6 +33,7 @@ use OCA\PettyCash\Domain\Shared\Money;
 use OCA\PettyCash\Domain\Shared\Uuid;
 use OCA\PettyCash\Domain\Workflow\Decision;
 use OCA\PettyCash\Domain\Workflow\FinanceDecisionPolicy;
+use OCA\PettyCash\Domain\Workflow\Repository\WorkflowDecisionRepository;
 use OCA\PettyCash\Domain\Workflow\TransactionStatus;
 use OCA\PettyCash\Domain\Workflow\WorkflowStage;
 
@@ -47,6 +48,7 @@ final readonly class FinanceSettlementService
         private AccountMovementRepository $movementRepository,
         private CostCenterRepository $costCenterRepository,
         private RoleAssignmentRepository $roleAssignmentRepository,
+        private WorkflowDecisionRepository $decisionRepository,
         private AuditWriter $auditWriter,
         private IdempotencyService $idempotencyService,
         private CurrentUser $currentUser,
@@ -62,7 +64,7 @@ final readonly class FinanceSettlementService
      * @param string $explanation
      * @param string $commandId
      * @param int $expectedVersion
-     * @return ExpenseTransaction
+     * @return DecisionOutcome
      */
     public function recordDecision(
         string $transactionPublicId,
@@ -70,8 +72,13 @@ final readonly class FinanceSettlementService
         string $explanation,
         string $commandId,
         int $expectedVersion
-    ): ExpenseTransaction {
+    ): DecisionOutcome {
         $actorUid = $this->currentUser->uid();
+
+        // Carried out of the idempotency callback, which does not run at all on a replay.
+        $recordedDecision = null;
+        $recordedMovement = null;
+        $recordedAccount = null;
 
         return $this->transactionManager->transactional(function () use (
             $transactionPublicId,
@@ -79,12 +86,26 @@ final readonly class FinanceSettlementService
             $decision,
             $explanation,
             $commandId,
-            $expectedVersion
-        ): ExpenseTransaction {
+            $expectedVersion,
+            &$recordedDecision,
+            &$recordedMovement,
+            &$recordedAccount
+        ): DecisionOutcome {
             // Check idempotency
+            //
+            // The stage is deliberately **not** part of the payload. It used to be, and it made a
+            // replayed command look like a different command: the first attempt advanced the
+            // transaction out of the finance stage, so the controller's retry routed it here with
+            // `FINAL` in hand, the payload hashed differently, and `IdempotencyService` answered
+            // 409 "Command ID was already used with a different payload" for a command that had
+            // already succeeded. A client retrying after a timeout was told its decision had
+            // been refused, having actually been applied.
+            //
+            // The transaction and the decision are what the command means, and both are in the
+            // payload, so a genuine reuse of one command id for different work is still a
+            // conflict.
             $payload = [
                 'transaction_id' => $transactionPublicId,
-                'stage' => WorkflowStage::Finance->value,
                 'decision' => $decision->value,
                 'command_id' => $commandId,
             ];
@@ -95,7 +116,10 @@ final readonly class FinanceSettlementService
                 $decision,
                 $explanation,
                 $commandId,
-                $expectedVersion
+                $expectedVersion,
+                &$recordedDecision,
+                &$recordedMovement,
+                &$recordedAccount
             ): array {
                 $transaction = $this->transactionRepository->findByPublicId($transactionPublicId);
 
@@ -189,9 +213,30 @@ final readonly class FinanceSettlementService
                     $commandId
                 );
 
+                // Persist the decision, and do it *before* the consumption.
+                //
+                // `ExpenseTransactionRepository::save()` writes the transaction row and nothing
+                // else, so the decision was never written at all, and
+                // `DbAccountMovementRepository::save()` resolves the movement's
+                // `source_decision_id` from the decision's public UUID. Recording the
+                // consumption first therefore failed to resolve a decision that did not exist
+                // yet, and **every finance approval answered 422** — the settlement path was
+                // unreachable through the API, whatever the in-memory doubles reported.
+                //
+                // The order is load-bearing for a second reason: the audit event below records
+                // `decision_id`, which is the null an unpersisted aggregate carries.
+                $this->decisionRepository->save($workflowDecision);
+                $recordedDecision = $workflowDecision;
+
                 // Handle financial effects for APPROVE decision
                 if ($decision === Decision::Approve) {
-                    $this->recordConsumption($transaction, $account, $workflowDecision, $commandId);
+                    $recordedMovement = $this->recordConsumption(
+                        $transaction,
+                        $account,
+                        $workflowDecision,
+                        $commandId
+                    );
+                    $recordedAccount = $account;
                 }
 
                 // Create audit event
@@ -222,7 +267,6 @@ final readonly class FinanceSettlementService
                 ];
                 $this->auditWriter->append($auditData);
 
-                // Persist transaction and decision
                 $this->transactionRepository->save($transaction);
 
                 // FR-043 and the workflow contract's "recalculated sheet state".
@@ -244,7 +288,17 @@ final readonly class FinanceSettlementService
                 throw new LogicException('Transaction not found after decision');
             }
 
-            return $transaction;
+            // On a replay the callback never ran, so the decision is read back by the command
+            // id that recorded it. Reporting no decision for a replayed command would make the
+            // two responses of one command differ with nothing in the request to explain it.
+            if ($recordedDecision === null) {
+                $recordedDecision = $this->decisionRepository->findByCommandId($commandId);
+            }
+            if ($recordedDecision === null) {
+                throw new LogicException('The recorded decision could not be found for this command');
+            }
+
+            return new DecisionOutcome($transaction, $recordedDecision, $recordedMovement, $recordedAccount);
         });
     }
 
@@ -273,12 +327,19 @@ final readonly class FinanceSettlementService
         $this->sheetRepository->save($sheet);
     }
 
+    /**
+     * FR-040: record the consumption and return it.
+     *
+     * The movement is returned rather than discarded because `DecisionResult` reports the account
+     * effect, and re-reading the ledger to find the row this call just wrote would be a second
+     * source of truth for a fact this method already holds.
+     */
     private function recordConsumption(
         ExpenseTransaction $transaction,
         PettyCashAccount $account,
         \OCA\PettyCash\Domain\Workflow\WorkflowDecision $workflowDecision,
         string $commandId
-    ): void {
+    ): AccountMovement {
         $amount = $transaction->revision()->amount();
         $revision = $transaction->revision();
 
@@ -313,6 +374,8 @@ final readonly class FinanceSettlementService
 
         $this->movementRepository->save($movement);
         $this->accountRepository->save($account);
+
+        return $movement;
     }
 
     private function getUserRoles(string $userUid): array

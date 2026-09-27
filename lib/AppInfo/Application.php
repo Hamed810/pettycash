@@ -334,6 +334,7 @@ final class Application extends App implements IBootstrap
                 $c->query(AccountMovementRepository::class),
                 $c->query(CostCenterRepository::class),
                 $c->query(RoleAssignmentRepository::class),
+                $c->query(WorkflowDecisionRepository::class),
                 $c->query(AuditWriter::class),
                 $c->query(IdempotencyService::class),
                 $c->query(CurrentUser::class),

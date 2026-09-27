@@ -200,9 +200,15 @@ final class AccountControllerTest extends TestCase
             'a charge is not justified by a revision'
         );
         $this->assertSame(
-            ContractFixtures::revisionId(),
+            ContractFixtures::ledgerRevisionId(),
             $byId[ContractFixtures::consumptionMovementId()]['sourceRevisionId'],
             'a consumption names the revision it settled'
+        );
+        $this->assertNotSame(
+            ContractFixtures::revisionId(),
+            ContractFixtures::ledgerRevisionId(),
+            'the settled revision is not the working one: the unique consumption index would '
+            . 'then make the working revision unsettleable'
         );
     }
 

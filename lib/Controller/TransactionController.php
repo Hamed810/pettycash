@@ -203,7 +203,7 @@ class TransactionController extends OCSController
             
             $stage = $transaction->stage;
             
-            $updatedTransaction = $this->managementReviewService->recordDecision(
+            $outcome = $this->managementReviewService->recordDecision(
                 $transactionId,
                 $stage,
                 $workflowDecision,
@@ -212,7 +212,7 @@ class TransactionController extends OCSController
                 $expectedVersion
             );
             
-            return new DataResponse($this->formatTransaction($updatedTransaction), 201);
+            return new DataResponse($this->formatTransaction($outcome->transaction), 201);
         } catch (\Throwable $e) {
             return $this->ocsErrorMapper->map($e, $commandId);
         }

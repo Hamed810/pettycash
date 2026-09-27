@@ -155,12 +155,23 @@ final class ExpenseTransaction
                 break;
 
             case WorkflowStage::Finance:
+                // The stage advances to `FINAL` on a final decision, as the cost-centre and
+                // senior branches above already advance it.
+                //
+                // It used not to, so a settled transaction reported `stage: FINANCE` beside
+                // `status: COMPLETED_APPROVED` — a transaction that has been decided while
+                // still saying it awaits the decision. `TransactionStage` declares `FINAL` for
+                // exactly this, and `ExpenseSheet::recalculateStatusFrom()` orders the stages
+                // with it last, so a stage left at `FINANCE` also kept a sheet whose
+                // transactions were all decided from reaching its own completed state.
                 if ($decision === Decision::Approve) {
                     $this->status = TransactionStatus::CompletedApproved;
                     $this->finalOutcome = 'APPROVED';
+                    $this->stage = WorkflowStage::Final;
                 } elseif ($decision === Decision::Reject) {
                     $this->status = TransactionStatus::CompletedRejected;
                     $this->finalOutcome = 'REJECTED';
+                    $this->stage = WorkflowStage::Final;
                 } elseif ($decision === Decision::Return) {
                     $this->status = TransactionStatus::AwaitingPurchaserCorrection;
                     $this->stage = WorkflowStage::Correction;

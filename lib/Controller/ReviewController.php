@@ -6,12 +6,14 @@ namespace OCA\PettyCash\Controller;
 
 use InvalidArgumentException;
 use LogicException;
+use OCA\PettyCash\Application\Workflow\DecisionOutcome;
 use OCA\PettyCash\Application\Workflow\FinanceQueue;
 use OCA\PettyCash\Application\Workflow\FinanceSettlementService;
 use OCA\PettyCash\Application\Workflow\ManagementReviewService;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Domain\Workflow\Decision;
 use OCA\PettyCash\Domain\Workflow\WorkflowStage;
+use OCA\PettyCash\Infrastructure\Http\AccountPayloadFormatter;
 use OCA\PettyCash\Infrastructure\Http\OcsErrorMapper;
 use OCA\PettyCash\Infrastructure\Http\TransactionPayloadFormatter;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
@@ -27,7 +29,8 @@ class ReviewController extends OCSController
         private FinanceSettlementService $financeSettlementService,
         private CurrentUser $currentUser,
         private OcsErrorMapper $ocsErrorMapper,
-        private TransactionPayloadFormatter $payloadFormatter
+        private TransactionPayloadFormatter $payloadFormatter,
+        private AccountPayloadFormatter $accountFormatter
     ) {
         parent::__construct('pettycash', $request);
     }
@@ -160,7 +163,7 @@ class ReviewController extends OCSController
             $stage = $transaction->stage;
 
             if ($stage === WorkflowStage::Finance) {
-                $updatedTransaction = $this->financeSettlementService->recordDecision(
+                $outcome = $this->financeSettlementService->recordDecision(
                     $transactionId,
                     $workflowDecision,
                     $explanation ?? '',
@@ -168,7 +171,7 @@ class ReviewController extends OCSController
                     $expectedVersion
                 );
             } else {
-                $updatedTransaction = $this->managementReviewService->recordDecision(
+                $outcome = $this->managementReviewService->recordDecision(
                     $transactionId,
                     $stage,
                     $workflowDecision,
@@ -178,7 +181,7 @@ class ReviewController extends OCSController
                 );
             }
 
-            return new DataResponse($this->formatTransaction($updatedTransaction), 201);
+            return new DataResponse($this->formatDecisionResult($outcome), 201);
         } catch (InvalidArgumentException $e) {
             // A missing explanation on REJECT/RETURN, a stale version, and an
             // out-of-state decision are all caller-correctable validation failures,
@@ -196,6 +199,11 @@ class ReviewController extends OCSController
      * Attach the offending field where the message identifies one, so the caller can
      * highlight it instead of only reading a sentence.
      *
+     * The match is case-insensitive. Every message these services throw starts with a capital
+     * letter — "Explanation required for reject or return" — and `str_contains` is case-sensitive,
+     * so the `explanation` branch never fired for the one message it exists to catch: a missing
+     * explanation came back as a bare 422 with a sentence and no field to highlight.
+     *
      * @return array<string, list<string>>
      */
     private function fieldErrorsFor(\Throwable $e): array
@@ -203,9 +211,9 @@ class ReviewController extends OCSController
         $message = $e->getMessage();
 
         return match (true) {
-            str_contains($message, 'explanation') => ['explanation' => ['explanation is required for reject or return']],
-            str_contains($message, 'version') => ['expectedVersion' => ['the transaction has changed, reload and retry']],
-            str_contains($message, 'stage') => ['stage' => ['the transaction is not at this review stage']],
+            stripos($message, 'explanation') !== false => ['explanation' => ['explanation is required for reject or return']],
+            stripos($message, 'version') !== false => ['expectedVersion' => ['the transaction has changed, reload and retry']],
+            stripos($message, 'stage') !== false => ['stage' => ['the transaction is not at this review stage']],
             default => [],
         };
     }
@@ -214,6 +222,38 @@ class ReviewController extends OCSController
     private function formatSummary(\OCA\PettyCash\Domain\Expense\ExpenseTransaction $transaction): array
     {
         return $this->payloadFormatter->summary($transaction);
+    }
+
+    /**
+     * The contract's `DecisionResult`: the decision that was recorded, the transaction it was
+     * recorded on, and — only where money actually moved — the account mutation.
+     *
+     * This answered with a bare `TransactionDetail` before, so the decision just taken against
+     * an immutable history was absent from the response and the account effect was absent too.
+     * `src/stores/reviews.ts` reads `result.transaction`, so the finance review view replaced the
+     * transaction it was showing with `undefined` after every decision.
+     *
+     * `accountMutation` is omitted rather than emitted empty for a reject, a return, and every
+     * non-finance stage: FR-040 records a consumption only for a final finance approval, so an
+     * empty mutation would be a claim that money moved when none did.
+     *
+     * @return array<string, mixed>
+     */
+    private function formatDecisionResult(DecisionOutcome $outcome): array
+    {
+        $result = [
+            'decision' => $this->payloadFormatter->decision($outcome->decision),
+            'transaction' => $this->payloadFormatter->detail($outcome->transaction),
+        ];
+
+        if ($outcome->hasAccountMutation()) {
+            $result['accountMutation'] = $this->accountFormatter->mutation(
+                $outcome->movement,
+                $outcome->account
+            );
+        }
+
+        return $result;
     }
 
     /** The contract's `TransactionDetail`, which the review views and decision form consume. */

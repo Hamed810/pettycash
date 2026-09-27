@@ -325,9 +325,16 @@ final readonly class TransactionPayloadFormatter
     }
 
     /**
+     * The contract's `Decision`.
+     *
+     * Public because `POST /transactions/{id}/decisions` answers with a `DecisionResult`, whose
+     * `decision` member is a decision of its own and not one read back out of the transaction's
+     * history: the caller is told which decision its command recorded, and an answer assembled
+     * from the transaction alone could not distinguish the one it just made from the ones before it.
+     *
      * @return array<string, mixed>
      */
-    private function decision(WorkflowDecision $decision): array
+    public function decision(WorkflowDecision $decision): array
     {
         return [
             'id' => $decision->publicId ?? $decision->id,

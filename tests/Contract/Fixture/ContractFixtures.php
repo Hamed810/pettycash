@@ -31,11 +31,11 @@ final class ContractFixtures
      * test happened to leave behind, which is order-dependent and hides real
      * behaviour.
      *
-     * @param 'draft'|'submitted'|'correction'|'usd'|'scope' $state
+     * @param 'draft'|'submitted'|'correction'|'usd'|'scope'|'finance' $state
      */
     public static function prepare(string $state = 'draft'): void
     {
-        if (!in_array($state, ['draft', 'submitted', 'correction', 'usd', 'scope'], true)) {
+        if (!in_array($state, ['draft', 'submitted', 'correction', 'usd', 'scope', 'finance'], true)) {
             throw new \RuntimeException("Unknown contract fixture state '{$state}'.");
         }
 
@@ -136,6 +136,18 @@ final class ContractFixtures
         return self::id('revisionId');
     }
 
+    /**
+     * The revision the seeded ledger consumption settled.
+     *
+     * Not the working revision: `pettycash_account_movements_consumption_uniq` is unique on
+     * `source_revision_id`, so a revision that the ledger already claims can never be settled —
+     * and the finance suite needs a revision it can settle.
+     */
+    public static function ledgerRevisionId(): string
+    {
+        return self::id('ledgerRevisionId');
+    }
+
     public static function costCenterId(): string
     {
         return self::id('costCenterId');
@@ -190,6 +202,56 @@ final class ContractFixtures
         if (!is_int($version)) {
             throw new \RuntimeException(
                 'The unmanaged cost center is only seeded in the `scope` state; call ContractFixtures::prepare(\'scope\') first.'
+            );
+        }
+
+        return $version;
+    }
+
+    /**
+     * A transaction awaiting finance review inside the cost center the acting user
+     * holds no assignment for.
+     *
+     * FR-034 makes the finance queue shared rather than scoped to the caller's own
+     * cost centers, and the acting user manages CC-100, so this is the only row in
+     * the fixture that can tell a shared queue from a scoped one.
+     */
+    public static function unmanagedFinanceTransactionId(): string
+    {
+        return self::id('financeSharedTransactionId');
+    }
+
+    public static function unmanagedFinanceTransactionVersion(): int
+    {
+        $version = self::all()['financeSharedTransactionVersion'] ?? null;
+        if (!is_int($version)) {
+            throw new \RuntimeException(
+                'The finance review fixture is only seeded in the `finance` state; call ContractFixtures::prepare(\'finance\') first.'
+            );
+        }
+
+        return $version;
+    }
+
+    /**
+     * A transaction awaiting finance review that the senior manager rejected.
+     *
+     * FR-039 draws the finance decision matrix from the senior outcome: this one may be
+     * rejected or returned by finance but must not be approved. A fixture where the
+     * senior always agreed cannot tell a policy that reads the outcome from one that
+     * assumes approval.
+     */
+    public static function seniorRejectedFinanceTransactionId(): string
+    {
+        return self::id('financeRejectedTransactionId');
+    }
+
+    public static function seniorRejectedFinanceTransactionVersion(): int
+    {
+        $version = self::all()['financeRejectedTransactionVersion'] ?? null;
+        if (!is_int($version)) {
+            throw new \RuntimeException(
+                'The finance review fixture is only seeded in the `finance` state; call ContractFixtures::prepare(\'finance\') first.'
             );
         }
 

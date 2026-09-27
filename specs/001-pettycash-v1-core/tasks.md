@@ -220,7 +220,83 @@ movements, balances, final states, and rollback.
   harness does not have. That belongs to the real-schema work. For the same reason the
   pre-existing `AtomicityFailureInjectionTest::testFinanceSettlementRollbackOnFailure` is not
   evidence of anything — it submits a sheet, never fails anything, and asserts the sheet status.
-- [ ] T057 [P] [US3] Write failing contract tests for shared finance queue and finance decision responses in `tests/Contract/Controller/FinanceReviewControllerTest.php`
+- [X] T057 [P] [US3] Write failing contract tests for shared finance queue and finance decision responses in `tests/Contract/Controller/FinanceReviewControllerTest.php` (complete — 21 tests, and **three product defects it found were fixed in the same pass**, one of which made the finance approval path unreachable over HTTP; report `docs/reports/T057.md`)
+
+  **The `finance` fixture state is the precondition, and it did not exist.** `ManagementReviewControllerTest::testFinanceQueueReturns200WithPagedTransactions`
+  asserted the finance queue against a fixture in which no transaction awaited finance review, so an
+  empty queue satisfied it — a queue scoped per cost center, a queue filtered on the wrong status, and
+  a queue that returned nothing at all were indistinguishable. `tests/Contract/Fixture/seed-contract-fixtures.php`
+  now seeds a sixth state, `finance`, holding **three** transactions at the finance stage, each for a
+  different claim: the primary trio senior-approved; one in CC-200, which the acting user does not
+  manage (so a shared queue is told from a scoped one — the user manages CC-100, so a scoped queue
+  would have looked right); and one the senior manager rejected (so FR-039's matrix is drawn from the
+  senior outcome rather than assumed). Each carries the two management decisions that put it there,
+  as rows, because the decision history finance reads to act on (FR-036) has to exist to be read. The
+  user additionally holds a `FINANCE` role, scoped to no cost center, and it is the *only* state that
+  grants it — a role gate cannot be tested by a fixture that always passes it.
+
+  **The three defects, in the order the suite found them.**
+
+  1. **No workflow decision was ever persisted.** `ManagementReviewService::recordDecision()` and
+     `FinanceSettlementService::recordDecision()` each carried a `// Persist transaction and decision`
+     comment above a call to `ExpenseTransactionRepository::save()` — which writes the transaction row
+     and nothing else. `DbWorkflowDecisionRepository` was registered, injected into the payload
+     formatter for reads, and **never called for a write by any code path**. So the transaction's
+     status advanced while `pettycash_workflow_decisions` stayed empty: the immutable history an
+     approver reads back was not there at any stage, and the audit event's `decision_id` was null. Both
+     services now persist the decision through the domain port, before the audit event so that
+     `decision_id` is a real surrogate key.
+
+  2. **The finance approval answered 422 for every input.** `DbAccountMovementRepository::save()`
+     resolves the movement's `source_decision_id` from the decision's public UUID, and the consumption
+     was recorded *before* the decision was saved — so the resolution failed against a decision that
+     did not exist yet. Two defects stacked here: the missing save above, and the order. With the save
+     in place, a second one appeared: `PettyCashAccount::consume()` built the movement's public id as
+     `$this->id . '-' . $commandId`, which is 73 characters for two UUIDs, in a 36-character column —
+     so the insert failed with "Data too long", and `charge()` had the same construction, meaning the
+     unbuilt `account#charge` endpoint would have failed identically. A UUID is minted instead; the
+     command id is stored in its own column, which is what a replay already looks up.
+
+  3. **The decision response was not a `DecisionResult`.** The contract answers
+     `POST /transactions/{id}/decisions` with the decision that was recorded, the transaction, and
+     `accountMutation`; the controller answered with a bare `TransactionDetail`. So the decision just
+     taken against an immutable history was absent from the response and the money that moved was
+     absent too — and `src/stores/reviews.ts:93` reads `result.transaction`, so the finance review view
+     replaced the transaction it was showing with `undefined` after **every** decision. Both services
+     now return a `DecisionOutcome` (transaction, decision, and the movement/account when money
+     actually moved), and `ReviewController` builds the contract's shape, omitting `accountMutation`
+     for a reject, a return, and every non-finance stage rather than emitting an empty one.
+
+  **Two smaller ones, both found by the same suite.** `fieldErrorsFor()` matched `'explanation'` with
+  `str_contains` against messages that start with a capital "Explanation", so the one field error it
+  exists to attach never fired and a missing explanation came back as a bare 422 with no field to
+  highlight; it matches case-insensitively now. And the finance branch of `ExpenseTransaction::applyDecision()`
+  set the status and the final outcome but never advanced the stage, so a settled transaction reported
+  `stage: FINANCE` beside `status: COMPLETED_APPROVED` — decided while still saying it awaits the
+  decision, and keeping a sheet of decided transactions from reaching its own completed state.
+
+  **A replayed finance decision was answered 409.** The idempotency payload included the workflow
+  stage, and the controller routes a decision by the transaction's *current* stage — which the first
+  attempt had already advanced. So a client retrying after a timeout hashed a different payload and was
+  told its command had been reused for different work, when it had in fact been applied. The stage is
+  not part of what a command means and is out of both payloads; the transaction and the decision are
+  still there, so a genuine reuse is still a conflict. **Known limitation, recorded as T290:** the
+  stored command result predates `accountMutation`, so a replay reports the decision and the transaction
+  and not the account effect.
+
+  **The ledger fixture was claiming a settlement that had not happened.** The seeded consumption named
+  the *working* revision, and `pettycash_account_movements_consumption_uniq` is unique on
+  `source_revision_id` — which is what makes FR-040's "exactly one consumption" an enforced fact, and
+  which also means a revision the ledger already claims can never be settled. The finance approval
+  failed on a duplicate key. The settled expense is now its own sheet, transaction, and revision at
+  FINAL, out of every queue, and the seeder deletes settlement-written movements on every state so the
+  ledger does not depend on whether the finance suite ran first.
+
+  **Six mutations, each verified to have applied before its result was read**: removing the decision
+  save fails 9, restoring the composed movement id fails 9, dropping `accountMutation` fails 3,
+  restoring the stage in the payload fails 1 (the replay), `str_contains` fails 1, dropping
+  `stage = Final` fails 1. `scripts/dev/phpunit` is **255 tests / 1367 assertions / 1 failure**, the
+  failure being T275 alone.
 - [X] T058 [P] [US3] Write failing Vue tests for the shared queue, senior-decision restrictions, settlement feedback, and manual retry messaging in `tests/Frontend/Component/FinanceReview.spec.ts` (complete — 25 tests covering all four subjects; landed with T287 and the US3 slice, `docs/reports/US3-finance-slice.md`. The "failing" in the task text is the RED convention: they were written and mutation-checked, and pass against the implementation built alongside them)
 
 ### Implementation for User Story 3
@@ -616,7 +692,7 @@ feature implementation.
 
 - [x] T183 [US3] Mark T055 complete - `FinanceDecisionPolicyTest.php` exists with 10 passing tests in `tests/Unit/Domain/Workflow/FinanceDecisionPolicyTest.php` (missing)
 - [ ] T184 [P] [US3] Create `FinanceSettlementTest.php` integration tests for fixed row-lock order, exactly-one consumption, command replay, conflicting UUID, simultaneous approvals, rollback per T056 in `tests/Integration/Workflow/FinanceSettlementTest.php` (missing)
-- [ ] T185 [P] [US3] Create `FinanceReviewControllerTest.php` contract tests for shared finance queue and decisions per T057 in `tests/Contract/Controller/FinanceReviewControllerTest.php` (missing)
+- [X] T185 [P] [US3] Create `FinanceReviewControllerTest.php` contract tests for shared finance queue and decisions per T057 in `tests/Contract/Controller/FinanceReviewControllerTest.php` (complete — the file exists with 21 tests covering the shared queue and the finance decision responses; T057 already `[x]`, and the details of what it found are recorded there)
 - [ ] T186 [P] [US3] Create `FinanceReview.spec.ts` Vue tests for shared queue, senior-decision restrictions, settlement feedback per FR-071 in `tests/Frontend/Component/FinanceReview.spec.ts` (missing)
 - [x] T187 [P] [US3] Align `AccountMovement` domain with minor units (not Money), positive magnitude, unique command ID, unique consumption source per T059 in `lib/Domain/Account/AccountMovement.php` (partial)
 - [x] T188 [US3] Implement `DbAccountRepository.php` and `DbAccountMovementRepository.php` with account locking, movement insertion, balance projection per T060 in `lib/Infrastructure/Persistence/Account/` (missing) (done - the four account read queries now build their currency projection with `selectAlias()` instead of inline `as` aliases, which `IQueryBuilder` splits with an unbounded `preg_split` and truncates into one malformed alias; `c.public_id` was also dropped because `data-model.md` defines `Currency` without a `public_id`; `mapRow()` no longer overwrites the public-UUID `$id` with the surrogate key, and `save()` now resolves the existing row via `dbId`; `AccountMovement` carries `accountPublicId` so `DbAccountMovementRepository::save()` resolves the real `pc_accounts.id` and fails loudly instead of writing `account_id = 1`. `POST /sheets` moved from HTTP 500 to a structured 422 and the account query is now exception-free. Pessimistic row locking is NOT implemented here and remains with T060/T129)
@@ -2670,6 +2746,32 @@ because it materially undermines every future PHP verification in this repositor
   `docs/reports/T288.md`. **Cost accepted**: up to 61s once per edit to `lib/`, zero otherwise, which is
   the price of not touching the shared container. A reset would remove the cost if restarting Apache is
   ever approved.
+
+### MEDIUM — the account payload projection now exists twice
+
+- [ ] T289 [MEDIUM] Move the account and movement projections out of `AccountService`, because
+  `AccountPayloadFormatter` in `lib/Infrastructure/Http/` was added by T057 to report
+  `AccountMutationResult` on a finance decision, and `AccountService::listForUser()` and
+  `listMovements()` still build the same two arrays inline. Two copies of one shape is how
+  `TransactionPayloadFormatter` came to exist in the first place: the transaction payload had a flat
+  `revision` object and no `allowedActions`, `decisions` or `evidence`, and every affected template
+  dereferenced `undefined` on a live response. T057 could not simply make the service delegate, because
+  `AccountService` sits in the Application layer and taking an `Infrastructure\Http` dependency would
+  invert the direction the layer rules set; the formatter's docblock says so rather than leaving the
+  duplication looking accidental. The move is to relocate the projection to a layer both can depend on,
+  or to have the controllers format from the aggregates and drop it from the service.
+
+### MEDIUM — a replayed finance decision does not report the account effect
+
+- [ ] T290 [MEDIUM] Store the account mutation in the command result, because T057 made a replayed
+  finance decision answer 201 again (it used to be refused with 409 — see T057) but the response for a
+  replay is rebuilt from `IdempotencyService`'s stored result, which holds only
+  `['transaction_id' => …]`. The decision and the transaction are read back correctly, and the ledger
+  is right — nothing is spent twice — but the contract's `accountMutation` is absent, so a client that
+  retries after a timeout cannot learn from the reply that money moved and has to re-read the ledger.
+  The stored result is written inside the same transaction as the settlement, so it cannot be
+  enriched after the fact without a second write; the fix is for the settlement to return the movement
+  and account through the idempotency payload it stores.
 
 ### MEDIUM — recorded for awareness, deliberately not appended
 

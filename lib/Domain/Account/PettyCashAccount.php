@@ -50,7 +50,7 @@ final class PettyCashAccount
             throw new InvalidArgumentException('Currency mismatch');
         }
         $movement = AccountMovement::createCharge(
-            $this->id . '-' . $commandId,
+            $this->newMovementId(),
             $amount,
             'Account charge',
             $this,
@@ -69,7 +69,7 @@ final class PettyCashAccount
             throw new InvalidArgumentException('Currency mismatch');
         }
         $movement = AccountMovement::createConsumption(
-            $this->id . '-' . $commandId,
+            $this->newMovementId(),
             $amount,
             'Expense consumption',
             $this,
@@ -79,6 +79,24 @@ final class PettyCashAccount
         );
         $this->balanceMinor = $movement->balanceAfter()->minorUnits();
         return $movement;
+    }
+
+    /**
+     * A movement's public identifier.
+     *
+     * This used to be `$this->id . '-' . $commandId`, which is 73 characters for two UUIDs, and
+     * `pettycash_account_movements.public_id` is 36. Every charge and every consumption therefore
+     * failed to insert with "Data too long for column 'public_id'" — so `POST /accounts/{id}/decisions`
+     * with APPROVE answered **500**, having already applied the new balance to the aggregate in
+     * memory. A UUID is minted instead, like every other aggregate here.
+     *
+     * The command id is not lost by this: it is stored in its own `command_id` column, which is
+     * what makes a replayed command find the movement it already wrote. Folding it into the public
+     * id added nothing but the overflow.
+     */
+    private function newMovementId(): string
+    {
+        return (string)\OCA\PettyCash\Domain\Shared\Uuid::random();
     }
 
     public function balance(): Money

@@ -152,7 +152,7 @@ final class ManagementDecisionTest extends TestCase
             'Approved',
             $commandId,
             0
-        );
+        )->transaction;
 
         self::assertEquals(WorkflowStage::Senior, $updatedTx->stage);
         self::assertEquals(TransactionStatus::CostCenterApproved, $updatedTx->status);
@@ -204,7 +204,7 @@ final class ManagementDecisionTest extends TestCase
             'Invalid expense',
             $commandId,
             0
-        );
+        )->transaction;
 
         self::assertEquals(WorkflowStage::Senior, $updatedTx->stage);
         self::assertEquals(TransactionStatus::CostCenterRejected, $updatedTx->status);
@@ -230,7 +230,7 @@ final class ManagementDecisionTest extends TestCase
             'Missing evidence',
             $commandId,
             0
-        );
+        )->transaction;
 
         self::assertEquals(WorkflowStage::Correction, $updatedTx->stage);
         self::assertEquals(TransactionStatus::AwaitingPurchaserCorrection, $updatedTx->status);
@@ -256,7 +256,7 @@ final class ManagementDecisionTest extends TestCase
             'OK',
             $commandId,
             0
-        );
+        )->transaction;
 
         // Now senior manager approves
         $this->setupRoleAssignment('senior-1', Role::SeniorManager, '1');
@@ -269,6 +269,7 @@ final class ManagementDecisionTest extends TestCase
             $this->container->query(TransactionRevisionRepository::class),
             $this->container->query(CostCenterRepository::class),
             $this->container->query(RoleAssignmentRepository::class),
+            $this->container->query(\OCA\PettyCash\Domain\Workflow\Repository\WorkflowDecisionRepository::class),
             $this->container->query(\OCA\PettyCash\Application\Port\AuditWriter::class),
             $this->container->query(IdempotencyService::class),
             $this->container->query(CurrentUser::class),
@@ -284,7 +285,7 @@ final class ManagementDecisionTest extends TestCase
             'Approved by senior',
             $commandId,
             $tx->lockVersion
-        );
+        )->transaction;
 
         self::assertEquals(WorkflowStage::Finance, $updatedTx->stage);
         self::assertEquals(TransactionStatus::SeniorApproved, $updatedTx->status);
@@ -310,7 +311,7 @@ final class ManagementDecisionTest extends TestCase
             'Not valid',
             $commandId,
             0
-        );
+        )->transaction;
 
         // Senior manager can still approve (independent decision)
         $this->setupRoleAssignment('senior-1', Role::SeniorManager, '1');
@@ -323,6 +324,7 @@ final class ManagementDecisionTest extends TestCase
             $this->container->query(TransactionRevisionRepository::class),
             $this->container->query(CostCenterRepository::class),
             $this->container->query(RoleAssignmentRepository::class),
+            $this->container->query(\OCA\PettyCash\Domain\Workflow\Repository\WorkflowDecisionRepository::class),
             $this->container->query(\OCA\PettyCash\Application\Port\AuditWriter::class),
             $this->container->query(IdempotencyService::class),
             $this->container->query(CurrentUser::class),
@@ -338,7 +340,7 @@ final class ManagementDecisionTest extends TestCase
             'Senior overrides',
             $commandId,
             $tx->lockVersion
-        );
+        )->transaction;
 
         self::assertEquals(WorkflowStage::Finance, $updatedTx->stage);
         self::assertEquals(TransactionStatus::SeniorApproved, $updatedTx->status);
@@ -384,6 +386,7 @@ final class ManagementDecisionTest extends TestCase
             $this->container->query(TransactionRevisionRepository::class),
             $this->container->query(CostCenterRepository::class),
             $this->container->query(RoleAssignmentRepository::class),
+            $this->container->query(\OCA\PettyCash\Domain\Workflow\Repository\WorkflowDecisionRepository::class),
             $this->container->query(\OCA\PettyCash\Application\Port\AuditWriter::class),
             $this->container->query(IdempotencyService::class),
             $this->container->query(CurrentUser::class),
@@ -400,7 +403,7 @@ final class ManagementDecisionTest extends TestCase
             'Self-approved as manager',
             $commandId,
             0
-        );
+        )->transaction;
 
         self::assertEquals(WorkflowStage::Senior, $updatedTx->stage);
         self::assertEquals(TransactionStatus::CostCenterApproved, $updatedTx->status);
@@ -419,7 +422,7 @@ final class ManagementDecisionTest extends TestCase
         $this->container->setInstance(CurrentUser::class, new \OCA\PettyCash\Tests\TestDoubles\InMemoryCurrentUser('manager-1'));
         $managementReview = $this->container->query(ManagementReviewService::class);
         $commandId = 'cmd-cc-' . Uuid::random();
-        $tx = $managementReview->recordDecision($tx->id, WorkflowStage::CostCenter, Decision::Approve, 'OK', $commandId, 0);
+        $tx = $managementReview->recordDecision($tx->id, WorkflowStage::CostCenter, Decision::Approve, 'OK', $commandId, 0)->transaction;
 
         $this->container->setInstance(CurrentUser::class, new \OCA\PettyCash\Tests\TestDoubles\InMemoryCurrentUser('senior-1'));
         $managementReview = new ManagementReviewService(
@@ -429,6 +432,7 @@ final class ManagementDecisionTest extends TestCase
             $this->container->query(TransactionRevisionRepository::class),
             $this->container->query(CostCenterRepository::class),
             $this->container->query(RoleAssignmentRepository::class),
+            $this->container->query(\OCA\PettyCash\Domain\Workflow\Repository\WorkflowDecisionRepository::class),
             $this->container->query(\OCA\PettyCash\Application\Port\AuditWriter::class),
             $this->container->query(IdempotencyService::class),
             $this->container->query(CurrentUser::class),
@@ -436,7 +440,7 @@ final class ManagementDecisionTest extends TestCase
             $this->container->query(AuthorizationService::class)
         );
         $commandId = 'cmd-senior-' . Uuid::random();
-        $tx = $managementReview->recordDecision($tx->id, WorkflowStage::Senior, Decision::Approve, 'OK', $commandId, $tx->lockVersion);
+        $tx = $managementReview->recordDecision($tx->id, WorkflowStage::Senior, Decision::Approve, 'OK', $commandId, $tx->lockVersion)->transaction;
 
         // Admin without finance role tries to make finance decision
         $this->container->setInstance(CurrentUser::class, new \OCA\PettyCash\Tests\TestDoubles\InMemoryCurrentUser('admin-1'));
@@ -447,6 +451,7 @@ final class ManagementDecisionTest extends TestCase
             $this->container->query(TransactionRevisionRepository::class),
             $this->container->query(CostCenterRepository::class),
             $this->container->query(RoleAssignmentRepository::class),
+            $this->container->query(\OCA\PettyCash\Domain\Workflow\Repository\WorkflowDecisionRepository::class),
             $this->container->query(\OCA\PettyCash\Application\Port\AuditWriter::class),
             $this->container->query(IdempotencyService::class),
             $this->container->query(CurrentUser::class),
@@ -511,7 +516,7 @@ final class ManagementDecisionTest extends TestCase
             'Approved',
             $commandId,
             0
-        );
+        )->transaction;
 
         // Replay with same command ID should return same result
         $secondResult = $managementReview->recordDecision(
@@ -521,7 +526,7 @@ final class ManagementDecisionTest extends TestCase
             'Approved',
             $commandId,
             $firstResult->lockVersion
-        );
+        )->transaction;
 
         self::assertEquals($firstResult->id, $secondResult->id);
         self::assertEquals($firstResult->status, $secondResult->status);

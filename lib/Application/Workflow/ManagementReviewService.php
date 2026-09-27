@@ -25,6 +25,7 @@ use OCA\PettyCash\Domain\Expense\Repository\TransactionRevisionRepository;
 use OCA\PettyCash\Domain\Shared\ActorSnapshot;
 use OCA\PettyCash\Domain\Shared\Uuid;
 use OCA\PettyCash\Domain\Workflow\Decision;
+use OCA\PettyCash\Domain\Workflow\Repository\WorkflowDecisionRepository;
 use OCA\PettyCash\Domain\Workflow\WorkflowDecision;
 use OCA\PettyCash\Domain\Workflow\WorkflowStage;
 
@@ -37,6 +38,7 @@ final readonly class ManagementReviewService
         private TransactionRevisionRepository $revisionRepository,
         private CostCenterRepository $costCenterRepository,
         private RoleAssignmentRepository $roleAssignmentRepository,
+        private WorkflowDecisionRepository $decisionRepository,
         private AuditWriter $auditWriter,
         private IdempotencyService $idempotencyService,
         private CurrentUser $currentUser,
@@ -53,7 +55,7 @@ final readonly class ManagementReviewService
      * @param string $explanation
      * @param string $commandId
      * @param int $expectedVersion
-     * @return ExpenseTransaction
+     * @return DecisionOutcome
      */
     public function recordDecision(
         string $transactionPublicId,
@@ -62,8 +64,11 @@ final readonly class ManagementReviewService
         string $explanation,
         string $commandId,
         int $expectedVersion
-    ): ExpenseTransaction {
+    ): DecisionOutcome {
         $actorUid = $this->currentUser->uid();
+
+        // Carried out of the idempotency callback, which does not run at all on a replay.
+        $recordedDecision = null;
 
         return $this->transactionManager->transactional(function () use (
             $transactionPublicId,
@@ -72,12 +77,19 @@ final readonly class ManagementReviewService
             $decision,
             $explanation,
             $commandId,
-            $expectedVersion
-        ): ExpenseTransaction {
+            $expectedVersion,
+            &$recordedDecision
+        ): DecisionOutcome {
             // Check idempotency
+            //
+            // The stage is not part of the payload, and must not be: the first attempt advances
+            // the transaction out of the stage it was decided at, so a replay arrives carrying a
+            // different stage and hashes to a different command — which `IdempotencyService`
+            // answers with 409, telling a client that retried after a timeout that its decision
+            // had been refused when it had in fact been applied. The transaction and the decision
+            // are what the command means, and both are here.
             $payload = [
                 'transaction_id' => $transactionPublicId,
-                'stage' => $stage->value,
                 'decision' => $decision->value,
                 'command_id' => $commandId,
             ];
@@ -89,7 +101,8 @@ final readonly class ManagementReviewService
                 $decision,
                 $explanation,
                 $commandId,
-                $expectedVersion
+                $expectedVersion,
+                &$recordedDecision
             ): array {
                 $transaction = $this->transactionRepository->findByPublicId($transactionPublicId);
 
@@ -147,6 +160,22 @@ final readonly class ManagementReviewService
                     $commandId
                 );
 
+                // Persist it.
+                //
+                // This line was absent, and the comment below used to claim it happened.
+                // `ExpenseTransactionRepository::save()` writes the transaction row and
+                // nothing else, so **no decision was ever written** — not at cost centre, not
+                // at senior, not at finance. The consequence was not a missing history: the
+                // transaction's status moved on while `pettycash_workflow_decisions` stayed
+                // empty, so the audit trail an approver reads back was not there, and a
+                // finance approval answered 422 because its consumption's
+                // `source_decision_id` could not be resolved to a row.
+                //
+                // Before the audit event, so the event's `decision_id` is the real surrogate
+                // key rather than the null an unpersisted aggregate carries.
+                $this->decisionRepository->save($workflowDecision);
+                $recordedDecision = $workflowDecision;
+
                 // Create audit event using the append method
                 $auditData = [
                     'id' => (string)Uuid::random(),
@@ -174,19 +203,29 @@ final readonly class ManagementReviewService
                 ];
                 $this->auditWriter->append($auditData);
 
-                // Persist transaction and decision
                 $this->transactionRepository->save($transaction);
 
                 return ['transaction_id' => $transactionPublicId];
             });
-            
+
             // Reload and return the transaction
             $transaction = $this->transactionRepository->findByPublicId($transactionPublicId);
             if ($transaction === null) {
                 throw new LogicException('Transaction not found after decision');
             }
-            
-            return $transaction;
+
+            // On a replay the callback never ran, so the decision is read back by the
+            // command id that recorded it. A response that reported no decision for a
+            // replayed command would make the two responses of one command differ, and the
+            // caller has no way to tell that it is the same decision being described.
+            if ($recordedDecision === null) {
+                $recordedDecision = $this->decisionRepository->findByCommandId($commandId);
+            }
+            if ($recordedDecision === null) {
+                throw new LogicException('The recorded decision could not be found for this command');
+            }
+
+            return new DecisionOutcome($transaction, $recordedDecision);
         });
     }
 
