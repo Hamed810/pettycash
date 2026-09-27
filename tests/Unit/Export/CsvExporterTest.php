@@ -76,6 +76,34 @@ final class CsvExporterTest extends TestCase
         self::assertSame('', $this->exporter->export([]));
     }
 
+    // ===== Explicit header =====
+
+    public function testAnExplicitHeaderIsWrittenEvenWithNoRows(): void
+    {
+        // The case that made the header an argument rather than derived: a caller that knows its column
+        // set independently of the data. The evidence archive manifest needs exactly this, because a
+        // recipient must be able to tell "no evidence was in scope" from "the export is broken".
+        self::assertSame("a,b\n", $this->exporter->export([], ['a', 'b']));
+    }
+
+    public function testAnExplicitHeaderKeepsItsOrderAndAppendsUnlistedColumns(): void
+    {
+        $csv = $this->exporter->export(
+            [['a' => '1', 'extra' => 'x']],
+            ['b', 'a']
+        );
+
+        // Declared order first, then the unlisted key. Passing a header must not drop a column.
+        self::assertSame("b,a,extra\n,1,x\n", $csv);
+    }
+
+    public function testAnExplicitHeaderIsStillFormulaSafeForUserControlledColumns(): void
+    {
+        $csv = $this->exporter->export([['title' => '=1+1']], ['title']);
+
+        self::assertStringContainsString("'=1+1", $csv);
+    }
+
     // ===== Formula escaping: the negative-amount case =====
 
     public function testANegativeAmountIsNotFormulaEscaped(): void

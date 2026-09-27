@@ -58,19 +58,32 @@ final class CsvExporter implements Exporter
     private const CSV_ESCAPE = '';
 
     /**
-     * Write rows as CSV.
+     * Write rows as CSV, with an explicit header when one is supplied.
      *
-     * The iterable is materialised so the header can be the union of every row's keys in first-seen
-     * order. Two reasons, both about not losing data silently: a later row carrying a key the first
-     * row did not would otherwise have that column dropped, and in a financial export a missing column
-     * is a defect that reads as a correct file. V1 exports are synchronous (contract, General Rules) and
-     * the documented scale is 10,000 transactions a year, so holding them is not a concern.
+     * The header is an optional argument rather than always derived from the first row because a caller
+     * sometimes knows the column set independently of the data — the evidence archive manifest, whose
+     * columns are fixed by `contracts/exports.md` and which must still carry its header when the archive
+     * turned out to be empty. Deriving it from the first row would make an empty export headerless, and
+     * a headerless manifest is not a manifest.
+     *
+     * Columns in `$header` keep their order and are always emitted. Any key a row carries that the
+     * header omits is appended afterwards in first-seen order, so passing a header cannot silently drop
+     * a column.
      *
      * @param iterable<array<string,mixed>> $rows
+     * @param list<string>|null $header
      */
-    public function export(iterable $rows): string
+    public function export(iterable $rows, ?array $header = null): string
     {
-        $header = [];
+        return $this->render($rows, $header);
+    }
+
+    /**
+     * @param iterable<array<string,mixed>> $rows
+     */
+    private function render(iterable $rows, ?array $header): string
+    {
+        $columns = $header ?? [];
         $normalised = [];
 
         foreach ($rows as $index => $row) {
@@ -82,18 +95,15 @@ final class CsvExporter implements Exporter
                 ));
             }
 
-            // Union preserving first-seen order. `array_merge` alone would append the duplicate
-            // column names, producing a header like `a,b,a` and a record with a trailing cell per
-            // repeated key, so the dedupe has to be explicit.
             foreach (array_keys($row) as $column) {
-                if (!in_array($column, $header, true)) {
-                    $header[] = $column;
+                if (!in_array($column, $columns, true)) {
+                    $columns[] = $column;
                 }
             }
             $normalised[] = $row;
         }
 
-        if ($header === []) {
+        if ($columns === []) {
             // An empty export is a valid answer to "no records match", and it still carries the
             // contract's explicit header requirement as an empty file rather than as a header of
             // guessed column names.
@@ -106,11 +116,11 @@ final class CsvExporter implements Exporter
         }
 
         try {
-            fputcsv($handle, $header, ',', '"', self::CSV_ESCAPE, "\n");
+            fputcsv($handle, $columns, ',', '"', self::CSV_ESCAPE, "\n");
 
             foreach ($normalised as $row) {
                 $line = [];
-                foreach ($header as $column) {
+                foreach ($columns as $column) {
                     $line[] = array_key_exists($column, $row)
                         ? $this->cell($row[$column])
                         : '';
