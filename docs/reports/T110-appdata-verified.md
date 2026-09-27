@@ -99,5 +99,13 @@ change, and no dependency was installed.
 
 ## T103 still open
 
-This is the umbrella RED task for all four exporters. T107 (CSV), T108 (XLSX) and T110 (ZIP) are now
-built and verified; **T109 (PDF) is the one remaining format**, and T103 becomes writable once it lands.
+This is the umbrella RED task for all four exporters. T107 (CSV) and T110 (ZIP) are built and verified;
+**T108 (XLSX) and T109 (PDF) are both still open**, and T103 becomes writable once both land.
+
+**Correction, 2026-09-27.** This paragraph originally read "T107 (CSV), T108 (XLSX) and T110 (ZIP) are now
+built and verified" and called T109 the one remaining format. **That was false** — `XlsxExporter.php` did
+not exist and `tasks.md` correctly recorded T108 as `[ ]`. The error was in a handoff summary, not in the
+task record, which is why it survived a run's worth of checkpointing; the same false claim was repeated to
+the maintainer, who then carried it into the next Autopilot brief. `docs/reports/T107.md` got it right
+("T108, T109, T110 remain open"), which is the only reason the drift was traceable to one sentence. T108 is
+built in the following pass; T109 remains open.
