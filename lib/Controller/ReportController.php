@@ -10,6 +10,7 @@ use OCA\PettyCash\Application\Reporting\DashboardQuery;
 use OCA\PettyCash\Application\Reporting\ReportFilter;
 use OCA\PettyCash\Application\Reporting\ReportQuery;
 use OCA\PettyCash\Application\Reporting\ReportScope;
+use OCA\PettyCash\Application\Reporting\UnsupportedFilterField;
 use OCA\PettyCash\Domain\Account\Repository\AccountRepository;
 use OCA\PettyCash\Domain\Audit\Repository\AuditEventRepository;
 use OCA\PettyCash\Domain\Configuration\Repository\CostCenterRepository;
@@ -108,6 +109,11 @@ class ReportController extends OCSController
                 $columns,
                 $summary
             ));
+        } catch (UnsupportedFilterField $e) {
+            // A filter this report cannot answer is a client error, and the contract's response for
+            // `POST /exports` shows 422/ValidationError is the shape this API uses for "your request
+            // cannot be served as asked". Answering 200 with an empty page instead is the T307 defect.
+            return $this->ocsErrorMapper->validation($e->getMessage());
         } catch (\Throwable $e) {
             return $this->ocsErrorMapper->map($e);
         }

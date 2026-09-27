@@ -3686,7 +3686,7 @@ One finding, surfaced by implementing T302 and explicitly recorded there as unow
   narrowing must be applied there, not in the controller, or there will be two definitions of what a
   filter means. (missing)
 
-- [ ] T307 **CRITICAL** — Reconcile `ReportQuery::applyFilter()`'s expected row keys with the rows the
+- [x] T307 **CRITICAL** — Reconcile `ReportQuery::applyFilter()`'s expected row keys with the rows the
   report and export controllers actually emit, and reopen T106 and T112 whose completion evidence this
   invalidates. The filter rule reads `currencyCode`, `actorUid`, `costCenterDbId`, `eventType` and
   `createdBy`; the sheets/transactions/accounts/process/evidence rows emit `currency` and `ownerUid`,
@@ -3700,3 +3700,33 @@ One finding, surfaced by implementing T302 and explicitly recorded there as unow
   refusing them. This is a domain defect, not a controller one: the right fix is one agreed row
   vocabulary owned by `ReportQuery` and consumed by both the report and export paths, rather than
   renaming keys in each producer until they happen to agree. (contradicts)
+
+  **Delivered.** `ReportQuery` now owns the filter-to-row-key mapping in one place
+  (`FILTER_FIELD_KEYS`), and refuses a filter its rows cannot answer. Measured on the live endpoint
+  after the fix: `GET /reports/sheets` `total: 100`; `filters={"currencyCodes":["IRR"]}` **99** (was
+  **0**); `filters={"actorUids":["employee1"]}` **100** (was **0**); `filters={"statuses":["OPEN"]}`
+  **97**; `costCenterDbIds` and `eventTypes` on sheets now answer **422** naming the field and the keys
+  the rows do carry; `eventTypes` on the audit report answers **200 total: 0**, a true negative,
+  because audit rows genuinely carry `eventType`.
+
+  Several filter fields list more than one accepted key (`currencyCodes` accepts `currency` and
+  `currencyCode`; `actorUids` accepts `ownerUid` and `actorUid`) because the concepts genuinely differ
+  by subject -- a sheet has an *owner*, an audit event an *actor* -- rather than because one word needed
+  renaming onto the other.
+
+  **Why T106 and T112 were NOT reopened, contrary to this task's own text.** Their behaviour is now
+  correct and verified, and T307 *is* the repair; reopening them would assert outstanding work that does
+  not exist. What was genuinely incomplete was T106's *verification*, and that gap is now closed by six
+  contract tests that run against rows a real producer emits -- the thing its 53 unit tests never did.
+  They passed unchanged through this fix, which is the evidence that they could not have caught it: they
+  built rows whose keys matched the filter's expectations rather than the keys the controllers emit.
+
+  **Verified**: 24 tests / 365 assertions in the report+export contract file, five of them new and
+  aimed at this defect. Proven by mutation: reverting `currencyCodes` to read only `currencyCode` fails
+  `testFilteringSheetsByCurrencyReturnsTheSheets`. Full suite **628 tests, 2770 assertions, 1
+  pre-existing T275 failure**.
+
+  **Residual, stated**: `costCenterDbIds` and `createdBy` are now refused everywhere, because no report
+  producer emits those columns. That is the correct answer today and a real capability gap -- FR-064's
+  cost-centre filtering and the spec's creator filter have no data behind them -- and it is unowned by
+  any task.

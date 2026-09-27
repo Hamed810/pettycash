@@ -255,44 +255,62 @@ final readonly class ReportQuery
      * @param list<array<string, mixed>> $rows
      * @return list<array<string, mixed>>
      */
+    /**
+     * Which row key each `ReportFilter` field reads, in order of preference.
+     *
+     * This map is the single place that defines the report row vocabulary a filter is evaluated
+     * against. It exists because the rule and its producers had drifted apart: the filter read
+     * `currencyCode` and `actorUid` while sheets and transactions emitted `currency` and `ownerUid`,
+     * so those filters compared an absent key and dropped every row while returning 200 (T307).
+     *
+     * Several entries list more than one key because the underlying concepts genuinely differ by
+     * subject and both are correct in their own place: a sheet has an *owner*, an audit event has an
+     * *actor*, and a filter on `actorUids` should mean whichever the report actually carries. The
+     * list is "any of these, first present wins" -- not a rename forced onto one word.
+     *
+     * @var array<string, list<string>>
+     */
+    private const FILTER_FIELD_KEYS = [
+        'statuses' => ['status'],
+        'currencyCodes' => ['currency', 'currencyCode'],
+        'actorUids' => ['ownerUid', 'actorUid'],
+        'eventTypes' => ['eventType'],
+        'costCenterDbIds' => ['costCenterDbId'],
+        'createdBy' => ['createdBy'],
+        'dateRange' => ['occurredAt', 'createdAt'],
+    ];
+
+    /**
+     * @param list<array<string, mixed>> $rows
+     * @return list<array<string, mixed>>
+     */
     private function applyFilter(array $rows, ReportFilter $filter): array
     {
         if (!$filter->hasFieldFilters()) {
             return $rows;
         }
 
+        // Refuse a filter the rows cannot answer *before* comparing anything, so a vocabulary mismatch
+        // surfaces as a 422 naming the field rather than as a confident empty page.
+        $this->assertFilterIsEvaluable($rows, $filter);
+
         return array_values(array_filter(
             $rows,
             function (array $row) use ($filter): bool {
-                if ($filter->statuses !== [] && !in_array((string) ($row['status'] ?? ''), $filter->statuses, true)) {
-                    return false;
-                }
-                if ($filter->currencyCodes !== [] && !in_array((string) ($row['currencyCode'] ?? ''), $filter->currencyCodes, true)) {
-                    return false;
-                }
-                if ($filter->costCenterDbIds !== [] && !in_array((int) ($row['costCenterDbId'] ?? 0), $filter->costCenterDbIds, true)) {
-                    return false;
-                }
-                if ($filter->actorUids !== [] && !in_array((string) ($row['actorUid'] ?? ''), $filter->actorUids, true)) {
-                    return false;
-                }
-                if ($filter->eventTypes !== [] && !in_array((string) ($row['eventType'] ?? ''), $filter->eventTypes, true)) {
-                    return false;
-                }
-                if ($filter->createdBy !== null && (string) ($row['createdBy'] ?? '') !== $filter->createdBy) {
-                    return false;
-                }
-                if ($filter->from !== null && !isset($row['occurredAt']) && !isset($row['createdAt'])) {
-                    return false;
-                }
+                foreach (self::FILTER_FIELD_KEYS as $field => $keys) {
+                    if (!$this->filterRequests($filter, $field)) {
+                        continue;
+                    }
 
-                $timestamp = $row['occurredAt'] ?? $row['createdAt'] ?? null;
-                if ($timestamp !== null) {
-                    $moment = $timestamp instanceof \DateTimeInterface ? $timestamp : new \DateTimeImmutable((string) $timestamp);
-                    if ($filter->from !== null && $moment < $filter->from) {
+                    $key = $this->presentKey($row, $keys);
+                    if ($key === null) {
+                        // The row lacks the field this filter needs. `assertFilterIsEvaluable()`
+                        // guarantees at least one row carries it, so this is a genuinely partial row
+                        // set rather than a vocabulary mismatch; excluding it is the honest reading.
                         return false;
                     }
-                    if ($filter->to !== null && $moment > $filter->to) {
+
+                    if (!$this->rowMatches($row[$key], $filter, $field)) {
                         return false;
                     }
                 }
@@ -300,5 +318,122 @@ final readonly class ReportQuery
                 return true;
             }
         ));
+    }
+
+    /**
+     * Whether the caller actually asked for this filter.
+     */
+    private function filterRequests(ReportFilter $filter, string $field): bool
+    {
+        return match ($field) {
+            'statuses' => $filter->statuses !== [],
+            'currencyCodes' => $filter->currencyCodes !== [],
+            'actorUids' => $filter->actorUids !== [],
+            'eventTypes' => $filter->eventTypes !== [],
+            'costCenterDbIds' => $filter->costCenterDbIds !== [],
+            'createdBy' => $filter->createdBy !== null,
+            'dateRange' => $filter->hasDateRange(),
+            default => false,
+        };
+    }
+
+    /**
+     * Compare one row value against the requested values for that filter.
+     */
+    private function rowMatches(mixed $value, ReportFilter $filter, string $field): bool
+    {
+        if ($field === 'dateRange') {
+            $moment = $value instanceof \DateTimeInterface
+                ? $value
+                : new \DateTimeImmutable((string) $value);
+
+            if ($filter->from !== null && $moment < $filter->from) {
+                return false;
+            }
+            if ($filter->to !== null && $moment > $filter->to) {
+                return false;
+            }
+
+            return true;
+        }
+
+        $actual = match ($field) {
+            'statuses' => (string) $value,
+            'currencyCodes' => (string) $value,
+            'actorUids' => (string) $value,
+            'eventTypes' => (string) $value,
+            'costCenterDbIds' => (int) $value,
+            'createdBy' => (string) $value,
+            default => (string) $value,
+        };
+
+        $requested = match ($field) {
+            'statuses' => $filter->statuses,
+            'currencyCodes' => $filter->currencyCodes,
+            'actorUids' => $filter->actorUids,
+            'eventTypes' => $filter->eventTypes,
+            'costCenterDbIds' => $filter->costCenterDbIds,
+            'createdBy' => [$filter->createdBy],
+            default => [],
+        };
+
+        return in_array($actual, array_map(strval(...), $requested), true)
+            || ($field === 'costCenterDbIds' && in_array($actual, $requested, true));
+    }
+
+    /**
+     * The first of `$keys` the row actually carries.
+     *
+     * @param list<string> $keys
+     */
+    private function presentKey(array $row, array $keys): ?string
+    {
+        foreach ($keys as $key) {
+            if (array_key_exists($key, $row)) {
+                return $key;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Refuse any requested filter that no row in the set can answer.
+     *
+     * @param list<array<string, mixed>> $rows
+     */
+    private function assertFilterIsEvaluable(array $rows, ReportFilter $filter): void
+    {
+        if ($rows === []) {
+            // Nothing to compare against, so nothing is being asserted about the data. Refusing here
+            // would make a filter unusable on an empty report, which is not a wrong answer.
+            return;
+        }
+
+        $available = [];
+        foreach ($rows as $row) {
+            foreach (array_keys($row) as $key) {
+                $available[$key] = true;
+            }
+        }
+
+        foreach (self::FILTER_FIELD_KEYS as $field => $keys) {
+            if (!$this->filterRequests($filter, $field)) {
+                continue;
+            }
+
+            foreach ($keys as $key) {
+                if (isset($available[$key])) {
+                    continue 2;
+                }
+            }
+
+            throw new UnsupportedFilterField(sprintf(
+                'This report cannot be filtered by `%s`: its rows carry %s. Filtering anyway would '
+                . 'match nothing and report an empty result, so the request is refused instead.',
+                $field,
+                $available === [] ? 'no fields' : '`' . implode('`, `', array_keys($available)) . '`'
+            ));
+        }
     }
 }

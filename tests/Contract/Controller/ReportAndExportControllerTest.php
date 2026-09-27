@@ -124,6 +124,68 @@ final class ReportAndExportControllerTest extends TestCase
         $this->assertStringContainsString('filters', $response['message']);
     }
 
+    // ===== T307: a filter the report cannot answer =====
+
+    /**
+     * The regression. `ReportQuery::applyFilter()` read `currencyCode` and `actorUid` while the sheets
+     * rows emit `currency` and `ownerUid`, so these filters compared an absent key, matched nothing and
+     * returned an empty page with a 200. On a sheet set that is entirely IRR and owned by
+     * `employee1`, filtering by either returned `total: 0` -- a confident wrong answer.
+     *
+     * These run against the live endpoint rather than against rows built to suit the filter, because
+     * building the rows in the test is precisely how the defect survived T106: its 53 tests used rows
+     * whose keys matched the filter's expectations, never the keys a producer actually emits.
+     */
+    public function testFilteringSheetsByCurrencyReturnsTheSheets(): void
+    {
+        $data = $this->get('/reports/sheets?filters=' . rawurlencode('{"currencyCodes":["IRR"]}'))['data'];
+
+        $this->assertGreaterThan(0, $data['total'], 'a currency every sheet has must not return nothing');
+    }
+
+    public function testFilteringSheetsByActorReturnsTheSheets(): void
+    {
+        $data = $this->get('/reports/sheets?filters=' . rawurlencode('{"actorUids":["employee1"]}'))['data'];
+
+        $this->assertGreaterThan(0, $data['total'], 'a filter naming the owner must not return nothing');
+    }
+
+    public function testFilteringSheetsByStatusStillNarrows(): void
+    {
+        $all = $this->get('/reports/sheets')['data'];
+        $open = $this->get('/reports/sheets?filters=' . rawurlencode('{"statuses":["OPEN"]}'))['data'];
+
+        $this->assertLessThanOrEqual($all['total'], $open['total']);
+        foreach ($open['rows'] as $row) {
+            $this->assertSame('OPEN', $row['status'], 'a status filter must only return that status');
+        }
+    }
+
+    /**
+     * A filter no row in the report can answer is refused, naming the field and what the rows do carry.
+     * A 200 with `total: 0` here would be indistinguishable from a true negative.
+     */
+    public function testAFilterTheReportCannotAnswerIsRefusedRatherThanReturningNothing(): void
+    {
+        foreach (['costCenterDbIds', 'eventTypes'] as $field) {
+            $response = $this->get('/reports/sheets?filters=' . rawurlencode(json_encode([$field => [1]])));
+
+            $this->assertEquals(422, $response['status'], "`{$field}` is not a sheets field and must be refused");
+            $this->assertStringContainsString($field, $response['message']);
+            $this->assertStringContainsString('status', $response['message'], 'the refusal should list what the rows do carry');
+        }
+    }
+
+    public function testTheAuditReportDoesAcceptAnEventTypeFilter(): void
+    {
+        $response = $this->get('/reports/audit?filters=' . rawurlencode('{"eventTypes":["NOT_A_REAL_EVENT"]}'));
+
+        // 200 with a true zero, not a 422: audit rows genuinely carry `eventType`, so this filter is
+        // evaluable and simply matches nothing.
+        $this->assertEquals(200, $response['status']);
+        $this->assertSame(0, $response['data']['total']);
+    }
+
     // ===== POST /exports =====
 
     public function testAConformingExportRequestAnswersJson(): void
