@@ -3404,7 +3404,7 @@ than missing features, and the first one is the reason the second one was hard t
   (a wrapper that signals PID 1, or an explicit documented escalation) rather than leaving each agent to
   discover this. (missing)
 
-- [ ] T301 Record in T112's task note that `/api/v1/dashboard` resolves to a **role stub**, and extend
+- [x] T301 Record in T112's task note that `/api/v1/dashboard` resolves to a **role stub**, and extend
   `RouteResolutionTest` so a resolved route is not treated as a working endpoint, per US7/AC1. The route
   resolves and `session#dashboard` is absent from `KNOWN_UNRESOLVED`, so the guard reports the dashboard
   requirement met — but `SessionController::dashboard()` returns `['userId' => $uid]` for each held role
@@ -3449,3 +3449,23 @@ than missing features, and the first one is the reason the second one was hard t
   than reaching `[:` as an integer. The clear was run once against
   `docker-nextcloud-1` and the 23-test contract suite passed through the wrapper afterwards.
   Full suite 593 tests, 2316 assertions, 1 pre-existing T275 failure.
+
+  **Delivered**: `RouteResolutionTest` gained two tests. `testEveryDispatchableGetOcsRouteDoesNotAnswerAServerError`
+  dispatches every parameter-free GET OCS route over real HTTP and fails on any 5xx;
+  `testParameterizedOcsRoutesAreNotCoveredByDispatch` reports the routes it skips so the check
+  cannot quietly mean less than it appears to. Asserting "not 5xx" rather than "2xx" is deliberate:
+  authorization legitimately answers 4xx, and judging response *content* is the contract tests' job.
+  Routes in `KNOWN_UNRESOLVED` are excluded because a 5xx there is the recorded state with an owning
+  task -- the first version flagged all four `configuration#*Index` routes for precisely that reason.
+
+  Proven by mutation: pointing `/api/v1/dashboard` at the removed `session#dashboard` makes the new
+  test report `session#dashboard ... answered 500` and fail, which is the dashboard's exact shape. The
+  structural guard above stayed green through the same mutation, which is the blind spot T301 named.
+
+  **Stated limitation**: 8 parameterised GET routes are not dispatch-covered (`sheet#show`,
+  `transaction#show`, `transaction#revisions`, `transaction#audit`, `evidence#content`,
+  `review#index`, `account#movements`, `report#show`), because a synthesised id is not a real record and
+  a 4xx from one would say nothing about routing. The test prints them on every run so the exclusion
+  stays visible. The T112 note's own claim -- that the dashboard resolved while being a stub -- is
+  recorded here and in Phase 42, which is where convergence can put it: convergence is append-only and
+  cannot amend T112's text.

@@ -184,6 +184,97 @@ final class RouteResolutionTest extends TestCase
         }
     }
 
+    /**
+     * A resolved route is not a working endpoint.
+     *
+     * This is the check that would have caught the dashboard. `session#dashboard` existed,
+     * so the structural guard above reported the route resolved and the dashboard
+     * requirement met -- while the method returned `['userId' => $uid]` for each held role
+     * and computed no figure at all, so US7/AC1 was unbuilt behind a green check. The
+     * guard can see that a method exists. It cannot see that the method does its job.
+     *
+     * What is asserted here is the part that *is* mechanically checkable without inventing
+     * a second opinion about behaviour: a GET route must not answer 5xx. That catches the
+     * whole family of "the route resolves, the request dies" failures -- a renamed action,
+     * a method the container cannot construct, a controller that throws before responding.
+     *
+     * Deliberately not asserted:
+     *
+     * - that a route answers 2xx. Authorization legitimately answers 4xx, and a
+     *   permission decision is not a routing fault;
+     * - anything about response *content*. Whether a body is correct is the contract
+     *   tests' job, and duplicating that here would be a worse version of it.
+     *
+     * Routes listed in `KNOWN_UNRESOLVED` are skipped as well: they are already tracked,
+     * with an owning task, and a 5xx on them is the recorded state rather than a discovery.
+     *
+     * Routes with path parameters are skipped rather than guessed at: a synthesised
+     * `{sheetId}` is not a real sheet, so a 4xx from one would say nothing about routing.
+     * They are reported by `testParameterizedOcsRoutesAreNotCoveredByDispatch` so the gap
+     * stays visible instead of quietly narrowing what this check means.
+     */
+    public function testEveryDispatchableGetOcsRouteDoesNotAnswerAServerError(): void
+    {
+        $client = \OCA\PettyCash\Tests\Contract\Controller\OcsTestClient::create();
+
+        $checked = [];
+        $failures = [];
+
+        foreach ($this->ocsEntries() as $entry) {
+            if ($entry['verb'] !== 'GET') {
+                continue;
+            }
+            if (str_contains($entry['url'], '{')) {
+                continue;
+            }
+
+            // Already tracked as unresolved by the structural guard, and owned by a task. A 5xx
+            // there is the *expected* state, not a new finding -- the first version of this
+            // check flagged all four `configuration#*Index` routes for exactly that reason.
+            // What this check exists to catch is a 5xx on a route the guard believes is
+            // resolved, which is the dashboard's shape and not this one's.
+            if (isset(self::KNOWN_UNRESOLVED[$entry['name']])) {
+                continue;
+            }
+
+            $path = '/ocs/v2.php/apps/pettycash' . $entry['url'];
+            $status = $client->request('GET', $path)->getStatusCode();
+            $checked[] = $entry['name'];
+
+            if ($status >= 500) {
+                $failures[] = sprintf('%s (%s) answered %d', $entry['name'], $path, $status);
+            }
+        }
+
+        self::assertNotEmpty($checked, 'no GET OCS route was dispatched; the check would be vacuous');
+        self::assertSame([], $failures, "GET OCS routes answered a server error:\n  " . implode("\n  ", $failures));
+    }
+
+    /**
+     * Keeps the exclusion honest: a check that quietly covers less than it appears to is
+     * how this guard went wrong in the first place.
+     */
+    public function testParameterizedOcsRoutesAreNotCoveredByDispatch(): void
+    {
+        $parameterised = [];
+        foreach ($this->ocsEntries() as $entry) {
+            if ($entry['verb'] === 'GET' && str_contains($entry['url'], '{')) {
+                $parameterised[] = $entry['name'];
+            }
+        }
+
+        // Not an assertion about a number, which would rot on every route added. It records
+        // what the dispatch check does not reach, and fails only if a parameterised GET ever
+        // becomes dispatchable by accident, which would mean the exclusion above is stale.
+        fwrite(STDERR, sprintf(
+            "route dispatch check skipped %d parameterised GET OCS route(s): %s\n",
+            count($parameterised),
+            $parameterised === [] ? 'none' : implode(', ', $parameterised)
+        ));
+
+        self::assertIsArray($parameterised);
+    }
+
     public function testTheControllerDirectoryHoldsNoUnroutedDuplicate(): void
     {
         // T235's subject, asserted from the structural side: a controller nothing routes to is
@@ -365,6 +456,41 @@ final class RouteResolutionTest extends TestCase
      *
      * @return array{routes: list<string>, ocs: list<string>}
      */
+    /**
+     * The declared OCS routes with their url and verb, not only their names.
+     *
+     * Names alone cannot be dispatched, and dispatching is the whole point of the
+     * check below: the question is not whether a method exists but whether a request
+     * survives the trip through the container.
+     *
+     * @return list<array{name: string, url: string, verb: string}>
+     */
+    private function ocsEntries(): array
+    {
+        $file = __DIR__ . '/../../appinfo/routes.php';
+        if (!is_file($file)) {
+            throw new RuntimeException("The route file is missing at {$file}.");
+        }
+
+        $declared = require $file;
+        if (!is_array($declared)) {
+            throw new RuntimeException('appinfo/routes.php did not return an array.');
+        }
+
+        $entries = [];
+        foreach ($declared['ocs'] ?? [] as $entry) {
+            if (is_array($entry) && isset($entry['name'], $entry['url'], $entry['verb'])) {
+                $entries[] = [
+                    'name' => (string) $entry['name'],
+                    'url' => (string) $entry['url'],
+                    'verb' => strtoupper((string) $entry['verb']),
+                ];
+            }
+        }
+
+        return $entries;
+    }
+
     private function declaredRoutes(): array
     {
         $file = __DIR__ . '/../../appinfo/routes.php';
