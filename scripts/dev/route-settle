@@ -58,15 +58,15 @@ set -euo pipefail
 # `occ` cannot do it. Under CLI, `ICacheFactory::createLocal()` returns an
 # array-backed cache, so clearing there empties nothing that Apache's `mod_php`
 # is serving; Apache's local cache is APCu, per worker process. The only
-# mechanism that reaches it is signalling the Apache master (PID 1 in this
-# image) with `SIGUSR2`, which recycles the workers and drops their APCu
+# mechanism that reaches it is recycling Apache's workers, which drops their APCu
 # contents. That is a privileged action on shared environment state — this
 # repository is a guest in a lab it does not own — and `scripts/dev/in-container`
-# is deliberately `--user www-data`, so this script cannot send it either.
+# is deliberately `--user www-data`, so this script cannot do it either.
 #
-# So `--clear` prints the exact command and exits without running it. A human
-# runs it. See `AGENTS.md`; the volume and container rules are unchanged by
-# this script because it never touches either.
+# So `--clear` delegates to `scripts/dev/route-cache-clear`, which a human runs.
+# The clear and the marker it writes have to be one action, or the marker can
+# disagree with what actually happened. See `AGENTS.md`; the volume and container
+# rules are unchanged by either script because neither touches either.
 #
 # USAGE
 #
@@ -160,15 +160,19 @@ now_epoch() {
 print_clear_command() {
   cat >&2 <<'MSG'
 route-settle: clearing it requires one privileged command, which this repository
-route-settle: does not run on its own. Apache is PID 1 in the Nextcloud
-route-settle: container; SIGUSR2 recycles its workers and drops their APCu
-route-settle: route cache. It reloads the same configuration and does not touch
-route-settle: containers, volumes or data.
+route-settle: does not run on its own: recycling Apache in a container this
+route-settle: repository does not own is a human decision. One command does it,
+route-settle: and it records that it happened so this script can tell "not yet
+route-settle: cleared" from "already cleared":
 
-route-settle:     docker exec -u root docker-nextcloud-1 kill -USR2 1
+route-settle:     scripts/dev/route-cache-clear
 
-route-settle: Then re-run. (`docker exec ... php -r 'apcu_clear_cache();'` does
-route-settle: NOT work: it clears the CLI's cache, not the mod_php workers'.)
+route-settle: It recycles Apache's workers, which drops their APCu route cache. It
+route-settle: reloads the same configuration and touches no container, volume or
+route-settle: data. Do NOT substitute `kill -USR2 1`: that signal is the textbook
+route-settle: graceful restart and does nothing here, silently. And
+route-settle: `php -r 'apcu_clear_cache();'` clears the CLI's cache, not the
+route-settle: mod_php workers'.
 MSG
 }
 

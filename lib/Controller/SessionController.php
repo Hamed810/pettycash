@@ -16,8 +16,12 @@ use OCP\AppFramework\Http\DataResponse;
 use OCP\AppFramework\OCSController;
 
 /**
- * Serves the session endpoints registered in `appinfo/routes.php`
- * (`session#me` and `session#dashboard`).
+ * Serves the `session#me` endpoint registered in `appinfo/routes.php`.
+ *
+ * `/api/v1/dashboard` used to live here too, behind `session#dashboard`. It moved to
+ * `DashboardController` (T112) because this handler returned a role *stub* — a `userId` and nothing
+ * else — and never consulted `DashboardQuery`, so it satisfied the route-resolution guard without
+ * satisfying US7/AC1. A resolved route is not the same thing as a working endpoint.
  *
  * Role resolution follows FR-002/FR-018: every authenticated user with
  * application access may act as a purchaser, additional roles come from
@@ -57,42 +61,6 @@ class SessionController extends OCSController
                 'roles' => $roles,
                 'capabilities' => $this->capabilities($roles),
             ]);
-        } catch (\Throwable $e) {
-            return $this->ocsErrorMapper->map($e);
-        }
-    }
-
-    #[NoAdminRequired]
-    public function dashboard(): DataResponse
-    {
-        try {
-            $uid = $this->currentUser->uid();
-            if ($uid === '') {
-                return $this->ocsErrorMapper->forbidden('No authenticated user in session');
-            }
-
-            $roles = $this->resolveRoles($uid);
-            $dashboard = [];
-
-            // Cards are only present for the roles the caller actually holds, so a
-            // purchaser never sees finance or administration summaries.
-            if (in_array(Role::Purchaser->value, $roles, true)) {
-                $dashboard['purchaser'] = ['userId' => $uid];
-            }
-            if (in_array(Role::CostCenterManager->value, $roles, true)) {
-                $dashboard['costCenter'] = ['userId' => $uid];
-            }
-            if (in_array(Role::SeniorManager->value, $roles, true)) {
-                $dashboard['senior'] = ['userId' => $uid];
-            }
-            if (in_array(Role::Finance->value, $roles, true)) {
-                $dashboard['finance'] = ['userId' => $uid];
-            }
-            if (in_array(Role::Administrator->value, $roles, true)) {
-                $dashboard['admin'] = ['userId' => $uid];
-            }
-
-            return new DataResponse($dashboard);
         } catch (\Throwable $e) {
             return $this->ocsErrorMapper->map($e);
         }

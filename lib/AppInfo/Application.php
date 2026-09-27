@@ -17,7 +17,9 @@ use OCA\PettyCash\Application\Port\TransientExportStore;
 use OCA\PettyCash\Application\Port\TransactionManager;
 use OCA\PettyCash\Application\Port\UserDirectory;
 use OCA\PettyCash\Application\Audit\RetentionPolicyService;
+use OCA\PettyCash\Application\Reporting\DashboardQuery;
 use OCA\PettyCash\Application\Reporting\ExportService;
+use OCA\PettyCash\Application\Reporting\ReportQuery;
 use OCA\PettyCash\Application\Security\AuthorizationService;
 use OCA\PettyCash\Application\Workflow\FinanceQueue;
 use OCA\PettyCash\Application\Workflow\FinanceSettlementService;
@@ -358,6 +360,19 @@ final class Application extends App implements IBootstrap
         // Export orchestration (T111). Registered here so the export controller (T112) can authorize
         // before it generates anything: the service owns the transient-artifact lifecycle, so a caller
         // that resolves it gets both the authorization decision and the cleanup in one place.
+        // T112. `DashboardQuery` was built in T106 but never registered, so nothing could resolve it and
+        // `/api/v1/dashboard` had to be served by a stub instead of the role-aware projection.
+        $context->registerService(DashboardQuery::class, function ($c) {
+            return new DashboardQuery(
+                $c->query(RoleAssignmentRepository::class),
+                $c->query(\OCA\PettyCash\Domain\Shared\Clock::class)
+            );
+        });
+
+        $context->registerService(ReportQuery::class, function ($c) {
+            return new ReportQuery();
+        });
+
         $context->registerService(ExportService::class, function ($c) {
             return new ExportService(
                 new CsvExporter(),

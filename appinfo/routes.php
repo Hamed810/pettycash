@@ -9,7 +9,7 @@ return [
     'ocs' => [
         // Session routes
         ['name' => 'session#me', 'url' => '/api/v1/me', 'verb' => 'GET'],
-        ['name' => 'session#dashboard', 'url' => '/api/v1/dashboard', 'verb' => 'GET'],
+        ['name' => 'dashboard#index', 'url' => '/api/v1/dashboard', 'verb' => 'GET'],
 
         // Sheet routes
         ['name' => 'sheet#create', 'url' => '/api/v1/sheets', 'verb' => 'POST'],

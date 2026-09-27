@@ -235,11 +235,15 @@ Rules:
 - It **blocks** rather than waits. The opcache wait is 60s and provably
   sufficient; this TTL is 3600s, so blocking an hour is not acceptable. The fix is
   one command.
-- `scripts/dev/route-cache-clear` performs the clear: it signals `SIGUSR2` to the
-  Apache master (PID 1 in this image), waits for the workers to return, and records
-  the moment. The record matters — without it `route-settle` could not distinguish
-  "not yet cleared" from "already cleared" and would block for the rest of the hour
-  after a successful clear.
+- `scripts/dev/route-cache-clear` performs the clear: it asks Apache to reload
+  gracefully, confirms the workers were actually recycled, and records the moment.
+  The record matters — without it `route-settle` could not distinguish "not yet
+  cleared" from "already cleared" and would block for the rest of the hour after a
+  successful clear.
+- It uses `apachectl -k graceful`, **not** `kill -USR2 1`. SIGUSR2 is the textbook
+  graceful-restart signal and does nothing in this container: the child PIDs were
+  identical before and after and the stale route kept being served. The reload is
+  proven by observing a *different set* of child PIDs, never by a matching count.
 - The container name is `docker-nextcloud-1`, per the pinned compose project.
 
 `docker exec ... php -r 'apcu_clear_cache();'` does **not** work: it clears the CLI's

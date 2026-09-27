@@ -65,7 +65,13 @@ final readonly class ReportScope
     ): self {
         $effective = $assignments->findActiveByUserUid($actorUid, $on);
 
-        $roles = [];
+        // FR-018, and the rule `SessionController::me()` already applies: every authenticated user with
+        // application access may act as a purchaser, and additional roles come from effective-dated
+        // assignments. Without this seed, `scopeFor()` described a user with no assignments as having no
+        // roles at all, so `/dashboard` and `/me` disagreed about the same person -- `/me` listed
+        // PURCHASER and the dashboard had no purchaser card. That divergence was found by a contract test
+        // asserting the two endpoints agree, not by reading either one.
+        $roles = [Role::Purchaser];
         $costCenterIds = [];
         $administrator = false;
 

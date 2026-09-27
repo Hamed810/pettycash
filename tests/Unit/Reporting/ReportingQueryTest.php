@@ -621,13 +621,29 @@ final class ReportingQueryTest extends TestCase
         self::assertNotContains('financeQueue', $sections);
     }
 
-    public function testAnAdministratorSeesTheAdministrationSectionOnly(): void
+    /**
+     * FR-007: an administrator gets full visibility but no financial approval authority, so no
+     * queue they cannot act on is offered. FR-018, on the other hand, makes every user with
+     * application access a purchaser, so the purchaser sections are present as well.
+     *
+     * The previous version of this test asserted `['administration']` and nothing else, which
+     * encoded the state before `ReportScope::forActor()` seeded the purchaser role. That is the
+     * divergence the dashboard contract test found: `/me` listed PURCHASER for the same user while
+     * the dashboard had no purchaser card. Asserting the union keeps both requirements honest --
+     * the useful one here is the `assertNotContains`, which is what FR-007 actually cares about.
+     */
+    public function testAnAdministratorSeesAdministrationWithoutAnyDecisionQueue(): void
     {
         $this->givenAssignment('admin-1', Role::Administrator, null);
 
         $sections = $this->dashboard->sections($this->dashboard->scopeFor('admin-1'));
 
-        self::assertSame(['administration'], $sections);
+        self::assertContains('administration', $sections);
+        // FR-018: still a purchaser, so the purchaser sections are the union's other half.
+        self::assertContains('mySheets', $sections);
+        // FR-007: no review or finance queue, because the administrator cannot decide in either.
+        self::assertNotContains('reviewQueues', $sections);
+        self::assertNotContains('financeQueue', $sections);
     }
 
     public function testAnAdministratorSummaryIsEmptyForANonAdministrator(): void
