@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace OCA\PettyCash\Infrastructure\Http;
 
 use InvalidArgumentException;
-use LogicException;
 use OCA\PettyCash\Application\Command\CommandConflict;
 use OCA\PettyCash\Application\Conflict;
 use OCP\AppFramework\Http;
@@ -43,7 +42,23 @@ final class OcsErrorMapper
             // requires a 409.
             $error instanceof Conflict => [Http::STATUS_CONFLICT, $error->errorCode()],
             $error instanceof InvalidArgumentException => [Http::STATUS_UNPROCESSABLE_ENTITY, 'VALIDATION_FAILED'],
-            $error instanceof LogicException => [Http::STATUS_FORBIDDEN, 'FORBIDDEN'],
+            // There is deliberately no `LogicException => 403` arm.
+            //
+            // It used to be there, and it was wrong twice over. `InvalidArgumentException` extends
+            // `LogicException`, so the arm was only ever correct for exceptions that were *not*
+            // validation failures -- which in practice meant it caught whatever the persistence layer
+            // happened to throw. A data fault then answered 403 FORBIDDEN with its internal message
+            // echoed verbatim: `GET /reports/transactions` returned
+            // "Cannot resolve the currency of transaction revision 7 from its sheet". A client caches
+            // that as a permission refusal and stops retrying; an operator reads it as an authorisation
+            // problem that does not exist. It is the same over-broad classification that caused T063's
+            // bug, where a broad `catch (\Exception)` swallowed every validation failure and answered
+            // 422 where the contract requires 409.
+            //
+            // Authorisation is not inferred from an exception class. Every controller that means
+            // "forbidden" already says so explicitly through `forbidden()`, which carries its own
+            // message. Anything unrecognised is a server fault: logged in full, reported as a generic
+            // failure, and its message withheld.
             default => [Http::STATUS_INTERNAL_SERVER_ERROR, 'UNEXPECTED_FAILURE'],
         };
 

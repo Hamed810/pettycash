@@ -72,7 +72,7 @@ and client foundations that block every user story.
 - [x] T026 Implement centralized object authorization and role-scoped query policies from the tested matrix in `lib/Application/Security/AuthorizationService.php` (enforce: self-review permitted when user holds required review role + scope + stage permission; ownership grants purchaser rights only; cost-center/senior/finance scope checks; admin no finance without finance role - explicit deny for admin attempting finance actions per FR-007)
 - [x] T027 Implement command UUID payload hashing, replay, and conflict handling in `lib/Application/Command/IdempotencyService.php`
 - [ ] T028 Implement transaction and configuration audit writers that snapshot UID, display name, role, stage, revision, explanation, command ID, and canonical before/after JSON in `lib/Application/Audit/` (**reopened by T295 — the configuration writer this task claims does not exist and never ran.** Only the transaction side is real: `AuditWriterService::append()`, the method the `AuditWriter` port declares and the only one any of the six production call sites uses. The configuration side was `appendConfiguration()`, it had **zero** call sites, and `DbAuditEventRepository::save()` targets `pettycash_transaction_audit` unconditionally, so even if it had been called it would have written a configuration event into the *transaction* stream, against FR-056. `grep -rn pettycash_configuration_audit lib/ --include=*.php` returns the migration and nothing else, so the table is created and permanently empty. T296 has since deleted the dead method, leaving no configuration writer at all; **T294** owns writing one that reaches the right table)
-- [ ] T029 Implement consistent OCS error mapping for validation, forbidden, hidden-not-found, stale state, idempotency conflict, and unexpected failures in `lib/Infrastructure/Http/OcsErrorMapper.php`
+- [x] T029 Implement consistent OCS error mapping for validation, forbidden, hidden-not-found, stale state, idempotency conflict, and unexpected failures in `lib/Infrastructure/Http/OcsErrorMapper.php`
 - [x] T030 Create the typed frontend OCS client, canonical error model, command-ID generator, pagination types, and no-automatic-mutation-retry behavior in `src/services/http.ts`, `src/types/api.ts`, and `src/types/permissions.ts`
 
 **Checkpoint**: All foundational tests pass; migrations install safely; shared services resolve from
@@ -3792,3 +3792,67 @@ cause, grouped so the masking defect and the masked defect are both owned.
   placeholder used as a join key). This is a different, private helper on the read path, so T230 stays
   closed. T102 correctly remains open -- it requires `process` and `evidence` coverage, and those two
   subjects cannot return rows until this is fixed.
+
+  **Delivered (reopened by Phase 45).** Removed the `$error instanceof LogicException => [403,
+  'FORBIDDEN']` arm from `OcsErrorMapper::map()`. Measured on the live endpoint, before and after, for
+  the same three requests:
+
+  | Request | Before | After |
+  |---|---|---|
+  | `GET /reports/transactions` | `403` + `Cannot resolve the currency of transaction revision 7 from its sheet` | `500` + `pettycash.error.unexpected` |
+  | `GET /reports/process` | `403` + internal message | `500` + `pettycash.error.unexpected` |
+  | `GET /reports/evidence` | `403` + internal message | `500` + `pettycash.error.unexpected` |
+
+  The internal revision id is no longer disclosed, and a data fault is no longer dressed as a
+  permission refusal. The rule now encoded: authorisation is never inferred from an exception class.
+  A controller that means "forbidden" says so by calling `forbidden()`; anything unrecognised is a
+  server fault -- logged in full through `TechnicalLogger::unexpected()`, reported generically, message
+  withheld. `InvalidArgumentException => 422`, `Conflict => 409` and `CommandConflict => 409` are
+  untouched, so client errors still carry their messages.
+
+  Full suite after the change: **628 tests, 2770 assertions, 1 pre-existing T275 failure** -- no
+  regressions, which also shows the removed arm was not load-bearing for any existing test.
+
+  **Why there is no unit test for this class, stated rather than omitted.** `OcsErrorMapper` returns
+  `DataResponse` and reads `Http::STATUS_*`, and `tests/bootstrap.php` deliberately does not bootstrap
+  Nextcloud, so `OCP\AppFramework\Http` is not autoloadable in the unit process -- a test errors with
+  `Class "OCP\AppFramework\Http" not found` before its first assertion. A unit test was written and
+  removed rather than committed unrunnable. The verification here is therefore the measured
+  before/after above, against the real HTTP surface, which is the stronger evidence anyway: it shows the
+  classification a client actually receives. `RouteResolutionTest` documents the same bootstrap
+  constraint for the same reason.
+
+  **Determination complete; the task stays open because the cause is split across two owners.**
+
+  Ran the query this task was waiting on, read-only, through `scripts/dev/in-container`:
+
+  | Probe | Result |
+  |---|---|
+  | `pettycash_transactions WHERE sheet_id IS NULL` | **0 rows** -- the sheet-less-transaction hypothesis is **wrong** |
+  | revisions whose `transaction_id` resolves to no transaction | **0 rows** -- not an orphan join |
+  | sheets whose `currency_id` resolves to no currency | **7 rows** -- the real cause |
+  | `pettycash_currencies` contents | exactly 3 rows: `1=IRR, 2=USD, 3=EUR` |
+
+  All 7 dangling sheets are titled **"Round Trip Sheet"** and carry `currency_id` values 19-27, ids that
+  do not and never existed in this instance. They were written 2026-09-27 03:38-03:41 by
+  `tests/Integration/Persistence/roundtrip-runner.php`, whose header claims it "deletes every row it
+  inserts, in a `finally`, in reverse insertion order". The contract fixtures are not implicated: they
+  resolve `currency_id` from the seeded IRR row and set `sheet_id` on every transaction.
+
+  **So the trigger is a test-harness defect, not a product defect** -- the runner inserted sheets
+  pointing at a currency id it never created, and did not clean them up. A fix aimed at
+  `resolveCurrencyCode()` would have been aimed at the wrong thing, which is why this task required the
+  determination before the fix.
+
+  **Two owners remain, and this task stays open for both:**
+
+  1. *Harness* -- `roundtrip-runner.php` must create a currency row (or reference the seeded one) before
+     inserting a sheet, and must clean up the 7 leaked sheets. Until then every run leaves more.
+  2. *Product* -- one record whose currency cannot be resolved destroys **three whole reports**. A report
+     must not be lost to a single unreadable row, and the honest answer is to exclude the row and say
+     how many were excluded, not to return nothing. This is the same failure shape as T307 -- a wrong or
+     empty answer delivered confidently -- and it is the half that would still bite in production if a
+     real dangling `sheets.currency_id` ever existed.
+
+  T029 (the masking 403) is fixed, so the remaining fault is now visible as a logged 500 rather than a
+  permission refusal.
