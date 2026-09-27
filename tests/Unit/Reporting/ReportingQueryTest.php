@@ -260,7 +260,7 @@ final class ReportingQueryTest extends TestCase
         );
 
         self::assertSame(1, $result['total']);
-        self::assertSame('a', $result['items'][0]['id']);
+        self::assertSame('a', $result['rows'][0]['id']);
     }
 
     public function testAnAdministratorSeesRowsOwnedByOthers(): void
@@ -460,9 +460,54 @@ final class ReportingQueryTest extends TestCase
 
     public function testEveryContractReportTypeIsSupported(): void
     {
+        // The contract's enum at `/reports/{reportType}`, verbatim. A client sends this string in the
+        // URL, so an underscore variant or an invented extra type would be a contract violation rather
+        // than a naming preference.
+        self::assertSame(
+            ['sheets', 'transactions', 'cost-centers', 'accounts', 'process', 'evidence', 'audit'],
+            ReportQuery::SUPPORTED_TYPES
+        );
+
         foreach (ReportQuery::SUPPORTED_TYPES as $type) {
             self::assertTrue($this->reports->supports($type), "{$type} must be supported");
         }
+    }
+
+    public function testTheContractSpellingOfCostCentersIsAccepted(): void
+    {
+        self::assertTrue($this->reports->supports('cost-centers'));
+        self::assertFalse(
+            $this->reports->supports('cost_centers'),
+            'the underscore spelling is not in the contract and must not be advertised'
+        );
+    }
+
+    public function testATypeTheContractDoesNotDeclareIsNotAdvertised(): void
+    {
+        // FR-065 names balances, movements and configuration audit as report subjects and the contract
+        // enum omits all three. That gap is recorded on T112 rather than papered over by advertising
+        // types the contract does not accept.
+        foreach (['balances', 'movements', 'configuration_audit'] as $undeclared) {
+            self::assertFalse($this->reports->supports($undeclared), "{$undeclared} is not a contract type");
+        }
+    }
+
+    public function testTheReportPageShapeMatchesTheContract(): void
+    {
+        $scope = new ReportScope('purchaser-1', [Role::Purchaser], []);
+        $result = $this->reports->paginate(
+            $scope,
+            new ReportFilter(),
+            [['id' => 'a', 'ownerUid' => 'purchaser-1']],
+            static fn (array $row, ReportScope $s): bool => $s->coversOwned((string) $row['ownerUid']),
+            ['id', 'ownerUid'],
+            ['totalMinor' => 125000]
+        );
+
+        // PageMeta (page, pageSize, total) plus columns, rows and summary.
+        self::assertSame(['page', 'pageSize', 'total', 'columns', 'rows', 'summary'], array_keys($result));
+        self::assertSame(['id', 'ownerUid'], $result['columns']);
+        self::assertSame(['totalMinor' => 125000], $result['summary']);
     }
 
     public function testAnUnknownReportTypeIsRefusedWithTheSupportedList(): void
@@ -490,8 +535,9 @@ final class ReportingQueryTest extends TestCase
 
         // 250 rows are in scope; a "give me everything" request is bounded to 100 per page.
         self::assertSame(250, $result['total']);
-        self::assertCount(100, $result['items']);
+        self::assertCount(100, $result['rows']);
         self::assertSame(100, $result['pageSize']);
+        self::assertSame(1, $result['page']);
     }
 
     public function testTheDefaultPageSizeBoundsTheWindowToTwentyFive(): void
@@ -510,7 +556,7 @@ final class ReportingQueryTest extends TestCase
         );
 
         self::assertSame(30, $result['total']);
-        self::assertCount(25, $result['items']);
+        self::assertCount(25, $result['rows']);
     }
 
     public function testTheSecondPageContinuesAfterTheFirst(): void
@@ -534,9 +580,9 @@ final class ReportingQueryTest extends TestCase
             static fn (array $row, ReportScope $s): bool => $s->coversOwned((string) $row['ownerUid'])
         );
 
-        self::assertCount(25, $first['items']);
-        self::assertCount(5, $second['items'], 'the remainder lands on page two');
-        self::assertNotSame($first['items'][0]['id'], $second['items'][0]['id']);
+        self::assertCount(25, $first['rows']);
+        self::assertCount(5, $second['rows'], 'the remainder lands on page two');
+        self::assertNotSame($first['rows'][0]['id'], $second['rows'][0]['id']);
     }
 
     public function testServerSideFiltersActuallyRemoveRows(): void
@@ -556,7 +602,7 @@ final class ReportingQueryTest extends TestCase
         );
 
         self::assertSame(1, $result['total']);
-        self::assertSame('a', $result['items'][0]['id']);
+        self::assertSame('a', $result['rows'][0]['id']);
     }
 
     // ===== Dashboard sections =====

@@ -42,27 +42,33 @@ use OCA\PettyCash\Domain\Shared\Enum\Role;
  */
 final readonly class ReportQuery
 {
-    /** The report types this query understands, as declared by `contracts/ocs-api.yaml`. */
+    /**
+     * The report types, **exactly** as `contracts/ocs-api.yaml` declares them at
+     * `/reports/{reportType}`.
+     *
+     * Copied from the contract rather than named independently, because a report type is part of the OCS
+     * surface: a client sends the string in the URL. An earlier version of this file used
+     * `cost_centers` (underscore) and added `balances`, `movements` and `configuration_audit`, none of
+     * which the contract accepts — so a request for a contract-valid `cost-centers` would have been
+     * refused, and three invented types would have been advertised. The contract is the source of truth
+     * for this list; see T112's note for the gap that leaves open.
+     */
     public const TYPE_SHEETS = 'sheets';
     public const TYPE_TRANSACTIONS = 'transactions';
-    public const TYPE_COST_CENTERS = 'cost_centers';
-    public const TYPE_BALANCES = 'balances';
-    public const TYPE_MOVEMENTS = 'movements';
+    public const TYPE_COST_CENTERS = 'cost-centers';
+    public const TYPE_ACCOUNTS = 'accounts';
     public const TYPE_PROCESS = 'process';
     public const TYPE_EVIDENCE = 'evidence';
     public const TYPE_AUDIT = 'audit';
-    public const TYPE_CONFIGURATION_AUDIT = 'configuration_audit';
 
     public const SUPPORTED_TYPES = [
         self::TYPE_SHEETS,
         self::TYPE_TRANSACTIONS,
         self::TYPE_COST_CENTERS,
-        self::TYPE_BALANCES,
-        self::TYPE_MOVEMENTS,
+        self::TYPE_ACCOUNTS,
         self::TYPE_PROCESS,
         self::TYPE_EVIDENCE,
         self::TYPE_AUDIT,
-        self::TYPE_CONFIGURATION_AUDIT,
     ];
 
     public function supports(string $reportType): bool
@@ -91,23 +97,31 @@ final readonly class ReportQuery
      *
      * @param list<array<string, mixed>> $candidates
      * @param callable(array<string, mixed>, ReportScope): bool $inScope
-     * @return array{items: list<array<string, mixed>>, total: int, page: int, pageSize: int, offset: int}
+     * @param list<string> $columns the report's column names, in order
+     * @param array<string, mixed> $summary free-form totals and counts, per the contract's `ReportPage`
+     * @return array{page: int, pageSize: int, total: int, columns: list<string>, rows: list<array<string, mixed>>, summary: array<string, mixed>}
      */
     public function paginate(
         ReportScope $scope,
         ReportFilter $filter,
         array $candidates,
-        callable $inScope
+        callable $inScope,
+        array $columns = [],
+        array $summary = []
     ): array {
         $scoped = array_values(array_filter($candidates, static fn (array $row): bool => $inScope($row, $scope)));
         $filtered = $this->applyFilter($scoped, $filter);
 
+        // Shaped as the contract's `ReportPage`: `PageMeta` (page, pageSize, total) plus columns, rows
+        // and summary. Returning `items`/`offset` instead would have been a second pagination shape for a
+        // contract that already declares one, and a client written against `rows` would have found nothing.
         return [
-            'items' => array_slice($filtered, $filter->offset, $filter->pageSize),
-            'total' => count($filtered),
             'page' => $filter->page,
             'pageSize' => $filter->pageSize,
-            'offset' => $filter->offset,
+            'total' => count($filtered),
+            'columns' => $columns,
+            'rows' => array_slice($filtered, $filter->offset, $filter->pageSize),
+            'summary' => $summary,
         ];
     }
 
