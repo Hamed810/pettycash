@@ -56,7 +56,7 @@ class ExportController extends OCSController
     #[NoAdminRequired]
     public function create(
         string $resource = '',
-        string $format = '',
+        string $fileFormat = '',
         ?string $reportType = null
     ): Response {
         // Read the way every other controller in this app reads it, rather than as a bound
@@ -72,8 +72,10 @@ class ExportController extends OCSController
             if ($resource === '') {
                 $fieldErrors['resource'] = 'required';
             }
-            if ($format === '') {
-                $fieldErrors['format'] = 'required';
+            if ($fileFormat === '') {
+                // Reported under the contract's new name, not the old one: a client that was told
+                // `format` is required would look for a field that no longer exists.
+                $fieldErrors['fileFormat'] = 'required';
             }
 
             if ($fieldErrors !== []) {
@@ -94,7 +96,7 @@ class ExportController extends OCSController
             // empty for a `report` resource because building them is the report's own job, and
             // inventing them here would put a second definition of a report's contents in an
             // export path.
-            $result = $this->exports->generate($scope, $resource, $format, []);
+            $result = $this->exports->generate($scope, $resource, $fileFormat, []);
 
             try {
                 $stream = $this->exports->readArtifact($result['artifactName']);

@@ -737,16 +737,14 @@ paths:
             schema: { $ref: '#/components/schemas/ExportRequest' }
       responses:
         '200':
-          description: CSV, XLSX, PDF, or ZIP stream
+          # An OCS envelope, not a bare artifact body. Every route in this `ocs` section is
+          # wrapped by `OCSMiddleware` in a `V2Response`, so a response whose body is the raw
+          # CSV/XLSX/PDF/ZIP bytes is unreachable from here. `mediaType` names the artifact's
+          # real type and `data` carries its base64-encoded bytes.
+          description: Generated export, encoded inside the OCS envelope
           content:
-            text/csv:
-              schema: { type: string }
-            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
-              schema: { type: string, format: binary }
-            application/pdf:
-              schema: { type: string, format: binary }
-            application/zip:
-              schema: { type: string, format: binary }
+            application/json:
+              schema: { $ref: '#/components/schemas/ExportResult' }
         '422':
           $ref: '#/components/responses/ValidationError'
 
@@ -1258,14 +1256,35 @@ components:
             columns: { type: array, items: { type: string } }
             rows: { type: array, items: { type: object, additionalProperties: true } }
             summary: { type: object, additionalProperties: true }
+    ExportResult:
+      type: object
+      required: [artifactName, mediaType, format, byteSize, rowCount, data]
+      properties:
+        artifactName: { type: string, description: Transient name; the artifact is removed once streamed }
+        mediaType:
+          type: string
+          description: The artifact's own media type, not the envelope's
+          enum: [text/csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/pdf, application/zip]
+        format: { type: string, enum: [csv, xlsx, pdf, zip] }
+        byteSize: { type: integer }
+        rowCount: { type: integer }
+        data: { type: string, format: byte, description: base64-encoded artifact bytes }
+        artifactRemoved: { type: boolean, description: True once the transient artifact has been deleted }
     ExportRequest:
       type: object
-      required: [resource, format]
+      required: [resource, fileFormat]
       properties:
         resource:
           type: string
           enum: [sheet, sheets, transactions, report, audit, evidence]
-        format:
+        # Named `fileFormat`, not `format`. Nextcloud's OCS layer reserves the request
+        # parameter `format` for choosing the response envelope: `Request::getFormat()`
+        # (lib/private/AppFramework/Http/Request.php:903) reads `getParam('format')` *before*
+        # the `Accept` header, and `OCSMiddleware` falls back to `xml` whenever the value is not
+        # a registered responder. A request carrying a field literally called `format`
+        # therefore always answers XML and no `Accept` header can override it, which would make
+        # every conforming request to this endpoint return the wrong envelope.
+        fileFormat:
           type: string
           enum: [csv, xlsx, pdf, zip]
         ids:

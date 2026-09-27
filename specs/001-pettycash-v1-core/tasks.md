@@ -565,7 +565,7 @@ evidence; verify every report/export contains all permitted and zero out-of-scop
   `IAppData` entirely and reported the real path `/appdata_oculd8krif6b/pettycash/exports/`. No shared temp or
   AppData litter after the run)
 - [x] T111 [US7] Implement export orchestration, transient AppData cleanup, and authorization-before-generation in `lib/Application/Reporting/ExportService.php`
-- [ ] T112 [US7] Add dashboard, report, and export OCS routes/controllers in `appinfo/routes.php`, `lib/Controller/DashboardController.php`, `lib/Controller/ReportController.php`, and `lib/Controller/ExportController.php` — **record this contract gap while building it, do not resolve it by inventing a type.** `contracts/ocs-api.yaml`'s `/reports/{reportType}` enum is exactly `[sheets, transactions, cost-centers, accounts, process, evidence, audit]`, but **FR-065 names petty-cash balances and movements as report subjects and FR-056 requires configuration audit to be visible**, and none of the three appears in the enum. `accounts` is the only plausible home for balances and movements, but the contract does not say so, and configuration audit has no type at all. T106 originally sidestepped this by advertising `balances`, `movements` and `configuration_audit`; that was corrected, because a report type is part of the OCS surface and an undeclared one is a contract violation rather than a naming preference. **The choice belongs to the contract:** either extend the enum, or record that these subjects are reachable through `accounts` and under what filter. `ReportQuery::SUPPORTED_TYPES` is asserted as the contract's exact list, so the day the enum changes this task's test says so. Also note the contract's `ExportRequest.resource` enum is a *different* set again (`[sheet, sheets, transactions, report, audit, evidence]`), so the two surfaces do not share a vocabulary. **And T299 lands here:** resolving which accounts a finance officer has charged is not derivable from the current schema, and this task's orchestration layer is where that decision has to be made — see T299 for the two routes and their costs. `report#show` and `export#create` are 2 of the 15 routes `RouteResolutionTest` reports as unresolved; `session#dashboard` is already routed
+- [x] T112 [US7] Add dashboard, report, and export OCS routes/controllers in `appinfo/routes.php`, `lib/Controller/DashboardController.php`, `lib/Controller/ReportController.php`, and `lib/Controller/ExportController.php` — **record this contract gap while building it, do not resolve it by inventing a type.** `contracts/ocs-api.yaml`'s `/reports/{reportType}` enum is exactly `[sheets, transactions, cost-centers, accounts, process, evidence, audit]`, but **FR-065 names petty-cash balances and movements as report subjects and FR-056 requires configuration audit to be visible**, and none of the three appears in the enum. `accounts` is the only plausible home for balances and movements, but the contract does not say so, and configuration audit has no type at all. T106 originally sidestepped this by advertising `balances`, `movements` and `configuration_audit`; that was corrected, because a report type is part of the OCS surface and an undeclared one is a contract violation rather than a naming preference. **The choice belongs to the contract:** either extend the enum, or record that these subjects are reachable through `accounts` and under what filter. `ReportQuery::SUPPORTED_TYPES` is asserted as the contract's exact list, so the day the enum changes this task's test says so. Also note the contract's `ExportRequest.resource` enum is a *different* set again (`[sheet, sheets, transactions, report, audit, evidence]`), so the two surfaces do not share a vocabulary. **And T299 lands here:** resolving which accounts a finance officer has charged is not derivable from the current schema, and this task's orchestration layer is where that decision has to be made — see T299 for the two routes and their costs. `report#show` and `export#create` are 2 of the 15 routes `RouteResolutionTest` reports as unresolved; `session#dashboard` is already routed
 - [ ] T113 [P] [US7] Implement dashboard/report API services, stores, filters, tables/cards, and export controls in `src/services/dashboardApi.ts`, `src/services/reportsApi.ts`, `src/stores/dashboard.ts`, `src/stores/reports.ts`, `src/views/DashboardView.vue`, and `src/views/reports/ReportsView.vue` (all elements visible without horizontal scroll at 390px viewport; WCAG AA contrast; ≥12pt Persian font per FR-071)
 - [ ] T114 [US7] Add dashboard, filtering, totals, report-scope, CSV/XLSX/PDF, and grouped-evidence export Playwright journeys in `tests/E2E/reporting-export.spec.ts` (verify p95 <3s, error rate <0.1%, zero data loss per FR-073)
 
@@ -3542,3 +3542,24 @@ than missing features, and the first one is the reason the second one was hard t
   with a contract-shaped `ReportPage`, and the guard's stale-entry check reports exactly `report#show`
   and `export#create` as resolved. The checkbox is reopened rather than left ticked because a task
   whose verification is known-incomplete must not read as done.
+
+
+  **Resolved and closed.** The contract owner chose to amend `contracts/ocs-api.yaml` to an
+  OCS-compatible shape rather than move the route. Applied: `ExportRequest.format` is now
+  `ExportRequest.fileFormat` (and `required: [resource, fileFormat]`), and the `200` is declared as
+  `application/json` referencing a new `ExportResult` schema -- `artifactName`, `mediaType`, `format`,
+  `byteSize`, `rowCount`, base64 `data`, `artifactRemoved` -- with the reason recorded inline in the
+  contract so the next reader does not rediscover it. `ExportController` reads `fileFormat` and reports
+  the missing-field error under the new name, because telling a client to send `format` when the field
+  is `fileFormat` would produce a request that cannot succeed.
+
+  `tests/Contract/Controller/ReportAndExportControllerTest.php` now covers both endpoints: 14 tests,
+  290 assertions, green. Its `decode()` helper reports the envelope's *format* rather than assuming
+  JSON, because `json_decode` of a well-formed XML OCS response returns null and that is exactly how the
+  `format` collision first presented -- as a body that looked missing rather than as the wrong format.
+
+  Proven by mutation: reverting the controller to read `format` makes
+  `testAConformingExportRequestAnswersJson` fail, and restoring it makes the test pass. A future rename
+  back to the reserved name therefore fails in this repository rather than in a client.
+
+  Full suite: **618 tests, 2695 assertions, 1 pre-existing T275 failure.**
