@@ -179,6 +179,29 @@ final readonly class ExportService
         $this->store->deleteAll();
     }
 
+    /**
+     * Read one generated artifact as a stream.
+     *
+     * Separate from `cleanup()` on purpose. `cleanup()` empties transient storage, which is right for
+     * a test teardown and wrong for a controller: two exports in flight would delete each other's
+     * bytes, and the second response would go out empty. A serving controller therefore removes
+     * exactly the artifact it just streamed.
+     *
+     * @return resource|null
+     */
+    public function readArtifact(string $artifactName)
+    {
+        return $this->store->read($artifactName);
+    }
+
+    /**
+     * Remove exactly one generated artifact, after it has been streamed.
+     */
+    public function deleteArtifact(string $artifactName): void
+    {
+        $this->store->delete($artifactName);
+    }
+
     public function artifactExists(string $artifactName): bool
     {
         return $this->store->exists($artifactName);

@@ -58,8 +58,9 @@ final class RouteResolutionTest extends TestCase
      *   controllers, which creates `ConfigurationController`);
      * - `evidence#links` and `evidence#deactivateLink` are T096's (evidence and public-link routes,
      *   which adds both actions to the existing `EvidenceController`);
-     * - `report#show` and `export#create` are T112's (dashboard, report and export routes and
-     *   controllers, which create `ReportController` and `ExportController`).
+     * - `report#show` and `export#create` were T112's and were deleted from this list when T112
+     *   completed, in the same change that marked it done. They created `ReportController` and
+     *   `ExportController`.
      *
      * Convergence Phase 38 re-verified all fifteen mechanically; the count has not moved since.
      *
@@ -79,8 +80,6 @@ final class RouteResolutionTest extends TestCase
         'configuration#expenseTypeUpdate' => 'T087',
         'configuration#financeAssignmentsIndex' => 'T087',
         'configuration#financeAssignmentCreate' => 'T087',
-        'report#show' => 'T112',
-        'export#create' => 'T112',
     ];
 
     // ===== The guard =====

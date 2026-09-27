@@ -17,6 +17,8 @@ use OCA\PettyCash\Application\Port\TransientExportStore;
 use OCA\PettyCash\Application\Port\TransactionManager;
 use OCA\PettyCash\Application\Port\UserDirectory;
 use OCA\PettyCash\Application\Audit\RetentionPolicyService;
+use OCA\PettyCash\Controller\ExportController;
+use OCA\PettyCash\Controller\ReportController;
 use OCA\PettyCash\Application\Reporting\DashboardQuery;
 use OCA\PettyCash\Application\Reporting\ExportService;
 use OCA\PettyCash\Application\Reporting\ReportQuery;
@@ -43,6 +45,7 @@ use OCA\PettyCash\Infrastructure\Nextcloud\NextcloudCurrentUser;
 use OCA\PettyCash\Infrastructure\Export\CsvExporter;
 use OCA\PettyCash\Infrastructure\Export\EvidenceArchiveExporter;
 use OCA\PettyCash\Infrastructure\Export\XlsxExporter;
+use OCA\PettyCash\Infrastructure\Http\OcsErrorMapper;
 use OCA\PettyCash\Infrastructure\Nextcloud\AppDataExportStore;
 use OCA\PettyCash\Infrastructure\Nextcloud\NextcloudRetentionPolicyStore;
 use OCA\PettyCash\Infrastructure\Nextcloud\NextcloudUserDirectory;
@@ -380,6 +383,36 @@ final class Application extends App implements IBootstrap
                 new EvidenceArchiveExporter($c->query(TransientExportStore::class)),
                 $c->query(TransientExportStore::class),
                 $c->query(PrivateFileStore::class)
+            );
+        });
+
+        // T112. Both controllers take their scope from `DashboardQuery::scopeFor()`, the same way
+        // `DashboardController` does, so a report and a dashboard can never disagree about who the
+        // caller is.
+        $context->registerService(ReportController::class, function ($c) {
+            return new ReportController(
+                $c->query(\OCP\IRequest::class),
+                $c->query(CurrentUser::class),
+                $c->query(DashboardQuery::class),
+                $c->query(ReportQuery::class),
+                $c->query(ExpenseSheetRepository::class),
+                $c->query(ExpenseTransactionRepository::class),
+                $c->query(CostCenterRepository::class),
+                $c->query(AccountRepository::class),
+                $c->query(EvidenceRepository::class),
+                $c->query(AuditEventRepository::class),
+                $c->query(OcsErrorMapper::class),
+                $c->query(\OCA\PettyCash\Domain\Shared\Clock::class)
+            );
+        });
+
+        $context->registerService(ExportController::class, function ($c) {
+            return new ExportController(
+                $c->query(\OCP\IRequest::class),
+                $c->query(CurrentUser::class),
+                $c->query(DashboardQuery::class),
+                $c->query(ExportService::class),
+                $c->query(OcsErrorMapper::class)
             );
         });
 

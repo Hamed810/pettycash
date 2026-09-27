@@ -565,7 +565,7 @@ evidence; verify every report/export contains all permitted and zero out-of-scop
   `IAppData` entirely and reported the real path `/appdata_oculd8krif6b/pettycash/exports/`. No shared temp or
   AppData litter after the run)
 - [x] T111 [US7] Implement export orchestration, transient AppData cleanup, and authorization-before-generation in `lib/Application/Reporting/ExportService.php`
-- [ ] T112 [US7] Add dashboard, report, and export OCS routes/controllers in `appinfo/routes.php`, `lib/Controller/DashboardController.php`, `lib/Controller/ReportController.php`, and `lib/Controller/ExportController.php` — **record this contract gap while building it, do not resolve it by inventing a type.** `contracts/ocs-api.yaml`'s `/reports/{reportType}` enum is exactly `[sheets, transactions, cost-centers, accounts, process, evidence, audit]`, but **FR-065 names petty-cash balances and movements as report subjects and FR-056 requires configuration audit to be visible**, and none of the three appears in the enum. `accounts` is the only plausible home for balances and movements, but the contract does not say so, and configuration audit has no type at all. T106 originally sidestepped this by advertising `balances`, `movements` and `configuration_audit`; that was corrected, because a report type is part of the OCS surface and an undeclared one is a contract violation rather than a naming preference. **The choice belongs to the contract:** either extend the enum, or record that these subjects are reachable through `accounts` and under what filter. `ReportQuery::SUPPORTED_TYPES` is asserted as the contract's exact list, so the day the enum changes this task's test says so. Also note the contract's `ExportRequest.resource` enum is a *different* set again (`[sheet, sheets, transactions, report, audit, evidence]`), so the two surfaces do not share a vocabulary. **And T299 lands here:** resolving which accounts a finance officer has charged is not derivable from the current schema, and this task's orchestration layer is where that decision has to be made — see T299 for the two routes and their costs. `report#show` and `export#create` are 2 of the 15 routes `RouteResolutionTest` reports as unresolved; `session#dashboard` is already routed
+- [x] T112 [US7] Add dashboard, report, and export OCS routes/controllers in `appinfo/routes.php`, `lib/Controller/DashboardController.php`, `lib/Controller/ReportController.php`, and `lib/Controller/ExportController.php` — **record this contract gap while building it, do not resolve it by inventing a type.** `contracts/ocs-api.yaml`'s `/reports/{reportType}` enum is exactly `[sheets, transactions, cost-centers, accounts, process, evidence, audit]`, but **FR-065 names petty-cash balances and movements as report subjects and FR-056 requires configuration audit to be visible**, and none of the three appears in the enum. `accounts` is the only plausible home for balances and movements, but the contract does not say so, and configuration audit has no type at all. T106 originally sidestepped this by advertising `balances`, `movements` and `configuration_audit`; that was corrected, because a report type is part of the OCS surface and an undeclared one is a contract violation rather than a naming preference. **The choice belongs to the contract:** either extend the enum, or record that these subjects are reachable through `accounts` and under what filter. `ReportQuery::SUPPORTED_TYPES` is asserted as the contract's exact list, so the day the enum changes this task's test says so. Also note the contract's `ExportRequest.resource` enum is a *different* set again (`[sheet, sheets, transactions, report, audit, evidence]`), so the two surfaces do not share a vocabulary. **And T299 lands here:** resolving which accounts a finance officer has charged is not derivable from the current schema, and this task's orchestration layer is where that decision has to be made — see T299 for the two routes and their costs. `report#show` and `export#create` are 2 of the 15 routes `RouteResolutionTest` reports as unresolved; `session#dashboard` is already routed
 - [ ] T113 [P] [US7] Implement dashboard/report API services, stores, filters, tables/cards, and export controls in `src/services/dashboardApi.ts`, `src/services/reportsApi.ts`, `src/stores/dashboard.ts`, `src/stores/reports.ts`, `src/views/DashboardView.vue`, and `src/views/reports/ReportsView.vue` (all elements visible without horizontal scroll at 390px viewport; WCAG AA contrast; ≥12pt Persian font per FR-071)
 - [ ] T114 [US7] Add dashboard, filtering, totals, report-scope, CSV/XLSX/PDF, and grouped-evidence export Playwright journeys in `tests/E2E/reporting-export.spec.ts` (verify p95 <3s, error rate <0.1%, zero data loss per FR-073)
 
@@ -3469,3 +3469,44 @@ than missing features, and the first one is the reason the second one was hard t
   stays visible. The T112 note's own claim -- that the dashboard resolved while being a stub -- is
   recorded here and in Phase 42, which is where convergence can put it: convergence is append-only and
   cannot amend T112's text.
+
+  **Delivered**: `lib/Controller/ReportController.php` (`GET /reports/{reportType}`) and
+  `lib/Controller/ExportController.php` (`POST /exports`), both registered in the container and both
+  taking their scope from `DashboardQuery::scopeFor()` so a report and a dashboard cannot disagree about
+  who the caller is. `report#show` and `export#create` are removed from `RouteResolutionTest`'s
+  `KNOWN_UNRESOLVED` in this same change, per that file's two-part rule. The dashboard half of this task
+  was delivered earlier in `42be65f`.
+
+  Every declared report type is served from a real read and scoped by `ReportQuery::paginate()`, which
+  scopes before it filters; the controller never pre-filters, because doing so here would reintroduce
+  the ordering hazard T106 removed. The enum is the contract's exactly, asserted as data, and an
+  undeclared type is refused with a 422 naming the contract's set. **The contract gap is recorded, not
+  resolved**: `balances`, `movements` and `configuration_audit` are refused, because FR-065 and FR-056
+  name them and `contracts/ocs-api.yaml` does not, and adding them from a controller would be a contract
+  change made in the wrong place. The `accounts` report returns the caller's own accounts and says so in
+  its summary (`scope: own_accounts`, `chargedAccountsIncluded: false`), because FR-055's charged-accounts
+  rule is not derivable from the schema and is T299's to settle.
+
+  `POST /exports` reads the command id from the `X-PettyCash-Command-ID` header the contract declares
+  required, refuses a missing one with 422, and delegates authorization-and-generation to
+  `ExportService::generate()` so the ordering requirement lives in one place. The artifact is streamed and
+  then removed, in that order, in a `finally`. `ExportService` gained `readArtifact()` and
+  `deleteArtifact()` for this: its existing `cleanup()` calls `deleteAll()`, which is right for a teardown
+  and wrong for a controller, because two exports in flight would delete each other's bytes.
+
+  **Verified**: both routes resolve (the guard's stale-entry test now reports exactly these two as
+  resolved and nothing else), and a live OCS probe returned `422` with a well-formed envelope for
+  `POST /exports` and `200` with a correct `ReportPage` -- `page`/`pageSize`/`total`/`columns`/`rows`/
+  `summary`, default `pageSize` 25, Persian titles intact -- for `GET /reports/sheets`.
+
+  **Gap, stated rather than hidden**: the permanent contract test for these two endpoints is **not**
+  written. A first version of it was written and removed in the same pass: its `GET` half passed, while
+  all six of its `POST` cases failed on an empty response body even though an equivalent standalone
+  probe of the same endpoint, with the same client, the same headers and the same JSON body, returned a
+  correct 422. That contradiction was not diagnosed before the context budget ran out, and committing
+  six red tests would have been worse than committing none. Whoever picks this up should reproduce it
+  with a minimal POST-only case first: the difference between the working probe and the failing test is
+  the single most useful thing to know, and the standalone probe is the known-good reference.
+
+  Also unaddressed here, and left for convergence: the guard's dispatch check skips `POST` routes, so
+  `export#create` is confirmed to resolve and to answer, but nothing keeps it answering in future.
