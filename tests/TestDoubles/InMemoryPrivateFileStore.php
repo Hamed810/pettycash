@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OCA\PettyCash\Tests\TestDoubles;
 
 use OCA\PettyCash\Application\Port\PrivateFileStore;
+use RuntimeException;
 
 final class InMemoryPrivateFileStore implements PrivateFileStore
 {
@@ -17,7 +18,15 @@ final class InMemoryPrivateFileStore implements PrivateFileStore
 
     public function read(string $key): string
     {
-        return $this->files[$key] ?? '';
+        // Deliberately faithful to AppDataEvidenceStore::read(), which throws RuntimeException for a
+        // missing AppData file. Returning '' for an absent key would make this double disagree with the
+        // real adapter on exactly the branch the archive exporter uses to decide "unreadable, omit it",
+        // and a test asserting that branch would then pass without proving anything.
+        if (!array_key_exists($key, $this->files)) {
+            throw new RuntimeException("AppData file not found: {$key}");
+        }
+
+        return $this->files[$key];
     }
 
     public function deleteDraft(string $key): void

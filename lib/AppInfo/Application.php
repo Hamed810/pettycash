@@ -17,6 +17,7 @@ use OCA\PettyCash\Application\Port\TransientExportStore;
 use OCA\PettyCash\Application\Port\TransactionManager;
 use OCA\PettyCash\Application\Port\UserDirectory;
 use OCA\PettyCash\Application\Audit\RetentionPolicyService;
+use OCA\PettyCash\Application\Reporting\ExportService;
 use OCA\PettyCash\Application\Security\AuthorizationService;
 use OCA\PettyCash\Application\Workflow\FinanceQueue;
 use OCA\PettyCash\Application\Workflow\FinanceSettlementService;
@@ -37,6 +38,9 @@ use OCA\PettyCash\Domain\Workflow\Repository\WorkflowDecisionRepository;
 use OCA\PettyCash\Infrastructure\Nextcloud\AppDataEvidenceStore;
 use OCA\PettyCash\Infrastructure\Nextcloud\NextcloudAdministratorCheck;
 use OCA\PettyCash\Infrastructure\Nextcloud\NextcloudCurrentUser;
+use OCA\PettyCash\Infrastructure\Export\CsvExporter;
+use OCA\PettyCash\Infrastructure\Export\EvidenceArchiveExporter;
+use OCA\PettyCash\Infrastructure\Export\XlsxExporter;
 use OCA\PettyCash\Infrastructure\Nextcloud\AppDataExportStore;
 use OCA\PettyCash\Infrastructure\Nextcloud\NextcloudRetentionPolicyStore;
 use OCA\PettyCash\Infrastructure\Nextcloud\NextcloudUserDirectory;
@@ -349,6 +353,19 @@ final class Application extends App implements IBootstrap
         // exporter persists there rather than in the host's shared system temp directory.
         $context->registerService(TransientExportStore::class, function ($c) {
             return new AppDataExportStore($c->query(IAppData::class));
+        });
+
+        // Export orchestration (T111). Registered here so the export controller (T112) can authorize
+        // before it generates anything: the service owns the transient-artifact lifecycle, so a caller
+        // that resolves it gets both the authorization decision and the cleanup in one place.
+        $context->registerService(ExportService::class, function ($c) {
+            return new ExportService(
+                new CsvExporter(),
+                new XlsxExporter($c->query(TransientExportStore::class)),
+                new EvidenceArchiveExporter($c->query(TransientExportStore::class)),
+                $c->query(TransientExportStore::class),
+                $c->query(PrivateFileStore::class)
+            );
         });
 
         $context->registerService(FinanceSettlementService::class, function ($c) {

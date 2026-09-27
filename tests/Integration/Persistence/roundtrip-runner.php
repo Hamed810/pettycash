@@ -52,6 +52,16 @@ if (!is_file($nextcloudRoot . '/lib/base.php')) {
 
 require_once $nextcloudRoot . '/lib/base.php';
 
+// The app's own composer autoloader. Nextcloud core loads `<app>/vendor/autoload.php` for every enabled
+// app (OC_App::registerAutoloading), which is why the app can use PhpSpreadsheet under Apache. This
+// runner bypasses that machinery by loading `lib/base.php` directly, so without this line any scenario
+// touching a third-party class dies on "Class ... not found" — which is what the exportservice scenario
+// did when it reached XlsxExporter, on a class that demonstrably works in the real runtime.
+$appVendor = __DIR__ . '/../../../vendor/autoload.php';
+if (is_file($appVendor)) {
+    require_once $appVendor;
+}
+
 use OCA\PettyCash\Application\Command\CommandResult;
 use OCA\PettyCash\Domain\Account\AccountMovement;
 use OCA\PettyCash\Domain\Account\PettyCashAccount;
@@ -94,7 +104,7 @@ use OCP\IUserManager;
 use OCP\IUserSession;
 
 $scenario = $argv[1] ?? '';
-$scenarios = ['configuration', 'account', 'expense', 'command', 'retention', 'appdata'];
+$scenarios = ['configuration', 'account', 'expense', 'command', 'retention', 'appdata', 'exportservice'];
 if (!in_array($scenario, $scenarios, true)) {
     fwrite(STDERR, 'Unknown scenario ' . var_export($scenario, true) . '; expected one of ' . implode(', ', $scenarios) . ".\n");
     exit(1);
@@ -275,6 +285,7 @@ try {
         'command' => scenarioCommand($commandResults, $db, $track, $commandIdFor),
         'retention' => scenarioRetention($auditEvents, $db, $actorUid, $now, $track, $surrogateIdOf),
         'appdata' => scenarioAppDataExportStore(),
+        'exportservice' => scenarioExportService(),
     };
 } catch (Throwable $e) {
     fwrite(STDERR, $e::class . ': ' . $e->getMessage() . "\n" . $e->getTraceAsString() . "\n");
@@ -1529,4 +1540,268 @@ function scenarioAppDataExportStore(): array
     }
 
     return $report;
+}
+
+
+/**
+ * T111: `ExportService` against a real `IAppData` and a real `AppDataEvidenceStore`.
+ *
+ * The unit suite for the service runs entirely on `InMemoryTransientExportStore` and
+ * `InMemoryPrivateFileStore`, and there are exactly two properties it structurally cannot prove:
+ *
+ * 1. **The scratch file is gone.** The service writes CSV bytes to `$store->scratchPath()` and removes
+ *    them in a `finally`. An in-memory store can report "the scratch still exists"; only a real
+ *    `tempnam()` file on a real filesystem can prove the removal actually happened. This is not
+ *    hypothetical: the first version of `generateCsv()` never unlinked its scratch, the unit test
+ *    caught it, and had the unit test not existed the copy would have sat in the system temp
+ *    directory with nothing tied to its lifetime.
+ * 2. **A missing evidence file really does throw.** `ExportService::readEvidence()` omits an evidence
+ *    member by catching `RuntimeException`. That catch is only correct because
+ *    `AppDataEvidenceStore::read()` throws `RuntimeException` on `NotFoundException` — an in-memory
+ *    double returning `''` would have made the catch unreachable and the "empty but valid archive"
+ *    guard silently untested.
+ *
+ * Usage: php tests/Integration/Persistence/roundtrip-runner.php exportservice
+ */
+function scenarioExportService(): array
+{
+    $appData = \OCP\Server::get(\OCP\Files\AppData\IAppDataFactory::class)->get('pettycash');
+    $store = new \OCA\PettyCash\Infrastructure\Nextcloud\AppDataExportStore($appData);
+    $evidenceStore = new \OCA\PettyCash\Infrastructure\Nextcloud\AppDataEvidenceStore($appData);
+
+    $service = new \OCA\PettyCash\Application\Reporting\ExportService(
+        new \OCA\PettyCash\Infrastructure\Export\CsvExporter(),
+        new \OCA\PettyCash\Infrastructure\Export\XlsxExporter($store),
+        new \OCA\PettyCash\Infrastructure\Export\EvidenceArchiveExporter($store),
+        $store,
+        $evidenceStore
+    );
+
+    $admin = new \OCA\PettyCash\Application\Reporting\ReportScope(
+        'probe-admin',
+        [\OCA\PettyCash\Domain\Shared\Enum\Role::Administrator],
+        [],
+        true
+    );
+    $scoped = new \OCA\PettyCash\Application\Reporting\ReportScope(
+        'probe-manager',
+        [\OCA\PettyCash\Domain\Shared\Enum\Role::CostCenterManager],
+        [11]
+    );
+    $refused = new \OCA\PettyCash\Application\Reporting\ReportScope(
+        'probe-purchaser',
+        [\OCA\PettyCash\Domain\Shared\Enum\Role::Purchaser],
+        []
+    );
+
+    $rows = [
+        ['id' => '1', 'title' => 'برگهٔ خردید', 'amount' => '125000'],
+        ['id' => '2', 'title' => 'هزینهٔ ایاب', 'amount' => '42000'],
+    ];
+
+    $report = [];
+
+    // --- 1. a refused export writes nothing to real app storage ---
+    $before = listingOf($appData);
+    $refusedThrew = false;
+    $refusedReason = '';
+    try {
+        $service->generate($refused, 'sheet', 'csv', $rows);
+    } catch (InvalidArgumentException $e) {
+        $refusedThrew = true;
+        $refusedReason = $e->getMessage();
+    }
+    $report['refusedThrew'] = $refusedThrew;
+    $report['refusedReason'] = $refusedReason;
+    $report['refusedAddedNothing'] = listingOf($appData) === $before;
+
+    // --- 2. PDF is refused while T109 is blocked, and writes nothing ---
+    $pdfDecision = $service->authorization($admin, 'report', 'pdf');
+    $report['pdfAllowed'] = $pdfDecision['allowed'];
+    $report['pdfReasonMentionsT109'] = str_contains($pdfDecision['reason'], 'T109');
+    $report['pdfReasonMentionsFont'] = str_contains($pdfDecision['reason'], 'font');
+
+    // --- 3. CSV through real app storage, and the scratch really is removed ---
+    $scratchBefore = glob(sys_get_temp_dir() . '/pettycash-export-*') ?: [];
+    $csv = $service->generate($admin, 'sheets', 'csv', $rows);
+    $scratchAfter = glob(sys_get_temp_dir() . '/pettycash-export-*') ?: [];
+    $leaked = array_values(array_diff($scratchAfter, $scratchBefore));
+
+    $report['csvStored'] = $store->exists($csv['artifactName']);
+    $report['csvFormat'] = $csv['format'];
+    $report['csvRowCount'] = $csv['rowCount'];
+    $report['csvByteSize'] = $csv['byteSize'];
+    $report['csvSizeMatchesStore'] = $store->size($csv['artifactName']) === $csv['byteSize'];
+    $report['csvLeakedScratch'] = $leaked;
+    $report['csvPersisted'] = '';
+    $handle = $store->read($csv['artifactName']);
+    if (is_resource($handle)) {
+        $report['csvPersisted'] = (string) stream_get_contents($handle);
+        fclose($handle);
+    }
+    $report['csvHasPersian'] = str_contains($report['csvPersisted'], 'برگهٔ خردید');
+    $report['csvRows'] = substr_count(trim($report['csvPersisted']), "\n") + 1;
+
+    // --- 4. XLSX is a real workbook in real app storage ---
+    $xlsx = $service->generate($admin, 'report', 'xlsx', $rows);
+    $xlsxBytes = '';
+    $xlsxHandle = $store->read($xlsx['artifactName']);
+    if (is_resource($xlsxHandle)) {
+        $xlsxBytes = (string) stream_get_contents($xlsxHandle);
+        fclose($xlsxHandle);
+    }
+    $report['xlsxStored'] = $store->exists($xlsx['artifactName']);
+    $report['xlsxIsZipContainer'] = substr($xlsxBytes, 0, 2) === 'PK';
+    $report['xlsxRowCount'] = $xlsx['rowCount'];
+
+    // --- 5. ZIP reads real evidence out of the real evidence store ---
+    // Written through putEvidence(), not put(). putEvidence() creates the transaction/revision folders
+    // and returns the stored key (`evidence/<tx>/<rev>/<file>`), which is the form findFile() expects —
+    // it strips the leading `evidence/` because the walk starts inside that folder. The raw put() takes a
+    // key relative to the evidence folder instead and does not strip the prefix, so passing a prefixed
+    // key to it writes to a path read() can never reach. Nothing in lib/ calls put(); this probe did,
+    // and it is why the first attempt failed to create the file.
+    $realKey = $evidenceStore->putEvidence(
+        bin2hex(random_bytes(6)),
+        1,
+        'receipt.pdf',
+        'real-evidence-bytes'
+    );
+
+    $entry = new \OCA\PettyCash\Infrastructure\Export\EvidenceArchiveEntry(
+        'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa',
+        'receipt.pdf',
+        'application/pdf',
+        9,
+        str_repeat('b', 64),
+        true,
+        'probe-actor',
+        'کاربر آزمایشی',
+        new DateTimeImmutable('2026-03-15T10:30:00+00:00'),
+        'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb',
+        1,
+        'cccccccc-3333-4333-8333-cccccccccccc',
+        'dddddddd-4444-4444-8444-dddddddddddd',
+        'Probe Sheet',
+        $realKey
+    );
+
+    $zip = $service->generate($admin, 'evidence', 'zip', [], [$entry]);
+    $report['zipStored'] = $store->exists($zip['artifactName']);
+    $report['zipRowCount'] = $zip['rowCount'];
+    $report['zipIncludedRealEvidence'] = $zip['rowCount'] === 1;
+    $report['zipEvidenceMember'] = zipMemberContaining($store, $zip['artifactName'], 'receipt.pdf');
+    $report['zipManifestHasPersian'] = zipMemberContaining($store, $zip['artifactName'], 'manifest.csv') !== ''
+        && str_contains(zipMemberContaining($store, $zip['artifactName'], 'manifest.csv'), 'کاربر آزمایشی');
+
+    // --- 6. a genuinely absent evidence key is omitted, not archived as an empty member ---
+    $absentEntry = new \OCA\PettyCash\Infrastructure\Export\EvidenceArchiveEntry(
+        'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa',
+        'ghost.pdf',
+        'application/pdf',
+        9,
+        str_repeat('c', 64),
+        true,
+        'probe-actor',
+        'کاربر آزمایشی',
+        new DateTimeImmutable('2026-03-15T10:30:00+00:00'),
+        'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb',
+        1,
+        'cccccccc-3333-4333-8333-cccccccccccc',
+        'dddddddd-4444-4444-8444-dddddddddddd',
+        'Probe Sheet',
+        'evidence/' . bin2hex(random_bytes(6)) . '/1/never-written.pdf'
+    );
+    $emptyZip = $service->generate($admin, 'evidence', 'zip', [], [$absentEntry]);
+    $report['absentRowCount'] = $emptyZip['rowCount'];
+    $emptyBytes = '';
+    $emptyHandle = $store->read($emptyZip['artifactName']);
+    if (is_resource($emptyHandle)) {
+        $emptyBytes = (string) stream_get_contents($emptyHandle);
+        fclose($emptyHandle);
+    }
+    // A valid archive with no evidence member: not the "looks like evidence, is not" artifact.
+    $report['absentZipIsValidButEmpty'] = substr($emptyBytes, 0, 2) === 'PK' && $emptyZip['rowCount'] === 0;
+
+    // --- 7. a manager with scope is allowed where a purchaser is refused ---
+    $report['scopedAllowed'] = $service->authorization($scoped, 'sheet', 'csv')['allowed'];
+    $report['refusedRoleAllowed'] = $service->authorization($refused, 'sheet', 'csv')['allowed'];
+
+    // --- 8. cleanup empties real app storage ---
+    $beforeCleanup = listingOf($appData);
+    $service->cleanup();
+    $afterCleanup = listingOf($appData);
+    $report['cleanupEmptiedStore'] = $afterCleanup === [];
+    $report['cleanupRemovedEverything'] = count($beforeCleanup) > 0 && $afterCleanup === [];
+    $report['cleanupSafeWhenEmpty'] = (static function () use ($service): bool {
+        $service->cleanup();
+        return true;
+    })();
+
+    return $report;
+}
+
+/**
+ * @return list<string> the export artifact names currently in real app storage
+ *
+ * No parameter type: the object `IAppDataFactory::get()` returns is the internal
+ * `OC\Files\AppData\AppData`, which is not an instance of the `OCP\Files\AppData\IAppData`
+ * interface, so hinting the interface makes the helper uncallable from the only place it is used.
+ */
+function listingOf(object $appData): array
+{
+    try {
+        $folder = $appData->getFolder('exports');
+    } catch (\OCP\Files\NotFoundException) {
+        return [];
+    }
+
+    $names = array_map(
+        static fn ($child): string => $child->getName(),
+        array_values(array_filter(
+            $folder->getDirectoryListing(),
+            static fn ($child): bool => $child instanceof \OCP\Files\SimpleFS\ISimpleFile
+        ))
+    );
+    sort($names);
+
+    return $names;
+}
+
+/**
+ * Read one member out of a stored archive, by suffix.
+ *
+ * Extracting rather than substring-scanning the raw bytes: ZIP members are deflated, so scanning the
+ * archive file for plaintext would report a healthy archive as empty.
+ */
+function zipMemberContaining(\OCA\PettyCash\Infrastructure\Nextcloud\AppDataExportStore $store, string $artifact, string $suffix): string
+{
+    $bytes = '';
+    $handle = $store->read($artifact);
+    if (is_resource($handle)) {
+        $bytes = (string) stream_get_contents($handle);
+        fclose($handle);
+    }
+
+    $path = tempnam(sys_get_temp_dir(), 'pettycash-probe-member-');
+    if ($path === false || substr($bytes, 0, 2) !== 'PK') {
+        return '';
+    }
+
+    file_put_contents($path, $bytes);
+    $found = '';
+    $zip = new ZipArchive();
+    if ($zip->open($path) === true) {
+        for ($i = 0; $i < $zip->numFiles; $i++) {
+            $name = (string) $zip->getNameIndex($i);
+            if (str_ends_with($name, $suffix)) {
+                $found = (string) $zip->getFromIndex($i);
+                break;
+            }
+        }
+        $zip->close();
+    }
+    @unlink($path);
+
+    return $found;
 }
