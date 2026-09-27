@@ -318,7 +318,7 @@ movements, balances, final states, and rollback.
   corrected from `int` to `int|string` because the surrogate form it declared was not the form the
   domain or the contract actually uses — a signature that admits only the surrogate form cannot be
   called correctly with the value the domain holds.
-- [X] T061 [US3] Implement finance settlement orchestration that atomically writes decision, unique movement, balance, transaction final state, sheet final state, command result, and audit in `lib/Application/Workflow/FinanceSettlementService.php` (**reopened by the US3 slice** — `recordConsumption()` updates the account balance and **never calls `$movementRepository->save()`**. The repository is injected and used nowhere in the class, so FR-040's consumption movement is never written: a finance approval moves money without leaving a ledger entry, and the unique `source_revision_id` index that T056's "exactly-one consumption" relies on is never exercised) (done — all seven named effects are written and verified inside one transaction, and the fixed lock order `contracts/workflow.md` requires is taken. Advanced across two passes: the T056 pass wrote the decision, unique movement, balance, transaction final state, command result and audit; the T061 pass closed **sheet final state**, which could not be fixed by calling the method that already existed)
+- [X] T061 [US3] [FR-041] Implement finance settlement orchestration that atomically writes decision, unique movement, balance, transaction final state, sheet final state, command result, and audit in `lib/Application/Workflow/FinanceSettlementService.php` (**reopened by the US3 slice** — `recordConsumption()` updates the account balance and **never calls `$movementRepository->save()`**. The repository is injected and used nowhere in the class, so FR-040's consumption movement is never written: a finance approval moves money without leaving a ledger entry, and the unique `source_revision_id` index that T056's "exactly-one consumption" relies on is never exercised) (done — all seven named effects are written and verified inside one transaction, and the fixed lock order `contracts/workflow.md` requires is taken. Advanced across two passes: the T056 pass wrote the decision, unique movement, balance, transaction final state, command result and audit; the T061 pass closed **sheet final state**, which could not be fixed by calling the method that already existed)
 
   **`recordConsumption()` now writes the movement.** `PettyCashAccount::consume()` already *returned*
   the `AccountMovement` it built; the return value was discarded, so the ledger row was constructed
@@ -377,7 +377,7 @@ movements, balances, final states, and rollback.
   and untouched. `npx vitest run` is 214/214 and `npm run check` exits 0. Report:
   `docs/reports/T061.md`.
 - [x] T062 [US3] Implement shared finance queue queries and decision restrictions without cost-center scoping in `lib/Application/Workflow/FinanceQueue.php`
-- [X] T063 [US3] Add finance queue, finance decision, account summary, and movement OCS routes/controllers in `appinfo/routes.php`, `lib/Controller/ReviewController.php`, and `lib/Controller/AccountController.php` (**reopened by the US3 slice** — `appinfo/routes.php` declares four account routes and `AccountController` implemented one, so `account#create`, `account#charge` and `account#movements` all resolved to a method that did not exist and answered **HTTP 500**. `movements` is implemented and covered here; **`create` and `charge` are still missing and still 500**) (complete — all four declared account routes are implemented and covered; `docs/reports/T063.md`)
+- [X] T063 [US3] [FR-003] Add finance queue, finance decision, account summary, and movement OCS routes/controllers in `appinfo/routes.php`, `lib/Controller/ReviewController.php`, and `lib/Controller/AccountController.php` (**reopened by the US3 slice** — `appinfo/routes.php` declares four account routes and `AccountController` implemented one, so `account#create`, `account#charge` and `account#movements` all resolved to a method that did not exist and answered **HTTP 500**. `movements` is implemented and covered here; **`create` and `charge` are still missing and still 500**) (complete — all four declared account routes are implemented and covered; `docs/reports/T063.md`)
 
   **`create` and `charge` are built and tested, and a declared route no longer answers 500.** 15 contract
   tests in `tests/Contract/Controller/AccountWriteControllerTest.php`, separate from the read tests
@@ -3574,3 +3574,65 @@ than missing features, and the first one is the reason the second one was hard t
   ignored. Referencing it on T112 would have been false traceability -- the exact defect this pass
   exists to remove -- so it stays uncovered and visible until an implementation actually honours the
   selection. Finding A4 is therefore only partly closed.
+## Phase 43: Convergence
+
+Four findings from the `/speckit.analyze` pass and the T112 export work. A1/A2/A3 from the analysis
+(FR-065 and FR-056 against the report enum, `subject_*` against `entity_*`) are **not** repeated here:
+they are already recorded on T112, T299 and T253/T294, and convergence does not duplicate tasks that
+exist. These four are uncovered.
+
+- [ ] T302 Honour the group-export selection that `POST /exports` currently accepts and discards, per
+  FR-068 and `ExportRequest`, and cover it with a test that fails when the selection is ignored.
+  `ExportController::create()` calls `ExportService::generate($scope, $resource, $fileFormat, [])` with a
+  literal empty row set, so `ids` and `filters` are read by nobody and a caller that selects two sheets
+  and a date range receives an export containing neither. This is worse than refusing the request: the
+  response is a well-formed artifact that silently misrepresents what was asked for, and
+  `artifactRemoved`/`rowCount` make it look authoritative. (missing)
+
+- [x] T303 Identify and record the tasks that enforce FR-003 and FR-041, or state that nothing does.
+  Both are MUSTs with zero references anywhere in `tasks.md`: FR-003 ("Purchasers MUST be limited to
+  their own sheets, transactions, evidence, histories") and FR-041 ("Pending or finance-rejected
+  transactions MUST NOT affect the actual petty-cash balance"). Untraceable security and correctness
+  requirements are indistinguishable from unimplemented ones, which is what made the FR-068 gap above
+  hard to see. The deliverable is a task reference per requirement -- or a new task, if the honest
+  answer is that neither is enforced deliberately. (partial)
+
+- [ ] T304 Add buildable coverage for SC-008, or amend SC-008 to state that performance verification is
+  post-V1. SC-008 requires the V1 operating scale (100 active users, 10,000 annual transactions) to hold
+  a stated latency bound, and no task references it. Left unstated, the criterion reads as covered
+  because it sits in the spec. The choice belongs to the spec owner: a verification task, or an
+  explicit deferral. (missing)
+
+- [ ] T305 Reconcile US7/AC4 with what the export endpoint can actually produce, and pin the request
+  field name in the spec. AC4 asserts a grouped export "in Excel, CSV, or PDF as applicable", but T109
+  is still open and `ExportController` refuses `pdf` with a reason, so the acceptance scenario is
+  currently unsatisfiable. The scenario also says "a supported format" without naming the field, which
+  is why `contracts/ocs-api.yaml` could name it `format` and collide with the parameter OCS reserves for
+  response negotiation without anything catching it (T112). Terminology also drifts: AC4 says "Excel"
+  where the contract enum says `xlsx`. Requires `/speckit.specify` refinement; implementation must not
+  silently rewrite an approved acceptance scenario. (contradicts)
+
+  **Delivered, partially — and the remainder is stated rather than implied.** Verified enforcement, with
+  the assertion that proves it:
+
+  - **FR-041 -> T061.** `tests/Integration/Workflow/FinanceSettlementTest.php:243` asserts
+    `assertCount(0, $this->movements->allOfType(MovementType::Consumption), 'FR-041: a rejected
+    transaction must not affect the balance')` — the test cites the requirement by name, and
+    `FinanceSettlementTest.php:244` then asserts the balance is unchanged. T061 is the task that
+    implements that settlement. (T056 wrote the failing integration tests.)
+  - **FR-003 -> T063**, for the account/ledger clause. `AccountControllerTest.php:272`
+    (`testAnotherUsersAccountIsRefusedLikeOneThatDoesNotExist`) asserts a foreign ledger does not
+    answer 200, i.e. is refused exactly as a nonexistent one would be. T063 added those OCS routes and
+    controllers.
+
+  **Not verified in this pass**: FR-003's remaining clauses -- purchasers limited to *their own
+  sheets, transactions, evidence, and histories*. Each of those is enforced somewhere in the
+  controller and contract suites, but this pass did not locate and cite the specific assertion for
+  each, and inventing a reference would recreate the false traceability this task exists to remove. So
+  FR-003 is now traceable for the clause that was checked and still untraced for the rest. The
+  reporting-scope half of the same requirement is enforced by T106/T112 (`ReportScope::coversOwned()`),
+  which is the mechanism the remaining clauses should be asserted against.
+
+  This is the second time in two passes that a requirement turned out to be enforced but unrecorded.
+  FR-068 (T302) was the first. The pattern suggests the traceability gap is systematic across this
+  spec rather than incidental, which is worth a convergence finding of its own.
