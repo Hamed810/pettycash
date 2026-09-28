@@ -181,6 +181,19 @@ final class Application extends App implements IBootstrap
             );
         });
 
+        // The configuration audit stream (FR-055). Same class, different bound table and subject
+        // columns, so the seven-method AuditEventRepository port is unchanged and the reads stay
+        // stream-scoped. Registered under a distinct key rather than as a second
+        // AuditEventRepository binding, which would make the transaction stream ambiguous.
+        $context->registerService('PettyCashConfigurationAuditRepository', function ($c) {
+            return new DbAuditEventRepository(
+                $c->query(IDBConnection::class),
+                $c->query(UserDirectory::class),
+                $c->query(CurrentUser::class),
+                'configuration'
+            );
+        });
+
         $context->registerService(AccountRepository::class, function ($c) {
             return new DbAccountRepository(
                 $c->query(IDBConnection::class),
@@ -270,7 +283,8 @@ final class Application extends App implements IBootstrap
             return new \OCA\PettyCash\Application\Audit\AuditWriterService(
                 $c->query(AuditEventRepository::class),
                 $c->query(CurrentUser::class),
-                $c->query(UserDirectory::class)
+                $c->query(UserDirectory::class),
+                $c->query('PettyCashConfigurationAuditRepository')
             );
         });
 

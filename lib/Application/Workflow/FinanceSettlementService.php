@@ -267,6 +267,33 @@ final readonly class FinanceSettlementService
                 ];
                 $this->auditWriter->append($auditData);
 
+                // FR-055: the account is the configuration a finance officer is charged against, and
+                // the specification derives an officer's charged accounts from their
+                // funding/charging configuration-audit events. Until settlement wrote one, that
+                // derivation had nothing to read and every officer answered as holding no charged
+                // account. It is written only when money actually moved, so a reject or return does
+                // not accrue a charge, and it lands in the configuration stream addressed by
+                // entity_type/entity_id because it has no sheet or transaction of its own.
+                if ($decision === Decision::Approve) {
+                    $this->auditWriter->appendConfiguration([
+                        'id' => (string)Uuid::random(),
+                        'entity_type' => 'account',
+                        'entity_id' => $account->id,
+                        'event_type' => 'ACCOUNT_CHARGED',
+                        'explanation' => $explanation,
+                        // `recordConsumption()` mutates the account in place, so a "before"
+                        // balance read here would be the post-consumption value wearing a
+                        // "before" label. The event records the charge that occurred, not a
+                        // balance pair that cannot be read honestly at this point.
+                        'after' => [
+                            'movement_id' => $recordedMovement?->id,
+                            'transaction_id' => $transactionPublicId,
+                            'decision' => $decision->value,
+                        ],
+                        'command_id' => $commandId,
+                    ]);
+                }
+
                 $this->transactionRepository->save($transaction);
 
                 // FR-043 and the workflow contract's "recalculated sheet state".

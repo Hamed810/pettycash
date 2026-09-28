@@ -78,4 +78,12 @@ final class InMemoryAuditEventRepository implements \OCA\PettyCash\Domain\Audit\
     {
         $this->events = [];
     }
+
+    /**
+     * @return list<AuditEvent>
+     */
+    public function getEvents(): array
+    {
+        return array_values($this->events);
+    }
 }

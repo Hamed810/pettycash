@@ -124,7 +124,8 @@ $container->register(UserDirectory::class, fn() => new InMemoryUserDirectory());
 $container->register(AuditWriter::class, fn($c) => new AuditWriterService(
     $c->query(AuditEventRepository::class),
     $c->query(CurrentUser::class),
-    $c->query(UserDirectory::class)
+    $c->query(UserDirectory::class),
+    $c->query(AuditEventRepository::class)
 ));
 $container->register(AdministratorCheck::class, fn() => new InMemoryAdministratorCheck());
 $container->register(PrivateFileStore::class, fn() => new InMemoryPrivateFileStore());
@@ -158,7 +159,8 @@ $container->register(IdempotencyService::class, fn($c) => new IdempotencyService
 $container->register(AuditWriterService::class, fn($c) => new AuditWriterService(
     $c->query(AuditEventRepository::class),
     $c->query(CurrentUser::class),
-    $c->query(UserDirectory::class)
+    $c->query(UserDirectory::class),
+    $c->query(AuditEventRepository::class)
 ));
 
 // Register Application Services

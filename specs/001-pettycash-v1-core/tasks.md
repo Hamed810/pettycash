@@ -3173,30 +3173,56 @@ what keeps T093 and T139 from being built on an assumption that turns out to be 
 
 ### CRITICAL — configuration audit is never written to its own table
 
-- [ ] T294 [CRITICAL] Make configuration audit actually reach `pettycash_configuration_audit`, because
-  FR-056 requires transaction audit and configuration audit to remain separately identifiable and
-  nothing in the application writes the configuration table at all. `DbAuditEventRepository` hardcodes
-  `pettycash_transaction_audit` in all seven of its methods — the six reads at lines 28, 39, 51, 65, 79
-  and 93, and `save()` at line 112 — and the class has no notion of which stream it is addressing, so
-  `save()` cannot write a configuration event even if a caller asked it to.
-  `AuditWriterService::appendConfiguration()` (line 90) is the intended writer and is **never called**:
-  all six production call sites use the `AuditWriter` port's `append()` instead, which writes
-  `stage: DRAFT` into the transaction table. So the table created at
-  `lib/Migration/Version010200Date20260920000000.php:34` is permanently empty, FR-017's requirement that
-  sensitive configuration changes record a separate configuration audit history is unimplemented, and
-  FR-055's role-scoped configuration audit visibility has no subject to scope over.
+  **Resolved by implementation; the task prose above was stale in two places and is corrected here.**
+  It claimed `AuditWriterService::appendConfiguration()` exists at line 90 and "is never called". It did
+  not exist at all — T296 had deleted the dead method, leaving no configuration writer and no caller —
+  so the correct work was to write one, not to find and wire a dormant one. It also said the repository
+  hardcodes the table in "all seven of its methods" and that `save()` could not write a configuration
+  event "even if a caller asked it to". Both halves were half-right in a way that matters: the six
+  reads all go through one shared `mapRow()` under `select('*')`, so they needed only a bound table
+  name, but `mapRow()` itself **hardcoded `entityType=''` and `entityId=null` with the comment "for
+  transaction audit"** and read `$row['sheet_id']` unguarded. So even a correctly bound configuration
+  read would have warned on absent columns and returned a null subject — the configuration stream was
+  unreadable as well as unwritten, and the task did not record that.
 
-  **What this must settle, and why it is not simply a new repository class.** The choice is between
-  giving the repository a stream discriminator (one class, two tables, `save()` taking the target) and
-  adding a sibling `ConfigurationAuditEventRepository` with its own port, so the domain types and ports
-  stop being interchangeable. The second is the one the artifacts lean toward: `data-model.md` gives
-  Transaction Audit Event and Configuration Audit Event separate sections, and T253 already owns the
-  `subject_type`/`subject_public_id` versus `entity_type`/`entity_id` disagreement that a shared
-  repository would have to paper over. **T253 should be settled first**, because whichever names win
-  must be the ones T294 writes and the ones T093 queries.
+  **Stream is a constructor binding, not a parameter on `save()`.** The class takes a `$stream` name
+  resolved through a private two-entry whitelist to a table and a subject-column set, and an
+  unrecognised name throws at construction rather than falling back to the transaction stream — a silent
+  fallback would write configuration events into the transaction table, the exact failure this task
+  exists to prevent. This keeps the seven-method `AuditEventRepository` port unchanged and all six
+  production `append()` call sites untouched, and it makes the reads stream-scoped for free. The two
+  tables are disjoint in subject columns, so `save()` writes exactly its own set: the transaction stream
+  gets sheet/transaction/revision/stage/decision, the configuration stream gets entity_type/entity_id.
+
+  **T253 settled the naming question: `entity_type`/`entity_id` win**, over the task's
+  `subject_type`/`subject_public_id`, so that is what T294 writes and what T093 will query.
+
+  **`appendConfiguration()` is back, but through the port and wired.** It was added to the `AuditWriter`
+  interface rather than to the service alone, so the surface test's rule — every public writer method is
+  a port member — still holds. `FinanceSettlementService::recordDecision()` now writes an
+  `ACCOUNT_CHARGED` configuration event naming the account it debited, on approval only, so a rejection
+  or return does not accrue a charge. Its payload deliberately records no `before` balance:
+  `recordConsumption()` mutates the account in place, so a "before" read there would be the
+  post-consumption value wearing a "before" label.
+
+  **Verified at both ends, in two suites, for an environmental reason worth recording.** The PHPUnit
+  process has no `IDBConnection` (the real database is reachable only from the separate
+  `roundtrip-runner` process), so no single test can span settlement to table.
+  `RepositoryRoundTripTest::testAConfigurationAuditEventLandsInItsOwnTableAndIsInvisibleToTheTransactionStream`
+  writes a configuration event through the real binding and asserts a real row in
+  `oc_pettycash_configuration_audit`, that `entity_type`/`entity_id` survive, that the transaction
+  stream's subject columns come back null, and that the transaction binding **cannot read it**.
+  Collapsing both streams onto one table is caught (as `Unknown column 'entity_type'` — the disjoint
+  columns make a stream mix-up a schema error, not silent corruption).
+  `FinanceSettlementTest` asserts the settlement half against a recording writer: exactly one charge on
+  approval, named for the debited account, carrying the causing command id, and none on rejection.
+  `AuditWriterSurfaceTest` asserts each writer path reaches only its own repository and that a
+  subjectless configuration event is refused. All three are mutation-proven. Suite: 640 tests,
+  2840 assertions, no new failures (T275 unchanged).
 
   This task owns the write path and the routing. T086 (write before/after on every configuration
   mutation, in the same transaction) and T093 (the role-scoped query) remain open and must be built on
+  whatever T294 lands, not alongside it. (contradicts)
   whatever T294 lands, not alongside it. (contradicts)
 
 ### HIGH — a completed task claims a writer that does not work
@@ -3269,7 +3295,7 @@ which neither had examined, plus a mechanical cross-check of task notes against 
 | F1 | contradicts | HIGH | T032, T195, T196 | Three notes assert a task is `[x]` that is not | Correct each in the direction its own evidence shows | **appended as T298** |
 | F2 | missing | MEDIUM | T032 | US5 configuration slice absent entirely | Build | T081–T089, T205 — open |
 | F3 | missing | MEDIUM | T032 | US7 export slice and report/dashboard queries absent entirely | Build | T105–T111, T155, T207 — open |
-| F4 | contradicts | CRITICAL | FR-056 | Nothing writes `pettycash_configuration_audit` | Route it | T294 — open |
+| F4 | contradicts | CRITICAL | FR-056 | Nothing writes `pettycash_configuration_audit` | Route it | T294 — closed, stream-bound, mutation-proven |
 | F5 | partial | MEDIUM | FR-052 | Two dead audit-writer methods, zero call sites | Remove or repair | T296 — open |
 
 **Summary metrics**: 81 FRs + 14 SCs + 9 US acceptance sets + 5 constitution principles; the US4, US5

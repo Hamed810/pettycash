@@ -145,6 +145,10 @@ $revisions = new DbTransactionRevisionRepository($db, $userDirectory, $currentUs
 $transactions = new DbExpenseTransactionRepository($db, $userDirectory, $currentUser, $revisions);
 $decisions = new DbWorkflowDecisionRepository($db, $userDirectory, $currentUser);
 $auditEvents = new DbAuditEventRepository($db, $userDirectory, $currentUser);
+// FR-056: the configuration stream is a second binding of the same repository, and it is the
+// only thing that proves the binding resolves to a different table with different subject
+// columns. A unit test over two in-memory doubles cannot show either.
+$configurationAuditEvents = new DbAuditEventRepository($db, $userDirectory, $currentUser, 'configuration');
 $evidence = new DbEvidenceRepository($db, $userDirectory, $currentUser);
 $evidenceLinks = new DbEvidenceLinkRepository($db, $userDirectory, $currentUser);
 $commandResults = new DbCommandResultRepository($db, $userDirectory, $currentUser);
@@ -271,6 +275,7 @@ try {
             $revisions,
             $decisions,
             $auditEvents,
+            $configurationAuditEvents,
             $evidence,
             $evidenceLinks,
             $actorUid,
@@ -642,6 +647,7 @@ function scenarioExpense(
     DbTransactionRevisionRepository $revisions,
     DbWorkflowDecisionRepository $decisions,
     DbAuditEventRepository $auditEvents,
+    DbAuditEventRepository $configurationAuditEvents,
     DbEvidenceRepository $evidence,
     DbEvidenceLinkRepository $evidenceLinks,
     string $actorUid,
@@ -833,6 +839,56 @@ function scenarioExpense(
     );
     $auditEvents->save($auditEvent);
     $track('pettycash_transaction_audit', $surrogateIdOf('pettycash_transaction_audit', $auditEvent->publicId));
+
+    // --- configuration audit event, addressed by entity_type/entity_id (FR-055) ---
+    $configurationEvent = new AuditEvent(
+        (string) Uuid::random(),
+        null,
+        null,
+        null,
+        '',
+        null,
+        'account',
+        'round-trip-account-1',
+        'ACCOUNT_CHARGED',
+        $actorUid,
+        'Round Trip Actor',
+        Role::Finance->value,
+        'charged in the round trip',
+        '{}',
+        '{"movement_id":"mov-1"}',
+        $decisionCommandId,
+        $now
+    );
+    $configurationAuditEvents->save($configurationEvent);
+    $track('pettycash_configuration_audit', $surrogateIdOf('pettycash_configuration_audit', $configurationEvent->publicId));
+
+    $configurationByPublicId = $configurationAuditEvents->findByPublicId($configurationEvent->publicId);
+    $configurationBySurrogate = $configurationAuditEvents->findById((int) $configurationEvent->dbId);
+    $configurationByActor = array_map(
+        static fn (AuditEvent $e): string => (string) $e->publicId,
+        $configurationAuditEvents->findByActorUid($actorUid)
+    );
+    $configurationByRange = array_map(
+        static fn (AuditEvent $e): string => (string) $e->publicId,
+        $configurationAuditEvents->findByDateRange($now, $now)
+    );
+    // Read the configuration table directly. Going through the binding under test cannot prove
+    // the binding reached that table; only the table itself can.
+    $configurationRows = \OCP\Server::get(\OCP\IDBConnection::class)->executeQuery(
+        'SELECT public_id FROM oc_pettycash_configuration_audit WHERE public_id = ?',
+        [$configurationEvent->publicId]
+    )->fetchAll();
+    // The separation that matters: the transaction binding must not be able to read it.
+    $visibleToTransactionStream = array_map(
+        static fn (AuditEvent $e): string => (string) $e->publicId,
+        $auditEvents->findByActorUid($actorUid)
+    );
+    $transmissionOfConfiguration = in_array(
+        (string) $configurationEvent->publicId,
+        $visibleToTransactionStream,
+        true
+    );
 
     $auditByPublicId = $auditEvents->findByPublicId($auditEvent->publicId);
     $auditBySurrogate = $auditEvents->findById((int) $auditEvent->dbId);
@@ -1039,6 +1095,32 @@ function scenarioExpense(
             'foundForActor' => in_array($auditEvent->publicId, $auditForActor, true),
             'foundInDateRange' => in_array($auditEvent->publicId, $auditInRange, true),
             'foundOutsideDateRange' => in_array($auditEvent->publicId, $auditOutOfRange, true),
+        ],
+        'configurationAudit' => [
+            'publicId' => $configurationEvent->publicId,
+            'byPublicId' => $configurationByPublicId === null ? null : [
+                'publicId' => $configurationByPublicId->publicId,
+                'eventType' => $configurationByPublicId->eventType,
+                'entityType' => $configurationByPublicId->entityType,
+                'entityId' => $configurationByPublicId->entityId,
+                'sheetDbId' => $configurationByPublicId->sheetId,
+                'transactionDbId' => $configurationByPublicId->transactionId,
+                'revisionDbId' => $configurationByPublicId->revisionId,
+                'decisionDbId' => $configurationByPublicId->decisionId,
+                'stage' => $configurationByPublicId->stage,
+                'actorUid' => $configurationByPublicId->actorUid,
+                'actorName' => $configurationByPublicId->actorName,
+                'actorRole' => $configurationByPublicId->actorRole,
+                'explanation' => $configurationByPublicId->explanation,
+                'beforeJson' => $configurationByPublicId->beforeJson,
+                'afterJson' => $configurationByPublicId->afterJson,
+                'commandId' => $configurationByPublicId->commandId,
+            ],
+            'bySurrogateKey' => $configurationBySurrogate === null ? null : ['publicId' => $configurationBySurrogate->publicId],
+            'foundForActor' => in_array($configurationEvent->publicId, $configurationByActor, true),
+            'foundInDateRange' => in_array($configurationEvent->publicId, $configurationByRange, true),
+            'rowCountInConfigurationTable' => count($configurationRows),
+            'visibleToTransactionStream' => $transmissionOfConfiguration,
         ],
         'evidence' => [
             'publicId' => $evidenceRow->publicId,

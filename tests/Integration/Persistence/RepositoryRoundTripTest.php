@@ -382,6 +382,65 @@ final class RepositoryRoundTripTest extends TestCase
         $this->assertSame('COST_CENTER_MANAGER', $byCommandId['actorRole']);
     }
 
+    /**
+     * FR-056: the configuration audit stream is a real table, not a second name for the
+     * transaction one.
+     *
+     * This is the assertion a unit test over two in-memory doubles cannot make. The doubles
+     * prove the writer sends each path to a different repository; only the real schema can prove
+     * the configuration binding writes to `pettycash_configuration_audit` with `entity_type` and
+     * `entity_id`, and that the transaction binding cannot see the row.
+     */
+    public function testAConfigurationAuditEventLandsInItsOwnTableAndIsInvisibleToTheTransactionStream(): void
+    {
+        $report = $this->report('expense');
+        $config = $report['configurationAudit'];
+
+        $this->assertSame(
+            1,
+            $config['rowCountInConfigurationTable'],
+            'the configuration event must be a real row in pettycash_configuration_audit; if the '
+            . 'stream binding silently fell back to the transaction table there would be none here'
+        );
+        $this->assertNotNull(
+            $config['byPublicId'],
+            'a configuration event must be readable back through the configuration binding'
+        );
+        $this->assertSame($config['publicId'], $config['byPublicId']['publicId']);
+        $this->assertSame(
+            $config['publicId'],
+            $config['bySurrogateKey']['publicId'],
+            'save() must set the surrogate key, or the event cannot be found by id'
+        );
+
+        // FR-055: a configuration event is addressed by entity_type/entity_id.
+        $this->assertSame('account', $config['byPublicId']['entityType']);
+        $this->assertSame('round-trip-account-1', $config['byPublicId']['entityId']);
+
+        // The transaction stream's subject columns do not exist on the configuration table, so
+        // they must come back empty rather than borrowing values from somewhere else.
+        $this->assertNull($config['byPublicId']['sheetDbId']);
+        $this->assertNull($config['byPublicId']['transactionDbId']);
+        $this->assertNull($config['byPublicId']['revisionDbId']);
+        $this->assertNull($config['byPublicId']['decisionDbId']);
+
+        // FR-052: the shared actor columns survive the stream binding.
+        $this->assertSame('employee1', $config['byPublicId']['actorUid']);
+        $this->assertSame('Round Trip Actor', $config['byPublicId']['actorName']);
+        $this->assertSame('FINANCE', $config['byPublicId']['actorRole']);
+        $this->assertSame('ACCOUNT_CHARGED', $config['byPublicId']['eventType']);
+        $this->assertSame('{"movement_id":"mov-1"}', $config['byPublicId']['afterJson']);
+
+        $this->assertTrue($config['foundForActor'], 'the configuration stream must answer findByActorUid');
+        $this->assertTrue($config['foundInDateRange'], 'the configuration stream must answer findByDateRange');
+
+        $this->assertFalse(
+            $config['visibleToTransactionStream'],
+            'the transaction binding must not be able to read a configuration event; if both '
+            . 'streams resolved to one table the two audit trails are indistinguishable'
+        );
+    }
+
     public function testAuditEventPointsAtItsSheetTransactionRevisionAndDecision(): void
     {
         $report = $this->report('expense');

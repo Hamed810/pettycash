@@ -7,6 +7,9 @@ namespace OCA\PettyCash\Tests\Unit\Audit;
 use OCA\PettyCash\Application\Audit\AuditWriterService;
 use OCA\PettyCash\Application\Port\AuditWriter;
 use OCA\PettyCash\Domain\Shared\ActorSnapshot;
+use OCA\PettyCash\Tests\TestDoubles\InMemoryAuditEventRepository;
+use OCA\PettyCash\Tests\TestDoubles\InMemoryCurrentUser;
+use OCA\PettyCash\Tests\TestDoubles\InMemoryUserDirectory;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 use ReflectionMethod;
@@ -44,10 +47,26 @@ final class AuditWriterSurfaceTest extends TestCase
         );
         sort($methods);
 
-        // `__construct` and `append` only. A second writer path is how a second divergent definition
-        // of "what an audit event contains" starts, which is the same duplication class T289 was
-        // written for on the account payload.
-        self::assertSame(['__construct', 'append'], $methods);
+        // `__construct` plus exactly the port's two paths. T296 deleted `appendConfiguration()` and
+        // this assertion is why that was safe; T294 restored it *through the port*, so the rule this
+        // test guards is unchanged: a writer path exists only because the port declares it, and a
+        // second definition of "what an audit event contains" cannot start as a public method that
+        // the container never sees.
+        self::assertSame(['__construct', 'append', 'appendConfiguration'], $methods);
+
+        $portMethods = array_map(
+            static fn (ReflectionMethod $m): string => $m->getName(),
+            (new ReflectionClass(AuditWriter::class))->getMethods(ReflectionMethod::IS_PUBLIC)
+        );
+        sort($portMethods);
+        // `__construct` is a construction detail of the class, not a port member.
+        $writerPaths = array_values(array_diff($methods, ['__construct']));
+        self::assertSame(
+            $portMethods,
+            $writerPaths,
+            'every public writer method must be declared on the port, so the container and the '
+            . 'contract cannot drift apart'
+        );
     }
 
     public function testTheRemovedWriterPathsAreGone(): void
@@ -59,17 +78,94 @@ final class AuditWriterSurfaceTest extends TestCase
         self::assertFalse(
             $reflection->hasMethod('appendTransaction'),
             'appendTransaction() was removed in T296: it had no callers and read $actor->role->value '
-            . 'on a string, which would persist a null actor role contrary to FR-052. If a writer path '
-            . 'is genuinely needed, add it to the AuditWriter port in the same change so the contract '
-            . 'and the implementation cannot drift apart.'
+            . 'on a string, which would persist a null actor role contrary to FR-052. T294 did not '
+            . 'restore it — `append()` is the transaction path, and a second one would reintroduce '
+            . 'exactly the divergence T289 was written for on the account payload.'
         );
-        self::assertFalse(
-            $reflection->hasMethod('appendConfiguration'),
-            'appendConfiguration() was removed in T296 for the same reason, and additionally because '
-            . 'DbAuditEventRepository::save() targets pettycash_transaction_audit unconditionally, so it '
-            . 'would have written a configuration event into the transaction stream contrary to FR-056. '
-            . 'T294 owns the real configuration audit writer.'
+    }
+
+    /**
+     * FR-056: the two streams are separate tables, and a configuration event written into the
+     * transaction stream is not a formatting problem — it lands in a table whose subject columns
+     * are sheet/transaction, where the configuration event has nothing to fill them with.
+     *
+     * This is the guarantee T296's assertion stood in for. It was removed because
+     * `DbAuditEventRepository::save()` targeted `pettycash_transaction_audit` unconditionally, so
+     * there was no correct way to add the method. T294 made the stream a constructor binding, which
+     * is what makes the separation observable here: two repositories, and each path must reach
+     * only its own.
+     */
+    public function testEachWriterPathReachesOnlyItsOwnStream(): void
+    {
+        $transaction = new InMemoryAuditEventRepository();
+        $configuration = new InMemoryAuditEventRepository();
+
+        $writer = new AuditWriterService(
+            $transaction,
+            new InMemoryCurrentUser('officer-1'),
+            new InMemoryUserDirectory(),
+            $configuration
         );
+
+        $writer->append([
+            'id' => '11111111-1111-4111-8111-111111111111',
+            'sheet_id' => 7,
+            'event_type' => 'DECISION',
+        ]);
+        $writer->appendConfiguration([
+            'id' => '22222222-2222-4222-8222-222222222222',
+            'entity_type' => 'account',
+            'entity_id' => 'acc-1',
+            'event_type' => 'ACCOUNT_CHARGED',
+        ]);
+
+        $inTransaction = $transaction->getEvents();
+        $inConfiguration = $configuration->getEvents();
+
+        self::assertCount(1, $inTransaction, 'the transaction event must reach the transaction stream');
+        self::assertCount(1, $inConfiguration, 'the configuration event must reach the configuration stream');
+
+        self::assertSame(
+            'DECISION',
+            $inTransaction[0]->eventType,
+            'the transaction stream must not receive the configuration event'
+        );
+        self::assertSame(
+            'ACCOUNT_CHARGED',
+            $inConfiguration[0]->eventType,
+            'the configuration stream must not receive the transaction event'
+        );
+        self::assertSame('account', $inConfiguration[0]->entityType, 'FR-055 addresses configuration events by entity_type');
+        self::assertSame('acc-1', $inConfiguration[0]->entityId);
+    }
+
+    /**
+     * A configuration event with no subject is refused rather than written.
+     *
+     * `entity_type` is the only thing that separates a configuration event from a transaction one
+     * in this stream. Without it the row is indistinguishable from a transaction event whose
+     * subject silently failed to bind, which is the state FR-055's charged-account derivation
+     * cannot detect.
+     */
+    public function testAConfigurationEventWithoutASubjectIsRefused(): void
+    {
+        $configuration = new InMemoryAuditEventRepository();
+        $writer = new AuditWriterService(
+            new InMemoryAuditEventRepository(),
+            new InMemoryCurrentUser('officer-1'),
+            new InMemoryUserDirectory(),
+            $configuration
+        );
+
+        $this->expectException(\InvalidArgumentException::class);
+        try {
+            $writer->appendConfiguration([
+                'id' => '33333333-3333-4333-8333-333333333333',
+                'event_type' => 'ACCOUNT_CHARGED',
+            ]);
+        } finally {
+            self::assertCount(0, $configuration->getEvents(), 'a subjectless configuration event must not be written');
+        }
     }
 
     public function testTheWriterImplementsThePortItIsRegisteredAgainst(): void

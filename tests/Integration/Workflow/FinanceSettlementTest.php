@@ -9,6 +9,7 @@ use DateTimeZone;
 use OCA\PettyCash\Application\Command\CommandConflict;
 use OCA\PettyCash\Application\Command\CommandResultRepository;
 use OCA\PettyCash\Application\Port\AuditWriter;
+use OCA\PettyCash\Tests\TestDoubles\InMemoryAuditWriter;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Application\Port\TransactionManager;
 use OCA\PettyCash\Application\Port\UserDirectory;
@@ -126,6 +127,80 @@ final class FinanceSettlementTest extends TestCase
         $this->container->setInstance(CurrentUser::class, new InMemoryCurrentUser('test-user'));
         $this->container->setInstance(TransactionManager::class, new InMemoryTransactionManager());
         $this->container->setInstance(AccountMovementRepository::class, new InMemoryAccountMovementRepository());
+    }
+
+    // --- FR-055: the charge is audited in the configuration stream ------------
+
+    /**
+     * FR-055: a finance approval charges an account, and an officer's charged accounts are derived
+     * from their funding/charging configuration-audit events.
+     *
+     * Until settlement wrote one, that derivation had nothing to read, so every officer answered
+     * as holding no charged account. The event must go to the configuration stream, not the
+     * transaction one: it has no sheet or transaction of its own, and the transaction table has
+     * no entity_type column to address it with.
+     */
+    public function testFinanceApprovalAuditsTheChargeInTheConfigurationStream(): void
+    {
+        $tx = $this->seniorApprovedTransaction('tx-1');
+        $writer = new InMemoryAuditWriter();
+
+        $this->serviceWithAuditWriter($writer)->recordDecision(
+            $tx->id,
+            Decision::Approve,
+            '',
+            $commandId = $this->commandId(),
+            $tx->lockVersion
+        );
+
+        $charges = $writer->getConfigurationEvents();
+        self::assertCount(1, $charges, 'an approval that moves money must write one configuration charge');
+        self::assertSame('account', $charges[0]['entity_type'], 'FR-055 addresses a charge by entity_type');
+        self::assertSame(
+            $this->account()->id,
+            $charges[0]['entity_id'],
+            'the charge must name the account that was debited, or the charged-account derivation '
+            . 'cannot attribute it to an officer'
+        );
+        self::assertSame('ACCOUNT_CHARGED', $charges[0]['event_type']);
+        self::assertSame($commandId, $charges[0]['command_id'], 'the charge carries the command that caused it');
+        self::assertSame(
+            $tx->id,
+            $charges[0]['after']['transaction_id'],
+            'the charge names the transaction it settled'
+        );
+
+        // It must not have been smuggled into the transaction stream, which is where the
+        // transaction audit event for the same decision already went.
+        self::assertCount(1, $writer->getEvents());
+        foreach ($writer->getEvents() as $event) {
+            self::assertNotSame('ACCOUNT_CHARGED', $event['event_type'] ?? null);
+        }
+    }
+
+    /**
+     * A decision that moves no money must not accrue a charge. Otherwise the charge stream records
+     * rejections and returns as charges, and an officer's charged-account set grows with every
+     * declined sheet.
+     */
+    public function testARejectedDecisionLeavesNoConfigurationCharge(): void
+    {
+        $tx = $this->seniorApprovedTransaction('tx-1');
+        $writer = new InMemoryAuditWriter();
+
+        $this->serviceWithAuditWriter($writer)->recordDecision(
+            $tx->id,
+            Decision::Reject,
+            'Not a business expense',
+            $this->commandId(),
+            $tx->lockVersion
+        );
+
+        self::assertCount(
+            0,
+            $writer->getConfigurationEvents(),
+            'a rejection moves no money, so it must not write an ACCOUNT_CHARGED event'
+        );
     }
 
     // --- FR-040: the consumption movement -------------------------------------
@@ -727,6 +802,48 @@ final class FinanceSettlementTest extends TestCase
     }
 
     // --- Fixtures --------------------------------------------------------------
+
+    /**
+     * The settlement with a caller-supplied audit writer.
+     *
+     * The charge half of the path is asserted here against a recording writer, and the table half
+     * is asserted in RepositoryRoundTripTest against the real schema. They are separate suites for
+     * an environmental reason worth stating: the PHPUnit process has no IDBConnection — the real
+     * database is reachable only from the separate roundtrip-runner process — so no single test
+     * here can span settlement to table. Between them both ends of the path are covered, and this
+     * one is the end that no other test can reach.
+     */
+    private function serviceWithAuditWriter(AuditWriter $writer): FinanceSettlementService
+    {
+        return new FinanceSettlementService(
+            $this->container->query(TransactionManager::class),
+            $this->container->query(ExpenseSheetRepository::class),
+            $this->container->query(ExpenseTransactionRepository::class),
+            $this->container->query(TransactionRevisionRepository::class),
+            $this->container->query(AccountRepository::class),
+            $this->container->query(AccountMovementRepository::class),
+            $this->container->query(\OCA\PettyCash\Domain\Configuration\Repository\CostCenterRepository::class),
+            $this->container->query(RoleAssignmentRepository::class),
+            $this->container->query(WorkflowDecisionRepository::class),
+            $writer,
+            $this->container->query(\OCA\PettyCash\Application\Command\IdempotencyService::class),
+            $this->container->query(CurrentUser::class),
+            $this->container->query(UserDirectory::class),
+            new AuthorizationService()
+        );
+    }
+
+    /** @return list<array<string, mixed>> */
+    private function configurationCharges(): array
+    {
+        $qb = $this->container->query(\OCP\IDBConnection::class)->getQueryBuilder();
+        $qb->select('entity_type', 'entity_id', 'event_type', 'actor_uid', 'command_id')
+            ->from('pettycash_configuration_audit')
+            ->where($qb->expr()->eq('event_type', $qb->createNamedParameter('ACCOUNT_CHARGED')))
+            ->orderBy('id', 'ASC');
+
+        return $qb->executeQuery()->fetchAllAssociative();
+    }
 
     private function service(): FinanceSettlementService
     {
