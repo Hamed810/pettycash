@@ -329,8 +329,14 @@ Mutable totals are calculated by role-scoped projections rather than stored as i
 
 ## Configuration Audit Event
 
-Same append-only conventions as transaction audit, with `subject_type`, `subject_public_id`,
+Same append-only conventions as transaction audit, with `entity_type`, `entity_id`,
 `event_type`, actor snapshot, explanation, before/after JSON, command ID, and occurrence time.
+The subject is named `entity_type`/`entity_id` -- not `subject_type`/`subject_public_id` -- because
+that is what `Version010200Date20260920000000.php` creates and what the `AuditEvent` domain entity
+already calls `entityType`/`entityId`. The earlier names in this file were a design-time sketch that
+the shipped schema superseded while the table was still empty, so nothing had to be migrated.
+A finance officer's charged accounts are the distinct `entity_id` values where `entity_type` is
+`account` across that officer's own configuration audit events (FR-055).
 
 ## Command Result
 

@@ -37,6 +37,14 @@ specifications from them. Do not implement anything. Only create specs."
 - Q: What should the artifacts say about residual `oc_pcash_*` prototype tables that remain in the shared development database? → A: leave them untouched and record them as unmanaged artifacts; V1 MUST NOT read, write, migrate, import, rename, or drop them, and their presence is not a V1 defect or a trigger for any cleanup action
 - Q: Index and constraint names are global per database schema, so which app-scoped naming form should the V1 schema use? → A: `pettycash_<table>_<subject>_<kind>` where kind is `idx`, `uniq`, `fk`, or `chk` (for example `pettycash_transactions_status_idx`, `pettycash_transaction_revisions_number_uniq`); the old generic `pc_` prefix MUST NOT be used for indexes or constraints, and identifiers MUST stay comfortably below the PostgreSQL 63-byte and MySQL 64-character limits, abbreviating only when a full descriptive name would exceed the portable limit
 
+### Session 2026-09-28
+
+- Q: Should petty-cash balances and movements be their own report types, or data within the existing `accounts` report? (FR-065) → A: Data within the existing `accounts` report; the report-type enum is not extended.
+- Q: Should FR-064 keep all twelve filtering facets even though five of them cannot currently be expressed, or should the requirement be narrowed to what exists? (FR-064) → A: Keep all twelve; they are V1 requirements, not deferred, and each facet's source is now stated.
+- Q: Where should the list of accounts a finance officer has charged come from, since nothing currently records it? (FR-055) → A: Derived from the officer's own configuration audit events for account subjects, written by T294; no migration and no coupling to the command log.
+- Q: Which column names should the configuration audit subject use, given the spec's data model and the shipped migration disagree? (T253, FR-056) → A: Keep the migration's `entity_type`/`entity_id` and correct `data-model.md`; the domain entity already uses those names, so the document is the outlier.
+- Q: Should SC-008's three-second usability target be verified during V1, or is that verification deferred to a later milestone? (SC-008) → A: Verified during V1, not deferred; the measurement is performed and its result recorded, so the criterion is reported as met or not met rather than assumed.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Capture and Submit Expenses (Priority: P1)
@@ -465,7 +473,12 @@ of all primary workflow actions.
 - **FR-055**: Audit visibility and export MUST follow the same role and scope restrictions as the
   related transaction; configuration audit visibility follows role scope: system administrators see
   all configuration audit events; finance officers see configuration audit for accounts they charge;
-  cost center and senior managers see configuration audit for their assigned cost centers.
+  cost center and senior managers see configuration audit for their assigned cost centers. An
+  officer's charged accounts are the distinct account subjects of that officer's own configuration
+  audit events, so the set is derived from the audit trail rather than recorded on each movement: a
+  charge must therefore write a configuration audit event naming the charging officer and the account,
+  and a finance officer with no such events sees no configuration audit, which is a true zero rather
+  than a widened scope.
 - **FR-056**: Transaction audit and configuration audit MUST remain separately identifiable from
   each other and from technical error records.
 - **FR-057**: Any configurable audit retention policy MUST preserve the non-deletable historical
@@ -493,9 +506,18 @@ of all primary workflow actions.
   key dates, current and submitted totals, summary amounts, and the active transaction revision.
 - **FR-064**: Users MUST be able to filter sheets by status, date, currency, and creator;
   transactions by status, cost center, expense type, date, and amount; and audit by actor, stage,
-  event type, and date range.
-- **FR-065**: Reports MUST cover sheets, transactions, cost centers, petty-cash balances and
-  movements, current process status, evidence, and history within the requester's access scope.
+  event type, and date range. Each facet resolves to exactly one source, so that "filter by creator"
+  has a single meaning: a sheet's **creator** is its owner; a transaction's **cost center** is reached
+  through the transactions of the sheet it belongs to; a transaction's **expense type** and **amount**
+  come from its active revision; and an audit event's **stage** is the stage recorded on the event.
+  A filter naming any field outside this set MUST be refused with a 422 naming the accepted filters, and
+  MUST NOT be ignored -- an unrecognised filter silently returning the unfiltered report is a wrong
+  answer, not an empty one.
+- **FR-065**: Reports MUST cover sheets, transactions, cost centers, current process status, evidence,
+  and history within the requester's access scope. Petty-cash balances and movements MUST be reachable
+  as data of the `accounts` report -- one account per row, carrying that account's balance and its
+  movements. The reporting API publishes exactly seven report types -- sheets, transactions,
+  cost-centers, accounts, process, evidence and audit -- and no requirement may add an eighth.
 - **FR-066**: Authorized users MUST be able to export permitted reports, sheets, transactions,
   audit histories, and evidence in a supported `fileFormat` (`csv`, `xlsx`, or `zip`; `pdf` once a
   Persian-capable font is available), and a format that cannot yet be produced MUST be refused with a
@@ -616,7 +638,9 @@ of all primary workflow actions.
   records outside that role's access scope across the acceptance dataset.
 - **SC-008**: At the V1 operating scale of up to 100 active users and 10,000 annual transactions,
   at least 95% of routine list, detail, history, and evidence views become usable within 3 seconds
-  under normal operating conditions.
+  under normal operating conditions. This is measured during V1 rather than deferred: the measurement
+  is performed at the stated scale and its result recorded, so the criterion is reported as met or not
+  met instead of being read as covered because nothing ever checks it.
 - **SC-009**: All primary purchaser, manager, senior manager, finance, and administrator journeys
   can be completed in Persian RTL at desktop and mobile viewport sizes in each supported browser.
 - **SC-010**: In moderated acceptance testing, at least 90% of representative users complete their
