@@ -3932,3 +3932,52 @@ cause, grouped so the masking defect and the masked defect are both owned.
   behavioural test. If that is not acceptable, the honest route is to make the runner's cleanup
   provably safe first and then add a scoped corrupt-row fixture -- which is Option A's verification
   problem, and worth doing before the next data-integrity fault is diagnosed from scratch.
+## Phase 46: Convergence
+
+Normal convergence, bounded to the US7 reporting slice. Three findings: one silent-wrong-answer defect
+in code this slice added recently, one unimplementable requirement, one unowned verification gap.
+
+- [ ] T309 Give the report filter surface a closed vocabulary and refuse any filter it does not
+  recognise, per FR-064 and the FR-068 rule that a filter which cannot be answered must be refused
+  (contradicts). `ReportController::filterFrom()` decodes the `filters` JSON and reads a fixed set of
+  keys, **discarding every other key without comment**. Measured on the live endpoint:
+  `GET /reports/transactions` returns `total: 4` unfiltered, and returns the *same* `total: 4` for
+  `filters={"stages":["FINANCE"]}`, for `filters={"banana":true}`, and — worst — for the typo
+  `filters={"costcentreIds":[1]}`. A caller who misspells a filter receives the entire report instead
+  of the subset they asked for, and nothing in the response says so. For a financial report that is a
+  silently wrong answer of exactly the kind T307 was raised for, and it is a regression in code added
+  to this slice after that lesson. The fix is the same shape as T307: an unrecognised key is a client
+  error and is refused with 422 naming the accepted filters, not absorbed. (contradicts)
+
+- [ ] T310 Add the report filter facets and row columns FR-064 names but nothing models, per FR-064
+  (missing). Of the twelve facets FR-064 requires, five cannot be expressed at all.
+  `ReportFilter` carries only `from`, `to`, `statuses`, `currencyCodes`, `costCenterDbIds`,
+  `actorUids`, `eventTypes` and `createdBy`, and the report rows carry none of the columns some of those
+  need:
+
+  | FR-064 facet | State | Why |
+  |---|---|---|
+  | sheets by creator | **refused** | filter field is `createdBy`; sheet rows carry `ownerUid` |
+  | transactions by cost centre | **refused** | filter field is `costCenterDbIds`; transaction rows carry `sheetId` only |
+  | transactions by expense type | **unmodelled** | no `ReportFilter` field and no row column |
+  | transactions by amount | **unmodelled** | no `ReportFilter` field and no row column |
+  | audit by stage | **silently ignored** | audit rows carry `stage`, but no filter field exists, so a `stages` key is dropped per T309 |
+
+  Working today: sheets by status/date/currency, transactions by status/date, audit by actor/event
+  type/date range. The three refused facets are refused rather than silently wrong because T307's
+  `assertFilterIsEvaluable()` caught them, which is the mechanism working as intended. This task is the
+  capability gap behind those refusals, and it needs a decision on where the columns come from -- a
+  sheet's cost centre is reachable through its transactions, so this may be a join rather than a schema
+  change. (missing)
+
+- [ ] T311 Add a corrupt-record fixture that can verify data-integrity handling without risking the
+  shared database, per Constitution II (missing). T308 delivered the reporting half of the data-fault
+  path -- a record with an unresolvable currency is refused with 422 rather than losing three reports --
+  but the 422 path has **no committed test**, because triggering it requires deliberately inserting a
+  record with a dangling `currency_id`, which is the exact fault T308 exists to remove. A one-off
+  injector was written and abandoned: it writes invalid data into the MariaDB the live contract suite
+  also uses, and a probe whose failure mode is "leaves a landmine that breaks three reports" is the
+  trade that produced the seven leaked sheets in the first place. Building it safely means the runner's
+  cleanup is provably complete *first* -- every inserted row registered before the next insert, and a
+  post-run assertion that the fingerprint count is zero -- and only then a fixture that asserts the 422
+  and its refusal to leak the internal message. (missing)
