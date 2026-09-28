@@ -43,6 +43,10 @@ specifications from them. Do not implement anything. Only create specs."
 - Q: Should FR-064 keep all twelve filtering facets even though five of them cannot currently be expressed, or should the requirement be narrowed to what exists? (FR-064) → A: Keep all twelve; they are V1 requirements, not deferred, and each facet's source is now stated.
 - Q: Where should the list of accounts a finance officer has charged come from, since nothing currently records it? (FR-055) → A: Derived from the officer's own configuration audit events for account subjects, written by T294; no migration and no coupling to the command log.
 - Q: Which column names should the configuration audit subject use, given the spec's data model and the shipped migration disagree? (T253, FR-056) → A: Keep the migration's `entity_type`/`entity_id` and correct `data-model.md`; the domain entity already uses those names, so the document is the outlier.
+- Q: Which configuration audit events count as a finance officer charging an account, given that no event vocabulary exists for configuration audit? (FR-055) → A: Only account funding and balance-charging events, by a named event type; a rename, activation or deactivation does not grant visibility into that account's configuration history.
+- Q: Whose accounts and balances may the `accounts` report show for each role? (FR-065, FR-055, FR-015) → A: A user sees their own accounts; a finance officer additionally sees every account they have charged; an administrator sees all.
+- Q: When a finance approval consumes an account's balance, which audit stream records that the officer charged that account? (FR-055, T294) → A: Settlement also writes a configuration audit event naming the charged account, so a charge appears in both streams and the derivation is not left empty.
+- Q: What counts as a view being "usable" within three seconds, so that SC-008 can actually be measured? (SC-008) → A: The view finishes loading and shows the rows the user is entitled to see, with no error state, measured end to end as a user sees it.
 - Q: Should SC-008's three-second usability target be verified during V1, or is that verification deferred to a later milestone? (SC-008) → A: Verified during V1, not deferred; the measurement is performed and its result recorded, so the criterion is reported as met or not met rather than assumed.
 
 ## User Scenarios & Testing *(mandatory)*
@@ -474,11 +478,15 @@ of all primary workflow actions.
   related transaction; configuration audit visibility follows role scope: system administrators see
   all configuration audit events; finance officers see configuration audit for accounts they charge;
   cost center and senior managers see configuration audit for their assigned cost centers. An
-  officer's charged accounts are the distinct account subjects of that officer's own configuration
-  audit events, so the set is derived from the audit trail rather than recorded on each movement: a
-  charge must therefore write a configuration audit event naming the charging officer and the account,
-  and a finance officer with no such events sees no configuration audit, which is a true zero rather
-  than a widened scope.
+  officer's charged accounts are the distinct account subjects of that officer's own **account funding
+  and balance-charging** configuration audit events, so the set is derived from the audit trail rather
+  than recorded on each movement: such an event MUST name the charging officer and the account, and an
+  event type outside funding and charging -- a rename, an activation, a deactivation -- MUST NOT count
+  toward the set, because touching an account is not charging it. Settling an approved transaction
+  against an account therefore MUST write a configuration audit event naming that account as well as
+  recording the decision, so a charge appears in both audit streams; relying on the transaction-audit
+  decision alone would leave this scope empty for every officer who had actually charged an account. A finance officer with no funding or
+  charging event sees no configuration audit, which is a true zero rather than a widened scope.
 - **FR-056**: Transaction audit and configuration audit MUST remain separately identifiable from
   each other and from technical error records.
 - **FR-057**: Any configurable audit retention policy MUST preserve the non-deletable historical
@@ -507,8 +515,9 @@ of all primary workflow actions.
 - **FR-064**: Users MUST be able to filter sheets by status, date, currency, and creator;
   transactions by status, cost center, expense type, date, and amount; and audit by actor, stage,
   event type, and date range. Each facet resolves to exactly one source, so that "filter by creator"
-  has a single meaning: a sheet's **creator** is its owner; a transaction's **cost center** is reached
-  through the transactions of the sheet it belongs to; a transaction's **expense type** and **amount**
+  has a single meaning: a sheet's **creator** is its owner; a transaction's **cost center** is the one
+  recorded on that transaction's own active revision -- not the sheet's, because a sheet may hold
+  transactions for several cost centers (FR-028); a transaction's **expense type** and **amount** also
   come from its active revision; and an audit event's **stage** is the stage recorded on the event.
   A filter naming any field outside this set MUST be refused with a 422 naming the accepted filters, and
   MUST NOT be ignored -- an unrecognised filter silently returning the unfiltered report is a wrong
@@ -516,8 +525,11 @@ of all primary workflow actions.
 - **FR-065**: Reports MUST cover sheets, transactions, cost centers, current process status, evidence,
   and history within the requester's access scope. Petty-cash balances and movements MUST be reachable
   as data of the `accounts` report -- one account per row, carrying that account's balance and its
-  movements. The reporting API publishes exactly seven report types -- sheets, transactions,
-  cost-centers, accounts, process, evidence and audit -- and no requirement may add an eighth.
+  movements. The report shows a user their own accounts, a finance officer every account they have
+  charged in addition to their own, and an administrator every account; a report that showed only the
+  caller's own accounts would hide from a finance officer the very accounts FR-015 requires them to
+  charge. The reporting API publishes exactly seven report types -- sheets, transactions, cost-centers,
+  accounts, process, evidence and audit -- and no requirement may add an eighth.
 - **FR-066**: Authorized users MUST be able to export permitted reports, sheets, transactions,
   audit histories, and evidence in a supported `fileFormat` (`csv`, `xlsx`, or `zip`; `pdf` once a
   Persian-capable font is available), and a format that cannot yet be produced MUST be refused with a
@@ -640,7 +652,9 @@ of all primary workflow actions.
   at least 95% of routine list, detail, history, and evidence views become usable within 3 seconds
   under normal operating conditions. This is measured during V1 rather than deferred: the measurement
   is performed at the stated scale and its result recorded, so the criterion is reported as met or not
-  met instead of being read as covered because nothing ever checks it.
+  met instead of being read as covered because nothing ever checks it. A view counts as **usable** when
+  it has finished loading and is showing the rows that user is entitled to see, with no error or empty
+  state standing in for them; it is measured end to end as a user sees it, not as an internal timing.
 - **SC-009**: All primary purchaser, manager, senior manager, finance, and administrator journeys
   can be completed in Persian RTL at desktop and mobile viewport sizes in each supported browser.
 - **SC-010**: In moderated acceptance testing, at least 90% of representative users complete their
