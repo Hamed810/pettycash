@@ -1380,7 +1380,7 @@ reproduced against the running container and database, not inferred.
 
 ### MEDIUM — configuration-audit subject columns disagree with the data model
 
-- [ ] T253 [MEDIUM] Reconcile the configuration-audit subject identity between the approved data
+- [x] T253 [MEDIUM] Reconcile the configuration-audit subject identity between the approved data
   model and the implementation, because the `Configuration Audit Event` section of
   `specs/001-pettycash-v1-core/data-model.md` specifies `subject_type`, `subject_public_id`,
   `event_type`, actor snapshot, explanation, before/after JSON, command ID, and occurrence time,
@@ -4017,3 +4017,21 @@ in code this slice added recently, one unimplementable requirement, one unowned 
   ordering is therefore T253 -> T294 -> the accounts scope -> T299's own verification, and T112's
   report/export work is otherwise complete and verified. Recorded here so the state is not lost, rather
   than left as a checked task that reads as done.
+
+  **Closed by reconciliation, not by new code.** The 2026-09-28 clarification settled the decision this
+  task was blocked on -- keep the migration's `entity_type`/`entity_id` and correct `data-model.md`,
+  because the domain `AuditEvent` entity already uses those names and the document was the outlier.
+  `data-model.md` was corrected in that session; this pass verified the whole chain agrees:
+
+  | Layer | State |
+  |---|---|
+  | `data-model.md` (Configuration Audit Event) | `entity_type`, `entity_id` |
+  | `Version010200Date20260920000000.php:45` | creates `entity_type`(64), `entity_id`(64) |
+  | `AuditWriterService.php:37-38` | writes `entity_type`, `entity_id` |
+  | any remaining `subject_*` disagreement | **none** |
+
+  Nothing had to be migrated: the configuration audit table has never been written, so the naming choice
+  cost no data. Verified rather than assumed -- four checks, all green -- and no application code was
+  touched, which is why this is a checkbox change and not an implementation.
+
+  This was the gate on T294, so T294 is now unblocked.
