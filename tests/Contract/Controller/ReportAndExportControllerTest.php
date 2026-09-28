@@ -186,6 +186,73 @@ final class ReportAndExportControllerTest extends TestCase
         $this->assertSame(0, $response['data']['total']);
     }
 
+    // ===== T309: the filter vocabulary is closed =====
+
+    /**
+     * The regression. `filterFrom()` used to read eight filter names and discard every other key in the
+     * object without comment, so a caller who misspelled a filter received the **entire report** instead
+     * of the subset they asked for, with nothing in the response saying so. Measured before the fix:
+     * `GET /reports/transactions` returned `total: 4` unfiltered, and the same `total: 4` for
+     * `{"stages":["FINANCE"]}`, for `{"banana":true}`, and for the typo `{"costcentreIds":[1]}`.
+     *
+     * FR-064 now requires an unrecognised filter to be refused with a 422 naming the accepted filters.
+     */
+    public function testAnUnrecognisedFilterIsRefusedRatherThanIgnored(): void
+    {
+        $response = $this->get('/reports/transactions?filters=' . rawurlencode('{"stages":["FINANCE"]}'));
+
+        $this->assertEquals(422, $response['status']);
+        $this->assertStringContainsString('stages', $response['message']);
+        $this->assertStringContainsString('costCenterDbIds', $response['message'], 'the refusal should list what is accepted');
+    }
+
+    /**
+     * The typo is the damaging case, because `costcentreIds` is a misspelling of a filter that *is*
+     * accepted: ignoring it returns every transaction in the caller's scope as though the cost centre had
+     * been chosen.
+     */
+    public function testAMisspelledFilterIsRefused(): void
+    {
+        $response = $this->get('/reports/transactions?filters=' . rawurlencode('{"costcentreIds":[1]}'));
+
+        $this->assertEquals(422, $response['status']);
+        $this->assertStringContainsString('costcentreIds', $response['message']);
+    }
+
+    public function testANonsenseFilterIsRefused(): void
+    {
+        $this->assertEquals(
+            422,
+            $this->get('/reports/transactions?filters=' . rawurlencode('{"banana":true}'))['status']
+        );
+    }
+
+    public function testAFilterArrayIsRefusedRatherThanTreatedAsNoFilter(): void
+    {
+        // A JSON array is not a filter object. `is_array()` alone would have accepted it and then read
+        // nothing from it -- silently unfiltered again, by a different route.
+        $this->assertEquals(
+            422,
+            $this->get('/reports/transactions?filters=' . rawurlencode('["statuses"]'))['status']
+        );
+    }
+
+    public function testEveryAcceptedFilterStillWorks(): void
+    {
+        $all = $this->get('/reports/transactions')['data']['total'];
+        $statuses = $this->get('/reports/transactions?filters=' . rawurlencode('{"statuses":["DRAFT"]}'))['data'];
+        $actors = $this->get('/reports/transactions?filters=' . rawurlencode('{"actorUids":["employee1"]}'))['data'];
+
+        // Refusing unknown keys must not have broken the ones that work.
+        $this->assertLessThanOrEqual($all, $statuses['total']);
+        foreach ($statuses['rows'] as $row) {
+            $this->assertSame('DRAFT', $row['status']);
+        }
+        foreach ($actors['rows'] as $row) {
+            $this->assertSame('employee1', $row['ownerUid']);
+        }
+    }
+
     // ===== POST /exports =====
 
     public function testAConformingExportRequestAnswersJson(): void

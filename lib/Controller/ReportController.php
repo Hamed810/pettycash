@@ -61,6 +61,28 @@ class ReportController extends OCSController
     /** Bounded reads, as in `DashboardController`: these are window sizes, not instance totals. */
     private const BOUND = 100;
 
+    /**
+     * The filter names this endpoint accepts, per FR-064.
+     *
+     * The list is closed on purpose. It used not to be: `filterFrom()` read the eight keys below and
+     * discarded every other key in the object without comment, so a caller who misspelled a filter --
+     * `costcentreIds` for `costCenterDbIds` -- received the **entire report** instead of the subset they
+     * asked for, with nothing in the response indicating it. That is a confidently wrong answer, and for
+     * a financial report it is the most damaging kind: the caller has no way to tell. Measured before
+     * the fix: `GET /reports/transactions` returned `total: 4` unfiltered, and the same `total: 4` for
+     * `{"stages":["FINANCE"]}`, for `{"banana":true}`, and for the typo above.
+     *
+     * FR-064 now requires an unrecognised filter to be refused with a 422 naming the accepted filters,
+     * and this is where that happens -- the same shape as `ReportQuery::assertFilterIsEvaluable()`,
+     * which refuses a *recognised* filter the rows cannot answer. Together they close both directions:
+     * a filter this report cannot evaluate is refused, and a filter this endpoint cannot read at all
+     * is refused before it can be mistaken for no filter.
+     */
+    private const ACCEPTED_FILTERS = [
+        'from', 'to', 'statuses', 'currencyCodes', 'costCenterDbIds', 'actorUids', 'eventTypes',
+        'createdBy',
+    ];
+
     public function __construct(
         \OCP\IRequest $request,
         private CurrentUser $currentUser,
@@ -160,10 +182,22 @@ class ReportController extends OCSController
         }
 
         $decoded = json_decode($filters, true);
-        if (!is_array($decoded)) {
+        if (!is_array($decoded) || array_is_list($decoded)) {
             throw new InvalidArgumentException(
                 'The `filters` parameter must be a JSON object; got ' . $this->describe($filters)
             );
+        }
+
+        $unknown = array_values(array_diff(array_keys($decoded), self::ACCEPTED_FILTERS));
+        if ($unknown !== []) {
+            throw new InvalidArgumentException(sprintf(
+                'Unknown filter%s %s. Accepted filters are: %s. An unrecognised filter is refused rather '
+                . 'than ignored, because ignoring it returns the unfiltered report and the caller cannot '
+                . 'tell the difference.',
+                count($unknown) === 1 ? '' : 's',
+                '"' . implode('", "', $unknown) . '"',
+                implode(', ', self::ACCEPTED_FILTERS)
+            ));
         }
 
         return new ReportFilter(

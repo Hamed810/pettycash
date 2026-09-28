@@ -565,7 +565,7 @@ evidence; verify every report/export contains all permitted and zero out-of-scop
   `IAppData` entirely and reported the real path `/appdata_oculd8krif6b/pettycash/exports/`. No shared temp or
   AppData litter after the run)
 - [x] T111 [US7] [FR-066] Implement export orchestration, transient AppData cleanup, and authorization-before-generation in `lib/Application/Reporting/ExportService.php`
-- [x] T112 [US7] Add dashboard, report, and export OCS routes/controllers in `appinfo/routes.php`, `lib/Controller/DashboardController.php`, `lib/Controller/ReportController.php`, and `lib/Controller/ExportController.php` — **record this contract gap while building it, do not resolve it by inventing a type.** `contracts/ocs-api.yaml`'s `/reports/{reportType}` enum is exactly `[sheets, transactions, cost-centers, accounts, process, evidence, audit]`, but **FR-065 names petty-cash balances and movements as report subjects and FR-056 requires configuration audit to be visible**, and none of the three appears in the enum. `accounts` is the only plausible home for balances and movements, but the contract does not say so, and configuration audit has no type at all. T106 originally sidestepped this by advertising `balances`, `movements` and `configuration_audit`; that was corrected, because a report type is part of the OCS surface and an undeclared one is a contract violation rather than a naming preference. **The choice belongs to the contract:** either extend the enum, or record that these subjects are reachable through `accounts` and under what filter. `ReportQuery::SUPPORTED_TYPES` is asserted as the contract's exact list, so the day the enum changes this task's test says so. Also note the contract's `ExportRequest.resource` enum is a *different* set again (`[sheet, sheets, transactions, report, audit, evidence]`), so the two surfaces do not share a vocabulary. **And T299 lands here:** resolving which accounts a finance officer has charged is not derivable from the current schema, and this task's orchestration layer is where that decision has to be made — see T299 for the two routes and their costs. `report#show` and `export#create` are 2 of the 15 routes `RouteResolutionTest` reports as unresolved; `session#dashboard` is already routed
+- [ ] T112 [US7] Add dashboard, report, and export OCS routes/controllers in `appinfo/routes.php`, `lib/Controller/DashboardController.php`, `lib/Controller/ReportController.php`, and `lib/Controller/ExportController.php` — **record this contract gap while building it, do not resolve it by inventing a type.** `contracts/ocs-api.yaml`'s `/reports/{reportType}` enum is exactly `[sheets, transactions, cost-centers, accounts, process, evidence, audit]`, but **FR-065 names petty-cash balances and movements as report subjects and FR-056 requires configuration audit to be visible**, and none of the three appears in the enum. `accounts` is the only plausible home for balances and movements, but the contract does not say so, and configuration audit has no type at all. T106 originally sidestepped this by advertising `balances`, `movements` and `configuration_audit`; that was corrected, because a report type is part of the OCS surface and an undeclared one is a contract violation rather than a naming preference. **The choice belongs to the contract:** either extend the enum, or record that these subjects are reachable through `accounts` and under what filter. `ReportQuery::SUPPORTED_TYPES` is asserted as the contract's exact list, so the day the enum changes this task's test says so. Also note the contract's `ExportRequest.resource` enum is a *different* set again (`[sheet, sheets, transactions, report, audit, evidence]`), so the two surfaces do not share a vocabulary. **And T299 lands here:** resolving which accounts a finance officer has charged is not derivable from the current schema, and this task's orchestration layer is where that decision has to be made — see T299 for the two routes and their costs. `report#show` and `export#create` are 2 of the 15 routes `RouteResolutionTest` reports as unresolved; `session#dashboard` is already routed
 - [ ] T113 [P] [US7] Implement dashboard/report API services, stores, filters, tables/cards, and export controls in `src/services/dashboardApi.ts`, `src/services/reportsApi.ts`, `src/stores/dashboard.ts`, `src/stores/reports.ts`, `src/views/DashboardView.vue`, and `src/views/reports/ReportsView.vue` (all elements visible without horizontal scroll at 390px viewport; WCAG AA contrast; ≥12pt Persian font per FR-071)
 - [ ] T114 [US7] Add dashboard, filtering, totals, report-scope, CSV/XLSX/PDF, and grouped-evidence export Playwright journeys in `tests/E2E/reporting-export.spec.ts` (verify p95 <3s, error rate <0.1%, zero data loss per FR-073)
 
@@ -3937,7 +3937,7 @@ cause, grouped so the masking defect and the masked defect are both owned.
 Normal convergence, bounded to the US7 reporting slice. Three findings: one silent-wrong-answer defect
 in code this slice added recently, one unimplementable requirement, one unowned verification gap.
 
-- [ ] T309 Give the report filter surface a closed vocabulary and refuse any filter it does not
+- [x] T309 Give the report filter surface a closed vocabulary and refuse any filter it does not
   recognise, per FR-064 and the FR-068 rule that a filter which cannot be answered must be refused
   (contradicts). `ReportController::filterFrom()` decodes the `filters` JSON and reads a fixed set of
   keys, **discarding every other key without comment**. Measured on the live endpoint:
@@ -3981,3 +3981,39 @@ in code this slice added recently, one unimplementable requirement, one unowned 
   cleanup is provably complete *first* -- every inserted row registered before the next insert, and a
   post-run assertion that the fingerprint count is zero -- and only then a fixture that asserts the 422
   and its refusal to leak the internal message. (missing)
+
+  **T309 delivered.** `ReportController` now holds a closed `ACCEPTED_FILTERS` vocabulary and refuses
+  anything outside it with a 422 naming what is accepted, per the FR-064 clause added in the
+  2026-09-28 clarification session. Measured on the live endpoint, before and after, for the same four
+  requests:
+
+  | `filters` sent to `GET /reports/transactions` | Before | After |
+  |---|---|---|
+  | none | `200`, `total: 4` | `200`, `total: 4` |
+  | `{"stages":["FINANCE"]}` | `200`, `total: 4` | **`422`**, names the accepted filters |
+  | `{"costcentreIds":[1]}` (typo) | `200`, `total: 4` | **`422`** |
+  | `{"banana":true}` | `200`, `total: 4` | **`422`** |
+
+  A JSON array is also refused rather than read as an empty filter object, which would have been the same
+  silent-unfiltered answer by a different route. Five tests added, including one asserting every
+  *accepted* filter still narrows, so closing the vocabulary did not break the filters that work.
+
+  **Mutation-proven**: removing the check fails all three refusal tests. Full suite **635 tests, 2806
+  assertions, 1 pre-existing T275 failure**.
+
+  This and `ReportQuery::assertFilterIsEvaluable()` now close both directions of the same hazard: a
+  filter the rows *cannot answer* is refused, and a filter the endpoint *cannot read* is refused before
+  it can be mistaken for no filter at all.
+
+  **T112 reopened.** The 2026-09-28 clarification answered that the `accounts` report must show a
+  finance officer *every account they have charged*, not only their own (FR-065, FR-055, FR-015). The
+  report as built returns `scope: own_accounts` with `chargedAccountsIncluded: false`, so a finance
+  officer cannot see the balances of the accounts FR-015 requires them to charge. That is a defect in
+  code this task delivered, found by a specification decision rather than by a test, and the task stays
+  open until it is repaired.
+
+  **It cannot be repaired yet**, and reopening it as "do it now" would be dishonest: the charged-account
+  set derives from configuration audit events that T294 must write, and T294 is gated on T253. The
+  ordering is therefore T253 -> T294 -> the accounts scope -> T299's own verification, and T112's
+  report/export work is otherwise complete and verified. Recorded here so the state is not lost, rather
+  than left as a checked task that reads as done.
