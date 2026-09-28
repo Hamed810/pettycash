@@ -158,6 +158,34 @@ final class DbAuditEventRepository implements AuditEventRepository
         }
     }
 
+    /** @return list<string> */
+    public function findEntityIdsByEventType(string $eventType, int $offset = 0, int $limit = 1000): array
+    {
+        if ($this->subject() !== 'configuration') {
+            // The transaction table has no entity_id column. Returning an empty list would read as
+            // "nothing has ever been recorded", which is the opposite of what a mis-bound stream
+            // means, so this refuses instead.
+            throw new \LogicException(
+                'entity ids exist only on the configuration audit stream; this repository is bound to '
+                . $this->table() . '.'
+            );
+        }
+
+        $qb = $this->connection->getQueryBuilder();
+        $qb->selectDistinct('entity_id')
+            ->from($this->table())
+            ->where($qb->expr()->eq('event_type', $qb->createNamedParameter($eventType)))
+            ->andWhere($qb->expr()->isNotNull('entity_id'))
+            ->orderBy('entity_id', 'ASC')
+            ->setFirstResult($offset)
+            ->setMaxResults($limit);
+
+        return array_map(
+            static fn ($v): string => (string) $v,
+            $qb->executeQuery()->fetchFirstColumn()
+        );
+    }
+
     /**
      * Build the insert values for this stream.
      *

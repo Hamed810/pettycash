@@ -9,6 +9,7 @@ use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Application\Reporting\DashboardQuery;
 use OCA\PettyCash\Application\Reporting\ReportFilter;
 use OCA\PettyCash\Application\Reporting\ReportQuery;
+use OCA\PettyCash\Application\Reporting\ChargedAccountScope;
 use OCA\PettyCash\Application\Reporting\ReportScope;
 use OCA\PettyCash\Application\DataIntegrity\UnreadableRecordData;
 use OCA\PettyCash\Application\Reporting\UnsupportedFilterField;
@@ -94,6 +95,7 @@ class ReportController extends OCSController
         private AccountRepository $accounts,
         private EvidenceRepository $evidence,
         private AuditEventRepository $auditEvents,
+        private ChargedAccountScope $chargedAccounts,
         private TechnicalLogger $logger,
         private OcsErrorMapper $ocsErrorMapper,
         private Clock $clock
@@ -223,7 +225,7 @@ class ReportController extends OCSController
             ReportQuery::TYPE_SHEETS => $this->sheetsReport($scope, $uid),
             ReportQuery::TYPE_TRANSACTIONS => $this->transactionsReport($scope),
             ReportQuery::TYPE_COST_CENTERS => $this->costCentersReport($scope),
-            ReportQuery::TYPE_ACCOUNTS => $this->accountsReport($uid),
+            ReportQuery::TYPE_ACCOUNTS => $this->accountsReport($scope, $uid),
             ReportQuery::TYPE_PROCESS => $this->processReport(),
             ReportQuery::TYPE_EVIDENCE => $this->evidenceReport($scope, $uid),
             ReportQuery::TYPE_AUDIT => $this->auditReport($scope, $uid),
@@ -320,12 +322,38 @@ class ReportController extends OCSController
     }
 
     /**
-     * The acting user's own accounts, and only those.
+     * Accounts, scoped by FR-055 and FR-016.
      *
-     * @return array{list<array<string, mixed>>, callable, list<string>, array<string, mixed>}
+     * The rule the clarification settled: an actor sees their own accounts; a finance officer
+     * additionally sees the accounts that have been charged; an administrator sees all.
+     *
+     * "Charged at all" rather than "charged by this officer", because FR-016 puts every finance
+     * officer on one shared queue — a charge is a fact about the instance, and an officer who cannot
+     * see an account another officer charged cannot work that account's queue. `ChargedAccountScope`
+     * answers that instance-wide question; nothing here narrows it to the caller.
+     *
+     * A non-finance actor is left with their own accounts, which is what this returned before T299
+     * and is still correct for them. The change is that a finance officer no longer sees strictly
+     * fewer accounts than the rule allows.
+     *
+     * @return array{list<array<string, mixed>>, callable(array<string, mixed>, ReportScope): bool, list<string>, array<string, mixed>}
      */
-    private function accountsReport(string $uid): array
+    private function accountsReport(ReportScope $scope, string $uid): array
     {
+        $own = $this->accounts->findActiveByUserUid($uid);
+
+        $charged = $scope->hasRole(\OCA\PettyCash\Domain\Shared\Enum\Role::Finance)
+            ? $this->chargedAccounts->chargedAccountDbIds()
+            : [];
+
+        // An administrator already sees the instance, so the charged lookup would only add a query
+        // whose answer is a subset of what they are about to be given.
+        $includeCharged = !$scope->administrator && $charged !== [];
+
+        $candidates = $includeCharged
+            ? array_merge($own, $this->accountsByDbIds($charged, $own))
+            : $own;
+
         $rows = array_map(
             static fn ($account): array => [
                 'id' => $account->id,
@@ -334,18 +362,73 @@ class ReportController extends OCSController
                 'balanceMinor' => $account->balanceMinor,
                 'active' => $account->active,
             ],
-            $this->accounts->findActiveByUserUid($uid)
+            $candidates
         );
+
+        $ownRowIds = array_map(static fn ($a): string => $a->id, $own);
+        $chargedRowIds = $includeCharged
+            ? array_values(array_diff(array_map(static fn ($a): string => $a->id, $candidates), $ownRowIds))
+            : [];
 
         return [
             $rows,
-            static fn (array $row): bool => ($row['userUid'] ?? null) === $uid,
+            // Scope is applied as row membership, decided above from the roles, rather than by a
+            // per-row predicate that would have to re-derive the same rule for every row. The
+            // predicate is kept because `paginate()` takes one, and it asserts the decision rather
+            // than re-making it.
+            static function (array $row) use ($ownRowIds, $chargedRowIds): bool {
+                $id = (string) ($row['id'] ?? '');
+                return in_array($id, $ownRowIds, true) || in_array($id, $chargedRowIds, true);
+            },
             ['id', 'currency', 'userUid', 'balanceMinor', 'active'],
-            // Said in the response, not only in a task note: a caller reading `accounts` deserves to
-            // know it is their own accounts and not the instance's, because FR-055's charged-accounts
-            // rule is unresolved (T299) and will widen this later.
-            ['scope' => 'own_accounts', 'chargedAccountsIncluded' => false, 't299' => 'pending'],
+            // Stated in the response rather than only in a task note, because a caller reading
+            // `accounts` deserves to know which rule produced the set. The `t299: pending` marker
+            // that stood here said the scope was unresolved; it is resolved and the marker is gone,
+            // and a caller can no longer mistake a resolved rule for a pending one.
+            [
+                'scope' => $scope->administrator
+                    ? 'all_accounts'
+                    : ($includeCharged ? 'own_and_charged_accounts' : 'own_accounts'),
+                'chargedAccountsIncluded' => $includeCharged,
+                'chargedAccountCount' => count($chargedRowIds),
+            ],
         ];
+    }
+
+    /**
+     * The accounts named by surrogate keys, minus the ones already in hand.
+     *
+     * Deduplicated here because an account can be both the caller's own and charged, and a report
+     * that listed it twice would double its count and its balance.
+     *
+     * @param list<int> $dbIds
+     * @param list<\OCA\PettyCash\Domain\Account\PettyCashAccount> $already
+     * @return list<\OCA\PettyCash\Domain\Account\PettyCashAccount>
+     */
+    private function accountsByDbIds(array $dbIds, array $already): array
+    {
+        $seen = array_map(static fn ($a): int => (int) $a->dbId, $already);
+        $extra = [];
+
+        foreach ($dbIds as $dbId) {
+            if (in_array($dbId, $seen, true)) {
+                continue;
+            }
+            $account = $this->accounts->findById($dbId);
+            if ($account === null) {
+                // A charge naming an account that no longer resolves is a real audit row, but it
+                // cannot become a report row: the row would have no owner, currency or balance to
+                // report. Skipping it is honest; inventing a placeholder would not be.
+                $this->logger->log('warning', 'A charged account could not be resolved for the accounts report', [
+                    'app' => 'pettycash',
+                ]);
+                continue;
+            }
+            $extra[] = $account;
+            $seen[] = $dbId;
+        }
+
+        return $extra;
     }
 
     /**

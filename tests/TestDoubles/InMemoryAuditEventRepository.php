@@ -66,6 +66,20 @@ final class InMemoryAuditEventRepository implements \OCA\PettyCash\Domain\Audit\
         return array_slice(array_values($result), $offset, $limit);
     }
 
+    public function findEntityIdsByEventType(string $eventType, int $offset = 0, int $limit = 1000): array
+    {
+        $ids = [];
+        foreach ($this->events as $event) {
+            if ($event->eventType === $eventType && $event->entityId !== null && $event->entityId !== '') {
+                $ids[$event->entityId] = true;
+            }
+        }
+        $ids = array_keys($ids);
+        sort($ids);
+
+        return array_slice($ids, $offset, $limit);
+    }
+
     public function save(AuditEvent $event): void
     {
         if ($event->dbId === null) {

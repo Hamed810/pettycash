@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OCA\PettyCash\Tests\Contract\Controller;
 
 use GuzzleHttp\Client;
+use OCA\PettyCash\Tests\Contract\Fixture\ContractFixtures;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\ResponseInterface;
 
@@ -105,15 +106,83 @@ final class ReportAndExportControllerTest extends TestCase
         $this->assertLessThanOrEqual(5, count($data['rows']), 'a page must not exceed its pageSize');
     }
 
-    public function testTheAccountsReportSaysWhoseAccountsItCovers(): void
+    /**
+     * FR-016 and FR-055: every finance officer shares one queue, so an officer sees the accounts
+     * that have been charged, not only their own.
+     *
+     * This asserts the *effect*, not the label. A summary saying `own_and_charged_accounts` while
+     * returning the caller's own rows would satisfy a string comparison and fail the requirement, so
+     * the charged account is located in the rows themselves. The charge it depends on is written by
+     * `FinanceReviewControllerTest`'s approvals against the same real database, which is also the
+     * proof that T294's configuration-audit events and T299's derivation are the same fact: the
+     * report can only widen because settlement recorded a charge.
+     */
+    public function testTheAccountsReportIncludesTheAccountsAChargeHasNamed(): void
     {
-        $summary = $this->get('/reports/accounts')['data']['summary'];
+        $data = $this->get('/reports/accounts?pageSize=100')['data'];
+        $summary = $data['summary'];
 
-        // FR-055's "accounts they charge" is not derivable from the schema (T299), so the report
-        // returns the caller's own accounts and says so. Without this a caller could read a scoped
-        // report as an instance-wide one.
-        $this->assertSame('own_accounts', $summary['scope']);
-        $this->assertFalse($summary['chargedAccountsIncluded']);
+        $this->assertSame('own_and_charged_accounts', $summary['scope']);
+        $this->assertTrue(
+            $summary['chargedAccountsIncluded'],
+            'a finance officer on the shared queue sees charged accounts (FR-016)'
+        );
+
+        $this->assertNotEmpty(
+            $data['rows'],
+            'the report must return the accounts it claims to cover'
+        );
+
+        // Every row is either the caller's own or an account some charge named. The account the
+        // finance review tests settled is the concrete witness: it exists, and the report reached
+        // it only through the configuration-audit stream.
+        $chargedAccount = ContractFixtures::accountId();
+        $ids = array_map(static fn (array $row): string => (string) $row['id'], $data['rows']);
+        $this->assertContains(
+            $chargedAccount,
+            $ids,
+            'the account debited by a settled finance approval must be in the officer\'s accounts '
+            . 'report; FR-016 makes the queue shared, so the charge is an instance-wide fact. '
+            . 'rows: ' . implode(', ', $ids)
+        );
+
+        $row = $data['rows'][array_search($chargedAccount, $ids, true)];
+        $this->assertArrayHasKey('userUid', $row, 'a charged account is still a fully reported account');
+        $this->assertArrayHasKey('balanceMinor', $row);
+
+        // The charged account is reported with the same balance the accounts endpoint reports, so
+        // widening the report did not also change what it says about the account.
+        $listed = [];
+        foreach ($this->get('/accounts?pageSize=100')['data']['items'] as $item) {
+            $listed[(string) $item['id']] = $item['balance']['amountMinor'] ?? null;
+        }
+        $this->assertArrayHasKey($chargedAccount, $listed, 'the account endpoint must also list the charged account');
+        $this->assertSame(
+            $listed[$chargedAccount],
+            $row['balanceMinor'],
+            'the report and the accounts endpoint must agree on the balance of a charged account'
+        );
+    }
+
+    /**
+     * The charged account appears once, not twice, when it is also the caller's own.
+     *
+     * `ChargedAccountScope` answers instance-wide and the report merges that with the caller's own
+     * accounts. An account in both sets is the ordinary case for the officer who owns it, and
+     * listing it twice would double both the count and the balance.
+     */
+    public function testTheAccountsReportDoesNotListAnAccountTwiceWhenItIsBothOwnAndCharged(): void
+    {
+        $ids = array_map(
+            static fn (array $row): string => (string) $row['id'],
+            $this->get('/reports/accounts?pageSize=100')['data']['rows']
+        );
+
+        self::assertSame(
+            array_values(array_unique($ids)),
+            $ids,
+            'the accounts report must not repeat an account that is both the caller\'s own and charged'
+        );
     }
 
     public function testAMalformedFilterIsRefusedRatherThanIgnored(): void

@@ -17,7 +17,16 @@ final class InMemoryAccountRepository implements \OCA\PettyCash\Domain\Account\R
 
     public function findById(int $id): ?PettyCashAccount
     {
-        return $this->accounts[$id] ?? null;
+        // Scans rather than indexing, because `save()` keys by public id. Indexing here would look
+        // up an int against string keys and always answer null, so any test covering a code path
+        // that resolves an account by surrogate key would see "no such account" for a fixture it
+        // had just stored. That is a defect in the double, not the behaviour under test.
+        foreach ($this->accounts as $account) {
+            if ($account->dbId === $id) {
+                return $account;
+            }
+        }
+        return null;
     }
 
     public function findByPublicId(string $publicId): ?PettyCashAccount

@@ -565,7 +565,39 @@ evidence; verify every report/export contains all permitted and zero out-of-scop
   `IAppData` entirely and reported the real path `/appdata_oculd8krif6b/pettycash/exports/`. No shared temp or
   AppData litter after the run)
 - [x] T111 [US7] [FR-066] Implement export orchestration, transient AppData cleanup, and authorization-before-generation in `lib/Application/Reporting/ExportService.php`
-- [ ] T112 [US7] Add dashboard, report, and export OCS routes/controllers in `appinfo/routes.php`, `lib/Controller/DashboardController.php`, `lib/Controller/ReportController.php`, and `lib/Controller/ExportController.php` — **record this contract gap while building it, do not resolve it by inventing a type.** `contracts/ocs-api.yaml`'s `/reports/{reportType}` enum is exactly `[sheets, transactions, cost-centers, accounts, process, evidence, audit]`, but **FR-065 names petty-cash balances and movements as report subjects and FR-056 requires configuration audit to be visible**, and none of the three appears in the enum. `accounts` is the only plausible home for balances and movements, but the contract does not say so, and configuration audit has no type at all. T106 originally sidestepped this by advertising `balances`, `movements` and `configuration_audit`; that was corrected, because a report type is part of the OCS surface and an undeclared one is a contract violation rather than a naming preference. **The choice belongs to the contract:** either extend the enum, or record that these subjects are reachable through `accounts` and under what filter. `ReportQuery::SUPPORTED_TYPES` is asserted as the contract's exact list, so the day the enum changes this task's test says so. Also note the contract's `ExportRequest.resource` enum is a *different* set again (`[sheet, sheets, transactions, report, audit, evidence]`), so the two surfaces do not share a vocabulary. **And T299 lands here:** resolving which accounts a finance officer has charged is not derivable from the current schema, and this task's orchestration layer is where that decision has to be made — see T299 for the two routes and their costs. `report#show` and `export#create` are 2 of the 15 routes `RouteResolutionTest` reports as unresolved; `session#dashboard` is already routed
+- [x] T112 [US7] Add dashboard, report, and export OCS routes/controllers in `appinfo/routes.php`, `lib/Controller/DashboardController.php`, `lib/Controller/ReportController.php`, and `lib/Controller/ExportController.php` — **record this contract gap while building it, do not resolve it by inventing a type.** `contracts/ocs-api.yaml`'s `/reports/{reportType}` enum is exactly `[sheets, transactions, cost-centers, accounts, process, evidence, audit]`, but **FR-065 names petty-cash balances and movements as report subjects and FR-056 requires configuration audit to be visible**, and none of the three appears in the enum. `accounts` is the only plausible home for balances and movements, but the contract does not say so, and configuration audit has no type at all. T106 originally sidestepped this by advertising `balances`, `movements` and `configuration_audit`; that was corrected, because a report type is part of the OCS surface and an undeclared one is a contract violation rather than a naming preference. **The choice belongs to the contract:** either extend the enum, or record that these subjects are reachable through `accounts` and under what filter. `ReportQuery::SUPPORTED_TYPES` is asserted as the contract's exact list, so the day the enum changes this task's test says so. Also note the contract's `ExportRequest.resource` enum is a *different* set again (`[sheet, sheets, transactions, report, audit, evidence]`), so the two surfaces do not share a vocabulary. **And T299 lands here:** resolving which accounts a finance officer has charged is not derivable from the current schema, and this task's orchestration layer is where that decision has to be made — see T299 for the two routes and their costs. `report#show` and `export#create` are 2 of the 15 routes `RouteResolutionTest` reports as unresolved; `session#dashboard` is already routed
+
+  **Closed in two passes, and the reason it was reopened is now fixed.** T309 closed the filter
+  vocabulary; this pass closes the **accounts scope**, which is what T309 left open and what T299 had
+  blocked. `accountsReport()` returned only the caller's own accounts and said so in its summary, with
+  an honest `t299: pending` marker. It now applies the clarified rule: own accounts; a finance officer
+  additionally sees the accounts that have been charged; an administrator sees all.
+
+  Two things about that are deliberate and worth recording. "Charged **at all**" rather than "charged
+  by this officer", because FR-016 puts every finance officer on one shared queue — an officer who
+  cannot see an account another officer charged cannot work that account's queue. And an account that
+  is both the caller's own and charged is listed **once**: the merge is deduplicated, because a row
+  listed twice would double both the count and the balance.
+
+  The `t299: pending` marker is **gone**, and its absence is the point. It said the scope was
+  unresolved; it is resolved, and leaving a pending marker on a resolved rule would let a caller
+  mistake one for the other. The summary now reports `scope`, `chargedAccountsIncluded` and
+  `chargedAccountCount`, which is what a caller needs to tell a scoped report from an instance-wide
+  one.
+
+  The contract test asserts the **effect**, not the label: it locates the account a finance approval
+  actually settled inside the returned rows, and cross-checks that row's balance against the accounts
+  endpoint. A summary reading `own_and_charged_accounts` while returning only the caller's own rows
+  would satisfy a string comparison and still fail FR-016, so the label alone is not the assertion.
+  A second test pins the no-duplicates rule. The old test that asserted `own_accounts` was asserting
+  the behaviour the clarification replaced — a valid RED, not a broken one.
+
+  One defect fixed in passing: `InMemoryAccountRepository::save()` keys by public id while
+  `findById()` indexed by surrogate key, so `findById()` always answered null for a fixture just
+  stored. That is a defect in the double, not the behaviour under test, but it made the new
+  by-surrogate-key path untestable. Suite: 648 tests, 2872 assertions, no new failures (T275
+  unchanged).
+
 - [ ] T113 [P] [US7] Implement dashboard/report API services, stores, filters, tables/cards, and export controls in `src/services/dashboardApi.ts`, `src/services/reportsApi.ts`, `src/stores/dashboard.ts`, `src/stores/reports.ts`, `src/views/DashboardView.vue`, and `src/views/reports/ReportsView.vue` (all elements visible without horizontal scroll at 390px viewport; WCAG AA contrast; ≥12pt Persian font per FR-071)
 - [ ] T114 [US7] Add dashboard, filtering, totals, report-scope, CSV/XLSX/PDF, and grouped-evidence export Playwright journeys in `tests/E2E/reporting-export.spec.ts` (verify p95 <3s, error rate <0.1%, zero data loss per FR-073)
 
@@ -3363,7 +3395,44 @@ rationale.
 
 ### HIGH — the finance clause of FR-055 has no data behind it
 
-- [ ] T299 [HIGH] Make "accounts a finance officer has charged" derivable, because FR-055 requires
+- [x] T299 [HIGH] Make "accounts a finance officer has charged" derivable, because FR-055 requires
+  **Resolved by T294 landing first, which changed the answer and made the cheaper route the correct one.**
+  This task offered two routes and said the choice belonged to the schema rather than to a report. T294
+  then wrote a real `ACCOUNT_CHARGED` event to the configuration audit stream naming the account in
+  `entity_id` — which is the record FR-017 asks for anyway. So neither offered route is needed:
+  the derivation reads **the audit trail itself**, not the command log. No migration, therefore no
+  approval-gated baseline reset, and `IdempotencyService`'s port is untouched, so the trap T106
+  stopped short of is gone rather than worked around. T299's own closing paragraph predicted this —
+  that T294 "decides whether there is anything for this to scope over".
+
+  **One port method added, and the guard that watches it was updated deliberately.**
+  `AuditEventRepository::findEntityIdsByEventType()` returns the distinct subjects an event type has
+  been recorded against. It is a read, in the same family as the other six, and
+  `RetentionPolicyTest::testTheAuditPortOffersOnlyReadsAndAnAppend()` — which asserts the port's exact
+  method list as data — now includes it. The invariant that test protects is unchanged: the port gains
+  reads and one append, and still offers no way to delete or rewrite an event. On the transaction
+  stream the read **throws** rather than returning nothing, because "no entity ids" and "wrong table"
+  are opposite conclusions and only one of them is safe to act on.
+
+  **The business rule lives in the application layer, not the port.**
+  `ChargedAccountScope` (new, `lib/Application/Reporting/`) turns entity ids into account surrogate
+  keys, and deliberately has no notion of a "current officer": FR-016 puts every finance officer on one
+  shared queue, so a charge is an instance-wide fact and an officer may read configuration audit for
+  accounts charged *at all*. An account a charge names that no longer resolves is dropped rather than
+  reported, because `configurationAuditScope()` widens from the ids it is handed and a fabricated id
+  would widen the visible set to an account nobody can name. An instance with no charges yields an
+  empty list, never "everything" — the direction that has to fail safe.
+
+  **Verified, and the two halves are proved by different means on purpose.** The contract test proves
+  the real path end to end: a finance approval in `FinanceReviewControllerTest` writes a charge against
+  the shared database, and `ReportAndExportControllerTest` then finds that exact account in the
+  officer's accounts report — which is only reachable through this derivation, and only because T294
+  recorded the charge. That test is residue- and order-dependent by nature, so
+  `ChargedAccountScopeTest` (7 tests) covers the derivation deterministically instead, including the
+  cases a happy path hides: a charge by another officer still counts (FR-016), repeated charges yield
+  one id, an unresolvable account is dropped, an empty instance is not "all", another event type on the
+  same account is not a charge, and an entity-idless event names no account. Mutations on the scope and
+  on the real-DB event-type filter are both caught.
   configuration audit to be visible to "finance officers ... for accounts they charge", and **no part of
   the schema or any port can currently answer that question.**
 

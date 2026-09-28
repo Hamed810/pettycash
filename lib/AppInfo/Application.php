@@ -278,6 +278,16 @@ final class Application extends App implements IBootstrap
             return new NextcloudTransactionManager($c->query(IDBConnection::class));
         });
 
+        // FR-016/FR-055: the derivation of "accounts charged at all" reads the configuration audit
+        // stream, so it takes the configuration binding rather than the transaction one. Bound to the
+        // wrong stream it would throw instead of quietly answering nothing.
+        $context->registerService(\OCA\PettyCash\Application\Reporting\ChargedAccountScope::class, function ($c) {
+            return new \OCA\PettyCash\Application\Reporting\ChargedAccountScope(
+                $c->query('PettyCashConfigurationAuditRepository'),
+                $c->query(AccountRepository::class)
+            );
+        });
+
         // Audit writer
         $context->registerService(AuditWriter::class, function ($c) {
             return new \OCA\PettyCash\Application\Audit\AuditWriterService(
@@ -415,6 +425,7 @@ final class Application extends App implements IBootstrap
                 $c->query(AccountRepository::class),
                 $c->query(EvidenceRepository::class),
                 $c->query(AuditEventRepository::class),
+                $c->query(\OCA\PettyCash\Application\Reporting\ChargedAccountScope::class),
                 $c->query(\OCA\PettyCash\Infrastructure\Nextcloud\TechnicalLogger::class),
                 $c->query(OcsErrorMapper::class),
                 $c->query(\OCA\PettyCash\Domain\Shared\Clock::class)

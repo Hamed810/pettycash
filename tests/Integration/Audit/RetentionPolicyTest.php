@@ -235,6 +235,12 @@ final class RetentionPolicyTest extends TestCase
 
         // Asserted as data rather than as a pattern so that adding a method to the port is a visible,
         // deliberate act in a diff instead of something only a regex would notice.
+        //
+        // `findEntityIdsByEventType` (T299) is a read and is here for the same reason the others are:
+        // FR-016 makes a charge an instance-wide fact, so "which accounts have been charged" is a
+        // question about the whole stream that no actor- or date-scoped read can answer. The
+        // invariant this test still protects is unchanged — the port gains reads and one append,
+        // and never a way to delete or rewrite an event.
         self::assertSame([
             'findByActorUid',
             'findByDateRange',
@@ -242,6 +248,7 @@ final class RetentionPolicyTest extends TestCase
             'findByPublicId',
             'findBySheetId',
             'findByTransactionId',
+            'findEntityIdsByEventType',
             'save',
         ], $methods);
     }
