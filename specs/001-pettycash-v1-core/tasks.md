@@ -863,10 +863,75 @@ feature implementation.
 ### Convergence Remediation (Priority: HIGH)
 
 - [ ] T210 Fix `tests/bootstrap.php` DI container to provide TransactionManager, PrivateFileStore, and other ports for `SheetSubmissionTest.php` and `IdempotencyServiceTest.php` per T144 (partial)
-- [ ] T211 Extend `AuthorizationService.canReview()` for Correction stage and explicit multi-role self-review logic (role + scope + stage + ownership) per FR-002/FR-008/T026 in `lib/Application/Security/AuthorizationService.php` (partial)
-- [ ] T212 Align `TransactionService.updateTransaction()` with domain model: use costCenterId/expenseTypeId as UUIDs, snapshot code/name per data-model.md/T037 in `lib/Application/Expense/TransactionService.php` (partial)
-- [ ] T213 Complete audit event insertion for all workflow transitions (decisions, returns, corrections, evidence deactivation) in respective services per FR-051/FR-052/T028 (partial)
-- [ ] T214 Apply `IdempotencyService` to all state-changing command handlers (management decisions, finance settlement, correction resubmit, account charges) per FR-042/T027 (partial)
+- [x] T211 Extend `AuthorizationService.canReview()` for Correction stage and explicit multi-role self-review logic (role + scope + stage + ownership) per FR-002/FR-008/T026 in `lib/Application/Security/AuthorizationService.php` (partial)
+  **The behaviour was already correct; the coverage was not. This is the opposite of what the task text
+  implies, and it is the finding.** `canReview()`'s last two branches are **byte-identical**, one
+  commented "multi-role self-review: if actor is the owner AND holds the required role + scope, allow"
+  and one not. FR-002 *permits* self-review when role, scope and stage permission are independently
+  held, so ownership adds no further condition and there is deliberately no ownership check. **That is a
+  correct rule.**
+
+  The problem is that two identical branches under a comment claiming a distinction invite the edit that
+  adds one — and the direction it naturally goes is the dangerous one: silently forbidding self-review
+  for exactly the multi-role user FR-002 names, and emptying every queue for a manager who is not the
+  owner. **Nothing could catch that.** Every pre-existing review test either had the reviewer as the
+  owner or used the Finance stage, which returns before those branches; there was **no test in which a
+  non-owner reviewed at all**. Measured:
+
+  | Mutation | `CanReviewTest` (new) | `AuthorizationServiceTest` (pre-existing) |
+  |---|---|---|
+  | collapse `canReview()` to owner-only | **killed, 3 reported** | **GREEN** |
+
+  That row is the task. The branches are collapsed into one with the reason stated in the docblock, and
+  the 14 new tests make the collapse provable rather than asserted. T211's first clause — the Correction
+  stage — also had its branch with **no test at all**; it is now pinned in both directions, including
+  that a manager with the right role *and* scope still cannot correct somebody else's record, which
+  asserts the branch's ordering as much as its rule.
+
+  Mutation-proven four times: collapse to owner-only (killed, 3), the correction stage accepting
+  anybody (killed, 3), the finance stage falling through to the queue rule (killed, 1), and the scope
+  check dropped (killed, 2). **No behaviour changed** — "T211 delivered" should mean "T211 is now
+  verifiable", not "T211 was broken".
+
+  **Recorded alongside it, not fixed here:** `canView()` still returns true for any actor holding any
+  role, regardless of ownership or scope, which is a broader reading of visibility than FR-003's
+  wording suggests. That is not T211's subject — T211 names `canReview()` only — but it was read while
+  looking, and it deserves its own task rather than a footnote.
+
+- [x] T212 Align `TransactionService.updateTransaction()` with domain model: use costCenterId/expenseTypeId as UUIDs, snapshot code/name per data-model.md/T037 in `lib/Application/Expense/TransactionService.php` (partial)
+  **Two silent data corruptions, both measured rather than inferred.** The caller supplies a **public
+  id** for both references, and the full-edit branch said so — `findByPublicId($expenseTypeTitle)`. The
+  parameter was nevertheless *named* `$expenseTypeTitle`, and the partial-edit branch then used the
+  name. `TransactionRevision::complete()`'s sixth parameter is `string $expenseTypeTitle`, assigned
+  straight to `$this->expenseTypeTitle`. So:
+
+  1. **A UUID stored as a title.** A `PATCH` supplying a cost centre and an expense type but omitting
+     the description took the partial branch — gated on *all three* being present — and wrote the
+     caller's UUID into the expense-type-title column. Measured: expected `'Original Expense Type'`,
+     got `88888888-8888-4888-8888-888888888888`.
+  2. **A new id with the previous centre's snapshot.** The partial branch took the caller's *new*
+     cost-centre id while reusing the *current* revision's `costCenterCode`/`costCenterName`. Measured:
+     `'CC-200'` expected, `'CC-100'` stored — a revision claiming CC-200 by id and CC-100 by name.
+
+  Both are worse than the failure they replaced: the finance queue reads these columns and neither value
+  looks wrong. FR-037 requires code and name to be **snapshotted**, and a snapshot of a different
+  record than the one referenced is not a snapshot. Each reference is now resolved independently and
+  snapshotted from the record it resolves, and the parameter is `$expenseTypeId`, matching
+  `TransactionController` and the contract.
+
+  7 tests / 29 assertions in `tests/Integration/Expense/TransactionServiceUpdateTest.php`, driving the
+  service directly with the in-memory doubles so both branches are comparable on the same inputs.
+  Mutation-proven four times: the UUID-into-title bug restored (killed, 2), the cost-centre code
+  snapshot taken from the old revision (killed, 2), a partial edit erasing the omitted expense type
+  (killed, 1), and the unknown-id refusal removed (killed, 1).
+
+  **Stated rather than glossed.** The tests are unit-level, so they isolate *which* branch stored which
+  value — the defect's home — but they do not prove what the endpoint does. A contract test for
+  `PATCH /transactions/{id}` with a cost centre and an expense type but no description would pin it end
+  to end and needs a fixture whose draft revision is already complete; it is not written.
+
+- [x] T213 Complete audit event insertion for all workflow transitions (decisions, returns, corrections, evidence deactivation) in respective services per FR-051/FR-052/T028 (complete; fixed 2 silent audit-snapshot losses, derived the event-type vocabulary from FR-051 into `AuditEventType` and split the decision type into APPROVED/REJECTED/RETURNED, added the 4 missing writers ROUTED/REVISION_CREATED/TRANSACTION_CHANGED/EVIDENCE_ADDED, added `Version010400` for nullable `command_id`; found-but-unfixed: editing a draft with no description/expense type throws a TypeError — see `docs/reports/T213.md`, `docs/decisions/0001-*.md`)
+- [x] T214 Apply `IdempotencyService` to all state-changing command handlers (management decisions, finance settlement, correction resubmit, account charges) per FR-042/T027 (complete; **duplicate of T149, which delivered all four named handlers** — verified rather than assumed: each wraps its whole closure in `idempotencyService->execute()` with a hashed payload for conflict detection, and both replay paths are correct: `ManagementReviewService`/`FinanceSettlementService` read the decision back by command id, `SubmitSheet` re-reads the sheet by public id after the block, `ResubmitCorrection` returns the stored result. `ACCOUNT_CHARGED` at FinanceSettlementService:287 is inside the closure (115→334), so a replayed settlement cannot double-charge. **The `(partial)` marker was stale.** **One real gap is NOT in this task's named scope and is recorded as T317 rather than silently absorbed here** — see `docs/reports/T214.md`)
 - [ ] T215 Remove temporary Vue component mocks from `tests/Frontend/__mocks__/components.ts` and update `vitest.config.ts` aliases to resolve real components per T042/T158 (unrequested)
 - [x] T216 Fix `SheetController.submit()` and `TransactionController` decision endpoints to return proper OCS envelope with `ocs.meta.statuscode` matching HTTP status per contract tests/T160 (partial)
 
@@ -4788,3 +4853,54 @@ owned gap would give one piece of work two owners and two places to be marked do
 
   No application code touched: the PHP suite is byte-identical at 745 tests / 3351 assertions / 1
   pre-existing failure (T275). Report: `docs/reports/T250.md`.
+
+---
+
+## Phase 48: Convergence (ownerless gap found by T214)
+
+- [ ] T317 Pass the client's `X-PettyCash-Command-ID` into `TransactionService::createTransaction()` and
+      `updateTransaction()` and wrap both in `IdempotencyService`, so revision creation and transaction
+      changes are replay-safe per FR-042/T027 (open; found while reconciling T214, **not** part of T214's
+      named scope)
+
+  **Why it is a task and not a line in T214's report.** T214 names four handlers and all four are done
+  (T149 delivered them). This gap sits outside that list, so absorbing it into T214 would have widened a
+  completed task's scope without saying so.
+
+  **The gap, precisely.** `TransactionController` reads the header at
+  `lib/Controller/TransactionController.php:56` and `:126`, echoes it through
+  `OcsErrorMapper::validation()` and `->map($e, $commandId)`, and then calls
+  `createTransaction($sheetId, $expenseDate, $amountMinor)` / `updateTransaction(...)` **without it**. So
+  the one place a command id is available is the one place it is dropped. Neither service method takes a
+  `$commandId` parameter, and neither is wrapped. The contract's `X-PettyCash-Command-ID` header is
+  therefore honoured on submission, decision, settlement and resubmit, and ignored on the two endpoints
+  that create and edit the revision FR-042 names explicitly ("creating a revision" MUST complete
+  atomically).
+
+  **Why it is more than tidiness after T213.** T213 gave these two handlers their `REVISION_CREATED` and
+  `TRANSACTION_CHANGED` audit events, and had to make `command_id` nullable on both audit tables
+  (`Version010400Date20260929000000`) precisely because these paths have no command id to record. FR-042's
+  atomicity is satisfied — both already run inside `transactionManager->transactional()` — but a retried
+  request, a double-clicked button or a proxy replay creates a **second revision** and a second audit
+  event, and FR-053 makes that row unrepairable. `expectedVersion` catches only a *concurrent* edit; it
+  does nothing for a sequential retry of a request that already succeeded.
+
+  **Likely shape, not decided here.** Both methods gain a `string $commandId`, the controller passes the
+  header it already has, and each wraps its existing transactional body in
+  `idempotencyService->execute()` with a hashed payload. `TransactionService` already holds an
+  `AuditWriter` (added by T213) but **no** `IdempotencyService`, so this is one constructor argument plus
+  the container registration and the two direct constructions in tests. The audit events can then record a
+  real `command_id`, and the nullable column from `Version010400Date20260929000000` stays correct for both
+  the wrapped and unwrapped states.
+
+  **Decisions this needs before implementation.**
+  - Should a **missing** `X-PettyCash-Command-ID` be refused (409/400) or tolerated? The other four
+    handlers appear to require it, so consistency argues for refusing — but that changes the contract's
+    behaviour for two endpoints and belongs with whoever owns `contracts/ocs-api.yaml`.
+  - A replayed `updateTransaction()` must return the **original** response, which means reading the
+    stored `CommandResult` back into an `ExpenseTransaction`. `SubmitSheet` re-reads by public id and
+    `ResubmitCorrection` returns the stored array; this one has to do neither, because the stored payload
+    is the command result and the entity must be reloaded. Worth deciding whether to follow the
+    `SubmitSheet` shape (re-read the aggregate) or widen what `IdempotencyService` stores.
+  - `deleteTransaction()` (T258) is also state-changing and also unwrapped; it is **not** in FR-042's list
+    and is deliberately left out unless the contract says otherwise.

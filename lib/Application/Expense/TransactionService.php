@@ -6,6 +6,7 @@ namespace OCA\PettyCash\Application\Expense;
 
 use DateTimeImmutable;
 use InvalidArgumentException;
+use OCA\PettyCash\Application\Port\AuditWriter;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Application\Port\PrivateFileStore;
 use OCA\PettyCash\Application\Port\TransactionManager;
@@ -19,7 +20,9 @@ use OCA\PettyCash\Domain\Expense\Repository\TransactionRevisionRepository;
 use OCA\PettyCash\Domain\Expense\TransactionRevision;
 use OCA\PettyCash\Domain\Shared\CurrencyCode;
 use OCA\PettyCash\Domain\Shared\Money;
+use OCA\PettyCash\Domain\Shared\Enum\AuditEventType;
 use OCA\PettyCash\Domain\Shared\Uuid;
+use OCA\PettyCash\Domain\Workflow\WorkflowStage;
 use OCA\PettyCash\Domain\Workflow\SheetStatus;
 use OCA\PettyCash\Domain\Workflow\TransactionStatus;
 
@@ -34,7 +37,8 @@ final readonly class TransactionService
         private EvidenceRepository $evidenceRepository,
         private PrivateFileStore $fileStore,
         private CurrentUser $currentUser,
-        private TransactionManager $transactionManager
+        private TransactionManager $transactionManager,
+        private AuditWriter $auditWriter
     ) {}
 
     /**
@@ -84,6 +88,34 @@ final readonly class TransactionService
 
             $sheet->addTransaction($transaction);
             $this->sheetRepository->save($sheet);
+
+            // FR-051 "revision creation". Written inside the transaction so the event and the rows it
+            // describes commit together -- an audit event for a revision that was rolled back would be a
+            // record of something that never happened, and the reverse would lose the event silently.
+            $this->auditWriter->append([
+                'id' => (string)Uuid::random(),
+                'sheet_id' => $sheet->dbId,
+                'transaction_id' => $transaction->dbId,
+                'revision_id' => $revision->dbId,
+                'stage' => WorkflowStage::Draft->value,
+                'decision_id' => null,
+                'entity_type' => 'transaction',
+                'entity_id' => $transaction->publicId,
+                'event_type' => AuditEventType::RevisionCreated->value,
+                'explanation' => '',
+                // A first revision supersedes nothing, so there is no prior state to compare against.
+                // Stated explicitly rather than left to look like a missing capture.
+                'before' => [],
+                'after' => [
+                    'revision_number' => $revision->number(),
+                    'amount_minor' => $revision->amount()->minorUnits(),
+                    'currency' => (string) $revision->amount()->currency(),
+                    'expense_date' => $revision->expenseDate()->format(\DateTimeInterface::ATOM),
+                    'is_correction' => false,
+                ],
+                'command_id' => null,
+            ]);
+
             return $transaction;
         });
     }
@@ -95,8 +127,8 @@ final readonly class TransactionService
      * @param string $expenseDate
      * @param int $amountMinor
      * @param string|null $description
-     * @param string|null $costCenterId
-     * @param string|null $expenseTypeTitle
+     * @param string|null $costCenterId   public id; code and name are snapshotted from it
+     * @param string|null $expenseTypeId  public id; the title is snapshotted from it
      * @param int $expectedVersion
      * @return ExpenseTransaction
      */
@@ -106,7 +138,7 @@ final readonly class TransactionService
         int $amountMinor,
         ?string $description,
         ?string $costCenterId,
-        ?string $expenseTypeTitle,
+        ?string $expenseTypeId,
         int $expectedVersion
     ): ExpenseTransaction {
         $ownerUid = $this->currentUser->uid();
@@ -133,60 +165,82 @@ final readonly class TransactionService
         $revisionId = (string)Uuid::random();
         $revision = TransactionRevision::draft($revisionId, $transaction->revision()->number() + 1, $date, $amount, $transaction->revision()->id());
 
-        if ($description !== null && $costCenterId !== null && $expenseTypeTitle !== null) {
-            // Look up CostCenter by public ID (UUID) to get snapshot data
+        // A partial edit must not erase the fields it does not mention, and must not half-write the
+        // ones it does.
+        //
+        // `PATCH /transactions/{id}` with only an expense date and an amount is a legitimate request,
+        // and building a fresh revision left the description, cost centre and expense type null -- so
+        // `assertSubmittable()` then rejected the purchaser's own transaction with "Revision is
+        // incomplete", and had it succeeded it would have silently dropped real business data. The
+        // current revision is therefore the source of truth for anything the caller omitted.
+        //
+        // Each of the two references is then resolved *independently*. The earlier version gated the
+        // resolution on all three fields being present and used the raw caller values in the fallback,
+        // which produced two silent corruptions, both measured by
+        // `tests/Integration/Expense/TransactionServiceUpdateTest.php`:
+        //
+        // 1. **A UUID stored as a title.** The parameter was named `$expenseTypeTitle` while the full
+        //    branch did `findByPublicId()` on it, so the partial branch passed the caller's *public id*
+        //    straight into `complete()`'s `string $expenseTypeTitle` parameter. A PATCH that supplied a
+        //    cost centre and an expense type but omitted the description wrote
+        //    `88888888-8888-4888-8888-888888888888` into the expense-type-title column.
+        // 2. **A new id with the previous centre's snapshot.** The partial branch took the caller's
+        //    *new* cost-centre id while reusing the *current* revision's `costCenterCode` and
+        //    `costCenterName`, so a revision claimed to be CC-200 by id and CC-100 by name.
+        //
+        // Both are worse than the failure they replaced, because the finance queue reads these columns
+        // and neither value is wrong-looking. FR-037 requires the code and name to be snapshotted, and
+        // a snapshot of a different record than the one referenced is not a snapshot.
+        $current = $transaction->revision();
+
+        if ($costCenterId !== null) {
             $costCenter = $this->costCenterRepository->findByPublicId($costCenterId);
             if ($costCenter === null) {
                 throw new InvalidArgumentException("Cost center not found: {$costCenterId}");
             }
 
-            // Look up ExpenseType by public ID (UUID) to get snapshot data
-            $expenseType = $this->expenseTypeRepository->findByPublicId($expenseTypeTitle);
+            $costCenterPublicId = $costCenter->publicId;
+            $costCenterCode = $costCenter->code();
+            $costCenterName = $costCenter->name;
+            $costCenterDbId = $costCenter->id ?? 0;
+        } else {
+            $costCenterPublicId = $current->costCenterId();
+            $costCenterCode = $current->costCenterCode;
+            $costCenterName = $current->costCenterName;
+            $costCenterDbId = $current->costCenterDbId ?? 0;
+        }
+
+        if ($expenseTypeId !== null) {
+            $expenseType = $this->expenseTypeRepository->findByPublicId($expenseTypeId);
             if ($expenseType === null) {
-                throw new InvalidArgumentException("Expense type not found: {$expenseTypeTitle}");
+                throw new InvalidArgumentException("Expense type not found: {$expenseTypeId}");
             }
             if (!$expenseType->active) {
-                throw new InvalidArgumentException("Expense type is inactive: {$expenseTypeTitle}");
+                throw new InvalidArgumentException("Expense type is inactive: {$expenseTypeId}");
             }
 
-            $hasEvidence = $transaction->revision()->hasEvidence();
-            $revision->complete(
-                $description,
-                $costCenter->publicId,
-                $costCenter->code(),
-                $costCenter->name,
-                $costCenter->id ?? 0,
-                $expenseType->title,
-                $expenseType->id ?? 0,
-                $hasEvidence
-            );
+            $expenseTypeTitle = $expenseType->title;
+            $expenseTypeDbId = $expenseType->id ?? 0;
         } else {
-            // A partial edit must not erase the fields it does not mention.
-            //
-            // `PATCH /transactions/{id}` with only an expense date and an amount is a
-            // legitimate request, and building a fresh revision left the description,
-            // cost center, and expense type null — so `assertSubmittable()` then
-            // rejected the purchaser's own transaction with "Revision is incomplete",
-            // and had it succeeded it would have silently dropped real business data.
-            // The current revision is the source of truth for anything the caller
-            // omitted.
-            $current = $transaction->revision();
-            $revision->complete(
-                $description ?? $current->description(),
-                $costCenterId ?? $current->costCenterId(),
-                $current->costCenterCode,
-                $current->costCenterName,
-                $current->costCenterDbId ?? 0,
-                $expenseTypeTitle ?? $current->expenseTypeTitle(),
-                $current->expenseTypeDbId ?? 0,
-                $current->hasEvidence()
-            );
+            $expenseTypeTitle = $current->expenseTypeTitle();
+            $expenseTypeDbId = $current->expenseTypeDbId ?? 0;
         }
+
+        $revision->complete(
+            $description ?? $current->description(),
+            $costCenterPublicId,
+            $costCenterCode,
+            $costCenterName,
+            $costCenterDbId,
+            $expenseTypeTitle,
+            $expenseTypeDbId,
+            $current->hasEvidence()
+        );
 
         $transaction->activate($revision);
         $transaction->lockVersion++;
 
-        return $this->transactionManager->transactional(function () use ($transaction, $revision): ExpenseTransaction {
+        return $this->transactionManager->transactional(function () use ($transaction, $revision, $current): ExpenseTransaction {
             // See createTransaction(): the revision needs the transaction's internal
             // id, and the transaction's active_revision_id needs the revision's.
             $this->transactionRepository->save($transaction);
@@ -195,6 +249,43 @@ final readonly class TransactionService
             $this->revisionRepository->save($revision);
 
             $this->transactionRepository->save($transaction);
+
+            // FR-051 "transaction changes", and the one event kind whose whole purpose is a
+            // before-and-after pair: a change is only legible as a diff. The prior values come from
+            // `$current`, the revision as it stood *before* `complete()` ran, so the snapshot is the real
+            // previous state and not a re-read of the already-mutated object.
+            //
+            // `command_id` is null because this entry point is not command-wrapped; see the report.
+            $this->auditWriter->append([
+                'id' => (string)Uuid::random(),
+                'sheet_id' => $transaction->sheetId,
+                'transaction_id' => $transaction->dbId,
+                'revision_id' => $revision->dbId,
+                'stage' => WorkflowStage::Draft->value,
+                'decision_id' => null,
+                'entity_type' => 'transaction',
+                'entity_id' => $transaction->publicId,
+                'event_type' => AuditEventType::TransactionChanged->value,
+                'explanation' => '',
+                'before' => [
+                    'revision_number' => $current->number(),
+                    'description' => $current->description(),
+                    'cost_center_id' => $current->costCenterId(),
+                    'cost_center_code' => $current->costCenterCode,
+                    'cost_center_name' => $current->costCenterName,
+                    'expense_type_title' => $current->expenseTypeTitle(),
+                ],
+                'after' => [
+                    'revision_number' => $revision->number(),
+                    'description' => $revision->description(),
+                    'cost_center_id' => $revision->costCenterId(),
+                    'cost_center_code' => $revision->costCenterCode,
+                    'cost_center_name' => $revision->costCenterName,
+                    'expense_type_title' => $revision->expenseTypeTitle(),
+                ],
+                'command_id' => null,
+            ]);
+
             return $transaction;
         });
     }

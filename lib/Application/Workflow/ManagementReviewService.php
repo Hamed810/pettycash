@@ -28,6 +28,7 @@ use OCA\PettyCash\Domain\Workflow\Decision;
 use OCA\PettyCash\Domain\Workflow\Repository\WorkflowDecisionRepository;
 use OCA\PettyCash\Domain\Workflow\WorkflowDecision;
 use OCA\PettyCash\Domain\Workflow\WorkflowStage;
+use OCA\PettyCash\Application\Audit\DecisionEventType;
 
 final readonly class ManagementReviewService
 {
@@ -186,18 +187,31 @@ final readonly class ManagementReviewService
                     'decision_id' => $workflowDecision->dbId,
                     'entity_type' => 'transaction',
                     'entity_id' => $transactionPublicId,
-                    'event_type' => 'DECISION',
+                    // FR-051 names approvals, rejections and returns as separate records, and both
+                    // decision services route through the same mapper so they cannot disagree.
+                    'event_type' => DecisionEventType::for($decision)->value,
                     'actor_uid' => $actorUid,
                     'actor_name' => $this->userDirectory->displayName($actorUid),
                     'actor_role' => $this->getUserRole($actorUid, $costCenterCode),
                     'explanation' => $explanation,
-                    'before_json' => json_encode([], JSON_THROW_ON_ERROR),
-                    'after_json' => json_encode([
+                    // `before` and `after` are plain arrays: `AuditWriterService` reads those two
+                    // keys and does the encoding itself. This payload used to send `before_json` and
+                    // `after_json`, which the writer does not read at all, so the `?? []` default
+                    // stored the literal "[]" in both columns and every value above was discarded --
+                    // on the DECISION path, meaning no approval, rejection or return recorded its
+                    // decision, stage, explanation or revision number. FR-052 requires those
+                    // before-and-after values, and FR-053 means the rows already written cannot be
+                    // repaired. `AuditWriterService` now refuses this spelling outright.
+                    //
+                    // `before` is genuinely empty: deciding mutates the transaction, so there is no
+                    // pre-decision state captured at this point to compare against.
+                    'before' => [],
+                    'after' => [
                         'decision' => $decision->value,
                         'stage' => $stage->value,
                         'explanation' => $explanation,
                         'revision_number' => $transaction->revision()->number(),
-                    ], JSON_THROW_ON_ERROR),
+                    ],
                     'command_id' => $commandId,
                     'occurred_at' => new DateTimeImmutable('now', new DateTimeZone('UTC')),
                 ];

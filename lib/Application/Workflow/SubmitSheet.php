@@ -15,12 +15,15 @@ use OCA\PettyCash\Application\Port\TransactionManager;
 use OCA\PettyCash\Application\Security\AuthorizationService;
 use OCA\PettyCash\Domain\Audit\AuditEvent;
 use OCA\PettyCash\Domain\Configuration\Repository\CostCenterRepository;
+use OCA\PettyCash\Domain\Configuration\Repository\RoleAssignmentRepository;
+use OCA\PettyCash\Domain\Shared\Enum\Role;
 use OCA\PettyCash\Domain\Expense\ExpenseSheet;
 use OCA\PettyCash\Domain\Expense\Repository\ExpenseSheetRepository;
 use OCA\PettyCash\Domain\Expense\Repository\ExpenseTransactionRepository;
 use OCA\PettyCash\Domain\Expense\Repository\TransactionRevisionRepository;
 use OCA\PettyCash\Domain\Expense\TransactionRevision;
 use OCA\PettyCash\Domain\Workflow\WorkflowStage;
+use OCA\PettyCash\Domain\Shared\Enum\AuditEventType;
 
 final readonly class SubmitSheet
 {
@@ -31,7 +34,8 @@ final readonly class SubmitSheet
         private IdempotencyService $idempotencyService,
         private CurrentUser $currentUser,
         private CostCenterRepository $costCenterRepository,
-        private ExpenseTransactionRepository $transactionRepository
+        private ExpenseTransactionRepository $transactionRepository,
+        private RoleAssignmentRepository $roleAssignmentRepository
     ) {}
 
     /**
@@ -82,12 +86,24 @@ final readonly class SubmitSheet
                     throw new InvalidArgumentException('At least one transaction is required');
                 }
 
-                // Check each transaction's cost center
+                // Check each transaction's cost center, and resolve who it routes to.
+                //
+                // FR-032: "Submission MUST route each transaction to the manager assigned to its cost
+                // center", and the data model states that assignment changes govern future routing
+                // without rewriting history. So the assignee is read *at submission time* and frozen
+                // into the audit event below -- an assignment changed afterwards must not retroactively
+                // change what this submission was routed to.
+                $routingTargets = [];
                 foreach ($sheet->transactions() as $tx) {
                     $costCenter = $this->resolveCostCenter($tx->revision());
                     if ($costCenter === null) {
                         throw new InvalidArgumentException('Transaction missing cost center');
                     }
+                    $routingTargets[] = [
+                        'transaction' => $tx,
+                        'cost_center' => $costCenter,
+                        'manager' => $this->resolveCostCenterManager($costCenter),
+                    ];
                 }
 
                 // Submit the sheet (domain logic)
@@ -107,7 +123,9 @@ final readonly class SubmitSheet
                     'decision_id' => null,
                     'entity_type' => 'sheet',
                     'entity_id' => $sheetId,
-                    'event_type' => 'SUBMISSION',
+                    // The enum, not a literal: see `AuditEventType` for why the producers were
+                    // moved onto it, and `AuditEventTypeConformanceTest` for what keeps them there.
+                    'event_type' => AuditEventType::Submitted->value,
                     'actor_uid' => $ownerUid,
                     'actor_role' => 'PURCHASER',
                     'explanation' => '',
@@ -119,6 +137,50 @@ final readonly class SubmitSheet
                     ],
                     'command_id' => $commandId,
                 ]);
+
+                // One ROUTED event per transaction (FR-051 "routing").
+                //
+                // This is per transaction rather than one sheet-level event because the fact it records
+                // -- which manager this specific transaction went to -- differs per cost center. A single
+                // sheet-level event would have to list them all in a JSON blob and still could not answer
+                // "which manager was this transaction routed to" without parsing it.
+                //
+                // It is written after the SUBMITTED event because that is the order the two happen in:
+                // FR-032 has submission begin formal history and route in the same breath, and the
+                // `stage` below is the stage the transaction has been routed *into*.
+                foreach ($routingTargets as $target) {
+                    $transaction = $target['transaction'];
+                    $costCenter = $target['cost_center'];
+                    $manager = $target['manager'];
+
+                    $this->auditWriter->append([
+                        'id' => (string)\OCA\PettyCash\Domain\Shared\Uuid::random(),
+                        'sheet_id' => $sheet->dbId,
+                        'transaction_id' => $transaction->dbId,
+                        'revision_id' => $transaction->revision()->dbId,
+                        'stage' => WorkflowStage::CostCenter->value,
+                        'decision_id' => null,
+                        'entity_type' => 'transaction',
+                        'entity_id' => $transaction->publicId,
+                        'event_type' => AuditEventType::Routed->value,
+                        'actor_uid' => $ownerUid,
+                        'explanation' => '',
+                        // The prior state is genuinely empty: routing establishes the queue position, it
+                        // does not change anything that was previously true about the transaction.
+                        'before' => [],
+                        'after' => [
+                            'cost_center_code' => $costCenter->code(),
+                            'cost_center_id' => $costCenter->publicId,
+                            // Null when no manager is assigned to the cost center. That is recorded
+                            // honestly rather than omitted: submission does not require an assignee
+                            // today, and a fabricated UID would put a real-looking name on a routing
+                            // decision nobody made. See the report for the follow-up this implies.
+                            'assigned_manager_uid' => $manager?->userUid,
+                            'routed_to_stage' => WorkflowStage::CostCenter->value,
+                        ],
+                        'command_id' => $commandId,
+                    ]);
+                }
 
                 // Persist the sheet
                 $this->sheetRepository->save($sheet);
@@ -148,6 +210,32 @@ final readonly class SubmitSheet
      * `findByCode()` can never match, so the numeric join key is tried first and the
      * submission-time code snapshot second.
      */
+    /**
+     * The manager currently assigned to a cost center, or null when none is.
+     *
+     * Read through `findActiveByRoleAndCostCenter()` with today's date so an assignment that has
+     * expired or is not yet valid is not treated as governing routing. FR-034 makes the cost-center
+     * manager's decision advisory, so this lookup determines who may review the transaction, not who
+     * decides it.
+     */
+    private function resolveCostCenterManager(\OCA\PettyCash\Domain\Configuration\CostCenter $costCenter): ?\OCA\PettyCash\Domain\Configuration\RoleAssignment
+    {
+        if ($costCenter->id === null) {
+            return null;
+        }
+
+        $assignments = $this->roleAssignmentRepository->findActiveByRoleAndCostCenter(
+            Role::CostCenterManager,
+            $costCenter->id,
+            new DateTimeImmutable('now', new DateTimeZone('UTC'))
+        );
+
+        // More than one active manager for a cost center is a configuration ambiguity, not a reason to
+        // pick one silently. The first is used so routing is still recorded, and the count is left in the
+        // event so the ambiguity is visible in the audit trail instead of being resolved invisibly.
+        return $assignments[0] ?? null;
+    }
+
     private function resolveCostCenter(TransactionRevision $revision): ?\OCA\PettyCash\Domain\Configuration\CostCenter
     {
         if ($revision->costCenterDbId !== null) {

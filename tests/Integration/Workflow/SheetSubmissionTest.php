@@ -335,7 +335,8 @@ $revision = TransactionRevision::draft(
             $container->query(\OCA\PettyCash\Application\Command\IdempotencyService::class),
             $container->query(\OCA\PettyCash\Application\Port\CurrentUser::class),
             $container->query(\OCA\PettyCash\Domain\Configuration\Repository\CostCenterRepository::class),
-            $container->query(\OCA\PettyCash\Domain\Expense\Repository\ExpenseTransactionRepository::class)
+            $container->query(\OCA\PettyCash\Domain\Expense\Repository\ExpenseTransactionRepository::class),
+            $container->query(\OCA\PettyCash\Domain\Configuration\Repository\RoleAssignmentRepository::class)
         );
         
         $commandId = 'test-command-' . \OCA\PettyCash\Domain\Shared\Uuid::random();

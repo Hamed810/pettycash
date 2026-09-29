@@ -41,6 +41,22 @@ final class ExpenseSheet
         return new self($id, $owner, $account, $currency, SheetStatus::Open, null, $title);
     }
 
+    /**
+     * A transaction belongs to its sheet exactly once, and re-adding one is a no-op.
+     *
+     * The duplicate guard was missing, and correctness depended on a repository detail instead: the
+     * aggregate guarded currency and status but not membership, while `DbExpenseSheetRepository`
+     * deliberately does not compose transactions, so a sheet loaded from the database always arrived
+     * with an empty collection and the append could not double up. `SubmitSheet` relies on exactly that --
+     * it re-attaches every transaction it loads -- so any path that hands it a sheet which already
+     * carries them appends each one twice.
+     *
+     * That is not hypothetical under the in-memory doubles, which return the stored instance with its
+     * collection intact, and it surfaced there as two `ROUTED` events and a doubled transaction count
+     * for a sheet holding one transaction. A silent double count in a sheet total is the kind of defect
+     * that is very hard to trace back to an aggregate method, so the invariant is stated here rather than
+     * left to depend on how a particular repository composes.
+     */
     public function addTransaction(ExpenseTransaction $transaction): void
     {
         if ($this->status !== SheetStatus::Open) {
@@ -48,6 +64,11 @@ final class ExpenseSheet
         }
         if (!$transaction->revision()->amount()->currency()->equals($this->currency)) {
             throw new InvalidArgumentException('Transaction currency must inherit the sheet currency');
+        }
+        foreach ($this->transactions as $existing) {
+            if ($existing->id === $transaction->id) {
+                return;
+            }
         }
         $this->transactions[] = $transaction;
     }

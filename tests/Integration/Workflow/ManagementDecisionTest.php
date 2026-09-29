@@ -494,6 +494,107 @@ final class ManagementDecisionTest extends TestCase
         self::assertNotEmpty($auditEvents);
     }
 
+    /**
+     * FR-051 names approvals, rejections and returns as three separate records.
+     *
+     * All three used to be written as one `DECISION` event, with the outcome only inside the `after`
+     * snapshot -- and that snapshot was being discarded, so the trail held no record of what was
+     * decided. FR-052 requires the before-and-after values, so the decision must be retained somewhere
+     * queryable. This asserts the split, and it asserts the *retained* outcome in the same pass, because
+     * fixing only the event type would leave the same data unreadable behind a more precise name.
+     */
+    public function testEachDecisionOutcomeIsRecordedUnderItsOwnEventType(): void
+    {
+        $expected = [
+            Decision::Approve->value => 'APPROVED',
+            Decision::Reject->value => 'REJECTED',
+            Decision::Return->value => 'RETURNED',
+        ];
+
+        $observed = [];
+        $sheetNumber = 30;
+
+        foreach (array_keys($expected) as $decisionValue) {
+            $sheetId = 'sheet-split-' . $sheetNumber++;
+            $sheet = $this->createSubmittedSheetWithTransaction($sheetId, 'CC001');
+            $tx = $sheet->transactions()[0];
+
+            $this->setupCostCenterManager('CC001', 'manager-' . $sheetNumber);
+            $this->setupRoleAssignment('manager-' . $sheetNumber, Role::CostCenterManager, '1');
+            $this->container->setInstance(
+                CurrentUser::class,
+                new \OCA\PettyCash\Tests\TestDoubles\InMemoryCurrentUser('manager-' . $sheetNumber)
+            );
+
+            $decision = Decision::from($decisionValue);
+
+            // A *fresh* service per outcome, not `$container->query()`. The container caches the
+            // service, and it captured whichever `CurrentUser` was registered when it was first built --
+            // which, in a full-suite run, is an earlier test's user. Querying it therefore authorized
+            // the wrong actor and threw "User not authorized for this review stage". This test passed when
+            // run alone and failed in the suite, which is exactly the order-dependence worth avoiding.
+            $service = new ManagementReviewService(
+                $this->container->query(TransactionManager::class),
+                $this->container->query(ExpenseSheetRepository::class),
+                $this->container->query(ExpenseTransactionRepository::class),
+                $this->container->query(TransactionRevisionRepository::class),
+                $this->container->query(CostCenterRepository::class),
+                $this->container->query(RoleAssignmentRepository::class),
+                $this->container->query(\OCA\PettyCash\Domain\Workflow\Repository\WorkflowDecisionRepository::class),
+                $this->container->query(\OCA\PettyCash\Application\Port\AuditWriter::class),
+                $this->container->query(IdempotencyService::class),
+                $this->container->query(CurrentUser::class),
+                $this->container->query(UserDirectory::class),
+                $this->container->query(\OCA\PettyCash\Application\Security\AuthorizationService::class)
+            );
+
+            $service->recordDecision(
+                $tx->id,
+                WorkflowStage::CostCenter,
+                $decision,
+                'Outcome under test: ' . $decisionValue,
+                'cmd-split-' . Uuid::random(),
+                0
+            );
+
+            $events = $this->container->query(AuditEventRepository::class)->findByTransactionId($tx->dbId ?? 0);
+            $decisionEvent = null;
+            foreach ($events as $event) {
+                if (in_array($event->eventType, ['APPROVED', 'REJECTED', 'RETURNED'], true)) {
+                    $decisionEvent = $event;
+                }
+            }
+
+            self::assertNotNull(
+                $decisionEvent,
+                "a {$decisionValue} must record an event under its own type"
+            );
+            self::assertSame(
+                $expected[$decisionValue],
+                $decisionEvent->eventType,
+                "{$decisionValue} is recorded under the wrong event type"
+            );
+            self::assertStringContainsString(
+                $decisionValue,
+                $decisionEvent->afterJson,
+                'FR-052: the decision itself must survive in the after snapshot, not only in the type'
+            );
+            self::assertStringNotContainsString(
+                '"[]"',
+                $decisionEvent->afterJson,
+                'an empty after-snapshot is the defect this task found twice already'
+            );
+
+            $observed[] = $decisionEvent->eventType;
+        }
+
+        self::assertSame(
+            ['APPROVED', 'REJECTED', 'RETURNED'],
+            $observed,
+            'the three outcomes must be distinguishable from the event stream'
+        );
+    }
+
     public function testIdempotentDecisionReplay(): void
     {
         $sheet = $this->createSubmittedSheetWithTransaction('sheet-10', 'CC001');

@@ -24,6 +24,7 @@ use OCA\PettyCash\Domain\Workflow\TransactionStatus;
 use OCA\PettyCash\Domain\Workflow\SheetStatus;
 use OCA\PettyCash\Domain\Shared\Uuid;
 use OCA\PettyCash\Domain\Audit\AuditEvent;
+use OCA\PettyCash\Domain\Shared\Enum\AuditEventType;
 
 class ResubmitCorrection
 {
@@ -128,7 +129,7 @@ class ResubmitCorrection
                     'decision_id' => null,
                     'entity_type' => 'transaction',
                     'entity_id' => $transactionPublicId,
-                    'event_type' => 'CORRECTION_RESUBMITTED',
+                    'event_type' => AuditEventType::Corrected->value,
                     'actor_uid' => $actorUid,
                     'actor_role' => 'PURCHASER',
                     'explanation' => $explanation ?? '',

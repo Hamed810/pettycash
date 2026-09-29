@@ -36,6 +36,8 @@ use OCA\PettyCash\Domain\Workflow\FinanceDecisionPolicy;
 use OCA\PettyCash\Domain\Workflow\Repository\WorkflowDecisionRepository;
 use OCA\PettyCash\Domain\Workflow\TransactionStatus;
 use OCA\PettyCash\Domain\Workflow\WorkflowStage;
+use OCA\PettyCash\Application\Audit\DecisionEventType;
+use OCA\PettyCash\Application\Reporting\ChargedAccountScope;
 
 final readonly class FinanceSettlementService
 {
@@ -249,19 +251,26 @@ final readonly class FinanceSettlementService
                     'decision_id' => $workflowDecision->dbId,
                     'entity_type' => 'transaction',
                     'entity_id' => $transactionPublicId,
-                    'event_type' => 'DECISION',
+                    // See `ManagementReviewService`: the same shared mapper records the outcome, so
+                    // this path cannot drift from the cost-center one.
+                    'event_type' => DecisionEventType::for($decision)->value,
                     'actor_uid' => $actorUid,
                     'actor_name' => $this->userDirectory->displayName($actorUid),
                     'actor_role' => $this->getUserRole($actorUid, $transaction->revision()->costCenterId()),
                     'explanation' => $explanation,
-                    'before_json' => json_encode([], JSON_THROW_ON_ERROR),
-                    'after_json' => json_encode([
+                    // See `ManagementReviewService`: this used to send `before_json` and `after_json`,
+                    // keys `AuditWriterService` does not read, so the finance DECISION event stored "[]"
+                    // for both snapshots and lost the decision, stage, explanation, revision number and
+                    // the `financial_effect` that says whether money actually moved. Passing plain
+                    // `before` / `after` arrays lets the writer store them.
+                    'before' => [],
+                    'after' => [
                         'decision' => $decision->value,
                         'stage' => WorkflowStage::Finance->value,
                         'explanation' => $explanation,
                         'revision_number' => $transaction->revision()->number(),
                         'financial_effect' => $decision === Decision::Approve ? 'CONSUMPTION_RECORDED' : 'NONE',
-                    ], JSON_THROW_ON_ERROR),
+                    ],
                     'command_id' => $commandId,
                     'occurred_at' => new DateTimeImmutable('now', new DateTimeZone('UTC')),
                 ];
@@ -279,7 +288,10 @@ final readonly class FinanceSettlementService
                         'id' => (string)Uuid::random(),
                         'entity_type' => 'account',
                         'entity_id' => $account->id,
-                        'event_type' => 'ACCOUNT_CHARGED',
+                        // FR-055 configuration stream, not the FR-051 transaction vocabulary, so this
+                        // one deliberately stays out of `AuditEventType`. The constant is the one T294
+                        // already derives charged accounts from, so the two cannot drift apart.
+                        'event_type' => ChargedAccountScope::CHARGE_EVENT_TYPE,
                         'explanation' => $explanation,
                         // `recordConsumption()` mutates the account in place, so a "before"
                         // balance read here would be the post-consumption value wearing a

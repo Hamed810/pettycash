@@ -144,7 +144,7 @@ test.describe('Purchaser Capture and Submission', () => {
 		
 		// Verify audit event created
 		await page.click('[data-test="audit-tab"]')
-		await expect(page.locator('[data-test="audit-event"]').first()).toContainText('SUBMISSION')
+		await expect(page.locator('[data-test="audit-event"]').first()).toContainText('SUBMITTED')
 	})
 
 	test('should submit without requiring positive account balance', async ({ page }) => {
@@ -211,8 +211,8 @@ test.describe('Audit Trail Verification', () => {
 		// Check audit trail
 		await page.click('[data-test="audit-tab"]')
 		
-		// Verify SUBMISSION event exists
-		const submissionEvent = page.locator('[data-test="audit-event"]').filter({ hasText: 'SUBMISSION' })
+		// Verify SUBMITTED event exists
+		const submissionEvent = page.locator('[data-test="audit-event"]').filter({ hasText: 'SUBMITTED' })
 		await expect(submissionEvent).toBeVisible()
 		
 		// Verify event contains actor, stage, timestamp

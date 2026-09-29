@@ -816,7 +816,10 @@ function scenarioExpense(
         (int) $decision->dbId,
         'transaction',
         $transaction->id,
-        AuditEventType::Decided->value,
+        // Was `Decided`, which covered an approval. The event types were split so an approval, a
+        // rejection and a return are distinguishable, and the explanation below records this as the
+        // approval it always was.
+        AuditEventType::Approved->value,
         $actorUid,
         'Round Trip Actor',
         Role::CostCenterManager->value,

@@ -470,7 +470,7 @@ final class RepositoryRoundTripTest extends TestCase
     {
         $audit = $this->report('expense')['audit'];
 
-        $this->assertSame('DECIDED', $audit['byPublicId']['eventType']);
+        $this->assertSame('APPROVED', $audit['byPublicId']['eventType']);
         $this->assertSame('COST_CENTER', $audit['byPublicId']['stage']);
         $this->assertSame('{"stage":"DRAFT"}', $audit['byPublicId']['beforeJson']);
         $this->assertSame('{"stage":"COST_CENTER"}', $audit['byPublicId']['afterJson']);

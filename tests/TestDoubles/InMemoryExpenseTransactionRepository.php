@@ -121,6 +121,15 @@ final class InMemoryExpenseTransactionRepository implements \OCA\PettyCash\Domai
         if ($transaction->dbId === null) {
             $transaction->dbId = count($this->transactions) + 1;
         }
+        // `publicId` is assigned from the aggregate's own `id`, mirroring
+        // `DbExpenseTransactionRepository::save()` (line 237) and `DbEvidenceRepository::save()`. The
+        // real insert writes the `id` into the `public_id` column, so the two are the same value in
+        // production -- but the property was left null here, which meant `findByPublicId()` could never
+        // find anything a test had just saved, and a test could pass while production could not resolve
+        // the id it had been given. Any double that does not mirror this hides that difference.
+        if ($transaction->publicId === null) {
+            $transaction->publicId = $transaction->id;
+        }
         $this->transactions[$transaction->dbId] = $transaction;
     }
 
