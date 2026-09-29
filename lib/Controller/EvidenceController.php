@@ -200,38 +200,48 @@ class EvidenceController extends OCSController
     }
 
 /**
-     * @param string $evidenceId
-     * @param string $commandId
-     * @return DataResponse
-     */
-    #[NoAdminRequired]
-    public function destroy(string $evidenceId, ?string $commandId = null): DataResponse
-    {
-        $commandId = $commandId ?? $this->request->getHeader('X-PettyCash-Command-ID');
-        if ($commandId === null || trim($commandId) === '') {
-            return $this->ocsErrorMapper->validation(
-                'Required fields are missing',
-                null,
-                ['commandId' => ['commandId is required']]
-            );
-        }
-
+ * @param string $evidenceId
+ * @return DataResponse
+ */
+#[NoAdminRequired]
+public function destroy(string $evidenceId): DataResponse
+{
+        // No command id is read, required, or reported here.
+        //
+        // This used to refuse the request with a 422 when `X-PettyCash-Command-ID` was absent, which
+        // contradicted `contracts/workflow.md`: that contract requires the header only for
+        // *non-repeatable* commands, and a DELETE is repeatable. It also refused with 422 where the
+        // missing-parameter convention this repository settled on elsewhere (T317, and
+        // `ReviewController`) is 400, so the header check was wrong on two counts at once.
+        //
+        // The header is not even forwarded to the service. It was read here only to be validated and
+        // then attached to error payloads — `deleteDraftEvidence()` never received it, so the header
+        // bought no replay protection at any point. `deleteDraftEvidence()` is now effect-idempotent
+        // on its own terms: a repeat returns the same `200` and the same metadata, including the
+        // `deactivatedAt` recorded by the first call.
         try {
             $ownerUid = $this->currentUser->uid();
             $evidence = $this->evidenceRepository->findByPublicId($evidenceId);
 
             if ($evidence === null || $evidence->uploadedBy !== $ownerUid) {
-                return $this->ocsErrorMapper->notFound('Evidence not found', $commandId);
+                return $this->ocsErrorMapper->notFound('Evidence not found');
             }
 
             // Check if transaction is in draft state (allows full deletion) or submitted (only deactivation)
             // For simplicity, we'll deactivate in both cases - the service handles the actual file deletion for drafts
             $this->evidenceService->deleteDraftEvidence($evidenceId);
-            
-            // Return the deactivated evidence metadata
-            return new DataResponse($this->formatEvidence($evidence), 200);
+
+            // Re-read rather than formatting the instance loaded above. The repository returns a
+            // freshly mapped object per call, so the pre-delete snapshot still reads `active: true`
+            // and `deactivatedAt: null` — while the contract this answers declares `200` as
+            // "Deactivated evidence metadata". It also made a repeat answer with pre-delete state
+            // on *both* calls, which is the one shape under which the idempotency of the write could
+            // never be observed from the response.
+            $deactivated = $this->evidenceRepository->findByPublicId($evidenceId);
+
+            return new DataResponse($this->formatEvidence($deactivated ?? $evidence), 200);
         } catch (\Throwable $e) {
-            return $this->ocsErrorMapper->map($e, $commandId);
+            return $this->ocsErrorMapper->map($e);
         }
     }
 

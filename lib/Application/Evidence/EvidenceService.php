@@ -119,13 +119,36 @@ final readonly class EvidenceService
         return $evidence;
     }
 
-    /**
-     * Delete draft evidence (before submission)
-     *
-     * @param string $evidencePublicId
-     */
-    public function deleteDraftEvidence(string $evidencePublicId): void
-    {
+  /**
+   * Delete draft evidence (before submission)
+   *
+   * Repeatable by design. `contracts/workflow.md` requires `X-PettyCash-Command-ID` only for
+   * *non-repeatable* commands, and the maintainer decision on T318 settled that `DELETE
+   * /evidence/{id}` is one of them, so this operation carries no idempotency wrapper and a retry
+   * reaches this method again rather than being answered from a stored result.
+   *
+   * That makes the *effect* idempotency this method's own responsibility, and the one thing it must
+   * not do is re-record the deactivation. `Evidence::deactivate()` writes `deactivatedAt`,
+   * `deactivatedBy`, and `deactivationReason` unconditionally, so without the guard below a repeat
+   * would answer 200 while rewriting `deactivatedAt` to the retry instant. The guard is on the
+   * evidence's own state rather than on the call, which is what makes the answer independent of how
+   * many times the client retried: `deactivatedBy` and `deactivationReason` are recorded facts of
+   * the same kind and are left alone for the same reason.
+   *
+   * It is deliberately *not* a refusal. Refusing a repeat would make the operation
+   * non-repeatable while the contract exempts it from the header that guards non-repeatable
+   * commands, reinstating the contradiction T318 removes. `deactivateEvidence()` at line 177
+   * refuses, because that path is a submitted-evidence transition with its own guard and its own
+   * idempotency contract.
+   *
+   * The AppData binary is removed before the guard on purpose: the file store is already
+   * idempotent (`AppDataEvidenceStore::deleteDraft()` swallows `NotFoundException`), and a repeat
+   * must not be able to short-circuit a cleanup the first call may have failed to complete.
+   *
+   * @param string $evidencePublicId
+   */
+  public function deleteDraftEvidence(string $evidencePublicId): void
+  {
         $ownerUid = $this->currentUser->uid();
         $evidence = $this->evidenceRepository->findByPublicId($evidencePublicId);
 
@@ -133,10 +156,15 @@ final readonly class EvidenceService
             throw new InvalidArgumentException('Evidence not found');
         }
 
+        $this->fileStore->deleteDraftEvidence($evidence->appDataKey);
+
         // Only allow deletion if the transaction is still in draft state
         // This check will be enhanced with proper transaction state verification
 
-        $this->fileStore->deleteDraftEvidence($evidence->appDataKey);
+        if (!$evidence->active) {
+            return;
+        }
+
         // Note: Repository doesn't have delete method - evidence is deactivated instead
         $evidence->deactivate($ownerUid, 'Draft deleted by purchaser');
         $this->evidenceRepository->save($evidence);

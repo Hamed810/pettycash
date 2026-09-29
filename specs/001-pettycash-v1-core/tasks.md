@@ -4904,3 +4904,132 @@ owned gap would give one piece of work two owners and two places to be marked do
     `SubmitSheet` shape (re-read the aggregate) or widen what `IdempotencyService` stores.
   - `deleteTransaction()` (T258) is also state-changing and also unwrapped; it is **not** in FR-042's list
     and is deliberately left out unless the contract says otherwise.
+
+---
+
+## Phase 49: Convergence (the DELETE replay contradiction — one root cause, two operations)
+
+- [x] T318 [MEDIUM] Reconcile the contradiction between `contracts/workflow.md`'s Command Contract and
+      `contracts/ocs-api.yaml` over whether a `DELETE` requires `X-PettyCash-Command-ID`, then align
+      both delete code paths with whichever answer wins per Constitution Governance
+      (`contradicts`; **decision required before any code is written**) — complete. **The maintainer
+      decided: a `DELETE` is a repeatable command and is exempt from `X-PettyCash-Command-ID`.** The
+      `workflow.md` branch wins; the two `$ref`s came out of `ocs-api.yaml` and the header requirement
+      is gone from both operations. **Neither DELETE was wrapped** — that is what "exempt" means, and
+      wrapping them would have been the other branch's answer. **The consequence the decision creates
+  had to be dealt with, and this is the part that was easy to get wrong:** with the header gone and no
+  wrapper, a retry reaches the service again, so *effect* idempotency became the operation's own
+  responsibility. On the evidence path that was unmet — `deleteDraftEvidence()` is a soft delete and
+  `Evidence::deactivate()` rewrites `deactivatedAt` unconditionally, so a repeat answered `200` while
+  recording a **new** deactivation time. A recorded business fact that varies with retry count is
+  worse than the header requirement was, and it was created *by* removing the header. Fixed with a
+  guard on `!$evidence->active` before the write (`lib/Application/Evidence/EvidenceService.php:159`),
+  deliberately placed **after** the file-store call so a repeat cannot short-circuit a binary cleanup
+  the first call may have failed to finish. It is deliberately **not** a refusal: refusing would make
+  the operation non-repeatable while the contract exempts it from the header that guards
+  non-repeatable commands, reinstating the contradiction from the other side.
+  `EvidenceController::destroy()` also now re-reads the row instead of formatting the pre-delete
+  snapshot — the repository returns a fresh object per call, so the old code answered `200`
+  "Deactivated evidence metadata" carrying `active: true`, and did so identically on both calls, which
+  is the one shape under which the idempotency of the write could never be observed from the response.
+  `TransactionService::deleteTransaction()` and `TransactionController::destroy()` are **unchanged**:
+  the transaction DELETE has no wrapper and never gained one, and its command id was only ever used to
+  label error payloads. `expectedVersion` still guards the concurrent-edit case on both.
+  **Response semantics were read off the existing contracts, not invented:** transaction first call
+  `204`, replay `422` (unchanged — a hard delete has no row left to be idempotent about, and giving it
+  a success answer would be a new contract decision); evidence `200` with `Evidence` on both calls, now
+  with identical bodies.
+  **17 tests, 6 mutations, all killed.** `DeleteCommandIdExemptionTest` pins the *artifact* so the two
+  files cannot drift apart again, and two of its mutations are the load-bearing ones — weakening
+  `workflow.md`'s rule to "all state-changing commands", and flipping the shared
+  `components/parameters/CommandId` to `required: false`. Both are invisible to any test that only
+  looks at the two DELETE blocks, and either would un-exempt every delete in the contract while
+  satisfying every other assertion. `EvidenceDeleteRepeatabilityTest` pins the service and compares
+  `DateTimeImmutable` objects rather than `ATOM` strings: the controller formats with `ATOM`, which
+  truncates to whole seconds, so two deletes inside one second would compare equal *against the exact
+  defect the test exists to catch*. **One pre-existing failure left alone and verified as such:**
+  `PurchaserFlowControllerTest::testGetEvidenceContentReturns200WithStream` asserts
+  `application/octet-stream` and gets `application/pdf`; it fails identically with every change in this
+  task stashed, so it is not this task's regression and was not silently absorbed. Report:
+  `docs/reports/T318.md`
+
+  **One task, not two.** The two DELETEs are the same root cause with different symptoms, and a verb-bounded
+  scan of `ocs-api.yaml` shows exactly two repeatable-verb operations in the entire contract reference
+  `CommandId` — both of these. Nothing else is in scope. (A first, unbounded scan appeared to implicate
+  `GET /configuration/currencies` and `GET /configuration/expense-types`; re-checking with each operation's
+  segment bounded at the next verb key showed both are false positives, their `CommandId` belonging to the
+  sibling `POST`/`PATCH` on the same path.)
+
+  **The contradiction, verbatim.**
+  - `contracts/workflow.md:14` — "**Non-repeatable** commands require `X-PettyCash-Command-ID` … Replaying
+    the same command with the same canonical payload returns the first result."
+  - `contracts/ocs-api.yaml:760-765` — the `CommandId` parameter is `required: true`, and it is `$ref`ed by
+    `DELETE /transactions/{transactionId}` at **`:488`** and `DELETE /evidence/{evidenceId}` at **`:636`**.
+  - A DELETE is repeatable, so on `workflow.md`'s wording it is exempt; on `ocs-api.yaml` it is required.
+    The two authoritative artifacts disagree, and Constitution **Governance**
+    (`.specify/memory/constitution.md:166`) says "When artifacts conflict, work MUST stop long enough to
+    reconcile the conflict in the authoritative artifact rather than choosing silently." The code has in
+    fact chosen silently: neither path is wrapped.
+
+  **Why it is a single task with two symptoms.** Both operations are unwrapped, so neither is answered with
+  its first result on replay. The observed behaviour differs only because of what the delete does:
+  - `DELETE /transactions/{transactionId}` is a hard delete. First call **204**; a replay reaches
+    `TransactionService::deleteTransaction()` (`lib/Application/Expense/TransactionService.php:389`), whose
+    `findByPublicId()` now returns null and throws `InvalidArgumentException` (`:394`), which
+    `OcsErrorMapper:44` maps to **422 VALIDATION_FAILED**. The status diverges.
+  - `DELETE /evidence/{evidenceId}` is a **soft** delete — `EvidenceService::deleteDraftEvidence()`
+    (`lib/Application/Evidence/EvidenceService.php:127`) calls `deactivate()` and saves, so the row survives.
+    `EvidenceController::destroy()` (`:208-218`) *does* validate the required header, but never forwards it.
+    Because `deleteDraftEvidence()` has no `!$evidence->active` guard — the one at `:164` belongs to
+    `deactivateEvidence()`, a different method — a replay re-runs `Evidence::deactivate()`
+    (`lib/Domain/Evidence/Evidence.php:30`), which unconditionally rewrites `deactivatedAt` with a new
+    timestamp. Same status (200), different body, and a recorded business fact that depends on retry count.
+    That is the worse of the two: the transaction replay produces a confusing error, the evidence replay
+    quietly rewrites history.
+
+  **Both replay behaviours are derived from the code paths above, not measured** — establishing them
+  end-to-end would require writing tests, which this task's decision has to precede.
+
+  **Severity.** Tagged MEDIUM to match how T275, the same class of unreconciled artifact conflict, is
+  classified. It does touch the CRITICAL clause's "violates a constitution MUST principle", and it is
+  raised as MEDIUM because there is no data-integrity exposure (no duplicate write, no duplicate audit row —
+  `deleteTransaction()` writes no audit event at all), no P1 baseline functionality is blocked, and the
+  repository's own precedent is MEDIUM. **A maintainer reading that CRITICAL clause literally should promote
+  this, and T275 with it.**
+
+  **What is NOT in scope, and must stay out.**
+  - **Do not reopen or widen T317.** It completed the two `POST`/`PATCH` operations and recorded this
+    exclusion deliberately ("not in FR-042's list and is deliberately left out unless the contract says
+    otherwise"). FR-042 lists "recording a decision, changing workflow state, creating a revision, and
+    recording final financial consumption" — a pre-submission draft delete is none of them, so FR-042 does
+    not reach this path and T317 was right to leave it.
+  - **T258** is unrelated: it made `deleteTransaction()` actually delete, and mentions no idempotency,
+    command id, or replay.
+  - The two statuses for a **missing** header are already settled and need no decision: a missing required
+    *parameter* is 400 under the principle T317 established, distinct from the 422 used for invalid body
+    fields. `DELETE /evidence/{id}` currently answers 422 for a missing header, which is the inconsistency
+    T317 corrected elsewhere; the chosen option below should settle both.
+  - `contracts/workflow.md:19-20`'s `expectedVersion` requirement already holds on both paths and is not
+    in question. It is also **not** a substitute for replay safety: it refuses a *concurrent* edit, but a
+    sequential retry resends the version the client originally read.
+
+  **The decision, which is a product call and cannot be derived from the repository.**
+  1. **Is a `DELETE` a non-repeatable command?** If yes, `ocs-api.yaml` stands, the two paths get wrapped in
+     `IdempotencyService`, and the header requirement stays. If no, `workflow.md` stands and the two
+     `$ref`s must be removed so the OpenAPI stops requiring a header the Command Contract does not.
+  2. **If wrapped, what does a replay return, and how?** Neither `deleteTransaction()` nor
+     `deleteDraftEvidence()` returns anything — both are `void` — so the closure must return something and
+     the controller must translate it. The T317 `SubmitSheet` pattern does **not** transfer: it re-reads the
+     aggregate, and on a delete the aggregate is gone. The alternative is widening what `IdempotencyService`
+     stores, which is the same sub-decision T317 flagged and deliberately left open.
+  3. **Is the soft delete's `deactivatedAt` rewrite acceptable at all?** If a replay is defined to return the
+     first result, `deleteDraftEvidence()` still needs an `active` guard so the timestamp of the *first*
+     delete is the one retained. If replay is defined as repeatable-and-idempotent, the guard is what stops
+     the rewrite. This is the part with actual data consequences and it should not be decided as a
+     side-effect of option 1.
+
+  **Likely shape once decided** (not decided here): one constructor argument and one DI registration for
+  each service, a `$commandId` on each method, the body moved inside the closure with its guard clauses, a
+  `['deleted' => true]`-style stored response translated to the operation's declared success code (204 for
+  the transaction, 200 with the evidence body for the evidence), and contract tests asserting replay
+  equivalence for both.

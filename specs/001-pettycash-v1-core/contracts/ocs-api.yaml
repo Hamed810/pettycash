@@ -483,9 +483,13 @@ paths:
     delete:
       tags: [Transactions]
       summary: Delete a transaction from an open sheet
+      # Repeatable command: no `X-PettyCash-Command-ID`. `contracts/workflow.md` requires that header
+      # only for *non-repeatable* commands, and a DELETE of a draft row is repeatable — the caller
+      # retries it, and the endpoint has nothing to deduplicate because the row is simply gone.
+      # `expectedVersion` still guards against a *concurrent* edit; it is not a replay guard, since a
+      # sequential retry resends the version the client originally read.
       parameters:
         - $ref: '#/components/parameters/TransactionId'
-        - $ref: '#/components/parameters/CommandId'
       responses:
         '204': { description: Draft transaction deleted }
         '409':
@@ -631,9 +635,12 @@ paths:
     delete:
       tags: [Evidence]
       summary: Delete draft evidence or deactivate submitted evidence
+      # Repeatable command: no `X-PettyCash-Command-ID`, for the reason given on
+      # `DELETE /transactions/{transactionId}`. The effect is idempotent rather than merely
+      # repeatable — the evidence row survives as deactivated, so a repeat returns the same `200`
+      # and the same metadata, including the `deactivatedAt` recorded by the *first* call.
       parameters:
         - $ref: '#/components/parameters/EvidenceId'
-        - $ref: '#/components/parameters/CommandId'
       responses:
         '200':
           description: Deactivated evidence metadata

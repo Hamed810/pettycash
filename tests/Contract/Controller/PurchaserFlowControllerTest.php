@@ -479,9 +479,6 @@ final class PurchaserFlowControllerTest extends TestCase
     public function testDeleteTransactionReturns204(): void
     {
         $response = $this->client->request('DELETE', '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId(), [
-            'headers' => [
-                'X-PettyCash-Command-ID' => ContractFixtures::commandId(),
-            ],
             'json' => [
                 'expectedVersion' => ContractFixtures::transactionVersion(),
             ],
@@ -489,6 +486,30 @@ final class PurchaserFlowControllerTest extends TestCase
 
         // Contract: DELETE /transactions/{id} returns 204 No Content
         $this->assertEquals(204, $response->getStatusCode(), 'DELETE /transactions/{id} should return 204 No Content');
+    }
+
+    /**
+     * T318: the contract no longer lists `X-PettyCash-Command-ID` on this operation.
+     *
+     * `contracts/workflow.md` requires the header only for *non-repeatable* commands, and deleting a
+     * draft is repeatable — the endpoint has no idempotency wrapper and never did. `expectedVersion`
+     * still guards against a concurrent edit, which is a different condition and is not affected:
+     * the assertions below all send a correct version.
+     */
+    public function testDeleteTransactionSucceedsWithoutACommandIdHeader(): void
+    {
+        $response = $this->client->request('DELETE', '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId(), [
+            'json' => [
+                'expectedVersion' => ContractFixtures::transactionVersion(),
+            ],
+        ]);
+
+        $this->assertEquals(
+            204,
+            $response->getStatusCode(),
+            'contracts/ocs-api.yaml does not list X-PettyCash-Command-ID on DELETE /transactions/{id} any '
+            . 'more, so a client that does not send it must still delete'
+        );
     }
 
     public function testRecordDecisionReturns201WithDecisionResult(): void
@@ -600,15 +621,75 @@ final class PurchaserFlowControllerTest extends TestCase
     {
         $evidenceId = $this->uploadEvidence();
 
-        $response = $this->client->request('DELETE', '/ocs/v2.php/apps/pettycash/api/v1/evidence/' . $evidenceId, [
-            'headers' => [
-                'X-PettyCash-Command-ID' => ContractFixtures::commandId(),
-            ],
-        ]);
+        $response = $this->client->request('DELETE', '/ocs/v2.php/apps/pettycash/api/v1/evidence/' . $evidenceId);
 
         // Contract: DELETE /evidence/{id} returns 200 with deactivated Evidence metadata
         $this->assertEquals(200, $response->getStatusCode(), 'DELETE /evidence/{id} should return 200 OK');
         $this->assertOcsResponseStructure($response, 200);
+    }
+
+    /**
+     * T318: the DELETE is repeatable, so the contract no longer requires `X-PettyCash-Command-ID`.
+     *
+     * `contracts/workflow.md` requires that header only for *non-repeatable* commands. The endpoint
+     * used to answer 422 when it was absent — a header the Command Contract does not ask this
+     * operation for, refused with a status that also contradicted the 400-for-a-missing-parameter
+     * convention the rest of the API settled on. The header was never forwarded to
+     * `deleteDraftEvidence()` either, so refusing it bought nothing.
+     */
+    public function testDeleteEvidenceSucceedsWithoutACommandIdHeader(): void
+    {
+        $evidenceId = $this->uploadEvidence();
+
+        $response = $this->client->request('DELETE', '/ocs/v2.php/apps/pettycash/api/v1/evidence/' . $evidenceId);
+
+        $this->assertEquals(
+            200,
+            $response->getStatusCode(),
+            'contracts/ocs-api.yaml does not list X-PettyCash-Command-ID on DELETE /evidence/{id} any more, '
+            . 'so a client that does not send it must not be refused'
+        );
+    }
+
+    /**
+     * T318: repeating a repeatable command must be invisible in the recorded history.
+     *
+     * The second call answers the same `200` with the same body — including `deactivatedAt` from the
+     * *first* call. Before the fix `Evidence::deactivate()` rewrote that timestamp on every call, so
+     * the response carried a value that depended on how many times the client had retried. The body
+     * is compared whole rather than field-by-field because a partial comparison would pass while a
+     * rewrite of `deactivationReason` or `deactivatedBy` went unnoticed.
+     */
+    public function testRepeatingTheEvidenceDeleteReturnsTheSameMetadata(): void
+    {
+        $evidenceId = $this->uploadEvidence();
+
+        $first = $this->client->request('DELETE', '/ocs/v2.php/apps/pettycash/api/v1/evidence/' . $evidenceId);
+        $this->assertEquals(200, $first->getStatusCode(), 'the first delete must succeed');
+
+        $second = $this->client->request('DELETE', '/ocs/v2.php/apps/pettycash/api/v1/evidence/' . $evidenceId);
+
+        $this->assertEquals(
+            200,
+            $second->getStatusCode(),
+            'a repeatable command must accept a repeat; refusing it would make DELETE non-repeatable '
+            . 'while the contract exempts it from the header that guards non-repeatable commands'
+        );
+
+        $firstData = json_decode((string) $first->getBody(), true)['ocs']['data'] ?? [];
+        $secondData = json_decode((string) $second->getBody(), true)['ocs']['data'] ?? [];
+
+        self::assertNotEmpty(
+            $firstData['deactivatedAt'] ?? null,
+            'the first delete must record a deactivation time, or the equality below would be vacuous'
+        );
+        $this->assertSame(
+            $firstData,
+            $secondData,
+            'a repeated delete must return the metadata the first call produced. `deactivatedAt` '
+            . 'depending on the retry count is a recorded business fact that varies with how often the '
+            . 'client happened to press the button'
+        );
     }
 
     public function testGetEvidenceContentReturns200WithStream(): void
@@ -773,10 +854,7 @@ final class PurchaserFlowControllerTest extends TestCase
         $delete = $this->client->request(
             'DELETE',
             '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId(),
-            [
-                'headers' => ['X-PettyCash-Command-ID' => ContractFixtures::commandId()],
-                'json' => ['expectedVersion' => ContractFixtures::transactionVersion()],
-            ]
+            ['json' => ['expectedVersion' => ContractFixtures::transactionVersion()]]
         );
 
         $this->assertSame(
@@ -812,10 +890,7 @@ final class PurchaserFlowControllerTest extends TestCase
         $response = $this->client->request(
             'DELETE',
             '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId(),
-            [
-                'headers' => ['X-PettyCash-Command-ID' => ContractFixtures::commandId()],
-                'json' => ['expectedVersion' => ContractFixtures::transactionVersion()],
-            ]
+            ['json' => ['expectedVersion' => ContractFixtures::transactionVersion()]]
         );
 
         $this->assertContains(
