@@ -9,6 +9,9 @@ use OCA\PettyCash\Application\Reporting\UnsupportedSelection;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Application\Reporting\DashboardQuery;
 use OCA\PettyCash\Application\Reporting\ExportService;
+use OCA\PettyCash\Application\Reporting\ReportFilter;
+use OCA\PettyCash\Application\Reporting\ReportFilterFactory;
+use OCA\PettyCash\Application\Reporting\ReportQuery;
 use OCA\PettyCash\Application\Reporting\ReportScope;
 use OCA\PettyCash\Infrastructure\Http\OcsErrorMapper;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
@@ -45,11 +48,30 @@ use OCP\IRequest;
  */
 class ExportController extends OCSController
 {
+    /**
+     * The declared columns of each resource this endpoint can enumerate.
+     *
+     * They exist for one reason: a selection that a filter narrowed to **nothing** must still produce
+     * an artifact that says what it would have contained. `contracts/exports.md` requires "an explicit
+     * column header row", and a header derived from the first row cannot be emitted when there is no
+     * first row — so the true-negative result was a zero-byte file, indistinguishable from a build that
+     * failed. They are also the vocabulary a filter is evaluated against, which is why they are stated
+     * once, here, rather than inferred per request.
+     */
+    private const SHEET_COLUMNS = ['id', 'title', 'ownerUid', 'status', 'currency', 'submittedTotalMinor', 'createdAt'];
+
+    private const TRANSACTION_COLUMNS = [
+        'id', 'ownerUid', 'stage', 'status', 'sheetId', 'createdAt',
+        'costCenterDbId', 'costCenterCode', 'expenseTypeDbId', 'expenseTypeTitle', 'amountMinor', 'currency',
+    ];
+
     public function __construct(
         IRequest $request,
         private CurrentUser $currentUser,
         private DashboardQuery $dashboard,
         private ExportService $exports,
+        private ReportQuery $reports,
+        private ReportFilterFactory $filters,
         private \OCA\PettyCash\Domain\Expense\Repository\ExpenseSheetRepository $sheets,
         private \OCA\PettyCash\Domain\Expense\Repository\ExpenseTransactionRepository $transactions,
         private OcsErrorMapper $ocsErrorMapper
@@ -103,22 +125,26 @@ class ExportController extends OCSController
             // Parsed here rather than beside the command id, so a malformed `ids` value becomes the
             // 422 the contract declares instead of escaping the try block as a 500.
             $ids = $this->idList($params['ids'] ?? null);
-            $filters = is_array($params['filters'] ?? null) ? $params['filters'] : [];
 
             // Whether the request is servable at all is decided before the selection is examined.
             // Asking "which sheets?" of a `pdf` request would answer with a selection complaint and
-            # hide the real reason -- that the format cannot be produced -- behind an unrelated one.
+            // hide the real reason -- that the format cannot be produced -- behind an unrelated one.
             $permitted = $this->exports->authorization($scope, $resource, $fileFormat);
             if (!$permitted['allowed']) {
                 throw new UnsupportedSelection($permitted['reason']);
             }
 
+            // Parsed after the authorization decision, because an unrecognised filter is a complaint
+            // about the selection and must not mask the answer to "can this be exported at all".
+            $filter = $this->filterFrom($params['filters'] ?? null);
+
             // Resolve the selection *before* generating. Authorize-and-generate in one call still
             // holds -- `ExportService::generate()` refuses before it writes anything, which is the
             // ordering `contracts/exports.md` requires -- but the rows are now the selected ones.
-            $rows = $this->rowsForSelection($resource, $ids, $filters, $scope, $commandId, $fileFormat);
+            [$rows, $columns] = $this->rowsForSelection($resource, $ids, $filter, $scope, $fileFormat);
 
-            $result = $this->exports->generate($scope, $resource, $fileFormat, $rows);
+            $result = $this->exports->generate($scope, $resource, $fileFormat, $rows, [], $columns);
+
 
             try {
                 $stream = $this->exports->readArtifact($result['artifactName']);
@@ -159,7 +185,7 @@ class ExportController extends OCSController
     }
 
     /**
-     * The rows the caller selected, or a refusal.
+     * The rows the caller selected, narrowed by the filter, or a refusal.
      *
      * ## The invariant this exists to establish
      *
@@ -169,38 +195,61 @@ class ExportController extends OCSController
      * correctly-shaped artifact containing neither. That is worse than a 422, because `rowCount` and
      * `byteSize` make the empty answer look measured rather than missing.
      *
-     * So for the resources this task wires -- `sheet`, `sheets` and `transactions` -- the selection is
-     * resolved to real, scope-checked rows. For every other resource that arrives carrying a
-     * selection, the request is refused with a reason naming what is not yet supported, rather than
-     * answered with something that ignores the question.
+     * `ids` was the half T302 closed. `filters` was still open: it was read for exactly one thing —
+     * the boolean "did the caller ask for something" — so a request carrying both an id list and a
+     * filter received the ids, unfiltered, with nothing in the response to say the filter had been
+     * discarded. Measured on the live endpoint before this task: the same request answered
+     * `rowCount: 1` for a filter that matched the sheet, for one that could not, for an unknown filter
+     * name, and for a date range that excluded it.
+     *
+     * So both halves are resolved here: the ids to real, scope-checked rows, and then the filter to a
+     * narrowing of those rows, applied by `ReportQuery` so there is one definition of what a filter
+     * means rather than one per endpoint. For every resource that does not resolve a selection at all,
+     * the request is refused with a reason naming what is not yet supported.
+     *
+     * ## A filter narrows, it does not create
+     *
+     * A `filters`-only request is refused rather than answered, and the two refusals say different
+     * things. With nothing at all there is no selection to speak of; with a filter and no ids there is
+     * a filter with nothing to narrow, and enumerating everything in scope is a different feature that
+     * is not implemented. Answering either with an empty artifact would report "you have no sheets" for
+     * what is really "I was not asked which sheets".
      *
      * ## A missing id and a foreign id are the same answer
      *
      * An id that does not exist and an id belonging to someone else both produce the same refusal.
      * That is deliberate and matches `AccountController`'s treatment of a foreign ledger: if the two
      * were distinguishable, this endpoint would confirm the existence of records the caller may not
-     * see, which is the disclosure FR-003 exists to prevent.
+     * see, which is the disclosure FR-003 exists to prevent. The filter cannot change that, because it
+     * runs after the lookup and the scope check rather than instead of them.
      *
      * @param list<string> $ids
-     * @param array<string, mixed> $filters
-     * @return list<array<string, mixed>>
+     * @return array{list<array<string, mixed>>, list<string>} the rows and the resource's declared columns
      */
     private function rowsForSelection(
         string $resource,
         array $ids,
-        array $filters,
+        ReportFilter $filter,
         ReportScope $scope,
-        string $commandId,
         string $fileFormat
     ): array {
-        $selectsSomething = $ids !== [] || $filters !== [];
+        $selectsSomething = $ids !== [] || $filter->hasFieldFilters();
 
         if ($resource === ExportService::RESOURCE_SHEET || $resource === ExportService::RESOURCE_SHEETS) {
-            return $this->sheetRows($ids, $scope, $commandId, $fileFormat, $selectsSomething);
+            return [
+                $this->reports->narrow($filter, $this->sheetRows($ids, $scope, $fileFormat, $selectsSomething)),
+                self::SHEET_COLUMNS,
+            ];
         }
 
         if ($resource === ExportService::RESOURCE_TRANSACTIONS) {
-            return $this->transactionRows($ids, $scope, $commandId, $fileFormat, $selectsSomething);
+            return [
+                $this->reports->narrow(
+                    $filter,
+                    $this->transactionRows($ids, $scope, $fileFormat, $selectsSomething)
+                ),
+                self::TRANSACTION_COLUMNS,
+            ];
         }
 
         if ($selectsSomething) {
@@ -217,20 +266,29 @@ class ExportController extends OCSController
         // No selection and no row source for this resource: an empty artifact, which is at least an
         // honest answer to "export everything you support for this resource" rather than a filtered
         // one pretending to be complete.
-        return [];
+        return [[], []];
     }
 
     /**
      * @param list<string> $ids
      * @return list<array<string, mixed>>
      */
-    private function sheetRows(array $ids, ReportScope $scope, string $commandId, string $format, bool $selectsSomething): array
+    private function sheetRows(array $ids, ReportScope $scope, string $format, bool $selectsSomething): array
     {
         if (!$selectsSomething) {
             throw new UnsupportedSelection(
-                "A '{$format}' export of resource 'sheets' needs a selection: pass ids, or use a resource "
-                . 'this endpoint can enumerate. Exporting every sheet is not implemented, and answering '
-                . 'with an empty artifact would misreport it as an empty result.'
+                "A '{$format}' export of resource 'sheets' needs a selection: pass ids. Exporting every "
+                . 'sheet is not implemented, and answering with an empty artifact would misreport it as '
+                . 'an empty result.'
+            );
+        }
+
+        if ($ids === []) {
+            throw new UnsupportedSelection(
+                "A '{$format}' export of resource 'sheets' cannot be narrowed by 'filters' alone: a "
+                . 'filter selects from a set of records, and passing ids is how the set is chosen. '
+                . 'Exporting every sheet in your scope is not implemented, so this request is refused '
+                . 'rather than answered with an artifact that omits the selection entirely.'
             );
         }
 
@@ -256,10 +314,20 @@ class ExportController extends OCSController
     }
 
     /**
+     * The transaction export's rows carry the same columns the transactions report carries, and for
+     * the same reason FR-028 gives.
+     *
+     * A transaction's cost centre, expense type, amount and currency are recorded on its **own active
+     * revision**, not on its sheet, because one sheet may hold transactions for several cost centres.
+     * Carrying them here is what makes FR-068's "cost center transactions" a selection this endpoint
+     * can honour rather than one it has to refuse: without the columns, `costCenterDbIds` is
+     * unanswerable and the facet is lost, and the export and the report would have two different ideas
+     * of what a transaction row is — which is the drift T307 had to unpick on the report side.
+     *
      * @param list<string> $ids
      * @return list<array<string, mixed>>
      */
-    private function transactionRows(array $ids, ReportScope $scope, string $commandId, string $format, bool $selectsSomething): array
+    private function transactionRows(array $ids, ReportScope $scope, string $format, bool $selectsSomething): array
     {
         if (!$selectsSomething) {
             throw new UnsupportedSelection(
@@ -269,12 +337,24 @@ class ExportController extends OCSController
             );
         }
 
+        if ($ids === []) {
+            throw new UnsupportedSelection(
+                "A '{$format}' export of resource 'transactions' cannot be narrowed by 'filters' alone: a "
+                . 'filter selects from a set of records, and passing ids is how the set is chosen. '
+                . 'Exporting every transaction in your scope is not implemented, so this request is '
+                . 'refused rather than answered with an artifact that omits the selection entirely.'
+            );
+        }
+
         $rows = [];
         foreach ($ids as $id) {
             $transaction = $this->transactions->findByPublicId($id);
             if ($transaction === null || !$scope->coversOwned($transaction->ownerUid)) {
                 throw new UnsupportedSelection("No transaction is available to you with id '{$id}'.");
             }
+
+            $revision = $transaction->revision();
+
             $rows[] = [
                 'id' => $transaction->publicId,
                 'ownerUid' => $transaction->ownerUid,
@@ -282,10 +362,51 @@ class ExportController extends OCSController
                 'status' => $transaction->status->value,
                 'sheetId' => $transaction->sheetId,
                 'createdAt' => $transaction->createdAt?->format(DATE_ATOM),
+                'costCenterDbId' => $revision->costCenterDbId,
+                'costCenterCode' => $revision->costCenterCode,
+                'expenseTypeDbId' => $revision->expenseTypeDbId,
+                'expenseTypeTitle' => $revision->expenseTypeTitle(),
+                'amountMinor' => $revision->amount()->minorUnits(),
+                'currency' => (string) $revision->amount()->currency(),
             ];
         }
 
         return $rows;
+    }
+
+    /**
+     * `ExportRequest.filters`, read as the contract's object.
+     *
+     * The contract declares `filters` as `type: object`, so a JSON body delivers an array and that is
+     * the shape expected here. Two things it does *not* permit:
+     *
+     * - **A value that is not an object at all.** A client that stringifies its filter — a form-encoded
+     *   request, or a wrapper that serialises everything — used to get its filter silently dropped,
+     *   because `is_array()` alone treated anything else as "no filters". That is the accepted-and-
+     *   discarded defect by a different route, and it is the one a client is least likely to notice,
+     *   since the response is a perfectly good unfiltered export.
+     * - **An empty object being refused.** A caller that builds a filter and finds every value empty
+     *   has asked for no filter. Refusing that would fail an unrelated client change for no reason.
+     *
+     * What the filter *means* is `ReportFilterFactory`'s, shared with the report endpoint.
+     */
+    private function filterFrom(mixed $raw): ReportFilter
+    {
+        if ($raw === null || $raw === '' || $raw === []) {
+            return new ReportFilter();
+        }
+
+        if (!is_array($raw)) {
+            throw new UnsupportedSelection(sprintf(
+                'ExportRequest.filters must be an object of filter names, not a %s. Accepted filters '
+                . 'are: %s. A filter that cannot be read is refused rather than ignored, because '
+                . 'ignoring it exports the whole selection while the caller believes it was narrowed.',
+                get_debug_type($raw),
+                implode(', ', ReportFilterFactory::ACCEPTED_FILTERS)
+            ));
+        }
+
+        return $this->filters->fromArray($raw);
     }
 
     /**

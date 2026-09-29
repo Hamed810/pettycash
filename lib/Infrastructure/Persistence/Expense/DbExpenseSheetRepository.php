@@ -6,6 +6,7 @@ namespace OCA\PettyCash\Infrastructure\Persistence\Expense;
 
 use DateTimeImmutable;
 use DateTimeZone;
+use OCA\PettyCash\Application\DataIntegrity\UnreadableRecordData;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Application\Port\UserDirectory;
 use OCA\PettyCash\Domain\Expense\ExpenseSheet;
@@ -153,8 +154,11 @@ final class DbExpenseSheetRepository implements ExpenseSheetRepository
 
     private function mapRow(array $row): ExpenseSheet
     {
+        // The sheet's public id is passed to the currency lookup so a failure can name the record an
+        // operator has to go and look at. The surrogate `currency_id` alone would not be enough: it is
+        // the sheet that is broken, and there may be many rows pointing at the same missing currency.
         $currencyCode = \OCA\PettyCash\Domain\Shared\CurrencyCode::fromString(
-            $this->getCurrencyCode($row['currency_id'])
+            $this->getCurrencyCode((int) $row['currency_id'], (string) $row['public_id'])
         );
         $sheet = ExpenseSheet::open(
             $row['public_id'],
@@ -176,7 +180,40 @@ final class DbExpenseSheetRepository implements ExpenseSheetRepository
         return $sheet;
     }
 
-    private function getCurrencyCode(int $currencyId): string
+    /**
+     * The code of a currency the sheet points at, or a loud failure.
+     *
+     * ## Why there is no fallback
+     *
+     * This returned the literal `'IRR'` when the lookup matched no row. That is the worst defect in
+     * this repository, and it is worth being precise about why rather than simply calling it a
+     * fallback. `amount_minor` is only meaningful beside its currency: `100000` is 1,000,000 rials or
+     * 1,000 dollars, and the two differ by four orders of magnitude. Substituting a currency therefore
+     * does not make an unknown value harmless — it makes it a *specific wrong number*, on a sheet
+     * whose current total, submitted total, effective-outcome column and every figure derived from
+     * them are all now in the wrong unit. And it does so while answering `200`, so nothing in the
+     * response distinguishes it from a sheet that really is denominated in rials.
+     *
+     * FR-021 makes the sheet the authority for its currency precisely because a transaction inherits
+     * it; if the authority cannot be read there is no number to report, and the honest answer is to
+     * say so.
+     *
+     * ## Why this exception type
+     *
+     * `UnreadableRecordData` is what `DbTransactionRevisionRepository` already throws for the same
+     * fault, so this is now one rule and not two. It extends `LogicException`, which is deliberate:
+     * `ReportController` translates it into a 422 that explains itself and withholds the message,
+     * while every other caller keeps the classification `OcsErrorMapper` already gives an
+     * unrecognised fault — 500, message withheld, full detail logged. Loud everywhere, and explained
+     * where an explanation is available. The alternative to either is the answer that was here.
+     *
+     * The message names both surrogate ids because that is what an operator needs to find the row,
+     * and it is never sent to a caller: `ReportController` builds a different string, and
+     * `OcsErrorMapper` withholds this one.
+     *
+     * @throws UnreadableRecordData
+     */
+    private function getCurrencyCode(int $currencyId, string $sheetPublicId): string
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('code')
@@ -184,7 +221,18 @@ final class DbExpenseSheetRepository implements ExpenseSheetRepository
             ->where($qb->expr()->eq('id', $qb->createNamedParameter($currencyId)))
             ->setMaxResults(1);
         $row = $qb->executeQuery()->fetchAssociative();
-        return $row ? $row['code'] : 'IRR';
+
+        if (!$row) {
+            throw new UnreadableRecordData(sprintf(
+                'Cannot resolve the currency of sheet %s: currency_id %d matches no row in '
+                . 'pettycash_currencies. The amount_minor values on this sheet cannot be read, because '
+                . 'an amount is meaningless without its currency.',
+                $sheetPublicId,
+                $currencyId
+            ));
+        }
+
+        return (string) $row['code'];
     }
 
     private function getAccountPublicId(int $accountId): string

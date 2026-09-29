@@ -99,9 +99,13 @@ use OCA\PettyCash\Infrastructure\Persistence\Expense\DbExpenseSheetRepository;
 use OCA\PettyCash\Infrastructure\Persistence\Expense\DbExpenseTransactionRepository;
 use OCA\PettyCash\Infrastructure\Persistence\Expense\DbTransactionRevisionRepository;
 use OCA\PettyCash\Infrastructure\Persistence\Workflow\DbWorkflowDecisionRepository;
+use OCA\PettyCash\Tests\Support\LeakedRows;
+use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\IDBConnection;
 use OCP\IUserManager;
 use OCP\IUserSession;
+
+require_once __DIR__ . '/../../Support/LeakedRows.php';
 
 $scenario = $argv[1] ?? '';
 $scenarios = ['configuration', 'account', 'expense', 'command', 'retention', 'appdata', 'exportservice'];
@@ -314,9 +318,6 @@ try {
     // resolved, so a failure *between* the insert and the registration leaks it. That is not
     // hypothetical — the first runs of this file leaked 32 rows into the shared MariaDB precisely
     // that way, which is why the fingerprint sweep exists.
-    //
-    // By fingerprint catches whatever the first sweep missed, and every predicate below is a name
-    // only this runner writes, so it cannot match a contract fixture row.
     foreach (array_reverse($inserted) as [$table, $dbId]) {
         $qb = $db->getQueryBuilder();
         $qb->delete($table)
@@ -324,52 +325,40 @@ try {
             ->executeStatement();
     }
 
-    // Order is load-bearing, and it was wrong for sheets.
+    // By fingerprint catches whatever the first sweep missed.
     //
-    // `pettycash_sheets` is swept here, by title, because it was the one table this runner creates that
-    // the fingerprint sweep could not reach: the by-id sweep needs a prior `$track`, and a sheet leaked
-    // *between* its insert and its registration is therefore unreachable forever. Seven such sheets
-    // ("Round Trip Sheet", 2026-09-27 03:38-03:41) survived from before this sweep existed, and the
-    // currency rows they referenced *were* swept by name -- which is what turned a harmless leak into
-    // seven sheets with a dangling `currency_id`, and that dangling row is what made
-    // `GET /reports/transactions`, `/reports/process` and `/reports/evidence` return no data at all.
-    //
-    // So sheets must be swept BEFORE the currencies they point at. Deleting the currency first would
-    // re-create the dangling reference this entry exists to clean up.
-    foreach ([
-        ['pettycash_evidence', 'appdata_key', 'like', 'roundtrip/%'],
-        ['pettycash_cost_centers', 'name', 'eq', 'Round Trip Cost Center'],
-        ['pettycash_expense_types', 'title', 'like', 'Round Trip Expense %'],
-        ['pettycash_sheets', 'title', 'eq', 'Round Trip Sheet'],
-        ['pettycash_currencies', 'name', 'eq', 'Round Trip Currency'],
-        ['pettycash_currencies', 'name', 'eq', 'Round Trip Account Currency'],
-        ['pettycash_transaction_audit', 'explanation', 'like', 'Retention probe %'],
-        ['pettycash_configuration_audit', 'explanation', 'like', 'Retention probe %'],
-        ['pettycash_currencies', 'name', 'eq', 'Round Trip Expense Currency'],
-    ] as [$table, $column, $operator, $value]) {
-        $qb = $db->getQueryBuilder();
-        $condition = $operator === 'like'
-            ? $qb->expr()->like($column, $qb->createNamedParameter($value))
-            : $qb->expr()->eq($column, $qb->createNamedParameter($value));
-        $qb->delete($table)->where($condition)->executeStatement();
-    }
+    // The definition of a fingerprint lives in `tests/Support/LeakedRows.php` and is shared with
+    // `roundtrip-leftovers.php`, because the two were separately written lists of the same thing and
+    // they disagreed: the diagnostic had no `pettycash_sheets` predicate at all and reported
+    // `No leftovers` while seven broken sheets sat in the database refusing three whole reports.
+    LeakedRows::sweep($db);
 
-    // Command-keyed rows carry no recognisable name, so they are swept by the prefix every id this
-    // runner mints carries.
-    foreach ([
-        ['pettycash_evidence_links', 'token_hash'],
-        ['pettycash_account_movements', 'command_id'],
-        ['pettycash_workflow_decisions', 'command_id'],
-        ['pettycash_command_results', 'command_id'],
-    ] as [$table, $column]) {
-        $qb = $db->getQueryBuilder();
-        $qb->delete($table)
-            ->where($qb->expr()->like($column, $qb->createNamedParameter('rq-%')))
-            ->executeStatement();
+    // The post-condition, and the reason the sweep above is trustworthy rather than merely present.
+    //
+    // A sweep that runs and is never checked is a sweep that can quietly stop working, and the failure
+    // it prevents is not visible where it happens: the next run's report answers 422 because a record
+    // cannot be read, and the search starts in the report. Reporting the surviving fingerprints here
+    // puts the number next to the run that produced it.
+    //
+    // The payload is *recorded* here and the failure is *raised* after the echo, below, rather than here.
+    // A throw from inside `finally` skips the trailing `echo`, so a leak found at this point would leave
+    // the caller with no output at all and a message about a subprocess that produced none -- which is
+    // strictly less information than the count it was about to report. Printing first and failing second
+    // means the suite receives the exact rows and names them.
+    $leftovers = LeakedRows::leftovers($db);
+    if ($leftovers !== []) {
+        $report['leftovers'] = $leftovers;
     }
 }
 
 echo json_encode($report, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+
+// The post-condition, enforced. Reached by running this file directly as often as by the suite, and the
+// two are the same check: a harness that only fails when something is watching it is not a guard.
+LeakedRows::assertNothingSurvived(
+    isset($report['leftovers']) && is_array($report['leftovers']) ? $report['leftovers'] : [],
+    "The '{$scenario}' round trip"
+);
 
 // ===== SCENARIOS =====
 
@@ -692,7 +681,7 @@ function scenarioExpense(
         $actorUid,
         $account->id,
         $account->currencyCode(),
-        title: 'Round Trip Sheet'
+        title: LeakedRows::ROUND_TRIP_SHEET_TITLE
     );
     $sheets->save($sheet);
     $track('pettycash_sheets', (int) $sheet->dbId);

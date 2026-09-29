@@ -93,6 +93,8 @@ final readonly class ExportService
      *
      * @param list<array<string, mixed>> $rows    rows already inside the actor's scope
      * @param list<EvidenceArchiveEntry>   $entries evidence entries, for a zip export only
+     * @param list<string>                 $columns the resource's declared columns, so a **narrowed-to-
+     *                                              empty** result still names its own shape
      * @return array{
      *     artifactName: string,
      *     mediaType: string,
@@ -106,15 +108,16 @@ final readonly class ExportService
         string $resource,
         string $format,
         array $rows = [],
-        array $entries = []
+        array $entries = [],
+        array $columns = []
     ): array {
         // 1. Authorize. Before anything is built, before anything is written.
         $this->authorize($scope, $resource, $format);
 
         // 2. Produce. Only now can a byte exist.
         return match ($format) {
-            self::FORMAT_CSV => $this->generateCsv($rows),
-            self::FORMAT_XLSX => $this->generateXlsx($rows),
+            self::FORMAT_CSV => $this->generateCsv($rows, $columns),
+            self::FORMAT_XLSX => $this->generateXlsx($rows, $columns),
             self::FORMAT_ZIP => $this->generateZip($entries),
             // Unreachable: authorize() refuses every other format, PDF included.
             default => throw new InvalidArgumentException("Unsupported export format '{$format}'"),
@@ -225,12 +228,13 @@ final readonly class ExportService
 
     /**
      * @param list<array<string, mixed>> $rows
+     * @param list<string> $columns
      * @return array{artifactName: string, mediaType: string, format: string, byteSize: int, rowCount: int}
      */
-    private function generateCsv(array $rows): array
+    private function generateCsv(array $rows, array $columns = []): array
     {
         $name = 'export-' . bin2hex(random_bytes(8)) . '.csv';
-        $csv = $this->csv->export($rows);
+        $csv = $this->csv->export($rows, $columns === [] ? null : $columns);
 
         // `TransientExportStore::persist()` streams *out of* the scratch file and does not remove it, so
         // the scratch's lifetime belongs to whoever created it. That is this method, and a leftover build
@@ -256,14 +260,15 @@ final readonly class ExportService
 
     /**
      * @param list<array<string, mixed>> $rows
+     * @param list<string> $columns
      * @return array{artifactName: string, mediaType: string, format: string, byteSize: int, rowCount: int}
      */
-    private function generateXlsx(array $rows): array
+    private function generateXlsx(array $rows, array $columns = []): array
     {
         $result = $this->xlsx->build([
             new XlsxSheet(
                 'Rows',
-                $this->columnsOf($rows),
+                $this->columnsOf($rows, $columns),
                 $rows
             ),
         ]);
@@ -303,19 +308,29 @@ final readonly class ExportService
     }
 
     /**
-     * The union of the rows' keys, in first-seen order, all declared as text.
+     * The declared columns, then the union of the rows' keys, all declared as text.
      *
      * A flat report export has no per-column typing to inherit, so every column is text and the values
      * are coerced to strings. That is a deliberate difference from the complete-sheet XLSX export, which
      * *does* have a declared typed layout — inventing types here would mean guessing at a report's
      * semantics, and a wrong guess is a wrong number in a spreadsheet the recipient trusts.
      *
+     * `$declared` comes first and is emitted even when `$rows` is empty. Without it a selection that
+     * every filter excluded would produce a workbook or a CSV with no columns at all — an artifact
+     * that is byte-indistinguishable from one that failed to build, and which a recipient cannot read
+     * as "your filter matched nothing" because it does not even say what it would have contained.
+     *
      * @param list<array<string, mixed>> $rows
+     * @param list<string> $declared
      * @return list<array{name: string, type: string}>
      */
-    private function columnsOf(array $rows): array
+    private function columnsOf(array $rows, array $declared = []): array
     {
         $columns = [];
+        foreach ($declared as $key) {
+            $columns[$key] = ['name' => $key, 'type' => XlsxSheet::TYPE_TEXT];
+        }
+
         foreach ($rows as $row) {
             foreach (array_keys($row) as $key) {
                 $columns[$key] = ['name' => $key, 'type' => XlsxSheet::TYPE_TEXT];

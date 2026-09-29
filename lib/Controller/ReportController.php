@@ -8,6 +8,7 @@ use InvalidArgumentException;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Application\Reporting\DashboardQuery;
 use OCA\PettyCash\Application\Reporting\ReportFilter;
+use OCA\PettyCash\Application\Reporting\ReportFilterFactory;
 use OCA\PettyCash\Application\Reporting\ReportQuery;
 use OCA\PettyCash\Application\Reporting\ChargedAccountScope;
 use OCA\PettyCash\Application\Reporting\ReportScope;
@@ -63,32 +64,22 @@ class ReportController extends OCSController
     private const BOUND = 100;
 
     /**
-     * The filter names this endpoint accepts, per FR-064.
+     * The filter rule itself lives in `ReportFilterFactory`, not here.
      *
-     * The list is closed on purpose. It used not to be: `filterFrom()` read the eight keys below and
-     * discarded every other key in the object without comment, so a caller who misspelled a filter --
-     * `costcentreIds` for `costCenterDbIds` -- received the **entire report** instead of the subset they
-     * asked for, with nothing in the response indicating it. That is a confidently wrong answer, and for
-     * a financial report it is the most damaging kind: the caller has no way to tell. Measured before
-     * the fix: `GET /reports/transactions` returned `total: 4` unfiltered, and the same `total: 4` for
-     * `{"stages":["FINANCE"]}`, for `{"banana":true}`, and for the typo above.
-     *
-     * FR-064 now requires an unrecognised filter to be refused with a 422 naming the accepted filters,
-     * and this is where that happens -- the same shape as `ReportQuery::assertFilterIsEvaluable()`,
-     * which refuses a *recognised* filter the rows cannot answer. Together they close both directions:
-     * a filter this report cannot evaluate is refused, and a filter this endpoint cannot read at all
-     * is refused before it can be mistaken for no filter.
+     * It used to be a private constant and a private method on this controller, and it moved because
+     * `POST /exports` needs the identical rule for `ExportRequest.filters`. A filter name that meant
+     * one thing here and another there is the T307 shape again — two definitions, one of them
+     * unreachable by the endpoint that was supposed to share it — so the vocabulary, the coercion and
+     * the refusal are one class that both controllers call. This controller keeps only what is
+     * genuinely its own: the *encoding* of `filters` on this endpoint, which is a query parameter and
+     * therefore arrives as a JSON string.
      */
-    private const ACCEPTED_FILTERS = [
-        'from', 'to', 'statuses', 'currencyCodes', 'costCenterDbIds', 'actorUids', 'eventTypes',
-        'createdBy',
-    ];
-
     public function __construct(
         \OCP\IRequest $request,
         private CurrentUser $currentUser,
         private DashboardQuery $dashboard,
         private ReportQuery $reports,
+        private ReportFilterFactory $filters,
         private ExpenseSheetRepository $sheets,
         private ExpenseTransactionRepository $transactions,
         private CostCenterRepository $costCenters,
@@ -170,12 +161,19 @@ class ReportController extends OCSController
     }
 
     /**
-     * The `filters` query parameter, decoded as JSON.
+     * The `filters` query parameter, decoded as JSON and handed to `ReportFilterFactory`.
      *
      * The contract types it as a string, "encoded as query parameters by the client", which leaves the
      * encoding to the client. JSON is the one encoding a bare string can carry unambiguously, and a
      * malformed value is a client error rather than something to silently ignore -- an ignored filter
      * would return *more* rows than the caller asked for while looking like a filtered result.
+     *
+     * Only the decoding is here. What the filter *means* -- which names exist, what shape each value
+     * has, what to do with a name that is not in the vocabulary -- belongs to the factory, which the
+     * export endpoint asks as well. Measured before T306: this method read eight keys and discarded
+     * every other key in the object without comment, so `{"stages":["FINANCE"]}`, `{"banana":true}` and
+     * the typo `{"costcentreIds":[1]}` each returned the whole report and nothing in the response said
+     * so.
      */
     private function filterFrom(int $page, int $pageSize, string $filters): ReportFilter
     {
@@ -190,30 +188,7 @@ class ReportController extends OCSController
             );
         }
 
-        $unknown = array_values(array_diff(array_keys($decoded), self::ACCEPTED_FILTERS));
-        if ($unknown !== []) {
-            throw new InvalidArgumentException(sprintf(
-                'Unknown filter%s %s. Accepted filters are: %s. An unrecognised filter is refused rather '
-                . 'than ignored, because ignoring it returns the unfiltered report and the caller cannot '
-                . 'tell the difference.',
-                count($unknown) === 1 ? '' : 's',
-                '"' . implode('", "', $unknown) . '"',
-                implode(', ', self::ACCEPTED_FILTERS)
-            ));
-        }
-
-        return new ReportFilter(
-            $page,
-            $pageSize,
-            $this->date($decoded, 'from'),
-            $this->date($decoded, 'to'),
-            $this->strings($decoded, 'statuses'),
-            $this->strings($decoded, 'currencyCodes'),
-            $this->ints($decoded, 'costCenterDbIds'),
-            $this->strings($decoded, 'actorUids'),
-            $this->strings($decoded, 'eventTypes'),
-            isset($decoded['createdBy']) ? (string) $decoded['createdBy'] : null
-        );
+        return $this->filters->fromArray($decoded, $page, $pageSize);
     }
 
     /**
@@ -274,21 +249,41 @@ class ReportController extends OCSController
             : $this->transactions->findByOwnerUid($scope->actorUid, null, null, 0, self::BOUND);
 
         $rows = array_map(
-            fn ($transaction): array => [
-                'id' => $transaction->publicId,
-                'ownerUid' => $transaction->ownerUid,
-                'stage' => $transaction->stage->value,
-                'status' => $transaction->status->value,
-                'sheetId' => $transaction->sheetId,
-                'createdAt' => $transaction->createdAt?->format(DATE_ATOM),
-            ],
+            // FR-064 fixes the source of each transaction facet: "a transaction's **cost center** is
+            // the one recorded on that transaction's own active revision -- not the sheet's, because a
+            // sheet may hold transactions for several cost centres (FR-028)", and its "expense type"
+            // and "amount" also come from the active revision. So all three are read from
+            // `$transaction->revision()` rather than joined from the sheet, and a draft revision that
+            // has not been completed carries nulls -- which is honest, and is why the amount filter
+            // excludes a null rather than treating it as zero.
+            static function ($transaction): array {
+                $revision = $transaction->revision();
+
+                return [
+                    'id' => $transaction->publicId,
+                    'ownerUid' => $transaction->ownerUid,
+                    'stage' => $transaction->stage->value,
+                    'status' => $transaction->status->value,
+                    'sheetId' => $transaction->sheetId,
+                    'createdAt' => $transaction->createdAt?->format(DATE_ATOM),
+                    'costCenterDbId' => $revision->costCenterDbId,
+                    'costCenterCode' => $revision->costCenterCode,
+                    'expenseTypeDbId' => $revision->expenseTypeDbId,
+                    'expenseTypeTitle' => $revision->expenseTypeTitle(),
+                    'amountMinor' => $revision->amount()->minorUnits(),
+                    'currency' => (string) $revision->amount()->currency(),
+                ];
+            },
             $candidates
         );
 
         return [
             $rows,
             static fn (array $row, ReportScope $s): bool => $s->coversOwned((string) ($row['ownerUid'] ?? '')),
-            ['id', 'ownerUid', 'stage', 'status', 'sheetId', 'createdAt'],
+            [
+                'id', 'ownerUid', 'stage', 'status', 'sheetId', 'createdAt', 'costCenterDbId',
+                'costCenterCode', 'expenseTypeDbId', 'expenseTypeTitle', 'amountMinor', 'currency',
+            ],
             ['rowsRead' => count($rows), 'rowsBoundedBy' => self::BOUND],
         ];
     }
@@ -510,7 +505,15 @@ class ReportController extends OCSController
                 'eventType' => $event->eventType,
                 'entityType' => $event->entityType,
                 'entityId' => $event->entityId,
+                // FR-064 names `stage` as an audit facet and fixes its source: "an audit event's
+                // **stage** is the stage recorded on the event". It was already carried here, but with
+                // no filter able to read it, so `{"stages":[...]}` was refused as unevaluable.
                 'stage' => $event->stage,
+                // Likewise the date range: `occurredAt` was on the event and absent from the row, so
+                // a `from`/`to` filter could not be evaluated. `DATE_ATOM` rather than a default
+                // format, because the range comparison parses these strings and a locale-dependent
+                // one would not round-trip.
+                'occurredAt' => $event->occurredAt->format(DATE_ATOM),
             ],
             $this->auditEvents->findByActorUid($uid, 0, self::BOUND)
         );
@@ -521,50 +524,18 @@ class ReportController extends OCSController
             // report that widened to everyone's audit log would need a rule for who may read another
             // person's history, and no requirement states one.
             static fn (array $row): bool => ($row['actorUid'] ?? null) === $uid,
-            ['id', 'actorUid', 'actorRole', 'eventType', 'entityType', 'entityId', 'stage'],
+            ['id', 'actorUid', 'actorRole', 'eventType', 'entityType', 'entityId', 'stage', 'occurredAt'],
             ['scope' => 'own_audit_trail', 'rowsRead' => count($rows), 'rowsBoundedBy' => self::BOUND],
         ];
     }
 
-    private function date(array $decoded, string $key): ?\DateTimeImmutable
-    {
-        if (!isset($decoded[$key])) {
-            return null;
-        }
-
-        try {
-            return new \DateTimeImmutable((string) $decoded[$key]);
-        } catch (\Exception $e) {
-            throw new InvalidArgumentException("Filter '{$key}' is not a valid date: " . $e->getMessage());
-        }
-    }
-
-    /** @return list<string> */
-    private function strings(array $decoded, string $key): array
-    {
-        if (!isset($decoded[$key])) {
-            return [];
-        }
-        if (!is_array($decoded[$key])) {
-            throw new InvalidArgumentException("Filter '{$key}' must be an array of strings.");
-        }
-
-        return array_values(array_map(static fn ($value): string => (string) $value, $decoded[$key]));
-    }
-
-    /** @return list<int> */
-    private function ints(array $decoded, string $key): array
-    {
-        if (!isset($decoded[$key])) {
-            return [];
-        }
-        if (!is_array($decoded[$key])) {
-            throw new InvalidArgumentException("Filter '{$key}' must be an array of integers.");
-        }
-
-        return array_values(array_map(static fn ($value): int => (int) $value, $decoded[$key]));
-    }
-
+    /**
+     * A rejected `filters` value, quoted and truncated.
+     *
+     * The one piece of filter handling left here, because it describes *this endpoint's* encoding: a
+     * query parameter arrives as a bare string, and echoing a whole JSON document into a 422 body is
+     * noise rather than diagnosis.
+     */
     private function describe(string $value): string
     {
         return strlen($value) > 60

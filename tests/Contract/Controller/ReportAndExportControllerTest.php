@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OCA\PettyCash\Tests\Contract\Controller;
 
 use GuzzleHttp\Client;
+use OCA\PettyCash\Application\Reporting\ReportFilterFactory;
 use OCA\PettyCash\Tests\Contract\Fixture\ContractFixtures;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\ResponseInterface;
@@ -35,6 +36,13 @@ final class ReportAndExportControllerTest extends TestCase
     protected function setUp(): void
     {
         $this->client = OcsTestClient::create();
+
+        // `submitted` rather than nothing. T310's audit facets need audit events to filter, and the
+        // audit report is the actor's own trail -- so without seeding them, whether the stage and
+        // date-range facets were answerable would depend on whether some *other* suite had run
+        // first. That is precisely the order-dependence `ContractFixtures` exists to remove, and a
+        // test whose result depends on PHPUnit's ordering is not evidence of anything.
+        ContractFixtures::prepare('submitted');
     }
 
     // ===== GET /reports/{reportType} =====
@@ -193,6 +201,235 @@ final class ReportAndExportControllerTest extends TestCase
         $this->assertStringContainsString('filters', $response['message']);
     }
 
+    // ===== T310: the FR-064 facets that had no filter and no column =====
+
+    /**
+     * FR-064 names twelve facets. Six of them could not be expressed at all before this task: the
+     * filter vocabulary had no field for them, or the rows carried no column for the filter to read,
+     * so each was refused. Refusing is the safe half of the behaviour and it is already tested above;
+     * these assert the other half, that a facet FR-064 requires now actually narrows.
+     *
+     * Each test is written as "this filter must narrow, and every row it returns must satisfy it"
+     * rather than "this filter must return N", because a hard-coded count is a fixture fact that
+     * changes the moment another test seeds a row. The per-row assertion is what would actually fail
+     * if the filter were ignored: an ignored filter returns rows that do not satisfy it.
+     */
+    public function testSheetsCanBeFilteredByCreator(): void
+    {
+        // FR-064: "a sheet's **creator** is its owner". The rows carry `ownerUid`, so this is the
+        // same fact read under the name the requirement uses.
+        $rows = $this->filterRows('/reports/sheets', ['createdBy' => 'employee1']);
+
+        $this->assertNotEmpty($rows, 'the acting user owns the fixture sheet');
+        foreach ($rows as $row) {
+            $this->assertSame('employee1', $row['ownerUid'], 'every row must be the named creator');
+        }
+    }
+
+    public function testACreatorThatOwnsNothingYieldsNothingRatherThanEverything(): void
+    {
+        // The failure this guards is the silent one: a filter that matches nothing must not fall
+        // through to the unfiltered report.
+        $this->assertSame(0, $this->filterTotal('/reports/sheets', ['createdBy' => 'no-such-user']));
+    }
+
+    public function testTransactionsCanBeFilteredByCostCentreOnTheirOwnActiveRevision(): void
+    {
+        // FR-064 and FR-028: a transaction's cost centre is the one on its own active revision, NOT
+        // the sheet's, because one sheet may hold transactions for several cost centres. So this
+        // asserts against the row's own `costCenterDbId`.
+        $rows = $this->filterRows('/reports/transactions', ['costCenterDbIds' => [1]]);
+
+        $this->assertNotEmpty($rows, 'the fixture transaction belongs to cost centre 1');
+        foreach ($rows as $row) {
+            $this->assertSame(1, $row['costCenterDbId'], 'every row must belong to the named cost centre');
+        }
+    }
+
+    public function testTransactionsCanBeFilteredByExpenseType(): void
+    {
+        $rows = $this->filterRows('/reports/transactions', ['expenseTypeDbIds' => [1]]);
+
+        $this->assertNotEmpty($rows);
+        foreach ($rows as $row) {
+            $this->assertSame(1, $row['expenseTypeDbId'], 'every row must carry the named expense type');
+        }
+    }
+
+    public function testAnExpenseTypeNothingUsesYieldsNothing(): void
+    {
+        $this->assertSame(0, $this->filterTotal('/reports/transactions', ['expenseTypeDbIds' => [999999]]));
+    }
+
+    public function testTransactionsCanBeFilteredByAnInclusiveAmountRange(): void
+    {
+        // The bound is taken from the report's own rows rather than hardcoded, so the test states the
+        // rule (a bound is inclusive) without pinning a fixture fact -- and without assuming every
+        // row carries the same amount, which is not true and made an earlier version of this test
+        // assert that a bound below one row's amount excluded rows that were legitimately smaller.
+        $rows = $this->get('/reports/transactions?pageSize=100')['data']['rows'];
+        $this->assertNotEmpty($rows, 'there must be a transaction to filter');
+
+        $amounts = array_map(static fn (array $row): int => (int) $row['amountMinor'], $rows);
+        $lowest = min($amounts);
+        $highest = max($amounts);
+
+        $atLowest = $this->filterRows('/reports/transactions', [
+            'amountMinMinor' => $lowest,
+            'amountMaxMinor' => $lowest,
+        ]);
+        $this->assertNotEmpty($atLowest, 'a range equal to the lowest amount must still return that row');
+        foreach ($atLowest as $row) {
+            $this->assertSame($lowest, $row['amountMinor'], 'a range must return only rows inside it');
+        }
+
+        // A range that excludes the lowest amount must not return it -- the narrowing is real.
+        // Only meaningful when the rows actually differ; with a single distinct amount every range
+        // containing it legitimately returns everything, and asserting otherwise would be asserting
+        // a fixture fact rather than the rule.
+        if ($lowest < $highest) {
+            $aboveLowest = $this->filterRows('/reports/transactions', [
+                'amountMinMinor' => $lowest + 1,
+                'amountMaxMinor' => $highest,
+            ]);
+            foreach ($aboveLowest as $row) {
+                $this->assertGreaterThan($lowest, $row['amountMinor'], 'the bound must exclude what is below it');
+            }
+            // The two ranges together must account for every row exactly once. A filter that was
+            // ignored would return all rows from *both*, and the sum would exceed the total.
+            $this->assertSame(
+                count($rows),
+                count($atLowest) + count($aboveLowest),
+                'the two ranges must partition the rows, not each return all of them'
+            );
+        }
+    }
+
+    public function testAnAmountBoundOfTheWrongTypeIsRefused(): void
+    {
+        // An amount bound that cannot be compared is a client error, not a filter to drop.
+        $response = $this->get('/reports/transactions?filters=' . rawurlencode('{"amountMinMinor":"abc"}'));
+
+        $this->assertEquals(422, $response['status']);
+        $this->assertStringContainsString('amountMinMinor', $response['message']);
+    }
+
+    public function testAnInvertedAmountRangeIsRefused(): void
+    {
+        $response = $this->get(
+            '/reports/transactions?filters=' . rawurlencode('{"amountMinMinor":100,"amountMaxMinor":1}')
+        );
+
+        $this->assertEquals(422, $response['status']);
+        $this->assertStringContainsString('amount', $response['message']);
+    }
+
+    public function testAuditCanBeFilteredByStage(): void
+    {
+        // FR-064: "an audit event's **stage** is the stage recorded on the event". The column was
+        // already on the row; what was missing was any filter able to read it.
+        $this->submitFixtureSheet();
+
+        $rows = $this->filterRows('/reports/audit', ['stages' => ['NOT_A_REAL_STAGE']]);
+        $this->assertSame([], $rows, 'a stage nothing carries must return nothing, not everything');
+
+        $wanted = null;
+        foreach ($this->get('/reports/audit?pageSize=100')['data']['rows'] as $row) {
+            $wanted ??= (string) $row['stage'];
+            $this->assertNotEmpty((string) $row['stage'], 'an audit row must carry the stage it was recorded at');
+        }
+        $this->assertNotNull($wanted, 'there must be an audit event to filter');
+
+        $matching = $this->filterRows('/reports/audit', ['stages' => [$wanted]]);
+        $this->assertNotEmpty($matching, 'a stage the events carry must return rows');
+        foreach ($matching as $row) {
+            $this->assertSame($wanted, $row['stage'], 'a stage filter must return only that stage');
+        }
+    }
+
+    public function testAuditCanBeFilteredByDateRange(): void
+    {
+        // `occurredAt` was on the event and absent from the row, so a from/to filter could not be
+        // evaluated and was refused. Both halves of the range are exercised, against the event's own
+        // recorded timestamp so no clock assumption is baked in.
+        $this->submitFixtureSheet();
+
+        $rows = $this->get('/reports/audit?pageSize=100')['data']['rows'];
+        $this->assertNotEmpty($rows, 'there must be an audit event to filter');
+        $occurredAt = new \DateTimeImmutable($rows[0]['occurredAt']);
+
+        $before = $occurredAt->modify('-1 day')->format(DATE_ATOM);
+        $after = $occurredAt->modify('+1 day')->format(DATE_ATOM);
+
+        $this->assertGreaterThan(
+            0,
+            $this->filterTotal('/reports/audit', ['from' => $before]),
+            'an event after the lower bound must be returned'
+        );
+        $this->assertSame(
+            0,
+            $this->filterTotal('/reports/audit', ['to' => $before]),
+            'an event after the upper bound must be excluded'
+        );
+        $this->assertGreaterThan(
+            0,
+            $this->filterTotal('/reports/audit', ['to' => $after]),
+            'an event before the upper bound must be returned'
+        );
+    }
+
+    /**
+     * Write a transaction-audit event by doing the thing that writes one.
+     *
+     * `seed-contract-fixtures.php` only ever *deletes* audit rows; the events themselves are written
+     * by real application actions, so an audit-report test that does not perform one sees an empty
+     * report whenever it happens to run first. Rather than assert a fixed row count -- which would
+     * then depend on PHPUnit's ordering, the exact hazard `ContractFixtures` documents -- the test
+     * produces the event it needs.
+     */
+    private function submitFixtureSheet(): void
+    {
+        // Re-seeded as a draft first: this suite's `setUp` leaves the fixture *submitted*, and
+        // submitting an already-submitted sheet is correctly refused with a 422. Re-seeding is the
+        // documented way to reach a known state rather than depending on what ran before.
+        ContractFixtures::prepare('draft');
+
+        $response = $this->client->request(
+            'POST',
+            '/ocs/v2.php/apps/pettycash/api/v1/sheets/' . ContractFixtures::sheetId() . '/submit',
+            [
+                'headers' => ['X-PettyCash-Command-ID' => ContractFixtures::commandId()],
+                'json' => ['expectedVersion' => ContractFixtures::sheetVersion()],
+            ]
+        );
+
+        $this->assertEquals(
+            200,
+            $response->getStatusCode(),
+            'the sheet must submit so that an audit event exists to filter'
+        );
+    }
+
+    /** @param array<string, mixed> $filters */
+    private function filterRows(string $path, array $filters): array
+    {
+        $response = $this->get($path . '?filters=' . rawurlencode(json_encode($filters)));
+
+        $this->assertEquals(200, $response['status'], "filtering {$path} must be answerable: " . $response['message']);
+
+        return $response['data']['rows'];
+    }
+
+    /** @param array<string, mixed> $filters */
+    private function filterTotal(string $path, array $filters): int
+    {
+        $response = $this->get($path . '?filters=' . rawurlencode(json_encode($filters)));
+
+        $this->assertEquals(200, $response['status'], "filtering {$path} must be answerable: " . $response['message']);
+
+        return $response['data']['total'];
+    }
+
     // ===== T307: a filter the report cannot answer =====
 
     /**
@@ -265,13 +502,18 @@ final class ReportAndExportControllerTest extends TestCase
      * `{"stages":["FINANCE"]}`, for `{"banana":true}`, and for the typo `{"costcentreIds":[1]}`.
      *
      * FR-064 now requires an unrecognised filter to be refused with a 422 naming the accepted filters.
+     *
+     * The example was `stages`, which T310 later made a **recognised** filter, so this now uses
+     * `expenseStatus` instead. That is a real consequence of the vocabulary growing: a test that
+     * picked "a key nothing accepts" has to be re-picked whenever the accepted set does, and this
+     * failure is the signature of forgetting to.
      */
     public function testAnUnrecognisedFilterIsRefusedRatherThanIgnored(): void
     {
-        $response = $this->get('/reports/transactions?filters=' . rawurlencode('{"stages":["FINANCE"]}'));
+        $response = $this->get('/reports/transactions?filters=' . rawurlencode('{"expenseStatus":["FINANCE"]}'));
 
         $this->assertEquals(422, $response['status']);
-        $this->assertStringContainsString('stages', $response['message']);
+        $this->assertStringContainsString('expenseStatus', $response['message']);
         $this->assertStringContainsString('costCenterDbIds', $response['message'], 'the refusal should list what is accepted');
     }
 
@@ -503,7 +745,449 @@ final class ReportAndExportControllerTest extends TestCase
         $this->assertStringContainsString('UUID', $response['message']);
     }
 
+    // ===== T306: the filter half of the selection is honoured, or refused =====
+
+    /**
+     * The regression T306 records.
+     *
+     * `ExportController::rowsForSelection()` read `ExportRequest.filters` and used it for exactly one
+     * thing: the boolean "did the caller ask for something". The filter half of the selection was
+     * therefore *accepted and discarded* — the same defect T302 closed for `ids`, reopened for
+     * `filters`, and the caller had no way to tell. Measured on the live endpoint before the fix: a
+     * sheets export of one named sheet returned `rowCount: 1` for `{"statuses":["COST_CENTER"]}`, for
+     * `{"statuses":["NOT_A_STATUS"]}`, for `{"banana":true}`, for a date range that excludes the
+     * sheet, and for `{"costCenterDbIds":[1]}` — five different questions, one identical answer.
+     *
+     * The pair below is the proof in both directions. A filter that matches must keep the row, and a
+     * filter that cannot match must remove it. Asserting only the first would pass against an
+     * implementation that ignored the filter; asserting only the second would pass against one that
+     * discarded everything.
+     */
+    public function testAnExportFilterKeepsTheRowItMatches(): void
+    {
+        $response = $this->post('/exports', [
+            'resource' => 'sheets',
+            'fileFormat' => 'csv',
+            'ids' => [self::FIXTURE_SHEET_ID],
+            'filters' => ['statuses' => [$this->fixtureSheetRow()['status']]],
+        ], $this->commandId());
+
+        $this->assertEquals(200, $response['status'], json_encode($response['data']));
+        $this->assertSame(1, $response['data']['rowCount'], 'a matching filter must keep the selected row');
+        $this->assertStringContainsString(
+            self::FIXTURE_SHEET_ID,
+            (string) base64_decode((string) $response['data']['data'], true)
+        );
+    }
+
+    public function testAnExportFilterRemovesTheRowItDoesNotMatch(): void
+    {
+        $response = $this->post('/exports', [
+            'resource' => 'sheets',
+            'fileFormat' => 'csv',
+            'ids' => [self::FIXTURE_SHEET_ID],
+            'filters' => ['statuses' => ['NOT_A_REAL_STATUS']],
+        ], $this->commandId());
+
+        $this->assertEquals(200, $response['status'], json_encode($response['data']));
+        $this->assertSame(0, $response['data']['rowCount'], 'a filter that excludes the row must exclude it');
+        $this->assertStringNotContainsString(
+            self::FIXTURE_SHEET_ID,
+            (string) base64_decode((string) $response['data']['data'], true),
+            'the artifact must not carry a record the filter excluded'
+        );
+    }
+
+    /**
+     * A filter narrows; it never widens.
+     *
+     * The dangerous failure for an export is not returning too little — that is visible. It is
+     * returning a record the caller never named and never had authorized, in a file they will forward
+     * to an accountant. So the filter is applied *after* the id lookup and the scope check, and a
+     * filter that matches some other sheet in the caller's scope must not bring it in.
+     */
+    public function testAnExportFilterCannotAddARowTheSelectionDidNotName(): void
+    {
+        $response = $this->post('/exports', [
+            'resource' => 'sheets',
+            'fileFormat' => 'csv',
+            'ids' => [self::FIXTURE_SHEET_ID],
+            // The fixture set holds a settled sheet at COMPLETED that this user also owns, so a filter
+            // implemented as "enumerate then filter" would return it.
+            'filters' => ['statuses' => ['COMPLETED']],
+        ], $this->commandId());
+
+        $this->assertEquals(200, $response['status'], json_encode($response['data']));
+        $this->assertSame(
+            0,
+            $response['data']['rowCount'],
+            'a filter may only remove rows the selection named, never introduce others'
+        );
+    }
+
+    /**
+     * A filter that genuinely matches nothing is a true negative, and the artifact says so.
+     *
+     * This is the one case where an empty artifact *is* the right answer, and it is worth separating
+     * from the T302 defect deliberately: there, an empty artifact stood for a selection that was
+     * never applied. Here the selection was applied and its result is empty. What makes the two
+     * distinguishable to the caller is that the artifact still declares its columns — an empty file
+     * with no header cannot be told apart from a broken export, and `contracts/exports.md` requires
+     * "an explicit column header row" for exactly this reason.
+     */
+    public function testAnEmptyResultStillNamesItsColumns(): void
+    {
+        $response = $this->post('/exports', [
+            'resource' => 'sheets',
+            'fileFormat' => 'csv',
+            'ids' => [self::FIXTURE_SHEET_ID],
+            'filters' => ['statuses' => ['NOT_A_REAL_STATUS']],
+        ], $this->commandId());
+
+        $this->assertEquals(200, $response['status']);
+        $this->assertSame(0, $response['data']['rowCount']);
+
+        $csv = (string) base64_decode((string) $response['data']['data'], true);
+        $this->assertNotSame('', $csv, 'an empty result must still be a CSV, not an empty file');
+        $this->assertStringContainsString(
+            'submittedTotalMinor',
+            $csv,
+            'contracts/exports.md requires an explicit column header row; a headerless empty artifact is '
+            . 'indistinguishable from a broken export'
+        );
+    }
+
+    /**
+     * A `filters`-only request is refused, because there is nothing for the filter to narrow.
+     *
+     * Enumerating every sheet in the caller's scope is not implemented, and answering with an empty
+     * artifact would say "you have no sheets" when the truth is "I was not asked which sheets". The
+     * refusal names both facts, so a client author can tell the difference between a selection it
+     * could send and one this endpoint cannot yet resolve.
+     */
+    public function testAFiltersOnlyExportIsRefusedRatherThanAnsweredEmpty(): void
+    {
+        $response = $this->post('/exports', [
+            'resource' => 'sheets',
+            'fileFormat' => 'csv',
+            'filters' => ['statuses' => ['COST_CENTER']],
+        ], $this->commandId());
+
+        $this->assertEquals(422, $response['status']);
+        $this->assertStringContainsString('ids', $response['message'], 'the refusal should name what does work');
+        $this->assertStringContainsString(
+            'not implemented',
+            $response['message'],
+            'the refusal should say that enumerating every sheet is what is missing'
+        );
+    }
+
+    public function testAFiltersOnlyTransactionsExportIsRefusedForTheSameReason(): void
+    {
+        $response = $this->post('/exports', [
+            'resource' => 'transactions',
+            'fileFormat' => 'csv',
+            'filters' => ['stages' => ['FINANCE']],
+        ], $this->commandId());
+
+        $this->assertEquals(422, $response['status']);
+        $this->assertStringContainsString('ids', $response['message']);
+    }
+
+    /**
+     * The export vocabulary is the report vocabulary, not a second one.
+     *
+     * Every name `GET /reports` accepts is iterated here, and the assertion is that the export never
+     * answers "unknown filter" for any of them. It may answer 422 for a facet its rows cannot carry —
+     * that is a different message, naming the facet and the columns — but a name rejected by the
+     * export and accepted by the report would be two definitions of the same rule, which is how the
+     * filter and the rows came to disagree in T307 in the first place.
+     */
+    public function testNoNameTheReportAcceptsIsUnknownToTheExport(): void
+    {
+        foreach (ReportFilterFactory::ACCEPTED_FILTERS as $name) {
+            $response = $this->post('/exports', [
+                'resource' => 'sheets',
+                'fileFormat' => 'csv',
+                'ids' => [self::FIXTURE_SHEET_ID],
+                'filters' => [$name => $this->aValidValueFor($name)],
+            ], $this->commandId());
+
+            $this->assertStringNotContainsString(
+                'Unknown filter',
+                $response['message'],
+                "'{$name}' is accepted by GET /reports and must not be an unknown filter here"
+            );
+        }
+    }
+
+    public function testAnUnrecognisedExportFilterIsRefusedRatherThanIgnored(): void
+    {
+        $response = $this->post('/exports', [
+            'resource' => 'sheets',
+            'fileFormat' => 'csv',
+            'ids' => [self::FIXTURE_SHEET_ID],
+            'filters' => ['expenseStatus' => ['FINANCE']],
+        ], $this->commandId());
+
+        $this->assertEquals(422, $response['status']);
+        $this->assertStringContainsString('expenseStatus', $response['message']);
+        $this->assertStringContainsString('costCenterDbIds', $response['message'], 'the refusal should list what is accepted');
+    }
+
+    public function testAMisspelledExportFilterIsRefused(): void
+    {
+        $response = $this->post('/exports', [
+            'resource' => 'sheets',
+            'fileFormat' => 'csv',
+            'ids' => [self::FIXTURE_SHEET_ID],
+            'filters' => ['costcentreIds' => [1]],
+        ], $this->commandId());
+
+        $this->assertEquals(422, $response['status']);
+        $this->assertStringContainsString('costcentreIds', $response['message']);
+    }
+
+    /**
+     * A filter the export's rows cannot answer is refused, not answered with an empty artifact.
+     *
+     * A sheet export row carries no cost centre, no event type, no expense type and no amount, so
+     * those four facets cannot be evaluated against it. Measured before the fix: every one of them
+     * answered `200` with `rowCount: 1` — the filter ignored, and the artifact indistinguishable from
+     * an unfiltered one.
+     */
+    public function testAFacetASheetsExportCannotAnswerIsRefused(): void
+    {
+        foreach (['costCenterDbIds', 'eventTypes', 'expenseTypeDbIds', 'amountMinMinor'] as $facet) {
+            $response = $this->post('/exports', [
+                'resource' => 'sheets',
+                'fileFormat' => 'csv',
+                'ids' => [self::FIXTURE_SHEET_ID],
+                'filters' => [$facet => $this->aValidValueFor($facet)],
+            ], $this->commandId());
+
+            $this->assertEquals(422, $response['status'], "`{$facet}` is not a sheet column and must be refused");
+            $this->assertStringContainsString($facet, $response['message']);
+            $this->assertStringContainsString('status', $response['message'], 'the refusal should list what the rows do carry');
+        }
+    }
+
+    /**
+     * FR-068: "cost center transactions" is a selection the export must support, so the transaction
+     * export has to carry the cost centre of the transaction's **own active revision** — the same
+     * source the transactions report reads, and the same one FR-028 requires, because a sheet may
+     * hold transactions for several cost centres.
+     */
+    public function testTransactionsCanBeExportedByTheirOwnActiveRevisionsCostCentre(): void
+    {
+        $costCenterDbId = $this->fixtureTransactionColumn('costCenterDbId');
+
+        $matching = $this->post('/exports', [
+            'resource' => 'transactions',
+            'fileFormat' => 'csv',
+            'ids' => [ContractFixtures::transactionId()],
+            'filters' => ['costCenterDbIds' => [$costCenterDbId]],
+        ], $this->commandId());
+        $this->assertEquals(200, $matching['status'], $matching['message']);
+        $this->assertSame(1, $matching['data']['rowCount'], 'the transaction belongs to that cost centre');
+
+        $other = $this->post('/exports', [
+            'resource' => 'transactions',
+            'fileFormat' => 'csv',
+            'ids' => [ContractFixtures::transactionId()],
+            'filters' => ['costCenterDbIds' => [999999]],
+        ], $this->commandId());
+        $this->assertEquals(200, $other['status'], $other['message']);
+        $this->assertSame(0, $other['data']['rowCount'], 'a cost centre the transaction does not belong to excludes it');
+    }
+
+    public function testTransactionsCanBeExportedByAnInclusiveAmountRange(): void
+    {
+        $amount = (int) $this->fixtureTransactionColumn('amountMinor');
+
+        $at = $this->post('/exports', [
+            'resource' => 'transactions',
+            'fileFormat' => 'csv',
+            'ids' => [ContractFixtures::transactionId()],
+            'filters' => ['amountMinMinor' => $amount, 'amountMaxMinor' => $amount],
+        ], $this->commandId());
+        $this->assertEquals(200, $at['status'], $at['message']);
+        $this->assertSame(1, $at['data']['rowCount'], 'a range equal to the amount must still include it');
+
+        $below = $this->post('/exports', [
+            'resource' => 'transactions',
+            'fileFormat' => 'csv',
+            'ids' => [ContractFixtures::transactionId()],
+            'filters' => ['amountMaxMinor' => $amount - 1],
+        ], $this->commandId());
+        $this->assertEquals(200, $below['status'], $below['message']);
+        $this->assertSame(0, $below['data']['rowCount'], 'a bound below the amount must exclude it');
+    }
+
+    public function testSheetsCanBeExportedByADateRange(): void
+    {
+        $createdAt = new \DateTimeImmutable($this->fixtureSheetRow()['createdAt']);
+
+        $after = $createdAt->modify('+1 day')->format(DATE_ATOM);
+        $excluding = $this->post('/exports', [
+            'resource' => 'sheets',
+            'fileFormat' => 'csv',
+            'ids' => [self::FIXTURE_SHEET_ID],
+            'filters' => ['from' => $after],
+        ], $this->commandId());
+        $this->assertEquals(200, $excluding['status'], $excluding['message']);
+        $this->assertSame(0, $excluding['data']['rowCount'], 'a sheet created before the bound must be excluded');
+
+        $including = $this->post('/exports', [
+            'resource' => 'sheets',
+            'fileFormat' => 'csv',
+            'ids' => [self::FIXTURE_SHEET_ID],
+            'filters' => ['from' => $createdAt->modify('-1 day')->format(DATE_ATOM)],
+        ], $this->commandId());
+        $this->assertEquals(200, $including['status'], $including['message']);
+        $this->assertSame(1, $including['data']['rowCount'], 'a sheet created after the bound must be included');
+    }
+
+    public function testAMalformedExportFilterIsRefusedRatherThanIgnored(): void
+    {
+        // A `filters` value that is a JSON *string* rather than an object. `is_array()` alone treated
+        // it as no filter at all, which is the accepted-and-discarded defect by another route.
+        $response = $this->post('/exports', [
+            'resource' => 'sheets',
+            'fileFormat' => 'csv',
+            'ids' => [self::FIXTURE_SHEET_ID],
+            'filters' => 'statuses=OPEN',
+        ], $this->commandId());
+
+        $this->assertEquals(422, $response['status']);
+        $this->assertStringContainsString('filters', $response['message']);
+    }
+
+    /**
+     * A filter list is refused for its shape, not as a set of unknown names.
+     *
+     * The negative assertion is the load-bearing half. A list is refused either way — a list has
+     * integer keys, so the closed vocabulary refuses it too — which means an assertion of the status
+     * alone passes against an implementation that never checked the shape. Mutation: replacing the
+     * shape check with `if (false)` left this test green, and the refusal the client would have seen
+     * named `"0"`, a filter they never sent.
+     */
+    public function testAFilterListIsRefusedRatherThanTreatedAsNoFilter(): void
+    {
+        $response = $this->post('/exports', [
+            'resource' => 'sheets',
+            'fileFormat' => 'csv',
+            'ids' => [self::FIXTURE_SHEET_ID],
+            'filters' => ['statuses'],
+        ], $this->commandId());
+
+        $this->assertEquals(422, $response['status']);
+        $this->assertStringContainsString('list', $response['message']);
+        $this->assertStringNotContainsString('Unknown filter', $response['message']);
+        $this->assertStringContainsString('statuses', $response['message'], 'the refusal should quote what was sent');
+    }
+
+    public function testAnEmptyFilterObjectIsNoFilterRatherThanARefusal(): void
+    {
+        $response = $this->post('/exports', [
+            'resource' => 'sheets',
+            'fileFormat' => 'csv',
+            'ids' => [self::FIXTURE_SHEET_ID],
+            'filters' => [],
+        ], $this->commandId());
+
+        $this->assertEquals(200, $response['status'], json_encode($response['data']));
+        $this->assertSame(1, $response['data']['rowCount']);
+    }
+
+    /**
+     * A filter may not be used to smuggle a record past the scope check.
+     *
+     * The id lookup and the `coversOwned()` test happen per id, before the filter runs. An id that is
+     * not the caller's is refused whether or not a filter would have kept it, so the filter cannot
+     * become a way to ask "does this record exist and does it match?" — which is the disclosure
+     * FR-003 exists to prevent.
+     */
+    public function testAFilterDoesNotChangeTheAnswerForAnUnavailableId(): void
+    {
+        $unfiltered = $this->post('/exports', [
+            'resource' => 'sheets',
+            'fileFormat' => 'csv',
+            'ids' => ['11111111-1111-4111-8111-111111111111'],
+        ], $this->commandId());
+
+        $filtered = $this->post('/exports', [
+            'resource' => 'sheets',
+            'fileFormat' => 'csv',
+            'ids' => ['11111111-1111-4111-8111-111111111111'],
+            'filters' => ['statuses' => ['OPEN']],
+        ], $this->commandId());
+
+        $this->assertEquals($unfiltered['status'], $filtered['status']);
+        $this->assertEquals($unfiltered['message'], $filtered['message'], 'a filter must not change a scope refusal');
+    }
+
     // ===== helpers =====
+
+    /**
+     * A well-formed value for a filter name — of the *right shape*, not necessarily of a real fact.
+     *
+     * The shape matters more than the value here. Sending `amountMinMinor: [1]` is refused by the
+     * coercion rather than by the row-vocabulary rule under test, and a test that mistakes the two
+     * failures passes against an implementation that never checks the vocabulary at all.
+     *
+     * @return list<string>|list<int>|int|string
+     */
+    private function aValidValueFor(string $name): array|int|string
+    {
+        return match ($name) {
+            'from', 'to' => '2026-01-01T00:00:00+00:00',
+            'createdBy' => 'employee1',
+            'amountMinMinor', 'amountMaxMinor' => 1,
+            'costCenterDbIds', 'expenseTypeDbIds' => [1],
+            default => ['NOT_A_REAL_VALUE'],
+        };
+    }
+
+    /**
+     * The fixture sheet's own row, read from the report rather than assumed.
+     *
+     * Its status is a fixture fact that changes with the state a suite seeds, so a test that pinned
+     * `'COST_CENTER'` would be asserting a seed value rather than the rule. What matters is that the
+     * filter names the status the row actually has.
+     *
+     * @return array<string, mixed>
+     */
+    private function fixtureSheetRow(): array
+    {
+        foreach ($this->get('/reports/sheets?pageSize=100')['data']['rows'] as $row) {
+            if ((string) $row['id'] === self::FIXTURE_SHEET_ID) {
+                return $row;
+            }
+        }
+
+        $this->fail('the fixture sheet must appear in the sheets report; it cannot be filtered on otherwise');
+    }
+
+    /**
+     * One column of the fixture transaction's own row.
+     *
+     * @return mixed
+     */
+    private function fixtureTransactionColumn(string $column)
+    {
+        $id = ContractFixtures::transactionId();
+
+        foreach ($this->get('/reports/transactions?pageSize=100')['data']['rows'] as $row) {
+            if ((string) $row['id'] === $id) {
+                self::assertArrayHasKey($column, $row, "the transactions report must carry '{$column}'");
+
+                return $row[$column];
+            }
+        }
+
+        $this->fail('the fixture transaction must appear in the transactions report; it cannot be filtered on otherwise');
+    }
 
     private function commandId(): string
     {

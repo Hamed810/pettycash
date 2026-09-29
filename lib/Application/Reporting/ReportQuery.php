@@ -110,7 +110,7 @@ final readonly class ReportQuery
         array $summary = []
     ): array {
         $scoped = array_values(array_filter($candidates, static fn (array $row): bool => $inScope($row, $scope)));
-        $filtered = $this->applyFilter($scoped, $filter);
+        $filtered = $this->narrow($filter, $scoped);
 
         // Shaped as the contract's `ReportPage`: `PageMeta` (page, pageSize, total) plus columns, rows
         // and summary. Returning `items`/`offset` instead would have been a second pagination shape for a
@@ -123,6 +123,35 @@ final readonly class ReportQuery
             'rows' => array_slice($filtered, $filter->offset, $filter->pageSize),
             'summary' => $summary,
         ];
+    }
+
+    /**
+     * Narrow a row set by the filter, returning **every** matching row.
+     *
+     * ## Why the export path needs this and cannot use `paginate()`
+     *
+     * An export is the whole authorized selection, not a window onto it. `paginate()` slices, and a
+     * sliced export is wrong in two ways at once: `rowCount` understates the selection, and the
+     * artifact silently omits records the caller named and was authorized to see — which is the exact
+     * outcome FR-068 forbids ("MUST NOT be answered with an export that omits the selected records").
+     * So the filter rule is exposed separately from the paging, and `paginate()` is expressed in terms
+     * of it, which is what keeps the two from becoming two definitions of what a filter means.
+     *
+     * The rows are expected to be **already scoped**. That is not a convenience: the export resolves
+     * each named id and applies the scope to it before narrowing, so scope-before-filtering — the
+     * order `contracts/exports.md` fixes — is structural there and cannot be reversed by a caller.
+     *
+     * The rows are reindexed on the way out, even when no filter is set, because the artifact writer
+     * iterates them by position: a gap in the input would become a blank line in the file, which a
+     * spreadsheet reads as a record with no values rather than as a record that was excluded.
+     *
+     * @param array<array-key, array<string, mixed>> $rows
+     * @return list<array<string, mixed>>
+     * @throws UnsupportedFilterField for a filter no row in the set can answer
+     */
+    public function narrow(ReportFilter $filter, array $rows): array
+    {
+        return $this->applyFilter(array_values($rows), $filter);
     }
 
     /**
@@ -268,6 +297,17 @@ final readonly class ReportQuery
      * *actor*, and a filter on `actorUids` should mean whichever the report actually carries. The
      * list is "any of these, first present wins" -- not a rename forced onto one word.
      *
+     * `createdBy` is listed against `ownerUid` as well as its own key for the same reason, and it is
+     * not a synonym: FR-064 fixes "a sheet's **creator** is its owner", so on a sheet the two are the
+     * same fact by definition, while an audit event's actor is a different column entirely. Reading
+     * `ownerUid` for a creator filter is what makes "filter sheets by creator" answerable at all --
+     * before this, a sheet row carried no `createdBy` and the request was refused as unevaluable.
+     *
+     * The transaction facets (`costCenterDbIds`, `expenseTypeDbIds`, `amountRange`) are read off the
+     * **active revision** columns the transactions report emits, per FR-064: "a transaction's cost
+     * centre is the one recorded on that transaction's own active revision -- not the sheet's,
+     * because a sheet may hold transactions for several cost centres" (FR-028).
+     *
      * @var array<string, list<string>>
      */
     private const FILTER_FIELD_KEYS = [
@@ -276,9 +316,47 @@ final readonly class ReportQuery
         'actorUids' => ['ownerUid', 'actorUid'],
         'eventTypes' => ['eventType'],
         'costCenterDbIds' => ['costCenterDbId'],
-        'createdBy' => ['createdBy'],
+        'createdBy' => ['createdBy', 'ownerUid'],
+        'expenseTypeDbIds' => ['expenseTypeDbId'],
+        'stages' => ['stage'],
+        'amountRange' => ['amountMinor'],
         'dateRange' => ['occurredAt', 'createdAt'],
     ];
+
+    /**
+     * The request filter names each rule above is answered by.
+     *
+     * Two of the rule names are not request names: a caller sends `amountMinMinor`/`amountMaxMinor`
+     * and `from`/`to`, and never `amountRange` or `dateRange`. That was not visible until the export
+     * path began refusing facets for the same reason — the message named `amountRange` to a client
+     * that had sent `amountMinMinor`, which is a name it cannot look up in the accepted-filter list
+     * it is shown two lines earlier. A refusal the caller cannot act on is a second refusal.
+     *
+     * Asserted against `ReportFilterFactory::ACCEPTED_FILTERS` in
+     * `ReportFilterFactoryTest::testEveryRequestNameIsAnsweredByARule`, so a filter added to the
+     * vocabulary without a rule here fails rather than becoming a name the application accepts and
+     * then refuses by a name nobody sent.
+     *
+     * @var array<string, list<string>>
+     */
+    private const RULE_REQUEST_NAMES = [
+        'amountRange' => ['amountMinMinor', 'amountMaxMinor'],
+        'dateRange' => ['from', 'to'],
+    ];
+
+    /**
+     * What to call a rule in a message the caller reads: every name they may have sent.
+     *
+     * All of them, not the first. A caller who sent `to` and is told the report cannot be filtered by
+     * `from` has been handed a word they did not use, and the message has told them nothing about the
+     * request they actually made.
+     */
+    private function nameOfRule(string $rule): string
+    {
+        $names = self::RULE_REQUEST_NAMES[$rule] ?? [$rule];
+
+        return '`' . implode('`, `', $names) . '`';
+    }
 
     /**
      * @param list<array<string, mixed>> $rows
@@ -332,6 +410,9 @@ final readonly class ReportQuery
             'eventTypes' => $filter->eventTypes !== [],
             'costCenterDbIds' => $filter->costCenterDbIds !== [],
             'createdBy' => $filter->createdBy !== null,
+            'expenseTypeDbIds' => $filter->expenseTypeDbIds !== [],
+            'stages' => $filter->stages !== [],
+            'amountRange' => $filter->hasAmountRange(),
             'dateRange' => $filter->hasDateRange(),
             default => false,
         };
@@ -357,6 +438,19 @@ final readonly class ReportQuery
             return true;
         }
 
+        // An inclusive range rather than a membership test, because a caller asking for
+        // "between 100 and 200" is asking for a range. A null row value is excluded rather than
+        // coerced to zero: a draft revision with no amount is not an amount of zero.
+        if ($field === 'amountRange') {
+            if ($value === null) {
+                return false;
+            }
+            $amount = (int) $value;
+
+            return ($filter->amountMinMinor === null || $amount >= $filter->amountMinMinor)
+                && ($filter->amountMaxMinor === null || $amount <= $filter->amountMaxMinor);
+        }
+
         $actual = match ($field) {
             'statuses' => (string) $value,
             'currencyCodes' => (string) $value,
@@ -364,6 +458,8 @@ final readonly class ReportQuery
             'eventTypes' => (string) $value,
             'costCenterDbIds' => (int) $value,
             'createdBy' => (string) $value,
+            'expenseTypeDbIds' => (int) $value,
+            'stages' => (string) $value,
             default => (string) $value,
         };
 
@@ -374,11 +470,14 @@ final readonly class ReportQuery
             'eventTypes' => $filter->eventTypes,
             'costCenterDbIds' => $filter->costCenterDbIds,
             'createdBy' => [$filter->createdBy],
+            'expenseTypeDbIds' => $filter->expenseTypeDbIds,
+            'stages' => $filter->stages,
             default => [],
         };
 
         return in_array($actual, array_map(strval(...), $requested), true)
-            || ($field === 'costCenterDbIds' && in_array($actual, $requested, true));
+            || ($field === 'costCenterDbIds' && in_array($actual, $requested, true))
+            || ($field === 'expenseTypeDbIds' && in_array($actual, $requested, true));
     }
 
     /**
@@ -429,9 +528,9 @@ final readonly class ReportQuery
             }
 
             throw new UnsupportedFilterField(sprintf(
-                'This report cannot be filtered by `%s`: its rows carry %s. Filtering anyway would '
+                'This report cannot be filtered by %s: its rows carry %s. Filtering anyway would '
                 . 'match nothing and report an empty result, so the request is refused instead.',
-                $field,
+                $this->nameOfRule($field),
                 $available === [] ? 'no fields' : '`' . implode('`, `', array_keys($available)) . '`'
             ));
         }

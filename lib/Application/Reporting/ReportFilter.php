@@ -47,6 +47,10 @@ final readonly class ReportFilter
      * @param list<int>    $costCenterDbIds   cost centres to include; empty means no filter
      * @param list<string> $actorUids         audit actors to include; empty means no filter
      * @param list<string> $eventTypes        audit event types to include; empty means no filter
+     * @param list<int>    $expenseTypeDbIds  expense types to include; empty means no filter
+     * @param list<string> $stages            workflow stages to include; empty means no filter
+     * @param int|null     $amountMinMinor    inclusive lower bound on the active revision's amount
+     * @param int|null     $amountMaxMinor    inclusive upper bound on the active revision's amount
      */
     public function __construct(
         int $page = 1,
@@ -58,7 +62,11 @@ final readonly class ReportFilter
         public array $costCenterDbIds = [],
         public array $actorUids = [],
         public array $eventTypes = [],
-        public ?string $createdBy = null
+        public ?string $createdBy = null,
+        public array $expenseTypeDbIds = [],
+        public array $stages = [],
+        public ?int $amountMinMinor = null,
+        public ?int $amountMaxMinor = null
     ) {
         if ($page < 1) {
             throw new InvalidArgumentException("Report page must be 1 or greater; {$page} was requested");
@@ -68,6 +76,17 @@ final readonly class ReportFilter
         }
         if ($from !== null && $to !== null && $from > $to) {
             throw new InvalidArgumentException('A report date range cannot end before it starts');
+        }
+        if ($amountMinMinor !== null && $amountMaxMinor !== null && $amountMinMinor > $amountMaxMinor) {
+            throw new InvalidArgumentException(
+                "A report amount range cannot end below where it starts; {$amountMinMinor} > {$amountMaxMinor}"
+            );
+        }
+        if ($amountMinMinor !== null && $amountMinMinor < 0) {
+            throw new InvalidArgumentException('A report amount bound cannot be negative');
+        }
+        if ($amountMaxMinor !== null && $amountMaxMinor < 0) {
+            throw new InvalidArgumentException('A report amount bound cannot be negative');
         }
 
         // Clamped, not rejected — see the class docblock.
@@ -91,6 +110,11 @@ final readonly class ReportFilter
         return $this->costCenterDbIds !== [];
     }
 
+    public function hasAmountRange(): bool
+    {
+        return $this->amountMinMinor !== null || $this->amountMaxMinor !== null;
+    }
+
     /**
      * Whether any field-level filter is set, as opposed to only pagination.
      *
@@ -105,6 +129,9 @@ final readonly class ReportFilter
             || $this->currencyCodes !== []
             || $this->actorUids !== []
             || $this->eventTypes !== []
+            || $this->expenseTypeDbIds !== []
+            || $this->stages !== []
+            || $this->hasAmountRange()
             || $this->createdBy !== null;
     }
 
@@ -123,7 +150,11 @@ final readonly class ReportFilter
             $this->costCenterDbIds,
             $this->actorUids,
             $this->eventTypes,
-            $this->createdBy
+            $this->createdBy,
+            $this->expenseTypeDbIds,
+            $this->stages,
+            $this->amountMinMinor,
+            $this->amountMaxMinor
         );
     }
 }

@@ -4,8 +4,11 @@ declare(strict_types=1);
 
 namespace OCA\PettyCash\Tests\Integration\Persistence;
 
+use OCA\PettyCash\Tests\Support\LeakedRows;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
+
+require_once dirname(__DIR__, 2) . '/Support/LeakedRows.php';
 
 /**
  * Constitution V: persistence, revisions and audit records must have automated integration tests.
@@ -568,62 +571,485 @@ final class RepositoryRoundTripTest extends TestCase
     // ===== HARNESS =====
 
     /**
-     * @return array<string, mixed>
-     */
-    /**
-     * The runner's fingerprint sweep must be able to reach a sheet.
+     * Every table the runner writes has a fingerprint that can remove it.
      *
-     * Seven sheets titled "Round Trip Sheet" survived from before that sweep existed, and because the
-     * sweep had no `pettycash_sheets` predicate they were unreachable forever: the by-id sweep needs a
-     * prior `$track`, and a row leaked *between* its insert and its registration never gets one. The
-     * currencies they pointed at *were* swept by name, which is what turned a harmless leak into seven
-     * dangling `sheets.currency_id` values -- and those made `GET /reports/transactions`,
-     * `/reports/process` and `/reports/evidence` return no data at all.
+     * ## Why this is the important test in the file
      *
-     * Asserted against the runner's source because the predicate list is the thing that was wrong, and
-     * because the alternative -- running a scenario and then inspecting the database for leftovers --
-     * depends on test ordering that PHPUnit does not guarantee. The order is asserted too: sheets must
-     * be swept before the currencies they reference, or the sweep re-creates the dangling row it exists
-     * to remove.
+     * The runner's by-id sweep is precise but incomplete: a row is only registered once its id has
+     * resolved, so a run that dies *between* an insert and its `$track()` leaks the row into the shared
+     * MariaDB with nothing left that can find it. The fingerprint sweep exists for exactly that window,
+     * and it only helps for tables it has a predicate for.
+     *
+     * It did not have predicates for six. Writing the list by hand and reading it back is what found
+     * them, and it found live rows while it was being written: **35 cost centres** named
+     * "Round Trip Expense Cost Center" (the predicate was `eq 'Round Trip Cost Center'`, so the expense
+     * scenario's differently-named centre never matched), and **one configuration audit row** whose
+     * `command_id` carried the harness prefix (the predicate was `explanation like 'Retention probe %'`,
+     * and this row's explanation was "charged in the round trip"). Both had been sitting in the shared
+     * database, invisible to `roundtrip-leftovers.php`, which is the tool whose job was to report them.
+     *
+     * So this test asserts a property of the whole set rather than one predicate: **every table the
+     * runner registers with `$track()` is swept by the shared definition.** A new table the runner
+     * starts writing is covered the moment it is tracked, and a step that is removed fails here rather
+     * than in a report three files away.
      */
-    public function testTheFingerprintSweepCanReachALeakedSheet(): void
+    public function testEveryTableTheRunnerWritesHasAFingerprintThatCanRemoveIt(): void
     {
         $runner = file_get_contents(__DIR__ . '/roundtrip-runner.php');
         $this->assertIsString($runner, 'the runner must be readable');
 
-        $this->assertMatchesRegularExpression(
-            "/\['pettycash_sheets',\s*'title',\s*'eq',\s*'Round Trip Sheet'\]/",
-            $runner,
-            'the fingerprint sweep must match sheets by title, or a leaked sheet is unreachable'
-        );
+        preg_match_all("/\\\$track\('(pettycash_[a-z_]+)'/", $runner, $matches);
+        $tracked = array_values(array_unique($matches[1]));
 
-        $sheetAt = strpos($runner, "['pettycash_sheets', 'title', 'eq', 'Round Trip Sheet']");
-        $currencyAt = strpos($runner, "['pettycash_currencies', 'name', 'eq', 'Round Trip Currency']");
-        $this->assertIsInt($sheetAt);
-        $this->assertIsInt($currencyAt);
-        $this->assertLessThan(
-            $currencyAt,
-            $sheetAt,
-            'sheets must be swept before the currencies they reference'
+        $this->assertNotEmpty($tracked, 'the runner must register rows with $track(), or this test is vacuous');
+
+        $swept = LeakedRows::sweptTables();
+        $uncovered = array_values(array_diff($tracked, $swept));
+
+        $this->assertSame(
+            [],
+            $uncovered,
+            'these tables are written by the runner and no fingerprint step can remove them, so a run '
+            . 'that dies between an insert and its $track() leaks them into the shared database '
+            . 'permanently. Add a step to tests/Support/LeakedRows.php.'
         );
     }
 
     /**
-     * The companion diagnostic had the identical blind spot, so it would have reported a clean
-     * database while the seven broken sheets sat in it.
+     * The sheets are swept before the currencies they reference.
+     *
+     * Order, not membership. Deleting the currency first re-creates the dangling `sheets.currency_id`
+     * the sheet sweep exists to remove, and a dangling currency is what made
+     * `GET /reports/transactions`, `/reports/process` and `/reports/evidence` return no data at all --
+     * so a sweep listed in the wrong order is a sweep that manufactures the fault it was written for.
+     *
+     * Asserted on the shared definition rather than on the runner's source, because the two are now one
+     * list: a test that read the runner's text would pass against a runner whose sweep had been moved
+     * into a module the test no longer inspects, and would fail against a correctly-ordered module it
+     * never mentions.
      */
-    public function testTheLeftoversDiagnosticCanSeeALeakedSheet(): void
+    public function testSheetsAreSweptBeforeTheCurrenciesTheyReference(): void
+    {
+        $stepAt = [];
+        foreach (LeakedRows::steps() as $index => $step) {
+            $stepAt[$step['name']] = $index;
+        }
+
+        $this->assertArrayHasKey(
+            'round trip sheets',
+            $stepAt,
+            'the round-trip sheet step must exist, or a leaked sheet is unreachable'
+        );
+        $this->assertArrayHasKey(
+            'currencies',
+            $stepAt,
+            'the currency step must exist, or the ordering below is about nothing'
+        );
+        $this->assertLessThan(
+            $stepAt['currencies'],
+            $stepAt['round trip sheets'],
+            'sheets must be swept before the currencies they reference, or the sweep re-creates the '
+            . 'dangling reference it exists to remove'
+        );
+        $this->assertLessThan(
+            $stepAt['currencies'],
+            $stepAt['corrupt probe sheets'],
+            'the corrupt probe sheet references a currency too, so it is swept before them as well'
+        );
+    }
+
+    /**
+     * Deleting a parent leaves a subtree, and a one-column predicate cannot describe that.
+     *
+     * Deleting a sheet without its transactions leaves `pettycash_transactions.sheet_id` pointing at
+     * nothing. Those rows are unreachable by every sheet-scoped read and by every simple predicate, yet
+     * they break the currency join in `resolveCurrencyCode()` (revision -> transaction -> sheet ->
+     * currency), so a single orphan refuses the whole `transactions` report. Measured before the fix:
+     * 28 orphaned transactions carrying 56 revisions, and `GET /reports/transactions` answering 422
+     * while the sheets report answered 200.
+     *
+     * Two shapes have to be present, and the second is the one that is easy to lose: the **cascade**,
+     * which deletes the dependents before the parent, and the **orphan net**, keyed off the orphan
+     * itself rather than off the sheet -- because by the time a sweep runs the offending sheet has
+     * already been deleted, so a sheet-keyed predicate matches none of them. The sheet-keyed version of
+     * that step was written first, and it found 0 of 28.
+     */
+    public function testTheSweepTakesASheetsSubtreeAndNetsOffTheOrphanItself(): void
+    {
+        $kinds = array_column(LeakedRows::steps(), 'kind', 'name');
+
+        $this->assertArrayHasKey(
+            'orphaned transactions',
+            $kinds,
+            'the orphan net must exist: a sheet leaked by an *earlier* run has already been swept, so its '
+            . 'id is unknowable and the damage can only be found from the transactions themselves'
+        );
+        $this->assertSame('orphans', $kinds['orphaned transactions']);
+
+        $source = file_get_contents(dirname(__DIR__, 2) . '/Support/LeakedRows.php');
+        $this->assertIsString($source);
+
+        $this->assertStringContainsString(
+            "leftJoin('t', 'pettycash_sheets', 's', 't.sheet_id = s.id')",
+            $source,
+            'the orphan is found by joining transactions to sheets, because a leaked sheet is itself '
+            . 'already deleted by the time the sweep runs'
+        );
+        $this->assertStringContainsString(
+            "isNull('s.id')",
+            $source,
+            'the orphan is the row whose sheet join is empty; anything else finds the wrong set'
+        );
+        $this->assertStringContainsString(
+            "isNotNull('t.sheet_id')",
+            $source,
+            'a transaction with no sheet at all is a different fault and must be kept out of this sweep, '
+            . 'or the sweep quietly deletes a row broken for another reason'
+        );
+
+        // Deepest first, or a table is left holding a key to a row that was just removed. The order is
+        // asserted where it is written rather than where it is used, because the cascade list is the one
+        // thing in the module that is order-dependent, and therefore the one thing a later edit is most
+        // likely to reorder without noticing.
+        $evidenceAt = strpos($source, "'pettycash_evidence',");
+        $revisionsAt = strpos($source, "'pettycash_transaction_revisions',");
+        $this->assertIsInt($evidenceAt);
+        $this->assertIsInt($revisionsAt);
+        $this->assertLessThan(
+            $revisionsAt,
+            $evidenceAt,
+            'evidence is swept before the revisions it belongs to'
+        );
+
+        $source = file_get_contents(__DIR__ . '/roundtrip-runner.php');
+        $this->assertIsString($source);
+        $this->assertStringContainsString(
+            'LeakedRows::sweep($db);',
+            $source,
+            'the sweep must actually be invoked, not merely defined. This exact gap was found by '
+            . 'mutating the call away and watching the suite stay green: a closure nobody calls '
+            . 'satisfies every assertion about its body while the database keeps filling with orphans.'
+        );
+    }
+
+    /**
+     * The runner checks that its own sweep worked, and the suite fails when it did not.
+     *
+     * A sweep that runs and is never checked is a sweep that can quietly stop working, and the failure
+     * it prevents is not visible where it happens. It surfaces in some later run's report, which answers
+     * 422 because a record cannot be read, and the search starts in the report. That is the whole of
+     * T308's investigation: three endpoints returning no data, and the cause in a test harness a dozen
+     * files away.
+     *
+     * Both halves are asserted. The runner computing the post-condition is necessary and not sufficient;
+     * a `leftovers` key that nothing turns into a failure would be reported to nobody.
+     */
+    public function testTheRunnerFailsItsOwnScenarioWhenTheSweepLeftRowsBehind(): void
+    {
+        $runner = file_get_contents(__DIR__ . '/roundtrip-runner.php');
+        $this->assertIsString($runner, 'the runner must be readable');
+
+        $this->assertStringContainsString(
+            'LeakedRows::leftovers($db)',
+            $runner,
+            'the runner must re-count its own fingerprints after sweeping. A sweep that is not checked '
+            . 'cannot be distinguished from a sweep that did nothing.'
+        );
+        $this->assertStringContainsString(
+            "\$report['leftovers'] = \$leftovers;",
+            $runner,
+            'the surviving rows must be reported in the runner output, or the number is only ever seen '
+            . 'by whoever happens to read stderr'
+        );
+        $this->assertStringContainsString(
+            'LeakedRows::assertNothingSurvived(',
+            $runner,
+            'the runner must fail its own scenario on a surviving row, not merely note it. The suite '
+            . 'enforces the same guard on the reported value, and that enforcement is itself tested in '
+            . 'testTheLeakPostConditionFailsTheRunThatLeakedRatherThanOnlyNamingIt.'
+        );
+    }
+
+    /**
+     * The post-condition fails the run that leaked it, rather than only naming it.
+     *
+     * Called directly with a synthetic leak, because the alternative is asserting that this suite's
+     * source *contains* the guard -- and that assertion is satisfied by a guard nothing calls, or by one
+     * behind an `if (false)`. Both were tried and both passed with the enforcement removed, which is
+     * the reason this test exists and the reason the guard is a function rather than an inline `throw`.
+     *
+     * The clean case is asserted too, and for the same reason: a guard only ever observed failing has
+     * not been shown to pass, and a post-condition that rejects a healthy run would take the whole
+     * suite with it.
+     */
+    public function testTheLeakPostConditionFailsTheRunThatLeakedRatherThanOnlyNamingIt(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('corrupt probe sheets: 3');
+        LeakedRows::assertNothingSurvived(
+            ['corrupt probe sheets' => 3],
+            "The 'expense' round trip"
+        );
+    }
+
+    /** The healthy case: a run that leaked nothing is not failed. */
+    public function testTheLeakPostConditionPassesWhenNothingSurvivedTheSweep(): void
+    {
+        $leaked = false;
+        try {
+            LeakedRows::assertNothingSurvived([], "The 'expense' round trip");
+        } catch (RuntimeException $e) {
+            $leaked = true;
+        }
+
+        $this->assertFalse(
+            $leaked,
+            'a run whose sweep removed everything must pass. A post-condition that fires on a clean '
+            . 'database would fail every scenario and be switched off, taking the real check with it.'
+        );
+
+        // And the same guard must accept what the runner actually produces on a clean database, which
+        // is the one input that matters and the one no synthetic array can stand in for.
+        foreach (['configuration', 'expense'] as $scenario) {
+            $report = $this->report($scenario);
+            $this->assertArrayNotHasKey(
+                'leftovers',
+                $report,
+                "the '{$scenario}' round trip must complete with nothing left behind; if it did not, the "
+                . 'runner would already have failed and this assertion would not be reached'
+            );
+        }
+    }
+
+    /**
+     * The diagnostic reads the same definition the sweep does, so the two cannot disagree.
+     *
+     * They were two separately written lists of the same set of rows, and they disagreed: the
+     * diagnostic had no `pettycash_sheets` predicate at all and printed `No leftovers` for as long as
+     * seven sheets with a dangling `currency_id` sat in the database refusing three whole reports. The
+     * operator running the one tool whose job was to say otherwise was told everything was fine.
+     */
+    public function testTheDiagnosticAndTheSweepShareOneDefinition(): void
     {
         $helper = file_get_contents(__DIR__ . '/roundtrip-leftovers.php');
         $this->assertIsString($helper);
 
-        $this->assertMatchesRegularExpression(
-            "/\['pettycash_sheets'/",
+        $this->assertStringContainsString(
+            "require_once __DIR__ . '/../../Support/LeakedRows.php';",
             $helper,
-            'the leftover diagnostic must count sheets, or a leak is invisible'
+            'the diagnostic must load the shared definition rather than carrying its own predicates'
+        );
+        $this->assertStringContainsString(
+            'LeakedRows::steps()',
+            $helper,
+            'the diagnostic must enumerate the shared steps, or it is describing a different set of '
+            . 'rows than the sweep removes'
+        );
+        $this->assertStringContainsString(
+            'LeakedRows::probeOne(',
+            $helper,
+            'the diagnostic must re-derive each count from the database. Reusing the sweep\'s own '
+            . 'arithmetic would mean it could not detect the sweep having done nothing.'
+        );
+
+        // It also has to say something when it cannot finish. `lib/base.php` switches display_errors off,
+        // so an uncaught error here used to exit 0 having printed nothing -- which for a diagnostic is
+        // the exact failure it was written to prevent: a clean database, reported by a crashed tool.
+        $this->assertStringContainsString(
+            'could not complete',
+            $helper,
+            'the diagnostic must report a crash as an unknown state rather than exiting quietly'
+        );
+        $this->assertStringContainsString(
+            'exit(2)',
+            $helper,
+            'a crashed diagnostic must exit non-zero, so a script cannot mistake silence for cleanliness'
         );
     }
 
+    /**
+     * The fingerprints match real rows, not only the source text that declares them.
+     *
+     * Every other assertion about the sweep reads `LeakedRows` or the runner's file. A predicate that
+     * matches nothing passes all of them, and a sweep built from predicates that match nothing removes
+     * nothing while looking completely correct -- which is the shape of the bug T308 had to unpick: a
+     * currency sweep that *did* match, ordered wrongly, plus a diagnostic whose sheet predicate did not
+     * match at all.
+     *
+     * So this plants the row and looks at the database. One sheet, no transactions, so the worst outcome
+     * of a crashed test is a single extra row the next run removes -- not a subtree.
+     *
+     * It also settles what the leak post-condition can and cannot be tested against, which is worth
+     * recording because it was arrived at by trying. A post-condition fires when a sweep leaves a row
+     * behind, and every row a predicate can *see* is a row the sweep *deletes*: the schema declares no
+     * foreign keys, so a delete does not fail on a dependent, and there is no way to plant a visible row
+     * that survives. The end-to-end path is therefore exercised where a mismatch can be manufactured --
+     * `corrupt-record-fixture.php remove`, whose post-condition is mutation-proven to fail five tests --
+     * and what is asserted here is the property that makes it meaningful: the two halves of the sweep
+     * agree, on real rows, about what they are looking at.
+     */
+    public function testTheFingerprintsMatchRealRowsRatherThanOnlyTheSourceThatDeclaresThem(): void
+    {
+        $this->sweepLeakedRows();
+        $this->insertLeakedSheet();
+
+        $planted = $this->countLeakedSheets();
+        $this->assertSame(
+            1,
+            $planted,
+            'the planted row must be visible to the shared definition. A predicate that matches nothing '
+            . 'passes every source-text assertion in this file while the sweep it belongs to removes '
+            . 'nothing -- which is how a leak survives a sweep that "works".'
+        );
+
+        $this->sweepLeakedRows();
+
+        $this->assertSame(
+            0,
+            $this->countLeakedSheets(),
+            'the sweep must remove a row its own predicate found. `leftovers()` reporting one and '
+            . '`sweep()` removing none is the disagreement that would make the post-condition '
+            . 'unfalsifiable, and it is invisible to any assertion that reads the source.'
+        );
+    }
+
+    /**
+     * The fingerprints name what the runner actually writes.
+     *
+     * {@see testEveryTableTheRunnerWritesHasAFingerprintThatCanRemoveIt()} checks that every *table* is
+     * swept. This checks the other half: that the *values* the predicates match are the values the runner
+     * writes. A table can be covered by a predicate keyed on a name nothing produces, which satisfies
+     * every table-level assertion and removes nothing — and the first version of the planted-row test
+     * could not see it, because planting and counting both read the same constant, so a typo in the
+     * constant left plant, count and sweep in perfect agreement on a row nothing would ever write.
+     *
+     * The sheet title is therefore a single constant the runner uses, and the remaining names are checked
+     * against the prefix the predicates key off.
+     */
+    public function testTheFingerprintValuesAreTheValuesTheRunnerWrites(): void
+    {
+        $runner = file_get_contents(__DIR__ . '/roundtrip-runner.php');
+        $this->assertIsString($runner);
+
+        $this->assertStringContainsString(
+            'title: LeakedRows::ROUND_TRIP_SHEET_TITLE',
+            $runner,
+            'the runner must write the shared sheet title rather than a second literal. Two spellings of '
+            . 'one fingerprint is the divergence this module exists to end, and it is invisible to a test '
+            . 'that reads either spelling from the same place.'
+        );
+
+        // Every remaining name the runner writes into a swept column has to start with the prefix the
+        // predicates match on. A name that does not is a row nothing can remove.
+        preg_match_all("/'(Round Trip[^']*)'/", $runner, $matches);
+        $this->assertNotEmpty($matches[1], 'the runner must write at least one fingerprinted name');
+
+        foreach (array_unique($matches[1]) as $name) {
+            $this->assertStringStartsWith(
+                'Round Trip',
+                $name,
+                "'{$name}' is written into a swept column but is not a harness fingerprint, so no step "
+                . 'can remove it'
+            );
+        }
+
+        // And the prefix the module matches on has to be a prefix of what the runner writes. Without this
+        // leg the previous assertion checks the runner against a phrase in this file while the predicates
+        // match on a *different* phrase in the module, and the two are free to drift.
+        $module = file_get_contents(dirname(__DIR__, 2) . '/Support/LeakedRows.php');
+        $this->assertIsString($module);
+        $this->assertMatchesRegularExpression(
+            "/private const NAME_PREFIX = '([^']*)';/",
+            $module,
+            'the module must declare the prefix its name predicates match on'
+        );
+        preg_match("/private const NAME_PREFIX = '([^']*)';/", $module, $prefixMatch);
+        $prefix = rtrim($prefixMatch[1], '%');
+
+        $this->assertNotSame('', $prefix, 'the name prefix must not be empty, or every step matches everything');
+        foreach (array_unique($matches[1]) as $name) {
+            $this->assertStringStartsWith(
+                $prefix,
+                $name,
+                "the module's name predicate matches '{$prefix}%' but the runner writes '{$name}', so a "
+                . 'leaked row carrying that name is invisible to the sweep that is supposed to remove it'
+            );
+        }
+    }
+
+    /**
+     * Run a scenario without the memoisation, so the guard at the end of the reader is reached.
+     *
+     * @return array<string, mixed>
+     */
+    private function runScenarioUnmemoised(string $scenario): array
+    {
+        $runner = __DIR__ . '/roundtrip-runner.php';
+        $output = shell_exec(
+            escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($runner) . ' '
+            . escapeshellarg($scenario) . ' 2>/dev/null'
+        );
+        $this->assertIsString($output, 'the runner must produce output');
+
+        $decoded = json_decode($output, true);
+        $this->assertIsArray($decoded, 'the runner must return JSON: ' . $output);
+
+        // The same guard `report()` applies, reached here deliberately.
+        LeakedRows::assertNothingSurvived(
+            isset($decoded['leftovers']) && is_array($decoded['leftovers']) ? $decoded['leftovers'] : [],
+            "The '{$scenario}' round trip"
+        );
+
+        return $decoded;
+    }
+
+    /**
+     * Write one sheet carrying a harness fingerprint, which is what a run that died between an insert and
+     * its registration leaves behind. In a subprocess, because the PHPUnit process has no database
+     * handle: `tests/bootstrap.php` deliberately does not bootstrap Nextcloud.
+     */
+    private function insertLeakedSheet(): void
+    {
+        $user = trim((string) getenv('PETTYCASH_TEST_USER'));
+        $this->assertNotSame('', $user, 'the round-trip scenarios require PETTYCASH_TEST_USER');
+
+        $output = shell_exec(
+            escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(__DIR__ . '/leak-a-sheet.php') . ' '
+            . escapeshellarg($user) . ' 2>&1'
+        );
+        $this->assertIsString($output);
+        $decoded = json_decode($output, true);
+        $this->assertIsArray($decoded, 'the leak helper must report JSON: ' . $output);
+        $this->assertArrayNotHasKey('error', $decoded, $output);
+    }
+
+    private function countLeakedSheets(): int
+    {
+        $output = shell_exec(
+            escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(__DIR__ . '/leak-a-sheet.php') . ' --count 2>&1'
+        );
+        $this->assertIsString($output);
+        $decoded = json_decode($output, true);
+        $this->assertIsArray($decoded, 'the leak helper must report JSON: ' . $output);
+
+        return (int) ($decoded['sheets'] ?? -1);
+    }
+
+    private function sweepLeakedRows(): void
+    {
+        $output = shell_exec(
+            escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(__DIR__ . '/roundtrip-leftovers.php')
+            . ' --delete 2>&1'
+        );
+        $this->assertIsString($output);
+        $this->assertStringNotContainsString(
+            'STILL PRESENT',
+            $output,
+            'the diagnostic could not remove everything it found: ' . $output
+        );
+    }
+
+    /** @return array<string, mixed> */
     private function report(string $scenario): array
     {
         if (isset(self::$reports[$scenario])) {
@@ -656,6 +1082,24 @@ final class RepositoryRoundTripTest extends TestCase
                 "The '{$scenario}' round trip failed against the real database: " . $decoded['error']
             );
         }
+
+        // The runner's own post-condition, enforced here.
+        //
+        // The runner re-counts its fingerprints after sweeping and reports what survived; this turns a
+        // non-empty answer into a failure of the scenario that produced it. Without this the number
+        // would be printed to stderr by a subprocess whose stderr is discarded (`2>/dev/null` above),
+        // so a leak would be reported to nobody and would surface later as some unrelated report
+        // answering 422.
+        //
+        // The guard is a *function* rather than an inline `throw`, and
+        // {@see testTheLeakPostConditionFailsTheRunThatLeakedRatherThanOnlyNamingIt} calls it directly
+        // with a synthetic leak. An inline throw asserted by reading this file's source could be made
+        // unreachable without the assertion noticing -- the first version of it was satisfied by an
+        // `if (false)` guard with the whole body still in place.
+        LeakedRows::assertNothingSurvived(
+            isset($decoded['leftovers']) && is_array($decoded['leftovers']) ? $decoded['leftovers'] : [],
+            "The '{$scenario}' round trip"
+        );
 
         return self::$reports[$scenario] = $decoded;
     }

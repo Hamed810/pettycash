@@ -32,7 +32,6 @@ use OCA\PettyCash\Domain\Expense\Repository\ExpenseTransactionRepository;
 use OCA\PettyCash\Domain\Expense\Repository\TransactionRevisionRepository;
 use OCA\PettyCash\Domain\Evidence\Repository\EvidenceRepository;
 use OCA\PettyCash\Domain\Audit\Repository\AuditEventRepository;
-use OCA\PettyCash\Domain\Command\Repository\CommandResultRepository as DomainCommandResultRepository;
 use OCA\PettyCash\Domain\Account\Repository\AccountRepository;
 use OCA\PettyCash\Domain\Account\Repository\AccountMovementRepository;
 use OCA\PettyCash\Domain\Workflow\Repository\WorkflowDecisionRepository;
@@ -148,9 +147,6 @@ $container->register(AuditEventRepository::class, fn() => new InMemoryAuditEvent
 $container->register(AccountRepository::class, fn() => new InMemoryAccountRepository());
 $container->register(AccountMovementRepository::class, fn() => new InMemoryAccountMovementRepository());
 $container->register(WorkflowDecisionRepository::class, fn() => new InMemoryWorkflowDecisionRepository());
-
-// Register Domain CommandResultRepository (uses same as Command)
-$container->register(DomainCommandResultRepository::class, fn($c) => $c->query(CommandResultRepository::class));
 
 // Register IdempotencyService
 $container->register(IdempotencyService::class, fn($c) => new IdempotencyService($c->query(CommandResultRepository::class)));

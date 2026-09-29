@@ -400,6 +400,14 @@ final class Application extends App implements IBootstrap
             return new ReportQuery();
         });
 
+        // T306. The filter vocabulary and its coercion, shared by `GET /reports` and `POST /exports`.
+        // It was a private constant and a private method on `ReportController`, which left the export
+        // endpoint free to answer the same filter name differently -- and it did, by ignoring filters
+        // entirely. One definition, two callers.
+        $context->registerService(\OCA\PettyCash\Application\Reporting\ReportFilterFactory::class, function ($c) {
+            return new \OCA\PettyCash\Application\Reporting\ReportFilterFactory();
+        });
+
         $context->registerService(ExportService::class, function ($c) {
             return new ExportService(
                 new CsvExporter(),
@@ -419,6 +427,7 @@ final class Application extends App implements IBootstrap
                 $c->query(CurrentUser::class),
                 $c->query(DashboardQuery::class),
                 $c->query(ReportQuery::class),
+                $c->query(\OCA\PettyCash\Application\Reporting\ReportFilterFactory::class),
                 $c->query(ExpenseSheetRepository::class),
                 $c->query(ExpenseTransactionRepository::class),
                 $c->query(CostCenterRepository::class),
@@ -438,6 +447,8 @@ final class Application extends App implements IBootstrap
                 $c->query(CurrentUser::class),
                 $c->query(DashboardQuery::class),
                 $c->query(ExportService::class),
+                $c->query(ReportQuery::class),
+                $c->query(\OCA\PettyCash\Application\Reporting\ReportFilterFactory::class),
                 $c->query(ExpenseSheetRepository::class),
                 $c->query(ExpenseTransactionRepository::class),
                 $c->query(OcsErrorMapper::class)

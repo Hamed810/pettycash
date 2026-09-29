@@ -10,6 +10,7 @@ use OCA\PettyCash\Application\Reporting\DashboardQuery;
 use OCA\PettyCash\Application\Reporting\ReportFilter;
 use OCA\PettyCash\Application\Reporting\ReportQuery;
 use OCA\PettyCash\Application\Reporting\ReportScope;
+use OCA\PettyCash\Application\Reporting\UnsupportedFilterField;
 use OCA\PettyCash\Domain\Configuration\CostCenter;
 use OCA\PettyCash\Domain\Configuration\RoleAssignment;
 use OCA\PettyCash\Domain\Shared\Clock;
@@ -661,6 +662,131 @@ final class ReportingQueryTest extends TestCase
             ['totalSheets' => 10, 'totalTransactions' => 20, 'totalAccounts' => 30],
             $this->dashboard->administrativeSummary($scope, 10, 20, 30)
         );
+    }
+
+    // ===== T306: narrowing without paging, for the export path =====
+
+    /**
+     * `narrow()` is the export's half of `paginate()`: the same filter rule, with no window.
+     *
+     * An export that paged would be a lie twice over — `rowCount` would understate the selection and
+     * the artifact would silently omit records the caller had named and been authorized to see. So
+     * the assertion here is deliberately about a set *larger* than the maximum page size: a
+     * `narrow()` that sliced would pass every test written against a handful of rows.
+     */
+    public function testNarrowingReturnsEveryMatchingRowRatherThanAPageOfThem(): void
+    {
+        $rows = array_map(
+            static fn (int $i): array => [
+                'id' => (string) $i,
+                'ownerUid' => 'purchaser-1',
+                'status' => $i % 2 === 0 ? 'OPEN' : 'FINAL',
+            ],
+            range(1, 250)
+        );
+
+        $narrowed = $this->reports->narrow(new ReportFilter(statuses: ['OPEN']), $rows);
+
+        self::assertCount(125, $narrowed, 'every matching row, not the first 25 or 100');
+        // Paging is what `paginate()` adds. Narrowing must not inherit it by accident.
+        self::assertSame(
+            125,
+            $this->reports->paginate(
+                new ReportScope('purchaser-1', [Role::Purchaser], []),
+                new ReportFilter(pageSize: ReportFilter::MAX_PAGE_SIZE, statuses: ['OPEN']),
+                $rows,
+                static fn (array $row, ReportScope $s): bool => $s->coversOwned((string) $row['ownerUid'])
+            )['total']
+        );
+    }
+
+    public function testNarrowingWithoutAFilterReturnsTheRowsUnchanged(): void
+    {
+        $rows = [['id' => 'a', 'ownerUid' => 'purchaser-1'], ['id' => 'b', 'ownerUid' => 'purchaser-1']];
+
+        self::assertSame($rows, $this->reports->narrow(new ReportFilter(), $rows));
+    }
+
+    /**
+     * A filter that yields nothing is a true negative, and narrowing it yields nothing.
+     *
+     * Asserted because the neighbouring behaviour is the T307 defect: a filter compared against a key
+     * the rows do not carry matches nothing while looking like an answer. That case is *refused*, and
+     * the refusal is asserted separately below — this test pins the other half, so that fixing the
+     * refusal cannot be achieved by making every filter return everything.
+     */
+    public function testAFilterThatGenuinelyMatchesNothingNarrowsToNothing(): void
+    {
+        $rows = [['id' => 'a', 'ownerUid' => 'purchaser-1', 'status' => 'OPEN']];
+
+        self::assertSame([], $this->reports->narrow(new ReportFilter(statuses: ['NOT_A_STATUS']), $rows));
+    }
+
+    /**
+     * The export path gets the refusal the report path gets, from the same code.
+     *
+     * A sheet row carries no `costCenterDbId`, so narrowing by one cannot be answered. Answering with
+     * an empty set — an artifact with `rowCount: 0` — is the T302 defect's shape: a confident
+     * measurement of nothing, delivered successfully.
+     */
+    public function testNarrowingRefusesAFacetTheRowsCannotAnswer(): void
+    {
+        $this->expectException(UnsupportedFilterField::class);
+        $this->expectExceptionMessage('costCenterDbIds');
+
+        $this->reports->narrow(
+            new ReportFilter(costCenterDbIds: [1]),
+            [['id' => 'a', 'ownerUid' => 'purchaser-1', 'status' => 'OPEN']]
+        );
+    }
+
+    public function testNarrowingRefusesBeforeComparingRatherThanAfter(): void
+    {
+        // Two rows, one of which would have matched. If the refusal came *after* filtering, the
+        // matching row would survive and the caller would get a partial answer with no explanation.
+        $rows = [
+            ['id' => 'a', 'ownerUid' => 'purchaser-1', 'status' => 'OPEN'],
+            ['id' => 'b', 'ownerUid' => 'purchaser-1', 'status' => 'FINAL'],
+        ];
+
+        try {
+            $this->reports->narrow(new ReportFilter(eventTypes: ['SHEET_SUBMITTED']), $rows);
+            self::fail('a sheet row cannot answer an event-type filter');
+        } catch (UnsupportedFilterField $e) {
+            self::assertStringContainsString('eventTypes', $e->getMessage());
+            self::assertStringContainsString('status', $e->getMessage(), 'the refusal should list what the rows do carry');
+        }
+    }
+
+    public function testNarrowingAnEmptyRowSetIsNotARefusal(): void
+    {
+        // Nothing to compare against, so nothing is being asserted about the data. Refusing here
+        // would make a filter unusable on an export whose selection matched no records, which is not
+        // a wrong answer.
+        self::assertSame([], $this->reports->narrow(new ReportFilter(costCenterDbIds: [1]), []));
+    }
+
+    public function testNarrowingReindexesTheRowsItKeeps(): void
+    {
+        // The export writes rows to CSV by position, so a preserved gap puts an empty line where a
+        // record was filtered out — which reads in a spreadsheet as a record that has no values.
+        //
+        // The input is deliberately *gapped*, produced by `array_filter` without `array_values`, which
+        // is what a caller that removed rows for its own reasons hands over. Both current callers pass
+        // a list, so this is the only thing that makes the reindex a guarantee rather than a line psalm
+        // correctly describes as unnecessary.
+        $gapped = array_filter([
+            ['id' => 'a', 'ownerUid' => 'purchaser-1', 'status' => 'FINAL'],
+            ['id' => 'b', 'ownerUid' => 'purchaser-1', 'status' => 'OPEN'],
+            ['id' => 'c', 'ownerUid' => 'purchaser-1', 'status' => 'OPEN'],
+        ], static fn (array $row): bool => $row['status'] === 'OPEN');
+
+        self::assertSame([1, 2], array_keys($gapped), 'the input must really be gapped for this to mean anything');
+
+        $narrowed = $this->reports->narrow(new ReportFilter(), $gapped);
+
+        self::assertSame([0, 1], array_keys($narrowed), 'a gap in the input must not reach the artifact');
+        self::assertSame(['b', 'c'], array_column($narrowed, 'id'));
     }
 
     // ===== Helpers =====

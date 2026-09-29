@@ -6,15 +6,14 @@ namespace OCA\PettyCash\Infrastructure\Persistence\Command;
 
 use DateTimeImmutable;
 use DateTimeZone;
-use OCA\PettyCash\Application\Command\CommandResultRepository as ApplicationCommandResultRepository;
+use OCA\PettyCash\Application\Command\CommandResultRepository;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Application\Port\UserDirectory;
 use OCA\PettyCash\Application\Command\CommandResult;
-use OCA\PettyCash\Domain\Command\Repository\CommandResultRepository as DomainCommandResultRepository;
 use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\IDBConnection;
 
-final class DbCommandResultRepository implements DomainCommandResultRepository, ApplicationCommandResultRepository
+final class DbCommandResultRepository implements CommandResultRepository
 {
     public function __construct(
         private readonly IDBConnection $connection,

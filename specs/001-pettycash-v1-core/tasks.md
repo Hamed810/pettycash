@@ -71,7 +71,50 @@ and client foundations that block every user story.
 - [x] T025 Implement Nextcloud user-directory, current-user, administrator, clock, technical-log, and private AppData adapters in `lib/Infrastructure/Nextcloud/`
 - [x] T026 Implement centralized object authorization and role-scoped query policies from the tested matrix in `lib/Application/Security/AuthorizationService.php` (enforce: self-review permitted when user holds required review role + scope + stage permission; ownership grants purchaser rights only; cost-center/senior/finance scope checks; admin no finance without finance role - explicit deny for admin attempting finance actions per FR-007)
 - [x] T027 Implement command UUID payload hashing, replay, and conflict handling in `lib/Application/Command/IdempotencyService.php`
-- [ ] T028 Implement transaction and configuration audit writers that snapshot UID, display name, role, stage, revision, explanation, command ID, and canonical before/after JSON in `lib/Application/Audit/` (**reopened by T295 — the configuration writer this task claims does not exist and never ran.** Only the transaction side is real: `AuditWriterService::append()`, the method the `AuditWriter` port declares and the only one any of the six production call sites uses. The configuration side was `appendConfiguration()`, it had **zero** call sites, and `DbAuditEventRepository::save()` targets `pettycash_transaction_audit` unconditionally, so even if it had been called it would have written a configuration event into the *transaction* stream, against FR-056. `grep -rn pettycash_configuration_audit lib/ --include=*.php` returns the migration and nothing else, so the table is created and permanently empty. T296 has since deleted the dead method, leaving no configuration writer at all; **T294** owns writing one that reaches the right table)
+- [x] T028 Implement transaction and configuration audit writers that snapshot UID, display name, role, stage, revision, explanation, command ID, and canonical before/after JSON in `lib/Application/Audit/` (**reopened by T295 — the configuration writer this task claims does not exist and never ran.** Only the transaction side is real: `AuditWriterService::append()`, the method the `AuditWriter` port declares and the only one any of the six production call sites uses. The configuration side was `appendConfiguration()`, it had **zero** call sites, and `DbAuditEventRepository::save()` targets `pettycash_transaction_audit` unconditionally, so even if it had been called it would have written a configuration event into the *transaction* stream, against FR-056. `grep -rn pettycash_configuration_audit lib/ --include=*.php` returns the migration and nothing else, so the table is created and permanently empty. T296 has since deleted the dead method, leaving no configuration writer at all; **T294** owns writing one that reaches the right table) (done)
+
+  **Corrected on evidence, not on T294's completion alone** — the fourth bookkeeping correction of this
+  kind in this file, after T067, T068 and T029. The blocker named above was T294's, T294 is delivered, and
+  what remained open was the *second* half of the complaint, which T294's own commit could not settle:
+  that the method had **zero call sites**. A method that exists and is never called is the same defect
+  the task was reopened for, so existence was not accepted as the answer.
+
+  Verified against the running system, in the four ways the claim can be wrong:
+
+  | Claim | How it was checked | Result |
+  |---|---|---|
+  | a configuration writer exists | `grep -rn appendConfiguration lib/` | `AuditWriterService::appendConfiguration()`, declared on the port |
+  | it reaches its **own** table | `DbAuditEventRepository.php:30` stream binding + `RepositoryRoundTripTest::testAConfigurationAuditEventLandsInItsOwnTableAndIsInvisibleToTheTransactionStream` | `pettycash_configuration_audit` |
+  | it has a **production** call site | `grep -rn appendConfiguration lib/` | `FinanceSettlementService.php:278` — the one that moves money |
+  | it actually **writes** | the live database, read-only | **123 rows**, every one `ACCOUNT_CHARGED` / `entity_type=account` |
+
+  The last row is the one that closes it. 123 rows in `pettycash_configuration_audit` and **0** in
+  `pettycash_transaction_audit` is the T295 complaint answered in both directions: the table is no longer
+  created-and-permanently-empty, and nothing has leaked into the transaction stream.
+
+  **The snapshot fields are the task's actual requirement**, and all nine are taken at write time by
+  `AuditWriterService::toEvent()` — uid and display name resolved through `CurrentUser`/`UserDirectory`
+  rather than looked up on read, which is what FR-054 and a disabled user's unchanged historical identity
+  depend on, plus `actor_role`, `stage`, `revision_id`, `explanation`, `command_id`, and
+  `before_json`/`after_json`.
+
+  `AuditWriterSurfaceTest` (7 tests) proves each path reaches only its own stream and that a configuration
+  event without a subject is refused; `FinanceSettlementTest` (31 tests, 163 assertions) proves against
+  the real table that an approval which moves money writes exactly one configuration charge — the
+  end-to-end shape T295 said had never run.
+
+  **`append()` keeps its six production call sites** across `SubmitSheet`, `ResubmitCorrection` and
+  `RetentionPolicyService`, and the transaction binding is covered by the round trip. Nothing was
+  rewritten to make this true.
+
+  **One observation, deliberately not acted on.** The contract seeder clears
+  `pettycash_transaction_audit` between runs but never clears `pettycash_configuration_audit`, so the
+  shared test database accumulates rows — 123 and counting. That is *correct* application behaviour
+  (FR-053/FR-057 make the configuration stream append-only with a 7-year floor, so a seeder that deleted
+  it would contradict the property under test), and nothing depends on the count:
+  `ChargedAccountScope` returns a set of account ids, and `FinanceSettlementTest`'s `assertCount(1, …)`
+  is scoped to the command under test rather than to the table. Recorded so the growth is not later
+  rediscovered as a leak, and so nobody "fixes" it by making the stream deletable.
 - [x] T029 Implement consistent OCS error mapping for validation, forbidden, hidden-not-found, stale state, idempotency conflict, and unexpected failures in `lib/Infrastructure/Http/OcsErrorMapper.php`
 - [x] T030 Create the typed frontend OCS client, canonical error model, command-ID generator, pagination types, and no-automatic-mutation-retry behavior in `src/services/http.ts`, `src/types/api.ts`, and `src/types/permissions.ts`
 
@@ -1356,7 +1399,7 @@ reproduced against the running container and database, not inferred.
 
 ### HIGH — the preflight gate never succeeds and inventories the wrong tables
 
-- [ ] T250 [HIGH] Fix `scripts/preflight.sh` so the database-inspection step at
+- [x] T250 [HIGH] Fix `scripts/preflight.sh` so the database-inspection step at
   `scripts/preflight.sh:27` actually executes and reports the legacy tables that exist, because
   the step invokes `mariadb -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE"` inside
   `docker-db-1` where `MYSQL_USER`, `MYSQL_DATABASE`, and `MYSQL_PASSWORD` are all unset — the
@@ -1700,7 +1743,7 @@ T126, T250, T252, and the T252-derived test defect, without rewriting their reco
   acceptance on an empty database, and remove every reference to `oc_pcash_*` and `oc_pc_*` as V1
   schema, since no V1 artifact may depend on a pre-V1 database and the `oc_pcash_*` premise was never
   present in this environment (FR-080, SC-014, supersedes T126, T252)
-- [ ] T264 [MEDIUM] Re-check every index and constraint name produced by T260 against the declared
+- [x] T264 [MEDIUM] Re-check every index and constraint name produced by T260 against the declared
   V1 backend identifier limits (PostgreSQL 63 bytes, MySQL 64 characters), abbreviating only where a
   full `pettycash_<table>_<subject>_<kind>` name would exceed them, and keep the `data-model.md`
   naming conventions in agreement with the migrations (FR-079, SC-014)
@@ -1754,7 +1797,7 @@ handoff summary that says "start with T265" is superseded by this ordering.
 
 ### HIGH — currency fraction digits are business rules hardcoded in two disagreeing controllers
 
-- [ ] T266 [HIGH] Remove the presentation-layer currency tables
+- [x] T266 [HIGH] Remove the presentation-layer currency tables
   `TransactionController::CURRENCY_MINOR_UNITS` (`lib/Controller/TransactionController.php:31-36`,
   read at `:345` as `self::CURRENCY_MINOR_UNITS[$currencyCode] ?? 2`) and
   `ReviewController::getMinorUnit()` (`lib/Controller/ReviewController.php:155-162`, whose
@@ -1771,7 +1814,7 @@ handoff summary that says "start with T265" is superseded by this ordering.
 
 ### HIGH — a broken currency reference is silently reported as rial
 
-- [ ] T267 [HIGH] Remove the silent currency fallbacks that mask a broken reference:
+- [x] T267 [HIGH] Remove the silent currency fallbacks that mask a broken reference:
   `DbExpenseSheetRepository::getCurrencyCode()` at
   `lib/Infrastructure/Persistence/Expense/DbExpenseSheetRepository.php:173-183` returns the literal
   `'IRR'` when the currency lookup matches no row, and
@@ -1783,11 +1826,115 @@ handoff summary that says "start with T265" is superseded by this ordering.
   requires every transaction to inherit the sheet currency and Constitution IV requires financial
   effects to be correct server-side, so the repository must fail loudly on an unresolvable currency
   reference and the view must render the absence rather than substituting a currency. T256 covers
-  only the revision repository's hardcoded `IRR` and does not cover these two sites (contradicts)
+  only the revision repository's hardcoded `IRR` and does not cover these two sites (delivered)
+
+  **The view half was already done and the checkbox did not say so.** `formatMoney` is now a shared
+  utility in `src/utils/money`; `grep -rn "?? 'IRR'" src/` returns nothing. What remained was the
+  repository, and T311 had just built the fixture that makes it observable and a test that
+  deliberately declined to assert it — "a test that pinned `"IRR"` as the expected answer would
+  enshrine a defect as a requirement and would have to be deleted when T267 removes it." The
+  precondition was met and the omission had an expiry condition.
+
+  **Delivered.** `getCurrencyCode()` now throws `UnreadableRecordData`, the type T308 created for
+  this exact fault, so this is one rule rather than two. Measured on the live endpoint with the
+  probe present, before and after:
+
+  | Endpoint | Before | After |
+  |---|---|---|
+  | `GET /reports/sheets` | `200`, probe reported `"currency":"IRR"` | **`422`** |
+  | `GET /sheets` | `200`, probe in the list as `"currency":"IRR"` | **`500`** |
+  | `GET /sheets/{probe}` | `200`, the corrupt sheet as a **rial sheet** | **`500`** |
+  | `GET /sheets/{healthy}` | `200` | `200`, unaffected |
+  | `GET /dashboard` | `200` | **`500`** |
+  | `GET /reports/{transactions,process,evidence}` | `422` | `422` |
+  | `GET /reports/audit`, `GET /queues/cost-center` | `200` | `200` |
+
+  **Two endpoints the task does not name were doing the same thing.** `GET /sheets` and
+  `GET /sheets/{id}` read the same repository and reported the same fabrication, and they are the
+  two a user is most likely to open. `GET /dashboard` also hydrates sheets and had been answering
+  `200` with no test covering it at all, so the substitution was hiding in a fourth place.
+
+  **The 500 is T308's decision, not a new one.** `UnreadableRecordData` extends `LogicException` on
+  purpose precisely so this happens: the report explains itself with a 422, every other caller keeps
+  the classification `OcsErrorMapper` already gives an unrecognised fault — 500, message withheld,
+  full detail logged. The trade is a wrong number that looks measured against a visible failure with
+  the operator-actionable detail in the log. Generalising the 422 policy to the five affected
+  endpoints is deliberately **not** done here: it changes their status, and a test pinning 500 would
+  have to be deleted to allow it, so the new tests assert the *absence of the wrong answer* and
+  enumerate the honest statuses instead.
+
+  **One existing test had to be inverted rather than weakened.**
+  `testTheSubjectsThatDoNotResolveTheCurrencyAreUnaffected` asserted in as many words that
+  `GET /reports/sheets` must **not** be refused by this fault — written to pin reachability, not
+  correctness, and correct about what it measured while wrong about what the measurement should be.
+  `sheets` moves into `CURRENCY_READING_SUBJECTS`, `audit` into a new `CURRENCY_FREE_SUBJECTS`. The
+  leak assertions were also made **wording-independent**: they checked for the literal string
+  `Cannot resolve the currency of transaction revision`, so the sheet repository's differently-worded
+  message would have slipped past them — an assertion that was true and proving nothing. They now
+  check the surrogate keys by value and add `danglingCurrencyId` to the set.
+
+  **An assertion of my own was too weak, and the mutation that proved it.** The first version asserted
+  `assertNotSame('IRR', $entry['currency'])`, which passes against an implementation that substitutes
+  **`USD`** — a different wrong number, in a different unit, from the same line of code. The record
+  is entitled to no currency at all, so the strong form is: *a `200` may not carry this record*. That
+  is what is asserted now, and it is mutation-proven against the `'USD'` substitution.
+
+  Mutation-proven four times: the `'IRR'` fallback restored (**4 fail**), a *different* wrong currency
+  substituted (**4 fail**), the throw swallowed (**10 error**), and `/reports/sheets` no longer
+  translating to a 422 (**4 fail**).
+
+  **Stated rather than glossed.** A genuinely dangling `currency_id` cannot be produced by the
+  application — the schema declares no foreign keys and the probe is the only way to make one — so
+  the fixture reproduces the *shape* of the fault, not an operator action that causes it; the
+  reachable non-harness case is a currency row deleted or deactivated out from under a sheet. The
+  admin path is not covered either: the contract suite holds one set of non-administrator
+  credentials, so the `findByStatus(...)` branches are exercised only by reasoning, not by
+  measurement. `/dashboard`'s new 500 is in the table because it was measured, not because a test
+  pins it; writing that test is the natural first half of the follow-on above.
+
+  741 tests / 3345 assertions / 1 failure, against 736 / 3318 / 1 at the baseline: the single failure
+  is T275, unchanged. `npm run check` clean, 0 lint errors, 7/7 frontend suites, and
+  `roundtrip-leftovers.php` reports `No leftovers.`
+
+  **Delivered.** `lib/Domain/Command/Repository/CommandResultRepository.php` is deleted, along with the
+  now-empty `lib/Domain/Command/` tree; `DbCommandResultRepository` implements one port instead of two;
+  and `tests/bootstrap.php`'s import and container registration are gone. No production code ever
+  consumed the domain copy — `grep -rn "DomainCommandResultRepository" lib/ tests/ src/` returned
+  three hits, all of them the adapter's own `implements` clause and the test alias. No behaviour
+  changed: no route, no response, no stored record.
+
+  **The deliverable is the property, not the deletion.** A two-line deletion has no test, and nothing
+  about deleting an unused interface can fail -- which is the problem, because the file was there
+  because nothing watched it. `tests/Unit/Architecture/LayerBoundaryTest.php` now scans `lib/Domain/`
+  and fails on any `use OCA\PettyCash\{Application,Infrastructure}\...`, and asserts
+  `CommandResultRepository` is declared exactly once. Both failed before this task; both will fail
+  again if a duplicate reappears anywhere, which is a thing no reviewer has to notice by reading two
+  files side by side.
+
+  **The RED state found two bugs in my own test, and neither would have shown up green.** Every
+  violation message read `tests/Unit/Architecture/../../../lib/Domain/...` -- true, and useless to
+  anyone who has to open the file. And the sanity check that exists to prove the scan is not vacuous
+  was comparing a repo-relative anchor against the iterator's absolute paths, so it was failing against
+  a perfectly good scan. That is the worst direction for that particular test to be wrong in.
+
+  **The layer order is itself asserted.** Every comparison is `array_search` over `LAYER_ORDER`, so a
+  table with `Domain` last would make the rule "nothing is above Domain" and the scan would pass over a
+  real violation in silence. Mutation-proven: reordering it fails. So is re-introducing the port
+  (1 fail), and so is pointing the scan at a directory that does not exist (3 fail) -- the last proving
+  the sanity check has teeth rather than being decorative.
+
+  **Deliberately not asserted:** the other three layer edges. `lib/Application/` imports `OCA\Server`
+  and other Nextcloud services in places, and where that line falls is a design question rather than a
+  scan's question. The scan also reads declared imports rather than the autoloader, so a class reached
+  by a fully-qualified inline reference is invisible to it -- a limitation of the approach, stated
+  rather than hidden.
+
+  745 tests / 3351 assertions / 1 failure, against 741 / 3345 / 1: the failure is T275, unchanged.
+  `npm run check` clean, 0 lint errors, 7/7 frontend suites. Report: `docs/reports/T268.md`.
 
 ### MEDIUM — a duplicated port makes the domain layer depend on the application layer
 
-- [ ] T268 [MEDIUM] Delete the unused duplicate port
+- [x] T268 [MEDIUM] Delete the unused duplicate port
   `lib/Domain/Command/Repository/CommandResultRepository.php` and the
   `DomainCommandResultRepository` half of the `implements` clause at
   `lib/Infrastructure/Persistence/Command/DbCommandResultRepository.php:17` and its alias at
@@ -3768,7 +3915,7 @@ exist. These four are uncovered.
 
 One finding, surfaced by implementing T302 and explicitly recorded there as unowned.
 
-- [ ] T306 Narrow an export's rows by `ExportRequest.filters`, or refuse a `filters`-only request
+- [x] T306 Narrow an export's rows by `ExportRequest.filters`, or refuse a `filters`-only request
   naming what enumeration is not implemented, per FR-068. T302 made `ids` authoritative and made
   `ExportController::rowsForSelection()` read `filters` -- but only as the boolean "did the caller ask
   for something", so a `filters` object narrows nothing. A request carrying only `filters` is therefore
@@ -3779,7 +3926,77 @@ One finding, surfaced by implementing T302 and explicitly recorded there as unow
   `costCenterDbIds`, `actorUids`, `eventTypes`) and `ReportQuery` already owns a private filter
   implementation, so the domain rule exists and needs exposing rather than rewriting -- and the
   narrowing must be applied there, not in the controller, or there will be two definitions of what a
-  filter means. (missing)
+  filter means. (delivered)
+
+  **Delivered.** The filter now narrows, and everything the row vocabulary cannot answer is refused
+  with a 422 naming the facet and the columns the rows do carry. Measured on the live endpoint, before
+  and after, for the same requests:
+
+  | `POST /exports` (`fileFormat: csv`) | Before | After |
+  |---|---|---|
+  | `ids=[sheet]` | `200` rowCount 1 | `200` rowCount 1 |
+  | `ids=[sheet]` + `{"statuses":["COST_CENTER"]}` | `200` rowCount 1 | `200` rowCount 1 |
+  | `ids=[sheet]` + `{"statuses":["NOT_A_STATUS"]}` | **`200` rowCount 1** | **`200` rowCount 0** |
+  | `ids=[sheet]` + a `from` bound after `createdAt` | **`200` rowCount 1** | **`200` rowCount 0** |
+  | `ids=[sheet]` + `{"banana":true}` | **`200` rowCount 1** | `422` unknown filter |
+  | `ids=[sheet]` + `{"costcentreIds":[1]}` | **`200` rowCount 1** | `422` unknown filter |
+  | `ids=[sheet]` + `{"costCenterDbIds":[1]}` | **`200` rowCount 1** | `422` unanswerable facet |
+  | `ids=[txn]` + `{"costCenterDbIds":[999999]}` | **`200` rowCount 1** | **`200` rowCount 0** |
+  | `ids=[txn]` + `{"amountMinMinor":99999999}` | **`200` rowCount 1** | **`200` rowCount 0** |
+  | `filters` only, no `ids` | **`200` rowCount 0, byteSize 0** | `422` |
+  | `ids=[unknown]` + a filter | **`200` rowCount 1** | `422` |
+
+  **The task's own description was wrong about the worst case, and measuring found it.** It stated
+  that "a request carrying only `filters` is therefore refused". It was not: it answered `200` with
+  `rowCount: 0`, `byteSize: 0` and an empty body — the T302 defect reopened on the filter half, and
+  *headerless*, because `CsvExporter` derives its header from the first row and there was none. So
+  `contracts/exports.md`'s "explicit column header row" was not met even in the one case where an
+  empty result is the right answer. `ExportService::generate()` now takes the resource's declared
+  columns: the same request answers 64 bytes, which is the header.
+
+  **The rule moved out of a controller rather than being copied into one.** T309's closed vocabulary
+  and its coercion were private members of `ReportController`, and the available move for the export
+  was to write them again — the shape of the T307 defect, where the filter and the rows each had a
+  private idea of the vocabulary. They are now `ReportFilterFactory`, in the application layer, and
+  `ReportController` keeps only what is its own: `filters` arrives here as a query parameter and so
+  arrives as a JSON string, which it decodes before handing the object over.
+  `testNoNameTheReportAcceptsIsUnknownToTheExport` iterates that constant and asserts the export never
+  answers "Unknown filter" for any name the report accepts, so a name added to one endpoint's
+  vocabulary and not the other's fails rather than drifting.
+
+  **`narrow()` is exposed separately from `paginate()` on purpose.** An export is the whole authorized
+  selection; a paged export understates `rowCount` *and* omits authorized records, which FR-068
+  forbids outright. The unit test filters 250 rows to 125 and asserts all 125 return, because a
+  `narrow()` that sliced to `pageSize` would pass any test written against a handful of rows.
+
+  **FR-068's "cost center transactions" is now selectable.** The transaction export row carried no
+  cost centre, so `costCenterDbIds` was unanswerable and the export and the report had two different
+  ideas of what a transaction row is. The export row now carries the same six active-revision columns
+  the transactions report carries, read from the transaction's own revision per FR-028. **This widens
+  the artifact**: the flat `transactions` CSV has six more columns than it had, which is a change to an
+  output rather than an internal refactor and is recorded as such.
+
+  **One real defect surfaced by the tests and is fixed here.** The unanswerable-facet refusal named
+  the *internal rule*, so a caller that sent `amountMinMinor` was told the report could not be filtered
+  by `amountRange` — a thirteenth name appearing nowhere in the accepted-filter list it had just been
+  shown. `RULE_REQUEST_NAMES` maps each rule to the names a caller may have sent and the refusal quotes
+  all of them, so a caller who sent `to` is not told about `from`.
+
+  Mutation-proven eleven times. One survived the first pass and is the interesting one: replacing the
+  list check in the factory with `if (false)` left the suite green, because both tests written for it
+  asserted only that a list is *refused* — and a list is refused either way, since
+  `array_keys(['statuses'])` is `[0]` and the closed vocabulary catches it with
+  `Unknown filter "0"`. A test that asserts an outcome is not a test that identifies which rule produced
+  it, which is T311's lesson again. Both now assert the *shape* of the refusal and are green against
+  the mutation.
+
+  **Not done here, deliberately.** FR-068's *predefined calendar periods* — month, quarter, year — are
+  not in the vocabulary, and a client sending one is refused as an unknown filter. That is the safe
+  direction and the refusal names what to send instead, but it is not support. "Month" is ambiguous
+  without a definition (current calendar month? last 30 days?) and a calendar needs a timezone, so the
+  answer belongs in `spec.md` rather than in a controller. Also unchanged: `report`, `audit` and
+  `evidence` still refuse any selection, and the export and report row builders are still separate
+  code that now agree by construction rather than by sharing it.
 
 - [x] T307 **CRITICAL** — Reconcile `ReportQuery::applyFilter()`'s expected row keys with the rows the
   report and export controllers actually emit, and reopen T106 and T112 whose completion evidence this
@@ -3855,7 +4072,7 @@ One finding, surfaced by implementing T302 and explicitly recorded there as unow
 Normal convergence, bounded to the US7 reporting/export slice. One reopened task and one novel root
 cause, grouped so the masking defect and the masked defect are both owned.
 
-- [ ] T029 Implement consistent OCS error mapping for validation, forbidden, hidden-not-found, stale
+- [x] T029 Implement consistent OCS error mapping for validation, forbidden, hidden-not-found, stale
   state, idempotency conflict (**reopened**). `OcsErrorMapper::map()` classifies
   `$error instanceof LogicException => [403, 'FORBIDDEN']`, and only the 500 branch suppresses the
   message. Any `LogicException` that is not an `InvalidArgumentException` is therefore reported to the
@@ -3867,6 +4084,22 @@ cause, grouped so the masking defect and the masked defect are both owned.
   does not exist. This is the same over-broad classification shape as T063's bug, where
   `InvalidArgumentException extends LogicException` let a broad catch swallow validation failures.
   Reopened rather than duplicated: T029 is the task that owns OCS error mapping. (contradicts)
+
+  **Corrected by T311 as bookkeeping, on T308's evidence -- not new work.** This line stayed `[ ]` after
+  the work was delivered and measured, so the state was simply never updated. T308's note records the
+  change and the measurement: the `$error instanceof LogicException => [403, 'FORBIDDEN']` arm was removed,
+  and `GET /reports/transactions`, `/reports/process` and `/reports/evidence` went from `403` plus
+  `Cannot resolve the currency of transaction revision 7 from its sheet` to `500` plus
+  `pettycash.error.unexpected`, with the full suite showing no regressions -- which is also what shows the
+  removed arm was not load-bearing for any existing test. The rule now encoded is the one this task
+  always asked for: **authorisation is never inferred from an exception class.**
+
+  T311 additionally verified the *reporting* half of this mapping against a real fault rather than a
+  synthetic one: `UnreadableRecordData` is answered `422`, the message names the fault as a data fault and
+  rules out permissions and filters, and neither the internal message nor the surrogate key it names
+  reaches the caller. Two assertions there are independent, proven by mutation: echoing the internal
+  message fails one, and rewording it while keeping the surrogate key fails the other. So the half of
+  T029 that T308 could not verify is now verified, and the half it could is unchanged.
 
 - [x] T308 Restore `transactions`, `process` and `evidence` reports, and settle whether the currency
   join failure is a product or a fixture defect, per FR-065 and US7/AC2 (missing). Three of the seven
@@ -4044,7 +4277,7 @@ in code this slice added recently, one unimplementable requirement, one unowned 
   to this slice after that lesson. The fix is the same shape as T307: an unrecognised key is a client
   error and is refused with 422 naming the accepted filters, not absorbed. (contradicts)
 
-- [ ] T310 Add the report filter facets and row columns FR-064 names but nothing models, per FR-064
+- [x] T310 Add the report filter facets and row columns FR-064 names but nothing models, per FR-064
   (missing). Of the twelve facets FR-064 requires, five cannot be expressed at all.
   `ReportFilter` carries only `from`, `to`, `statuses`, `currencyCodes`, `costCenterDbIds`,
   `actorUids`, `eventTypes` and `createdBy`, and the report rows carry none of the columns some of those
@@ -4065,7 +4298,95 @@ in code this slice added recently, one unimplementable requirement, one unowned 
   sheet's cost centre is reachable through its transactions, so this may be a join rather than a schema
   change. (missing)
 
-- [ ] T311 Add a corrupt-record fixture that can verify data-integrity handling without risking the
+  **Delivered. Six facets, not the five the table names -- the sixth was found by measuring the
+  endpoint rather than by reading the table.** `audit by date range` was recorded above as *working*,
+  and it was not: `dateRange` reads `occurredAt`/`createdAt`, the audit report emitted neither, and
+  `{"from":...}` against `/reports/audit` was refused 422. The same happened to `stages`, which T309's
+  note called "silently ignored" -- that was the state *before* T309 closed the vocabulary, and after
+  it the same key was refused instead. Both are refusals, both are now answered, and a table that
+  described the gap from a snapshot rather than a measurement will be wrong exactly this way.
+
+  Measured on the live endpoint, all twelve facets, before and after:
+
+  | Facet | Before | After |
+  |---|---|---|
+  | sheets by creator | `422` `createdBy` unevaluable | `200`, narrows; `{"createdBy":"no-such-user"}` -> `total: 0` |
+  | transactions by cost centre | `422` unevaluable | `200`, narrows on the active revision's centre |
+  | transactions by expense type | `422` unknown filter | `200`, narrows |
+  | transactions by amount | `422` unknown filter | `200`, inclusive `amountMinMinor`/`amountMaxMinor` |
+  | audit by stage | `422` unknown filter | `200`, narrows |
+  | audit by date range | `422` unevaluable | `200`, both bounds |
+  | the six already working | `200` | `200`, unchanged |
+
+  **The sources are FR-064's own, not a convenience.** Each facet reads the column the requirement
+  names: a sheet's creator is its `ownerUid`; a transaction's cost centre, expense type and amount all
+  come from `revision()` -- its **own active revision**, not the sheet, because FR-028 allows one
+  sheet to hold transactions for several cost centres; an audit event's stage and date are the ones
+  recorded on the event. The transaction rows gained `costCenterDbId`, `costCenterCode`,
+  `expenseTypeDbId`, `expenseTypeTitle`, `amountMinor` and `currency` for this, and the audit rows
+  gained `occurredAt`. No migration and no schema change: every column was already reachable, which is
+  the answer to the join-or-schema question the task posed.
+
+  **Amount is a range, and deliberately not a list.** `amountMinMinor`/`amountMaxMinor`, inclusive,
+  validated in `ReportFilter` (an inverted or negative range is a 422) and parsed strictly in the
+  controller so a non-integer names the offending key. A caller asking "between 100 and 200" is asking
+  for a range. A null row amount -- a draft revision that was never completed -- is **excluded**,
+  because a revision with no amount is not an amount of zero, and coercing it to zero would put every
+  such draft into a `max: 0` result.
+
+  **The guards still guard, and that is asserted rather than assumed.** A facet on a report that has
+  no such column is still refused rather than ignored: `{"amountMinMinor":1}` against `/reports/sheets`
+  answers 422 naming `amountRange` *and* the columns the rows do carry. Closing the vocabulary did not
+  become a way to get an unfiltered report.
+
+  **One existing test had to change, and the reason is the point.** `testAnUnrecognisedFilterIsRefused`
+  used `{"stages":["FINANCE"]}` as its example of a key nothing accepts, because it was unknown when
+  written. T310 made `stages` a real filter, so that assertion became false and now fails. The example
+  was re-picked (`expenseStatus`). A test that selects "a key nothing accepts" has to be re-picked
+  whenever the accepted set grows, and this failure is the signature of forgetting to -- so it is
+  recorded here rather than quietly re-pointed.
+
+  **Two live defects found while measuring, both fixed, neither belonging to this task's slice.**
+  Recorded here because both were found *by* this task's work and neither had an owner:
+
+  1. **The round-trip harness orphaned 28 transactions, and that was refusing a whole report.**
+     `roundtrip-runner.php` swept a leaked sheet by title but not the transactions hanging off it,
+     leaving `pettycash_transactions.sheet_id` pointing at nothing. `resolveCurrencyCode()` walks
+     revision -> transaction -> sheet -> currency, so with the sheet gone the `transactions` report
+     answered **422** while `sheets` answered 200. T308 fixed the *sibling* fault -- a leaked sheet
+     whose currency had been swept -- and the same blind spot survived one level down, which is the
+     strongest argument that "the sweep is correct" was never established by reading it.
+     The fix keys off the **orphan itself** (`LEFT JOIN ... WHERE s.id IS NULL`), not off the leaked
+     sheet, because by the time any sweep runs the offending sheet is already deleted: a sheet-keyed
+     predicate matches nothing. That was verified, not reasoned -- the first version of the fix used
+     the sheet key and `roundtrip-leftovers.php` still printed "No leftovers" against 112 broken rows.
+     `roundtrip-leftovers.php` had the identical blind spot and now reports them; 112 rows were removed
+     and the report answers 200.
+  2. **`TechnicalLogger::log()` did not exist and one caller used it anyway.**
+     `ReportController::accountsByDbIds()` called it on the branch where a charged account no longer
+     resolves. PHP resolves methods at call time, so the file parsed, the suite stayed green, and the
+     endpoint would have answered 500 with `Call to undefined method` on exactly the data fault an
+     operator most wants logged. The method now exists, and `TechnicalLoggerTest` covers it -- at the
+     logger's own surface, because reaching the controller needs the whole container.
+
+  **Mutation-proven, all three.** Removing the four new row-key mappings fails 5 contract tests;
+  removing the transaction rows' active-revision columns fails 4; removing `occurredAt` errors 1;
+  making the amount filter ignore its bounds fails 1; removing `TechnicalLogger::log()` errors 3; and
+  removing the orphan sweep's **call** fails the harness test. That last one is worth recording: the
+  first version of that test asserted the sweep was *defined* and passed against a runner whose sweep
+  had been commented out. A closure nobody calls satisfies every assertion about its body, so the
+  invocation is now asserted too -- found by mutating the call away and watching the suite stay green.
+
+  Suite **664 tests, 3005 assertions, 1 pre-existing T275 failure** (the evidence content-type
+  conflict, unchanged from the 648/2872 baseline). `npm run check` clean: typecheck, lint, stylelint,
+  7/7 frontend suites, build.
+
+  **Not done here, deliberately.** T311 remains open and is *not* addressed by this task: the 422 path
+  this work had to unpick is still unverified by a committed test, because verifying it needs a
+  deliberate corrupt record. What this task did was remove the *accidental* corruption that made the
+  path unreachable in practice, which is the precondition T311 asks for and not the fixture itself.
+
+- [x] T311 Add a corrupt-record fixture that can verify data-integrity handling without risking the
   shared database, per Constitution II (missing). T308 delivered the reporting half of the data-fault
   path -- a record with an unresolvable currency is refused with 422 rather than losing three reports --
   but the 422 path has **no committed test**, because triggering it requires deliberately inserting a
@@ -4075,7 +4396,97 @@ in code this slice added recently, one unimplementable requirement, one unowned 
   trade that produced the seven leaked sheets in the first place. Building it safely means the runner's
   cleanup is provably complete *first* -- every inserted row registered before the next insert, and a
   post-run assertion that the fingerprint count is zero -- and only then a fixture that asserts the 422
-  and its refusal to leak the internal message. (missing)
+  and its refusal to leak the internal message. (done)
+
+  **Delivered in the stated order, and the first half was the larger one.** The precondition was not
+  "make the cleanup complete" -- it was that nobody could *know* it was complete, because
+  `roundtrip-runner.php` and `roundtrip-leftovers.php` carried separately written lists of the same set of
+  rows and had already diverged once. The definition now lives once, in `tests/Support/LeakedRows.php`,
+  and both read it.
+
+  **Writing it against the live database found 36 leaked rows the old definition could not see** --
+  which is the whole argument for having done it that way rather than transcribing the two lists:
+
+  | Leak | Count | Why the old predicates missed it |
+  |---|---|---|
+  | cost centres named `Round Trip Expense Cost Center` | **35** | the predicate was `eq 'Round Trip Cost Center'`; the expense scenario writes a differently named centre |
+  | configuration audit rows | **1** | the predicate was `explanation like 'Retention probe %'`; this row's explanation was `charged in the round trip` |
+
+  Both were reachable only by the by-id sweep, which is the sweep that fails when a run dies *between* an
+  insert and its `$track()`. Both were removed, and `pettycash_accounts`, `pettycash_role_assignments`,
+  `pettycash_transactions`, `pettycash_transaction_revisions` and the expense-scenario audit rows are now
+  covered for the first time. Coverage became a **property of the whole set** rather than one predicate:
+  every table the runner registers with `$track()` must appear in `LeakedRows::sweptTables()`. Dropping the
+  accounts step fails that test by name.
+
+  The post-condition is `leftovers()` after the sweep, **recorded in the runner's payload and then
+  raised** -- printing first and failing second, because a `throw` inside `finally` skips the trailing
+  `echo` and the caller would be told only that a subprocess produced no output.
+
+  **The probe is a real business record with one corrupted column.** Sheet, transaction and revision are
+  written exactly as the contract seeder writes them, and only then is `sheets.currency_id` pointed at an
+  id that does not exist -- so what is under test is the *reference*, not a hand-built approximation of a
+  record. Measured on the live endpoint, absent vs present:
+
+  | Request | Absent | Present |
+  |---|---|---|
+  | `/reports/transactions` | `200` | **`422`** |
+  | `/reports/process` | `200` | **`422`** |
+  | `/reports/evidence` | `200` | **`422`** |
+  | `/reports/sheets` | `200` | `200` |
+  | `/reports/audit` | `200` | `200` |
+
+  The body names the fault as a data fault and rules out permissions and filters. The internal message
+  -- `Cannot resolve the currency of transaction revision 1223 from its sheet` -- is absent, and so is
+  the surrogate key.
+
+  **Isolation is by stage, measured rather than assumed.** `transactionsReport()` reads
+  `findByOwnerUid(...)` for a non-administrator but `findByStageAndStatus(Final, ...)` for an
+  administrator, so a probe at Final would be read by *both* and a crashed probe would refuse the report
+  for a user with nothing to do with it. At `DRAFT` it is confined to the one fixture that creates it.
+
+  Four properties make it safe, each checked rather than described: **repair before write** (a probe left
+  by a killed run is swept before the next is written, so the fault lasts one run, not one run per
+  attempt); **removal verifies** rather than assuming, and the PHPUnit side throws rather than reporting
+  success; **the fingerprint is a name**, so `roundtrip-leftovers.php --delete` repairs a crashed probe;
+  and the corruption is one column, so nothing else about the record is synthetic.
+
+  **Mutation-proven, ten times.** Removing the `catch (UnreadableRecordData)` fails 3 (status 996, not
+  422); echoing the internal message fails 1; rewording it while keeping the surrogate key fails 1
+  *independently*, so both disclosure assertions have their own teeth; removing the repair-before-write
+  sweep fails 1; removing the removal's sweep errors 5; dropping the accounts step fails 1 by name;
+  reordering the currency sweep before the sheets fails 1; removing the runner's post-condition fails 1;
+  breaking `NAME_PREFIX` so no predicate matches fails 1.
+
+  **The ninth mutation survived, and it changed the design.** The suite's enforcement of the runner's
+  post-condition was asserted by reading *this file's own source* for the word `leftovers`; replacing the
+  guard with `if (false)` left the suite green. A source-text assertion cannot see a dead branch -- and
+  this project has been bitten by that twice, T310's orphan sweep being *defined* and never *called* while
+  every assertion about its body passed. So the enforcement became a function,
+  `LeakedRows::assertNothingSurvived()`, called by both the runner and the suite and tested **by calling
+  it** with a synthetic leak. The dead branch has nowhere left to hide.
+
+  **What could not be tested, stated rather than glossed.** The runner's post-condition *cannot be
+  provoked* end to end, and the reason is structural: a post-condition fires when a sweep leaves a row
+  behind, and every row a predicate can see is a row the sweep deletes. The schema declares no foreign
+  keys, so a delete does not fail on a dependent, and no visible row can be made to survive. The test that
+  plants one and runs a scenario proved exactly that -- the scenario swept it, so no failure was raised,
+  correctly. What is asserted instead is the property that makes the guard meaningful: **the two halves
+  agree, on real rows, about what they are looking at** -- a planted row is counted, swept, then counted
+  at zero. A predicate matching nothing would pass every source-text assertion in the file while removing
+  nothing, which is the shape of the bug T308 had to unpick.
+
+  **One finding recorded and not fixed.** With the probe present, `GET /reports/sheets` answers **200** and
+  reports the probe sheet as `"currency":"IRR"`: `DbExpenseSheetRepository::getCurrencyCode()`
+  (`lib/Infrastructure/Persistence/Expense/DbExpenseSheetRepository.php:179-188`) returns the literal
+  `'IRR'` when the lookup matches no row. That is **T267**, which is open and owns it, and it is
+  deliberately **not asserted** here -- a test that pinned `"IRR"` as the expected answer would enshrine a
+  defect as a requirement and would have to be deleted when T267 removes it. It is recorded as an
+  observation, and it is why this task cannot claim the fault is contained.
+
+  Suite **675 tests, 3089 assertions, 1 pre-existing T275 failure** (baseline 664/3005/1). `npm run check`
+  clean. Database verified clean afterwards three ways: the diagnostic prints `No leftovers.`, a
+  `LEFT JOIN ... IS NULL` finds **0** sheets with an unresolvable currency, and **0** orphaned transactions.
 
   **T309 delivered.** `ReportController` now holds a closed `ACCEPTED_FILTERS` vocabulary and refuses
   anything outside it with a 422 naming what is accepted, per the FR-064 clause added in the
@@ -4130,3 +4541,250 @@ in code this slice added recently, one unimplementable requirement, one unowned 
   touched, which is why this is a checkbox change and not an implementation.
 
   This was the gate on T294, so T294 is now unblocked.
+## Phase 47: Convergence (Ownerless gaps left by T306 and T267)
+
+**Purpose**: Six pieces of work that three convergence phases found by measuring, and that **no task
+owns**. T310, T311, T306 and T267 each recorded something they deliberately did not do; four of those
+records are gaps with no owner anywhere in this file, so `/speckit.implement` — which works the first
+genuinely incomplete task — would never reach them.
+
+**This phase deliberately appends nothing that already has an open task.** US6 (evidence, public
+evidence links, traceability) is the largest unimplemented surface in the repository:
+`PublicEvidenceLinkService`, `EvidenceQueryService`, `AppDataStreamResponse` and `AuditQueryService`
+do not exist, and `EvidenceController` implements `content()` but neither `createLink()` nor
+`deactivateLink()`. All of that is already owned by T090-T099, every one of them `[ ]`. T275 (the
+evidence content-type conflict, and the one failing test in the suite) and T304 (SC-008) are likewise
+already owned, and both are blocked on a maintainer decision rather than on code. Re-appending an
+owned gap would give one piece of work two owners and two places to be marked done.
+
+- [ ] T312 Decide what FR-068's *predefined calendar periods* mean, and either accept them on
+  `POST /exports` or record an explicit deferral in `spec.md` (partial)
+
+  FR-068 requires group exports to support "reporting periods (predefined calendar periods: month,
+  quarter, year; plus custom date range)". T306 delivered the custom-date-range half: `from` and `to`
+  are honoured on both `sheets` and `transactions` exports. The predefined half is not implemented and
+  is not reachable — a client sending `{"period":"month"}` is refused as an unknown filter, which is
+  the safe direction and names what to send instead, but is not support.
+
+  **This is a requirements question before it is a code one.** "Month" is ambiguous without a
+  definition — the current calendar month, the previous one, the last 30 days — and a calendar needs a
+  timezone, which is a decision the spec has not made. `plan.md` restates the requirement without
+  settling it. So the first half of this task is the decision, recorded in `spec.md`; the second is
+  the implementation, which is small once the decision exists: a `period` name in
+  `ReportFilterFactory::ACCEPTED_FILTERS`, resolved to a `from`/`to` pair against the application's
+  `Clock` rather than PHP's clock, and asserted on the live endpoint the way every other T306 facet
+  is. Recorded by T306 as "the answer belongs in `spec.md` rather than in a controller", which is why
+  it was left without an owner.
+
+- [ ] T313 Give `GET /sheets`, `GET /sheets/{id}` and `GET /dashboard` the same data-fault answer the
+  reports have, and settle whether that answer is 422 (partial)
+
+  T267 removed the last hardcoded currency fallback, so a stored record whose `currency_id` no longer
+  resolves now fails loudly everywhere instead of being reported as rial. `UnreadableRecordData`
+  extends `LogicException` on purpose, which means `ReportController` translates it into a 422 that
+  explains itself while every other caller keeps `OcsErrorMapper`'s 500-with-message-withheld. That
+  split is correct for a *report*, which can say "one or more stored records are incomplete"; it is
+  poor for a list, where a caller is told nothing except that the server broke.
+
+  Measured on the live endpoint with the corrupt-record probe present, after T267:
+
+  | Endpoint | Status |
+  |---|---|
+  | `GET /reports/{sheets,transactions,process,evidence}` | `422`, message explains the fault |
+  | `GET /sheets`, `GET /sheets/{probe}`, `GET /dashboard` | `500`, `pettycash.error.unexpected` |
+  | `GET /sheets/{healthy}` | `200`, unaffected |
+
+  The choice is where the translation lives — a shared handler, a decorator, or a deliberate line
+  drawn at the report boundary — and it changes the status of three endpoints, so it is a decision
+  rather than a refactor. T267 recorded it as "not done here, deliberately" and left it ownerless. The
+  existing tests assert the *absence of the wrong answer* and enumerate the honest statuses rather
+  than pinning `500`, so this task can tighten them without deleting anything.
+
+- [ ] T314 Cover the `/dashboard` and administrator paths of the data-integrity refusal, which are
+  measured but pinned by no test (partial)
+
+  T267 measured `/dashboard` answering `500` with a broken sheet and recorded it in its report table
+  rather than in a test, because the measurement was taken from a probe window and a test written
+  there would assert a status the task above may change. The same gap is larger than the dashboard:
+  the OCS contract suite holds **one** set of non-administrator credentials, so every
+  `findByStatus(...)` branch an administrator reads is unexercised — the dashboard's administrative
+  summary, and the administrator's own view of the sheets report. T267's argument that the outcome
+  does not vary between branches, because the repository throws from one place, is *reasoning* and is
+  recorded as such rather than as evidence.
+
+  This task adds the coverage the claim actually needs. It is sequenced after T313 so it pins the
+  settled behaviour rather than the provisional one, and it is the natural place to add an
+  administrator fixture, which no contract suite currently has.
+
+- [ ] T315 Extract the report and export row projections into one shared definition (partial)
+
+  `ReportController::sheetsReport()` and `ExportController::sheetRows()` build the same seven sheet
+  columns, and the transaction equivalents the same twelve, in two controllers. They agree today by
+  construction rather than by sharing code — verified by comparing the key lists — and T306 changed
+  both in the same commit to keep them that way. That is a convention, not an invariant, and the
+  failure mode is already known: it is T307, where the filter and the rows each held a private idea of
+  the row vocabulary and neither matched the other. `plan.md` puts the projection in the application
+  layer; neither controller is there.
+
+  The T306 fix made the consequence visible: `ReportQuery::FILTER_FIELD_KEYS` is a filter evaluated
+  against a vocabulary that two producers each declare independently, so a column added to one and not
+  the other makes a facet answerable on the export and refused on the report, with no test failing.
+  One shared projection removes the possibility rather than documenting it. `ExportService` already
+  takes each resource's declared columns as a parameter, so the extraction has somewhere to land.
+
+- [x] T316 Reconcile the remaining unchecked task lines against the repository, with evidence, and
+  mark `[X]` only where the named deliverable is present and correct (partial)
+
+  116 task lines are unchecked. At least one is demonstrably stale: **T266** is `[ ]` while its
+  deliverable is verifiably present — `grep -rn "CURRENCY_MINOR_UNITS" lib/` and
+  `grep -rn "getMinorUnit" lib/` return nothing, no controller contains the string `IRR`, and
+  `grep -rn "?? 'IRR'" src/` returns nothing, so fraction digits come from the configured `Currency`
+  aggregate. T267 found this while choosing between T266 and T267 and deliberately left the box alone,
+  because this file records that convergence never rewrites existing task state.
+
+  T274 made one such pass over the `(missing)` annotations. The remainder is unexamined, and the
+  harm is concrete: `/speckit.implement` works the first genuinely incomplete task and
+  `AGENTS.md` requires verifying each unchecked task's state before selecting it, so every one of
+  these lines costs a fresh investigation — and a line that is stale but read as genuine invites a
+  rewrite of completed work, which `AGENTS.md` forbids. The measurement is cheap; the table is the
+  deliverable.
+
+## Known artifact issues in this phase (recorded here; do not open duplicate tasks)
+
+- **US6 is unimplemented and correctly owned.** `PublicEvidenceLinkService`, `EvidenceQueryService`,
+  `AppDataStreamResponse` and `AuditQueryService` do not exist, and `EvidenceController` implements
+  `content()` but neither `createLink()` nor `deactivateLink()`. T090-T099 own all of it and are all
+  `[ ]`. Not re-appended: one gap, one owner.
+- **T275 is the suite's only failing test** and is blocked on a maintainer decision — amend
+  `contracts/ocs-api.yaml` to describe a stored-media-type response, or clarify FR-060 to mean
+  download-only — not on code. Owned, not duplicated, and not implementable until the decision.
+- **T304** is the same shape: SC-008's performance bound is either covered by a verification task or
+  explicitly deferred in the spec, and the choice is the spec owner's. Owned, not duplicated.
+- **Constitution checks found no violations.** All five principles are filled, and the currency
+  fallback T267 removed was the one place business configuration was being guessed in code
+  (Constitution III) and a financial effect was being wrong without being visible (Constitution IV).
+  Both are now addressed. No finding in this phase is CRITICAL.
+
+  **Verified by T316, marked on evidence rather than on a file existing.**
+  `tests/Integration/Migration/V1SchemaMigrationTest.php` declares `MAX_IDENTIFIER_LENGTH = 63` and
+  **asserts it**, not merely declares it: the assertion at line 195 compares `strlen($identifier)`
+  against the limit across the identifiers the migrations actually enumerate, and names the offending
+  identifier in the failure message. The test is also green -- 8 tests, 160 assertions. The
+  substance of the task is the assertion, so that is what was checked; a constant nobody compares
+  against would have satisfied a file-existence check and nothing else.
+
+  **Verified by T267 and marked by T316. Both named sites are absent:**
+
+  | Evidence | Result |
+  |---|---|
+  | `grep -rn "CURRENCY_MINOR_UNITS" lib/` | no matches |
+  | `grep -rn "getMinorUnit" lib/` | no matches |
+  | `grep -rn "IRR" lib/Controller/` | no matches |
+  | `grep -rn "?? 'IRR'" src/` | no matches |
+
+  Fraction digits now come from the administrator-configured `Currency` aggregate through
+  `CurrencyRepository`, reached via `$account->currency->minorUnit` in the application layer. The
+  front end contains no currency literal at all: `formatMoney` is a shared utility in
+  `src/utils/money` that takes a `Money`-shaped value, which is the *view* half of T267's requirement
+  and was delivered before T267 began. T267 found this while choosing between T266 and T267, chose
+  not to flip the box because this file records that convergence never rewrites existing task state,
+  and left the finding in `docs/reports/T267.md` for exactly this pass.
+
+  **T316 result: 120 unchecked lines reconciled against the repository. 2 marked, 118 left open.**
+
+  The evidence is mechanical and reproducible. For every unchecked line the named backticked paths were
+  extracted and resolved -- a bare filename such as `plan.md` or `DecisionForm.vue` was resolved
+  against `git ls-files` rather than treated as a literal path, because 15 of the 71 apparent
+  "missing" files exist under a directory and treating them as absent would have produced a table of
+  false findings.
+
+  **Marked `[X]` — 2.** T264 and T266, each with its evidence inline above.
+
+  **Named deliverable genuinely absent — 56.** No file of that name exists anywhere in the repository.
+  This is the real remaining work and it is coherent, not scattered:
+
+  | Group | Tasks | What is absent |
+  |---|---|---|
+  | US4 correction | T069, T076 | `CorrectionControllerTest.php`, `TransactionCorrection.spec.ts`, `transaction-correction.spec.ts` |
+  | US5 configuration administration | T078-T089 | `CurrencyService`, `CostCenterService`, `ExpenseTypeService`, `FinanceAssignmentService`, `AccountAdministrationService`, `ConfigurationAuditService`, `ConfigurationController`, `src/stores/configuration.ts` and four test files |
+  | US6 traceability and evidence | T090-T099 | `AuditQueryService`, `EvidenceQueryService`, `AppDataStreamResponse`, `PublicEvidenceLinkService`, `AuditController`, `auditApi.ts`, `stores/audit.ts`, `AuditView.vue` and four test files |
+  | US7 reporting and export | T102-T104, T113, T114 | `ReportScopeTest`, `ExportersTest`, `ReportingControllerTest`, `DashboardReports.spec.ts`, `ReportsView.vue`, `reporting-export.spec.ts` |
+  | US8 cross-device UI | T115, T116, T119, T121-T123 | `ApplicationShell.spec.ts`, `RtlAccessibility.spec.ts`, `src/l10n.ts`, `useAsyncAction.ts`, `browser-matrix.spec.ts`, `ui-acceptance.md` |
+  | Polish and release gates | T124-T135, T137, T139 | `validate-openapi.sh`, `security-check.sh`, `package.sh`, `docs/architecture.md`, `docs/operations.md`, `docs/release.md`, three checklists, `EvidenceReconciliationService`, and four test files |
+  | Playwright journeys | T054, T066, T182, T194, T204 | every `tests/E2E/*.spec.ts` except `purchaser-submit.spec.ts` |
+  | Blocked | T109 | `PdfExporter.php` -- the font asset, a maintainer decision |
+
+  **Genuinely partial — 4, and each was checked behaviourally rather than by file presence:**
+
+  | Task | What was checked | Observed |
+  |---|---|---|
+  | T077 | test methods in `ConfigurationRulesTest.php` | **one** (`testCurrencyMinorUnitRange`) against the six rules the task names, so five are unwritten |
+  | T254 | whether the migration test executes a migration | it is now structural rather than a substring search, but it still reads `lib/Migration/*.php` **as text**; the task's demand that it "exercise the real migration path" is unmet |
+  | T276 | the controller and the service | `EvidenceController:229` still calls `deleteDraftEvidence()` for every state and `EvidenceService:106` still unlinks the binary before deactivating, behind a "will be enhanced" comment |
+  | T297 | the migration's `command_id` column | declared without `notnull => false`, so NOT NULL, while `AuditEvent::__construct()` types it `?string` |
+
+  **Reachable but blocked — 2.** T250 still exits 1: `sh scripts/preflight.sh` reports
+  `ERROR 1045 (28000): Access denied for user '-p'@'localhost'` and fails on every invocation, so the
+  HIGH-priority defect is unfixed. T291 needs a second acting identity, which `.env.testing`'s single
+  credential cannot express -- a harness gap, as its own note says.
+
+  **Present but unverified — 12, deliberately left `[ ]`.** T060, T072-T075, T117, T118, T120, T193,
+  T201, T211, T212, T215. Their named files exist, which is the only thing that proves, and T316's own
+  criterion is "present **and correct**". Two of them name a file to *modify* rather than a deliverable
+  to create (T211 `AuthorizationService`, T212 `TransactionService`), so file presence is not evidence
+  of anything at all. Marking these on presence would commit the error this task exists to remove, in
+  the opposite direction. Each needs one behavioural check -- read the method, or run the named test
+  -- and that is a task-sized unit of work, not a checkbox.
+
+  **Delivered, and the task's diagnosis verified in full rather than assumed.** Measured before the
+  fix: `sh scripts/preflight.sh` printed `ERROR 1045 (28000): Access denied for user '-p'@'localhost'`
+  and exited 1. `docker exec docker-db-1 env | grep -i mysql` shows why -- the official MariaDB image
+  publishes `MARIADB_USER`, `MARIADB_PASSWORD`, `MARIADB_ROOT_PASSWORD` and `MARIADB_DATABASE` and **no
+  `MYSQL_*` variable at all**, so the step asked for three variables that do not exist. Credentials now
+  come from `MARIADB_*` with a `MYSQL_*` fallback for a stock `mysql:` image, and the password is
+  expanded *inside* the database container so it never reaches the host's command line.
+
+  **The task's table of legacy tables is wrong in a number, and measuring found it.** The direction is
+  right and the count is not: the declared `oc_pcash_%` prefix matches **0** rows, `oc_pc_%` matches
+  **11**, not the 26 the task claims, plus `oc_migrations`.
+
+  **The prefix is reported, not chosen.** T252 — still `[ ]` — owns reconciling the legacy-table
+  premise and names T250 as one of the two guards derived from the wrong prefix, so the script queries
+  both and prints:
+
+  > preflight: WARNING - spec.md:333 declares the legacy tables are oc_pcash_* and none exists, while
+  > oc_pc_* tables do; T252 owns the reconciliation
+
+  A preflight that silently adopted one prefix would hide the disagreement the reconciliation exists to
+  settle; a preflight that *failed* on it would turn a documentation defect into a blocked build and
+  reproduce the always-red gate this task was raised to fix. `make preflight` now exits 0 and lists all
+  11 tables.
+
+  **`scripts/preflight.test.sh` is the real deliverable.** The gate is not run by `make check`, not by
+  `npm run check`, and by no CI — which is exactly why a permanently-red script looked like a healthy
+  one. Six assertions; two of them exist to stop the test being satisfied by a script that does nothing
+  (asserting that the step *reached the database*, and that it found the *right* tables rather than
+  merely that it ran).
+
+  **Four bugs in that test, all found by mutation, all of which would have shipped green.** `$?` inside
+  `$( )` is the substitution's status, so every assertion was reading the status of the arithmetic it
+  had just run — they passed unconditionally. `set -eu` aborted at the first failed probe, so a broken
+  gate reported one failure and silently skipped five. The password-leak check was **inverted**, passing
+  exactly when the secret leaked, and the mutation that printed the password survived. The count
+  assertion was a **lower bound** (`-ge`), so a gate printing `999` passed while listing eleven. The
+  last two are the same shape as the defect this task was raised for — an assertion that cannot fail —
+  reproduced in the fix for it.
+
+  Mutation-proven seven times, all killed: `MYSQL_*` credentials, the observed-prefix query removed, the
+  disagreement silenced, **the whole database step deleted**, the password printed, the count fabricated
+  as 999, the summary inflated by 5. The fourth is the one that matters most: a gate that passes by
+  never checking is worse than a gate that fails, because it converts an unknown into a green.
+
+  **Stated rather than glossed.** The password assertion checks the *output*, not the host process
+  table -- `docker exec -e FOO=...` never appears in a host argument list either, so that half of the
+  claim rests on reading the script, not on the test. And **nothing in CI runs either script**:
+  `.github/workflows/` does not exist, which is T239, and until it is built both remain manual gates.
+  That is the structural reason this defect went unnoticed and it is not fixed here.
+
+  No application code touched: the PHP suite is byte-identical at 745 tests / 3351 assertions / 1
+  pre-existing failure (T275). Report: `docs/reports/T250.md`.
