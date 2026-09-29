@@ -291,6 +291,164 @@ final class PurchaserFlowControllerTest extends TestCase
         $this->assertOcsResponseStructure($response, 201);
     }
 
+    // ===== T317: the contract-required command id on transaction create/update =====
+
+    /**
+     * `contracts/ocs-api.yaml:761` declares `CommandId` as `required: true`, and both operations
+     * `$ref` it: `POST /sheets/{sheetId}/transactions` at `:436` and `PATCH /transactions/{id}` at
+     * `:466`. The controller read the header and then dropped it, so a request without one was
+     * accepted and produced an un-replayable write.
+     *
+     * The status is 400 rather than 422 because this is a missing *parameter*, not an invalid body
+     * field. That is the status `ReviewController` already returns for the identical condition, and
+     * `ManagementReviewControllerTest::testRecordDecisionMissingCommandIdReturns400` already pins it.
+     * The 422 the mapper's `validation()` emits stays where it belongs, on the body fields this
+     * endpoint already refuses that way.
+     */
+    public function testCreateTransactionWithoutCommandIdReturns400(): void
+    {
+        $response = $this->client->request('POST', '/ocs/v2.php/apps/pettycash/api/v1/sheets/' . ContractFixtures::sheetId() . '/transactions', [
+            'json' => [
+                'expenseDate' => '2026-09-20',
+                'amountMinor' => 1000,
+            ],
+        ]);
+
+        $this->assertEquals(
+            400,
+            $response->getStatusCode(),
+            'contracts/ocs-api.yaml declares X-PettyCash-Command-ID required on this operation, so omitting '
+            . 'it must be refused rather than silently accepted'
+        );
+    }
+
+    public function testUpdateTransactionWithoutCommandIdReturns400(): void
+    {
+        $response = $this->client->request('PATCH', '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId(), [
+            'json' => [
+                'expenseDate' => '2026-09-21',
+                'amountMinor' => 2000,
+                'expectedVersion' => ContractFixtures::transactionVersion(),
+            ],
+        ]);
+
+        $this->assertEquals(
+            400,
+            $response->getStatusCode(),
+            'contracts/ocs-api.yaml declares X-PettyCash-Command-ID required on PATCH /transactions/{id} too'
+        );
+    }
+
+    /**
+     * The load-bearing one: a replayed create must not make a second transaction.
+     *
+     * FR-042 names "creating a revision" as something that must complete atomically, and FR-053 makes
+     * the audit rows unrepairable, so a retried request or a double-clicked button previously left a
+     * second transaction *and* a second `REVISION_CREATED` event behind. The response is compared
+     * whole, because a replay that returns a different transaction id is just as wrong as one that
+     * writes a duplicate row while returning 201.
+     */
+    public function testReplayingTheCreateWithTheSameCommandIdReturnsTheOriginalTransaction(): void
+    {
+        $commandId = ContractFixtures::commandId();
+        $body = [
+            'expenseDate' => '2026-09-22',
+            'amountMinor' => 4242,
+        ];
+
+        $first = $this->client->request('POST', '/ocs/v2.php/apps/pettycash/api/v1/sheets/' . ContractFixtures::sheetId() . '/transactions', [
+            'headers' => ['X-PettyCash-Command-ID' => $commandId],
+            'json' => $body,
+        ]);
+        $this->assertEquals(201, $first->getStatusCode(), 'the first create must succeed');
+
+        $second = $this->client->request('POST', '/ocs/v2.php/apps/pettycash/api/v1/sheets/' . ContractFixtures::sheetId() . '/transactions', [
+            'headers' => ['X-PettyCash-Command-ID' => $commandId],
+            'json' => $body,
+        ]);
+
+        $this->assertEquals(
+            201,
+            $second->getStatusCode(),
+            'a replay answers with the original result, so it stays 201 rather than becoming an error'
+        );
+        $this->assertSame(
+            $this->ocsData($first),
+            $this->ocsData($second),
+            'a replayed command must return the transaction the first call created, not a new one'
+        );
+    }
+
+    /**
+     * The other half of idempotency: the same command id with a *different* body is a client bug, and
+     * `IdempotencyService` answers it with `CommandConflict`, which the mapper turns into 409 -- the
+     * status this PATCH operation already declares.
+     */
+    public function testReusingACommandIdWithADifferentPayloadReturns409(): void
+    {
+        $commandId = ContractFixtures::commandId();
+
+        $first = $this->client->request('POST', '/ocs/v2.php/apps/pettycash/api/v1/sheets/' . ContractFixtures::sheetId() . '/transactions', [
+            'headers' => ['X-PettyCash-Command-ID' => $commandId],
+            'json' => ['expenseDate' => '2026-09-22', 'amountMinor' => 1000],
+        ]);
+        $this->assertEquals(201, $first->getStatusCode());
+
+        $second = $this->client->request('POST', '/ocs/v2.php/apps/pettycash/api/v1/sheets/' . ContractFixtures::sheetId() . '/transactions', [
+            'headers' => ['X-PettyCash-Command-ID' => $commandId],
+            'json' => ['expenseDate' => '2026-09-22', 'amountMinor' => 9999],
+        ]);
+
+        $this->assertEquals(
+            409,
+            $second->getStatusCode(),
+            'the same command id with a different payload is a conflict, not a second create'
+        );
+    }
+
+    /**
+     * The replay path for an edit, which is the case that differs from a create.
+     *
+     * A replayed `PATCH` must not produce a second revision: `updateTransaction()` creates a new
+     * revision on every call, and each one writes a `TRANSACTION_CHANGED` audit event that FR-053 makes
+     * permanent. So the assertion is on the transaction's identity *and* version, since a duplicate
+     * revision is exactly what an unchanged version proves did not happen.
+     */
+    public function testReplayingTheUpdateWithTheSameCommandIdDoesNotCreateASecondRevision(): void
+    {
+        $commandId = ContractFixtures::commandId();
+        $body = [
+            'expenseDate' => '2026-09-23',
+            'amountMinor' => 7777,
+            'description' => 'Replayed edit',
+            'expectedVersion' => ContractFixtures::transactionVersion(),
+        ];
+
+        $first = $this->client->request('PATCH', '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId(), [
+            'headers' => ['X-PettyCash-Command-ID' => $commandId],
+            'json' => $body,
+        ]);
+        $this->assertEquals(200, $first->getStatusCode(), 'the first update must succeed');
+
+        $second = $this->client->request('PATCH', '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId(), [
+            'headers' => ['X-PettyCash-Command-ID' => $commandId],
+            'json' => $body,
+        ]);
+
+        $this->assertEquals(200, $second->getStatusCode(), 'a replay answers with the original result');
+        $this->assertSame(
+            $this->ocsData($first),
+            $this->ocsData($second),
+            'a replayed edit must not bump the version, which is what a second revision would do'
+        );
+    }
+
+    /** The `ocs.data` payload, so two responses can be compared as the client sees them. */
+    private function ocsData(\Psr\Http\Message\ResponseInterface $response): mixed
+    {
+        return json_decode((string) $response->getBody(), true)['ocs']['data'] ?? null;
+    }
+
     public function testGetTransactionDetailReturns200WithTransactionDetail(): void
     {
         $response = $this->client->request('GET', '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId());

@@ -46,7 +46,7 @@ final class TransactionRevisionPersistenceTest extends TestCase
         $service = $this->container->query(TransactionService::class);
         $sheetId = $this->openSheet();
 
-        $transaction = $service->createTransaction($sheetId, '2026-09-20', 1000);
+        $transaction = $service->createTransaction($sheetId, '2026-09-20', 1000, 'cmd-persist-' . \OCA\PettyCash\Domain\Shared\Uuid::random());
 
         $revision = $transaction->revision();
 
@@ -66,7 +66,7 @@ final class TransactionRevisionPersistenceTest extends TestCase
         $service = $this->container->query(TransactionService::class);
         $sheetId = $this->openSheet();
 
-        $transaction = $service->createTransaction($sheetId, '2026-09-20', 1000);
+        $transaction = $service->createTransaction($sheetId, '2026-09-20', 1000, 'cmd-persist-' . \OCA\PettyCash\Domain\Shared\Uuid::random());
         $revisions = $this->container->query(TransactionRevisionRepository::class);
 
         $found = $revisions->findByTransactionId((int)$transaction->dbId);

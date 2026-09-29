@@ -329,7 +329,8 @@ final class Application extends App implements IBootstrap
                 $c->query(PrivateFileStore::class),
                 $c->query(CurrentUser::class),
                 $c->query(TransactionManager::class),
-                $c->query(AuditWriter::class)
+                $c->query(AuditWriter::class),
+                $c->query(IdempotencyService::class)
             );
         });
 

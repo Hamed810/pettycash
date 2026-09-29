@@ -6,6 +6,8 @@ namespace OCA\PettyCash\Application\Expense;
 
 use DateTimeImmutable;
 use InvalidArgumentException;
+use LogicException;
+use OCA\PettyCash\Application\Command\IdempotencyService;
 use OCA\PettyCash\Application\Port\AuditWriter;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Application\Port\PrivateFileStore;
@@ -38,83 +40,122 @@ final readonly class TransactionService
         private PrivateFileStore $fileStore,
         private CurrentUser $currentUser,
         private TransactionManager $transactionManager,
-        private AuditWriter $auditWriter
+        private AuditWriter $auditWriter,
+        private IdempotencyService $idempotencyService
     ) {}
 
     /**
-     * Create a draft transaction in an open sheet
+     * Create a draft transaction in an open sheet.
      *
-     * @param string $sheetId
-     * @param string $expenseDate
-     * @param int $amountMinor
-     * @return ExpenseTransaction
+     * Wrapped in `IdempotencyService` because `contracts/ocs-api.yaml:436` declares
+     * `X-PettyCash-Command-ID` `required: true` on this operation, and because FR-042 names "creating a
+     * revision" as something that must complete atomically while FR-053 makes the audit rows permanent.
+     * Without it, a retried request or a double-clicked button left a second transaction *and* a second
+     * `REVISION_CREATED` event behind.
+     *
+     * The shape follows `SubmitSheet::execute()`: `transactional()`, then `execute()`, then re-read the
+     * aggregate by public id. Two consequences of that shape are load-bearing here.
+     *
+     * The id is generated **inside** the closure, not before it. On a replay the closure never runs, so
+     * an id minted outside would be a fresh value for a row that was never written, and re-reading by it
+     * would return null for a command that in fact succeeded. The closure therefore returns the id it
+     * used, and `execute()` hands that same value back on a replay, so there is exactly one source for
+     * "which transaction did this command create".
+     *
+     * The sheet lookup and its ownership and status checks also moved inside, for the same reason: on a
+     * replay they must not run, because re-validating a command that already succeeded is how a replay
+     * turns into a spurious refusal.
      */
-    public function createTransaction(string $sheetId, string $expenseDate, int $amountMinor): ExpenseTransaction
-    {
-        $ownerUid = $this->currentUser->uid();
-        $sheet = $this->sheetRepository->findByPublicId($sheetId);
+    public function createTransaction(
+        string $sheetId,
+        string $expenseDate,
+        int $amountMinor,
+        string $commandId
+    ): ExpenseTransaction {
+        $payload = [
+            'sheet_id' => $sheetId,
+            'expense_date' => $expenseDate,
+            'amount_minor' => $amountMinor,
+            'command_id' => $commandId,
+        ];
 
-        if ($sheet === null || $sheet->ownerUid !== $ownerUid) {
-            throw new InvalidArgumentException('Sheet not found');
-        }
+        return $this->transactionManager->transactional(function () use ($sheetId, $expenseDate, $amountMinor, $commandId, $payload): ExpenseTransaction {
+            $stored = $this->idempotencyService->execute($commandId, $payload, function () use ($sheetId, $expenseDate, $amountMinor, $commandId): array {
+                $ownerUid = $this->currentUser->uid();
+                $sheet = $this->sheetRepository->findByPublicId($sheetId);
 
-        if ($sheet->status !== \OCA\PettyCash\Domain\Workflow\SheetStatus::Open) {
-            throw new InvalidArgumentException('Cannot add transactions to a submitted sheet');
-        }
+                if ($sheet === null || $sheet->ownerUid !== $ownerUid) {
+                    throw new InvalidArgumentException('Sheet not found');
+                }
 
-        $date = new DateTimeImmutable($expenseDate);
-        $currency = $sheet->currency;
-        $amount = Money::positive($amountMinor, $currency);
+                if ($sheet->status !== \OCA\PettyCash\Domain\Workflow\SheetStatus::Open) {
+                    throw new InvalidArgumentException('Cannot add transactions to a submitted sheet');
+                }
 
-        $transactionId = (string)Uuid::random();
-        $revisionId = (string)Uuid::random();
+                $date = new DateTimeImmutable($expenseDate);
+                $currency = $sheet->currency;
+                $amount = Money::positive($amountMinor, $currency);
 
-        $revision = TransactionRevision::draft($revisionId, 1, $date, $amount);
-        $transaction = new ExpenseTransaction($transactionId, $ownerUid, $revision);
-        $transaction->sheetId = $sheet->dbId;
+                $transactionId = (string)Uuid::random();
+                $revisionId = (string)Uuid::random();
 
-        return $this->transactionManager->transactional(function () use ($sheet, $transaction, $revision): ExpenseTransaction {
-            // `pettycash_transaction_revisions.transaction_id` is a NOT NULL join key onto
-            // `pettycash_transactions.id`, and `pettycash_transactions.active_revision_id` points
-            // back at the revision, so the two rows have to be written in three
-            // steps inside one transaction: the transaction first (leaving
-            // active_revision_id null), then the revision, then the back-link.
-            $this->transactionRepository->save($transaction);
+                $revision = TransactionRevision::draft($revisionId, 1, $date, $amount);
+                $transaction = new ExpenseTransaction($transactionId, $ownerUid, $revision);
+                $transaction->sheetId = $sheet->dbId;
 
-            $revision->transactionDbId = $transaction->dbId;
-            $this->revisionRepository->save($revision);
+                // `pettycash_transaction_revisions.transaction_id` is a NOT NULL join key onto
+                // `pettycash_transactions.id`, and `pettycash_transactions.active_revision_id` points
+                // back at the revision, so the two rows have to be written in three
+                // steps inside one transaction: the transaction first (leaving
+                // active_revision_id null), then the revision, then the back-link.
+                $this->transactionRepository->save($transaction);
 
-            $this->transactionRepository->save($transaction);
+                $revision->transactionDbId = $transaction->dbId;
+                $this->revisionRepository->save($revision);
 
-            $sheet->addTransaction($transaction);
-            $this->sheetRepository->save($sheet);
+                $this->transactionRepository->save($transaction);
 
-            // FR-051 "revision creation". Written inside the transaction so the event and the rows it
-            // describes commit together -- an audit event for a revision that was rolled back would be a
-            // record of something that never happened, and the reverse would lose the event silently.
-            $this->auditWriter->append([
-                'id' => (string)Uuid::random(),
-                'sheet_id' => $sheet->dbId,
-                'transaction_id' => $transaction->dbId,
-                'revision_id' => $revision->dbId,
-                'stage' => WorkflowStage::Draft->value,
-                'decision_id' => null,
-                'entity_type' => 'transaction',
-                'entity_id' => $transaction->publicId,
-                'event_type' => AuditEventType::RevisionCreated->value,
-                'explanation' => '',
-                // A first revision supersedes nothing, so there is no prior state to compare against.
-                // Stated explicitly rather than left to look like a missing capture.
-                'before' => [],
-                'after' => [
-                    'revision_number' => $revision->number(),
-                    'amount_minor' => $revision->amount()->minorUnits(),
-                    'currency' => (string) $revision->amount()->currency(),
-                    'expense_date' => $revision->expenseDate()->format(\DateTimeInterface::ATOM),
-                    'is_correction' => false,
-                ],
-                'command_id' => null,
-            ]);
+                $sheet->addTransaction($transaction);
+                $this->sheetRepository->save($sheet);
+
+                // FR-051 "revision creation". Written inside the transaction so the event and the rows
+                // it describes commit together -- an audit event for a revision that was rolled back
+                // would be a record of something that never happened, and the reverse would lose the
+                // event silently. Inside the idempotent closure, so a replay writes no second event.
+                $this->auditWriter->append([
+                    'id' => (string)Uuid::random(),
+                    'sheet_id' => $sheet->dbId,
+                    'transaction_id' => $transaction->dbId,
+                    'revision_id' => $revision->dbId,
+                    'stage' => WorkflowStage::Draft->value,
+                    'decision_id' => null,
+                    'entity_type' => 'transaction',
+                    'entity_id' => $transaction->id,
+                    'event_type' => AuditEventType::RevisionCreated->value,
+                    'explanation' => '',
+                    // A first revision supersedes nothing, so there is no prior state to compare
+                    // against. Stated explicitly rather than left to look like a missing capture.
+                    'before' => [],
+                    'after' => [
+                        'revision_number' => $revision->number(),
+                        'amount_minor' => $revision->amount()->minorUnits(),
+                        'currency' => (string) $revision->amount()->currency(),
+                        'expense_date' => $revision->expenseDate()->format(\DateTimeInterface::ATOM),
+                        'is_correction' => false,
+                    ],
+                    'command_id' => $commandId,
+                ]);
+
+                return ['transaction_id' => $transaction->id];
+            });
+
+            // Re-read the aggregate the command created, exactly as `SubmitSheet` re-reads its sheet.
+            // On a replay `execute()` returned the stored response, so this resolves to the original
+            // transaction rather than minting a second one.
+            $transaction = $this->transactionRepository->findByPublicId($stored['transaction_id'] ?? '');
+            if ($transaction === null) {
+                throw new LogicException('Transaction not found after creation');
+            }
 
             return $transaction;
         });
@@ -130,7 +171,22 @@ final readonly class TransactionService
      * @param string|null $costCenterId   public id; code and name are snapshotted from it
      * @param string|null $expenseTypeId  public id; the title is snapshotted from it
      * @param int $expectedVersion
+     * @param string $commandId
      * @return ExpenseTransaction
+     *
+     * Wrapped in `IdempotencyService` because `contracts/ocs-api.yaml:466` declares
+     * `X-PettyCash-Command-ID` `required: true` on this PATCH. It matters more here than on the create,
+     * because this method creates a **new revision on every call** and writes a `TRANSACTION_CHANGED`
+     * audit event for it, and FR-053 makes those rows permanent.
+     *
+     * `expectedVersion` is not a substitute. It refuses a *concurrent* edit, but a sequential retry of a
+     * request that already succeeded would otherwise pass it, because the client resends the version it
+     * originally read. Measured before this change: replaying a PATCH answered 422 stale-version,
+     * which is the duplicate revision showing up as a confusing error rather than as a duplicate.
+     *
+     * The whole body -- ownership, sheet status, version, the revision build, the writes and the audit
+     * event -- sits inside the closure, for the same reason as in `createTransaction()`: on a replay the
+     * closure must not run, so none of these checks may fire a second time.
      */
     public function updateTransaction(
         string $transactionId,
@@ -139,8 +195,22 @@ final readonly class TransactionService
         ?string $description,
         ?string $costCenterId,
         ?string $expenseTypeId,
-        int $expectedVersion
+        int $expectedVersion,
+        string $commandId
     ): ExpenseTransaction {
+        $payload = [
+            'transaction_id' => $transactionId,
+            'expense_date' => $expenseDate,
+            'amount_minor' => $amountMinor,
+            'description' => $description,
+            'cost_center_id' => $costCenterId,
+            'expense_type_id' => $expenseTypeId,
+            'expected_version' => $expectedVersion,
+            'command_id' => $commandId,
+        ];
+
+        return $this->transactionManager->transactional(function () use ($transactionId, $expenseDate, $amountMinor, $description, $costCenterId, $expenseTypeId, $expectedVersion, $commandId, $payload): ExpenseTransaction {
+            $this->idempotencyService->execute($commandId, $payload, function () use ($transactionId, $expenseDate, $amountMinor, $description, $costCenterId, $expenseTypeId, $expectedVersion, $commandId): array {
         $ownerUid = $this->currentUser->uid();
         $transaction = $this->transactionRepository->findByPublicId($transactionId);
 
@@ -240,7 +310,6 @@ final readonly class TransactionService
         $transaction->activate($revision);
         $transaction->lockVersion++;
 
-        return $this->transactionManager->transactional(function () use ($transaction, $revision, $current): ExpenseTransaction {
             // See createTransaction(): the revision needs the transaction's internal
             // id, and the transaction's active_revision_id needs the revision's.
             $this->transactionRepository->save($transaction);
@@ -253,9 +322,8 @@ final readonly class TransactionService
             // FR-051 "transaction changes", and the one event kind whose whole purpose is a
             // before-and-after pair: a change is only legible as a diff. The prior values come from
             // `$current`, the revision as it stood *before* `complete()` ran, so the snapshot is the real
-            // previous state and not a re-read of the already-mutated object.
-            //
-            // `command_id` is null because this entry point is not command-wrapped; see the report.
+            // previous state and not a re-read of the already-mutated object. It sits inside the
+            // idempotent closure, so a replayed edit writes no second event.
             $this->auditWriter->append([
                 'id' => (string)Uuid::random(),
                 'sheet_id' => $transaction->sheetId,
@@ -283,10 +351,22 @@ final readonly class TransactionService
                     'cost_center_name' => $revision->costCenterName,
                     'expense_type_title' => $revision->expenseTypeTitle(),
                 ],
-                'command_id' => null,
+                'command_id' => $commandId,
             ]);
 
-            return $transaction;
+                return ['transaction_id' => $transaction->id];
+            });
+
+            // Re-read, exactly as `SubmitSheet` re-reads its sheet and `createTransaction()` re-reads its
+            // transaction. On a replay `execute()` returned the stored response, so this resolves to the
+            // transaction as the *first* call left it -- same version, same active revision -- instead of
+            // a second edit.
+            $stored = $this->transactionRepository->findByPublicId($transactionId);
+            if ($stored === null) {
+                throw new LogicException('Transaction not found after update');
+            }
+
+            return $stored;
         });
     }
 

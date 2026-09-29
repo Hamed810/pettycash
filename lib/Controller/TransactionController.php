@@ -54,6 +54,18 @@ class TransactionController extends OCSController
     public function create(string $sheetId, ?string $expenseDate = null, ?int $amountMinor = null): DataResponse
     {
         $commandId = $this->request->getHeader('X-PettyCash-Command-ID');
+        // `contracts/ocs-api.yaml:436` declares this header `required: true`. It is refused with 400, the
+        // status `ReviewController` already returns for the identical condition, because a missing
+        // required *parameter* is a malformed request rather than an invalid body field -- the 422 that
+        // `validation()` emits stays with `expenseDate` and `amountMinor` below.
+        if ($commandId === null || trim($commandId) === '') {
+            return $this->ocsErrorMapper->badRequest(
+                'Required fields are missing',
+                null,
+                ['commandId' => ['commandId is required']]
+            );
+        }
+
         $fieldErrors = [];
         if ($expenseDate === null || trim($expenseDate) === '') {
             $fieldErrors['expenseDate'] = ['expenseDate is required'];
@@ -66,7 +78,7 @@ class TransactionController extends OCSController
         }
 
         try {
-            $transaction = $this->transactionService->createTransaction($sheetId, $expenseDate, $amountMinor);
+            $transaction = $this->transactionService->createTransaction($sheetId, $expenseDate, $amountMinor, $commandId);
             return new DataResponse($this->formatTransaction($transaction), 201);
         } catch (\Throwable $e) {
             return $this->ocsErrorMapper->map($e, $commandId);
@@ -112,6 +124,16 @@ class TransactionController extends OCSController
         ?int $expectedVersion = null
     ): DataResponse {
         $commandId = $this->request->getHeader('X-PettyCash-Command-ID');
+        // As in `create()`: the contract declares this header required on PATCH too
+        // (`contracts/ocs-api.yaml:466`), and a missing required parameter is a 400 rather than a 422.
+        if ($commandId === null || trim($commandId) === '') {
+            return $this->ocsErrorMapper->badRequest(
+                'Required fields are missing',
+                null,
+                ['commandId' => ['commandId is required']]
+            );
+        }
+
         $fieldErrors = [];
         if ($expenseDate === null || trim($expenseDate) === '') {
             $fieldErrors['expenseDate'] = ['expenseDate is required'];
@@ -134,7 +156,8 @@ class TransactionController extends OCSController
                 $description,
                 $costCenterId,
                 $expenseTypeId,
-                $expectedVersion
+                $expectedVersion,
+                $commandId
             );
             return new DataResponse($this->formatTransaction($transaction));
         } catch (\Throwable $e) {

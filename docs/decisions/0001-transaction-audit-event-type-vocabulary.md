@@ -104,8 +104,8 @@ the reason the measurement was taken before choosing.
 - **`TransactionService::createTransaction()`, `updateTransaction()` and `EvidenceService::uploadEvidence()`
   are not command-wrapped**, so their events record a null `command_id`, which required
   `Version010400Date20260929000000` to make that column nullable. FR-052 does not list `command_id` among
-  the fields an event must retain. Wrapping these transitions in `IdempotencyService` is **T317**, and when
-  that happens these rows begin carrying real command ids — the nullable column is correct for both
-  states. (First written as "T214", which was wrong: T214's four named handlers were already delivered by
+  the fields an event must retain. Wrapping these transitions in `IdempotencyService` is **T317**, which is
+  now done for the two `TransactionService` methods: their events carry a real command id. Only
+  `EvidenceService::uploadEvidence()` still records null, and the nullable column remains correct for it. (First written as "T214", which was wrong: T214's four named handlers were already delivered by
   T149, and the two unwrapped handlers are in `TransactionService`, which T214 does not name. See
   `docs/reports/T214.md`.)

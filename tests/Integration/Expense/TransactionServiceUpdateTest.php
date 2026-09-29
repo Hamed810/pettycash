@@ -17,7 +17,9 @@ use OCA\PettyCash\Domain\Shared\Money;
 use OCA\PettyCash\Domain\Workflow\SheetStatus;
 use OCA\PettyCash\Tests\TestDoubles\FixedClock;
 use OCA\PettyCash\Tests\TestDoubles\InMemoryCostCenterRepository;
+use OCA\PettyCash\Application\Command\IdempotencyService;
 use OCA\PettyCash\Tests\TestDoubles\InMemoryAuditWriter;
+use OCA\PettyCash\Tests\TestDoubles\InMemoryCommandResultRepository;
 use OCA\PettyCash\Tests\TestDoubles\InMemoryCurrentUser;
 use OCA\PettyCash\Tests\TestDoubles\InMemoryEvidenceRepository;
 use OCA\PettyCash\Tests\TestDoubles\InMemoryExpenseSheetRepository;
@@ -135,7 +137,8 @@ final class TransactionServiceUpdateTest extends TestCase
             // `TRANSACTION_CHANGED` here, so a test that constructs the service directly has to supply
             // one. The in-memory writer is used rather than the real service so these tests stay focused
             // on the revision semantics they were written for.
-            new InMemoryAuditWriter()
+            new InMemoryAuditWriter(),
+            new IdempotencyService(new InMemoryCommandResultRepository())
         );
     }
 
@@ -183,7 +186,8 @@ final class TransactionServiceUpdateTest extends TestCase
             null,                        // description omitted -> the partial branch
             self::COST_CENTER_ID,
             self::EXPENSE_TYPE_ID,       // supplied, and is a UUID
-            0
+            0,
+            'cmd-t317-1'
         );
 
         $stored = $this->activeRevision();
@@ -209,7 +213,8 @@ final class TransactionServiceUpdateTest extends TestCase
             null,
             self::OTHER_COST_CENTER_ID,  // a different cost centre than the current revision's
             self::EXPENSE_TYPE_ID,
-            0
+            0,
+            'cmd-t317-2'
         );
 
         $stored = $this->activeRevision();
@@ -230,7 +235,8 @@ final class TransactionServiceUpdateTest extends TestCase
             'new description',
             self::OTHER_COST_CENTER_ID,
             self::OTHER_EXPENSE_TYPE_ID,
-            0
+            0,
+            'cmd-t317-3'
         );
 
         $stored = $this->activeRevision();
@@ -254,7 +260,8 @@ final class TransactionServiceUpdateTest extends TestCase
             null,
             null,
             null,
-            0
+            0,
+            'cmd-t317-4'
         );
 
         $stored = $this->activeRevision();
@@ -278,7 +285,8 @@ final class TransactionServiceUpdateTest extends TestCase
             'd',
             self::COST_CENTER_ID,
             'no-such-expense-type',
-            0
+            0,
+            'cmd-t317-5'
         );
     }
 
@@ -294,7 +302,8 @@ final class TransactionServiceUpdateTest extends TestCase
             'd',
             'no-such-cost-centre',
             self::EXPENSE_TYPE_ID,
-            0
+            0,
+            'cmd-t317-6'
         );
     }
 
@@ -314,7 +323,8 @@ final class TransactionServiceUpdateTest extends TestCase
             'new description',
             self::COST_CENTER_ID,
             self::EXPENSE_TYPE_ID,
-            0
+            0,
+            'cmd-t317-7'
         );
 
         self::assertCount($before + 1, $this->revisions->findByTransactionId(1));

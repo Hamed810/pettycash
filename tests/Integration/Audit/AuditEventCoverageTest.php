@@ -112,7 +112,7 @@ final class AuditEventCoverageTest extends TestCase
     {
         $this->seedSheet();
 
-        $this->transactionService()->createTransaction(self::SHEET_ID, '2026-02-01', 5000);
+        $this->transactionService()->createTransaction(self::SHEET_ID, '2026-02-01', 5000, 'cmd-create');
 
         $events = $this->eventsOfType('REVISION_CREATED');
         self::assertCount(1, $events, 'creating a transaction must record exactly one revision creation');
@@ -124,13 +124,67 @@ final class AuditEventCoverageTest extends TestCase
     {
         $this->seedSheet();
 
-        $this->transactionService()->createTransaction(self::SHEET_ID, '2026-02-01', 5000);
+        $this->transactionService()->createTransaction(self::SHEET_ID, '2026-02-01', 5000, 'cmd-create');
 
         $after = $this->eventsOfType('REVISION_CREATED')[0]['after'];
         self::assertSame(5000, $after['amount_minor'] ?? null);
         self::assertSame('2026-02-01', substr((string)($after['expense_date'] ?? ''), 0, 10));
         self::assertSame(1, $after['revision_number'] ?? null, 'the first revision is number 1');
         self::assertFalse($after['is_correction'] ?? null, 'a first revision is not a correction');
+    }
+
+    /**
+     * The audit event must carry the command id that produced it.
+     *
+     * T213 recorded `command_id => null` here, which is why `Version010400Date20260929000000` had to make
+     * the column nullable. Now that the command id reaches the service it is recorded, so the event can
+     * be correlated back to the request that caused it.
+     *
+     * Written after a mutation showed the replay tests could not see this: setting `command_id` back to
+     * `null` left all five T317 tests green. The replay assertions prove the *write* happens once; only
+     * this proves the event says which command it was.
+     */
+    public function testTheRevisionCreatedEventCarriesTheCommandIdThatProducedIt(): void
+    {
+        $this->seedSheet();
+
+        $this->transactionService()->createTransaction(self::SHEET_ID, '2026-02-01', 5000, 'cmd-correlation');
+
+        $events = $this->eventsOfType('REVISION_CREATED');
+        self::assertCount(1, $events);
+        self::assertSame(
+            'cmd-correlation',
+            $events[0]['command_id'] ?? null,
+            'an audit event that cannot be correlated to its command is why the column had to be nullable'
+        );
+    }
+
+    public function testTheTransactionChangedEventCarriesTheCommandIdThatProducedIt(): void
+    {
+        $this->seedSheet();
+        $this->seedCostCenter();
+        $expenseType = ExpenseType::create('Travel', null, false);
+        $expenseType->id = 1;
+        $expenseType->publicId = 'et-1';
+
+        $service = $this->transactionService([$expenseType]);
+        $transaction = $service->createTransaction(self::SHEET_ID, '2026-02-01', 5000, 'cmd-a');
+        $this->audit->clear();
+
+        $service->updateTransaction(
+            $transaction->id,
+            '2026-02-02',
+            6000,
+            'Taxi to client site',
+            'cc-1',
+            'et-1',
+            $transaction->lockVersion,
+            'cmd-b-correlation'
+        );
+
+        $events = $this->eventsOfType('TRANSACTION_CHANGED');
+        self::assertCount(1, $events);
+        self::assertSame('cmd-b-correlation', $events[0]['command_id'] ?? null);
     }
 
     // ===== transaction changes =====
@@ -144,7 +198,7 @@ final class AuditEventCoverageTest extends TestCase
         $expenseType->publicId = 'et-1';
 
         $service = $this->transactionService([$expenseType]);
-        $transaction = $service->createTransaction(self::SHEET_ID, '2026-02-01', 5000);
+        $transaction = $service->createTransaction(self::SHEET_ID, '2026-02-01', 5000, 'cmd-create');
         $this->audit->clear();
 
         $service->updateTransaction(
@@ -154,7 +208,8 @@ final class AuditEventCoverageTest extends TestCase
             'Taxi to client site',
             'cc-1',
             'et-1',
-            $transaction->lockVersion
+            $transaction->lockVersion,
+            'cmd-routable'
         );
 
         $events = $this->eventsOfType('TRANSACTION_CHANGED');
@@ -178,7 +233,7 @@ final class AuditEventCoverageTest extends TestCase
         $expenseType->publicId = 'et-1';
 
         $service = $this->transactionService([$expenseType]);
-        $transaction = $service->createTransaction(self::SHEET_ID, '2026-02-01', 5000);
+        $transaction = $service->createTransaction(self::SHEET_ID, '2026-02-01', 5000, 'cmd-create');
         $this->audit->clear();
 
         $service->updateTransaction(
@@ -188,7 +243,8 @@ final class AuditEventCoverageTest extends TestCase
             'Taxi to client site',
             'cc-1',
             'et-1',
-            $transaction->lockVersion
+            $transaction->lockVersion,
+            'cmd-routable'
         );
 
         $event = $this->eventsOfType('TRANSACTION_CHANGED')[0];
@@ -328,7 +384,7 @@ final class AuditEventCoverageTest extends TestCase
         $expenseType->publicId = 'et-1';
 
         $service = $this->transactionService([$expenseType]);
-        $transaction = $service->createTransaction(self::SHEET_ID, '2026-02-01', 5000);
+        $transaction = $service->createTransaction(self::SHEET_ID, '2026-02-01', 5000, 'cmd-create');
         $service->updateTransaction(
             $transaction->id,
             '2026-02-01',
@@ -336,7 +392,8 @@ final class AuditEventCoverageTest extends TestCase
             'Original description',
             'cc-1',
             'et-1',
-            $transaction->lockVersion
+            $transaction->lockVersion,
+            'cmd-routable'
         );
         $this->audit->clear();
 
@@ -376,7 +433,8 @@ final class AuditEventCoverageTest extends TestCase
             new InMemoryPrivateFileStore(),
             new InMemoryCurrentUser(self::OWNER),
             new InMemoryTransactionManager(),
-            $this->audit
+            $this->audit,
+            new IdempotencyService(new InMemoryCommandResultRepository())
         );
     }
 

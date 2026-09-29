@@ -177,7 +177,8 @@ $container->register(TransactionService::class, fn($c) => new TransactionService
     $c->query(PrivateFileStore::class),
     $c->query(CurrentUser::class),
     $c->query(TransactionManager::class),
-    $c->query(AuditWriter::class)
+    $c->query(AuditWriter::class),
+    $c->query(IdempotencyService::class)
 ));
 
 $container->register(EvidenceService::class, fn($c) => new EvidenceService(
