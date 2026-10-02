@@ -578,13 +578,253 @@ final class PurchaserFlowControllerTest extends TestCase
 
     public function testListAuditReturns200WithAuditPage(): void
     {
-        $response = $this->client->request('GET', '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId() . '/audit', [
+        $response = $this->client->request('GET', $this->auditUrl(), [
             'query' => ['page' => 1, 'pageSize' => 25],
         ]);
 
         // Contract: GET /transactions/{id}/audit returns 200 with AuditPage
         $this->assertEquals(200, $response->getStatusCode(), 'GET /transactions/{id}/audit should return 200 OK');
         $this->assertOcsResponseStructure($response, 200);
+    }
+
+    /**
+     * T319: `contracts/ocs-api.yaml:581` declares this operation's `200` as `AuditPage`, which at
+     * `:913-922` is `PageMeta` (`page`, `pageSize`, `total`, all `required`) plus `items`.
+     *
+     * `testListAuditReturns200WithAuditPage` above sends `page`/`pageSize` and asserts only the
+     * status and the OCS envelope, which stops at `ocs.meta` and never looks at `ocs.data`. It passed
+     * while the endpoint returned a bare array, which is the whole reason this gap read as covered.
+     * These assertions read `ocs.data`, and they read it as data: a response carrying the right keys
+     * with the wrong types still fails.
+     */
+    public function testTheAuditResponseCarriesTheAuditPageShape(): void
+    {
+        $response = $this->client->request('GET', $this->auditUrl(), [
+            'query' => ['page' => 1, 'pageSize' => 25],
+        ]);
+
+        $data = json_decode((string) $response->getBody(), true)['ocs']['data'] ?? null;
+
+        self::assertIsArray(
+            $data,
+            'AuditPage is an object carrying PageMeta plus items. A JSON array here means the endpoint '
+            . 'still returns the bare list, and a client reading `data.items` gets nothing'
+        );
+        foreach (['page', 'pageSize', 'total'] as $key) {
+            self::assertArrayHasKey(
+                $key,
+                $data,
+                "PageMeta marks '{$key}' as required, so its absence is a contract violation rather "
+                . 'than an optional field'
+            );
+            self::assertIsInt($data[$key], "'{$key}' must be an integer per PageMeta");
+        }
+        self::assertArrayHasKey('items', $data, "AuditPage's second member is 'items'");
+        self::assertIsArray($data['items'], 'items must be an array of AuditEvent');
+    }
+
+    /**
+     * The three `PageMeta` values must describe the request that was actually made.
+     *
+     * A response that always reports the defaults would satisfy the shape assertions above while
+     * ignoring the query entirely, so the echoed values are compared against what was sent.
+     */
+    public function testTheAuditResponseEchoesTheRequestedPage(): void
+    {
+        $response = $this->client->request('GET', $this->auditUrl(), [
+            'query' => ['page' => 1, 'pageSize' => 2],
+        ]);
+
+        $data = json_decode((string) $response->getBody(), true)['ocs']['data'] ?? [];
+
+        self::assertSame(1, $data['page'] ?? null, 'the response must echo the requested page');
+        self::assertSame(
+            2,
+            $data['pageSize'] ?? null,
+            'the response must echo the requested page size, not the default of 25. A fixed value here '
+            . 'means pageSize is ignored'
+        );
+        self::assertLessThanOrEqual(
+            2,
+            count($data['items'] ?? []),
+            'pageSize=2 must bound the returned slice'
+        );
+    }
+
+    /**
+     * `page` must actually move the window, and `total` must count the whole scoped set.
+     *
+     * `total` is the field most easily got wrong in the direction that still looks correct: reporting
+     * `count($items)` makes a single page's length look like the whole history, and a paginated
+     * client then stops after page 1 having silently missed every later event. US6/AC1 requires every
+     * official event to be reachable, so `total` is the field that makes the rest reachable.
+     * `AccountControllerTest:228` already pins this distinction for its endpoint — same rule here.
+     */
+    public function testPagingTheAuditWindowReachesEveryEventExactlyOnce(): void
+    {
+        $this->recordThreeAuditEvents();
+
+        $first = $this->auditPage(1, 1);
+        self::assertCount(1, $first['items'], 'pageSize=1 must return exactly one event');
+
+        $total = $first['total'];
+        self::assertGreaterThanOrEqual(
+            3,
+            $total,
+            'total counts the whole scoped set. Three edits were recorded, so a total below three means '
+            . 'the count describes the page rather than the history'
+        );
+
+        // Walk every page and collect the ids. This is the assertion the bare-array response cannot
+        // pass: `items` does not exist there, so the walk sees nothing and reports zero events.
+        $seen = [];
+        $pages = 0;
+        while ($pages++ < 50) {
+            $page = $this->auditPage($pages, 1);
+            foreach ($page['items'] as $item) {
+                $seen[] = $item['id'] ?? null;
+            }
+            if (count($page['items']) < 1) {
+                break;
+            }
+        }
+
+        $distinct = array_values(array_unique(array_filter($seen)));
+
+        self::assertNotEmpty($seen, 'paging the audit window must reach events at all');
+        self::assertCount(
+            count($distinct),
+            array_filter($seen),
+            'an event must not repeat across pages, or paging duplicates history'
+        );
+        self::assertSame(
+            $total,
+            count($distinct),
+            'walking every page must yield exactly `total` distinct events. A total that disagrees with '
+            . 'what the pages actually yield means one of them is lying, and a client that trusts the '
+            . 'total stops early or loops forever'
+        );
+    }
+
+    /**
+     * Record three real audit events through the API, so this test does not depend on the fixture
+     * having any.
+     *
+     * `ContractFixtures` seeds no `pettycash_transaction_audit` rows, so a paging test that assumed
+     * them would walk an empty set and prove nothing — and one that assumed a *previous* suite had
+     * written some would be order-dependent, which is the failure mode the fixture exists to
+     * remove. `ReportAndExportControllerTest:36-43` states the same rule for the same reason.
+     *
+     * `PATCH /transactions/{id}` is used because it writes a `TRANSACTION_CHANGED` audit event on
+     * every call (FR-053 makes it permanent). Each edit bumps the optimistic lock, so the version is
+     * read back from each response rather than guessed.
+     */
+    private function recordThreeAuditEvents(): void
+    {
+        $version = ContractFixtures::transactionVersion();
+
+        for ($i = 1; $i <= 3; $i++) {
+            $response = $this->client->request(
+                'PATCH',
+                '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId(),
+                [
+                    'headers' => ['X-PettyCash-Command-ID' => ContractFixtures::commandId()],
+                    'json' => [
+                        'expenseDate' => '2026-09-2' . $i,
+                        'amountMinor' => 1000 + $i,
+                        'description' => 'audit paging fixture ' . $i,
+                        'expectedVersion' => $version,
+                    ],
+                ]
+            );
+            self::assertSame(200, $response->getStatusCode(), 'edit ' . $i . ' must succeed to record an audit event');
+
+            $version = json_decode((string) $response->getBody(), true)['ocs']['data']['version'] ?? null;
+            self::assertIsInt($version, 'the edit response must report the new lock version');
+        }
+    }
+
+    /**
+     * `contracts/ocs-api.yaml:766-772` fixes `PageSize` at `minimum: 1, maximum: 100`.
+     *
+     * Over-large is clamped and under-small is refused, matching the rule
+     * `ReportFilter` documents for the sibling surface (`ReportFilter.php:74` rejects `< 1`,
+     * `:93` clamps to `MAX_PAGE_SIZE`). Both directions are asserted because an implementation that
+     * refused a large page size would look reasonable and would break a client legitimately asking
+     * for the contract's own maximum.
+     */
+    public function testTheAuditPageSizeIsBoundedByTheContract(): void
+    {
+        $clamped = json_decode(
+            (string) $this->client->request('GET', $this->auditUrl(), [
+                'query' => ['page' => 1, 'pageSize' => 5000],
+            ])->getBody(),
+            true
+        )['ocs']['data'] ?? [];
+
+        self::assertSame(
+            100,
+            $clamped['pageSize'] ?? null,
+            'the contract caps pageSize at 100, so 5000 must be clamped down to it rather than refused'
+        );
+
+        $refused = $this->client->request('GET', $this->auditUrl(), [
+            'query' => ['page' => 1, 'pageSize' => 0],
+        ]);
+
+        self::assertContains(
+            $refused->getStatusCode(),
+            [400, 422],
+            'pageSize below the contract minimum is a client error and must be refused, not clamped'
+        );
+    }
+
+    /**
+     * The revisions endpoint has the identical bare-array shape and is **correct**.
+     *
+     * `contracts/ocs-api.yaml:567` declares a plain `Revision` array for it, with no `PageMeta`.
+     * This assertion exists to stop "make the audit page conform" from quietly becoming "make every
+     * list conform": a change that paged the revisions response would break a client written against
+     * the contract, and without this test nothing would say so.
+     */
+    public function testTheRevisionsEndpointStillReturnsABareArray(): void
+    {
+        $response = $this->client->request('GET', '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId() . '/revisions');
+
+        $data = json_decode((string) $response->getBody(), true)['ocs']['data'] ?? null;
+
+        self::assertIsArray($data, 'revisions returns an array');
+        self::assertSame(
+            array_keys($data),
+            range(0, count($data) - 1),
+            'contracts/ocs-api.yaml:567 declares a bare Revision array for this endpoint, so `data` must '
+            . 'stay a JSON list. It must NOT be wrapped in PageMeta -- that is a different contract'
+        );
+        self::assertArrayNotHasKey(
+            'items',
+            $data === [] ? [] : $data,
+            'the revisions response must not acquire an `items` key; only the audit endpoint declares AuditPage'
+        );
+    }
+
+    private function auditUrl(): string
+    {
+        return '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId() . '/audit';
+    }
+
+    /** @return array<string, mixed> */
+    private function auditPage(int $page, int $pageSize): array
+    {
+        $response = $this->client->request('GET', $this->auditUrl(), [
+            'query' => ['page' => $page, 'pageSize' => $pageSize],
+        ]);
+
+        self::assertSame(200, $response->getStatusCode(), "audit page {$page} must succeed");
+
+        $data = json_decode((string) $response->getBody(), true)['ocs']['data'] ?? [];
+        self::assertIsArray($data['items'] ?? null, "audit page {$page} must carry an `items` array");
+
+        return $data;
     }
 
     // ===== EVIDENCE =====

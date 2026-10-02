@@ -181,12 +181,48 @@ final class EvidenceDeactivationAuditShapeTest extends TestCase
         self::assertStringNotContainsString('"[]"', $event->afterJson);
     }
 
-    public function testDeactivationIsStillRefusedForEvidenceThatIsNotActive(): void
+    /**
+     * A repeat is a no-op, not a refusal.
+     *
+     * This test used to assert that deactivating already-inactive evidence threw
+     * `InvalidArgumentException`, which was right under the design this file was written for: the
+     * post-submission deactivation was treated as a one-way transition.
+     *
+     * **T072 changed that.** The maintainer decision on T318 settled
+     * `DELETE /evidence/{id}` as a *repeatable* command exempt from `X-PettyCash-Command-ID`, and this
+     * is the post-submission half of that same operation — so a repeat is a legitimate retry, not a
+     * caller error. Refusing it would make the endpoint non-repeatable while the contract exempts it
+     * from the header that guards non-repeatable commands, which is the same contradiction T318 was
+     * written to remove.
+     *
+     * What must survive a repeat is the *record*, and that is asserted here rather than the refusal:
+     * `Evidence::deactivate()` rewrites `deactivatedAt` unconditionally, so re-running it would answer
+     * 200 while recording a new deactivation instant.
+     *
+     * The content half of the same requirement — a submitted transaction's evidence keeps its bytes —
+     * is proved in `EvidenceRemovalContentRetentionTest`, which is the only place the difference between
+     * deactivating and deleting is visible.
+     */
+    public function testRepeatingADeactivationLeavesTheRecordedTimeUnchanged(): void
     {
-        $this->seedEvidence();
-        $this->service->deactivateEvidence('ev-1', 'submitted in error', 'cmd-1');
+        $seeded = $this->seedEvidence();
 
-        $this->expectException(\InvalidArgumentException::class);
+        $this->service->deactivateEvidence('ev-1', 'submitted in error', 'cmd-1');
+        $firstDeactivatedAt = $seeded->deactivatedAt?->format(\DateTimeInterface::ATOM);
+        self::assertNotNull($firstDeactivatedAt, 'the first deactivation records a time');
+
         $this->service->deactivateEvidence('ev-1', 'again', 'cmd-2');
+
+        self::assertSame(
+            $firstDeactivatedAt,
+            $seeded->deactivatedAt?->format(\DateTimeInterface::ATOM),
+            'a repeat must not re-record when the evidence was deactivated; otherwise the recorded instant '
+            . 'depends on how many times the client retried'
+        );
+        self::assertSame(
+            'submitted in error',
+            $seeded->deactivationReason,
+            'and the recorded reason is the first one, not the retry\'s'
+        );
     }
 }

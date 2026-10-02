@@ -42,7 +42,8 @@ final readonly class EvidenceService
      *
      * @param string $transactionPublicId
      * @param int $transactionDbId
-     * @param int $revisionNumber
+     * @param int $revisionNumber     the revision's sequence number, used for the AppData key only
+     * @param int|null $originRevisionDbId the revision this evidence is attached to
      * @param string $originalFilename
      * @param string $content
      * @param string $mediaType
@@ -52,6 +53,7 @@ final readonly class EvidenceService
         string $transactionPublicId,
         int $transactionDbId,
         int $revisionNumber,
+        ?int $originRevisionDbId,
         string $originalFilename,
         string $content,
         string $mediaType
@@ -70,7 +72,16 @@ final readonly class EvidenceService
         $evidence = new Evidence(
             $evidenceId,
             $transactionDbId,
-            1, // revision db ID - will be enhanced with proper revision tracking
+            // The revision this evidence was uploaded against, not a constant.
+            //
+            // This was hardcoded to `1` with the comment "will be enhanced with proper revision
+            // tracking", so every evidence row in the application claimed revision 1 forever — including
+            // rows uploaded while correcting, which are by definition attached to a *later* revision.
+            // FR-050 makes the active revision determine the transaction's current information, and
+            // FR-048 keeps each revision's history intact, so which revision an item belongs to is the
+            // difference between a reconstructable history and one that cannot say what was corrected
+            // when.
+            $originRevisionDbId ?? 0,
             $key,
             $originalFilename,
             $mediaType,
@@ -96,7 +107,7 @@ final readonly class EvidenceService
             // repository, so it is recorded as unknown rather than guessed. See the T213 report.
             'sheet_id' => null,
             'transaction_id' => $transactionDbId,
-            'revision_id' => 1,
+            'revision_id' => $originRevisionDbId,
             'stage' => 'EVIDENCE',
             'decision_id' => null,
             'entity_type' => 'evidence',
@@ -190,7 +201,22 @@ final readonly class EvidenceService
             }
 
             if (!$evidence->active) {
-                throw new InvalidArgumentException('Evidence already deactivated');
+                // Already deactivated: return it as it stands.
+                //
+                // This used to throw "Evidence already deactivated". T318 settled that
+                // `DELETE /evidence/{id}` is a **repeatable** command exempt from
+                // `X-PettyCash-Command-ID`, and this is the post-submission half of that same
+                // operation — so a repeat is a legitimate retry, not a caller error, and refusing it
+                // would make the endpoint non-repeatable while the contract exempts it from the header
+                // that guards non-repeatable commands.
+                //
+                // Returning early rather than falling through is what keeps the answer independent of
+                // retry count: `deactivate()` rewrites `deactivatedAt`, `deactivatedBy` and
+                // `deactivationReason` unconditionally, so re-running it would answer 200 while
+                // recording a *new* deactivation instant. The replay that shares this command id never
+                // reaches here at all — `IdempotencyService` returns its stored result — so this branch
+                // is the different-command-id retry, and it is a no-op.
+                return ['evidence_id' => $evidencePublicId];
             }
 
             // Store old state for audit
@@ -259,10 +285,28 @@ final readonly class EvidenceService
                 'command_id' => $commandId,
             ]);
 
-            return ['evidence' => $evidence];
+            return ['evidence_id' => $evidencePublicId];
         });
 
-        return $result['evidence'];
+        // Re-read rather than returning the aggregate from inside the closure.
+        //
+        // `IdempotencyService` stores the closure's response as JSON and reads it back as an **array**
+        // (`DbCommandResultRepository`: `json_decode($row['response_json'], true)`). Returning the
+        // `Evidence` object from inside meant the replay produced `['evidence' => [...array...]]`, and
+        // the `: Evidence` return type then threw — so every replayed post-submission deactivation
+        // answered `500 UNEXPECTED_FAILURE` with the message withheld, on a transaction whose evidence
+        // had in fact been deactivated correctly.
+        //
+        // Storing only the id makes the stored result something that can actually survive the round
+        // trip, and re-reading gives the caller the real aggregate. This is the same shape T317 settled
+        // for the transaction commands: re-read the aggregate by its public id after the block.
+        $stored = $this->evidenceRepository->findByPublicId((string) ($result['evidence_id'] ?? $evidencePublicId));
+
+        if ($stored === null) {
+            throw new InvalidArgumentException('Evidence not found');
+        }
+
+        return $stored;
     }
 
     /**

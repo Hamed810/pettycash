@@ -90,10 +90,6 @@ function formatDateTime(dateStr: string): string {
 </script>
 
 <style scoped>
-.prior-decision-history {
-	direction: rtl;
-}
-
 .prior-decision-history__title {
 	margin-block-end: 16px;
 }

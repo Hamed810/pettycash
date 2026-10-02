@@ -280,6 +280,7 @@ final class AuditEventCoverageTest extends TestCase
             'txn-1',
             1,
             1,
+            11,
             'invoice.pdf',
             'file-bytes',
             'application/pdf'
@@ -297,7 +298,7 @@ final class AuditEventCoverageTest extends TestCase
     public function testEvidenceAdditionAndDeactivationBothAppearForTheSameEvidence(): void
     {
         $service = $this->evidenceService();
-        $evidence = $service->uploadEvidence('txn-1', 1, 1, 'invoice.pdf', 'bytes', 'application/pdf');
+        $evidence = $service->uploadEvidence('txn-1', 1, 1, 11, 'invoice.pdf', 'bytes', 'application/pdf');
         $this->audit->clear();
 
         $service->deactivateEvidence($evidence->id, 'wrong file', 'cmd-1');

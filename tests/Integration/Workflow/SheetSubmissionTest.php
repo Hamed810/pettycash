@@ -404,6 +404,7 @@ $revision = TransactionRevision::draft(
             'tx-1',
             1,
             1,
+            11,
             'large-file.pdf',
             $largeContent,
             'application/pdf'
@@ -424,6 +425,7 @@ $revision = TransactionRevision::draft(
             'tx-1',
             1,
             1,
+            11,
             'valid-file.pdf',
             $validContent,
             'application/pdf'
@@ -450,6 +452,7 @@ $revision = TransactionRevision::draft(
             'tx-1',
             1,
             1,
+            11,
             'test-file.txt',
             $validContent,
             'text/plain'

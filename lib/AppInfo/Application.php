@@ -6,6 +6,13 @@ namespace OCA\PettyCash\AppInfo;
 
 use OCA\PettyCash\Application\Command\CommandResultRepository;
 use OCA\PettyCash\Application\Command\IdempotencyService;
+use OCA\PettyCash\Application\Configuration\CostCenterService;
+use OCA\PettyCash\Domain\Shared\Clock;
+use OCA\PettyCash\Application\Port\AdministratorCheck;
+use OCA\PettyCash\Application\Configuration\CurrencyService;
+use OCA\PettyCash\Application\Configuration\ExpenseTypeService;
+use OCA\PettyCash\Application\Audit\ConfigurationAuditService;
+use OCA\PettyCash\Application\Configuration\FinanceAssignmentService;
 use OCA\PettyCash\Application\Expense\SheetService;
 use OCA\PettyCash\Application\Expense\TransactionService;
 use OCA\PettyCash\Application\Evidence\EvidenceService;
@@ -182,9 +189,16 @@ final class Application extends App implements IBootstrap
         });
 
         // The configuration audit stream (FR-055). Same class, different bound table and subject
-        // columns, so the seven-method AuditEventRepository port is unchanged and the reads stay
+        // columns, so the single AuditEventRepository port is unchanged and the reads stay
         // stream-scoped. Registered under a distinct key rather than as a second
         // AuditEventRepository binding, which would make the transaction stream ambiguous.
+        //
+        // T319 added `countByTransactionId()` to that port, which makes it the ninth method rather
+        // than the seven this comment used to claim — the count was added precisely because a stale
+        // count is what this gap turned on, so the number here had to be corrected with it. It counts
+        // within whichever table this binding resolves to, so a configuration-stream caller gets a
+        // configuration count; nothing calls it that way, and the `AuditEventRepository` binding
+        // above is the transaction stream that `GET /transactions/{id}/audit` uses.
         $context->registerService('PettyCashConfigurationAuditRepository', function ($c) {
             return new DbAuditEventRepository(
                 $c->query(IDBConnection::class),
@@ -306,6 +320,67 @@ final class Application extends App implements IBootstrap
         // Idempotency service
         $context->registerService(IdempotencyService::class, function ($c) {
             return new IdempotencyService($c->query(CommandResultRepository::class));
+        });
+
+        // Configuration administration services (T081, T082, T083).
+        //
+        // Registered explicitly rather than autowired, matching the other application services here.
+        // Every dependency is already bound above, so autowiring would also resolve them -- the
+        // registration exists to make the dependency set visible at a glance, because these three are
+        // the first services whose *authorization* dependency (`AdministratorCheck`) is what keeps a
+        // non-administrator from writing configuration, and that is easy to miss when it is implicit.
+        //
+        // `ConfigurationController` (T087) consumes these and is deliberately absent: its eleven route
+        // targets stay in T272's `KNOWN_UNRESOLVED` until the actions actually exist.
+        // T086 / FR-017. Registered before the four administration services that depend on it, because
+        // they receive it as a constructor argument. Both of its own dependencies are bound above: the
+        // shared `AuditWriter` (which routes `appendConfiguration()` to the configuration stream) and
+        // the shared `TransactionManager`, which is what makes a mutation and its audit record one
+        // unit -- an audit that cannot be persisted rolls the mutation back.
+        $context->registerService(ConfigurationAuditService::class, function ($c) {
+            return new ConfigurationAuditService(
+                $c->query(AuditWriter::class),
+                $c->query(TransactionManager::class)
+            );
+        });
+        $context->registerService(CurrencyService::class, function ($c) {
+            return new CurrencyService(
+                $c->query(CurrencyRepository::class),
+                $c->query(AdministratorCheck::class),
+                $c->query(ConfigurationAuditService::class)
+            );
+        });
+        $context->registerService(CostCenterService::class, function ($c) {
+            return new CostCenterService(
+                $c->query(CostCenterRepository::class),
+                $c->query(RoleAssignmentRepository::class),
+                $c->query(UserDirectory::class),
+                $c->query(AdministratorCheck::class),
+                $c->query(Clock::class),
+                $c->query(ConfigurationAuditService::class)
+            );
+        });
+        $context->registerService(ExpenseTypeService::class, function ($c) {
+            return new ExpenseTypeService(
+                $c->query(ExpenseTypeRepository::class),
+                $c->query(AdministratorCheck::class),
+                $c->query(ConfigurationAuditService::class)
+            );
+        });
+        // T084. `UserDirectory` is the second authorization-adjacent dependency in this group and it is
+        // the one that is easy to overlook: the table's `user_uid` column is a bare string with no
+        // foreign key, so nothing below this service would stop an assignment naming a user who does
+        // not exist. `Clock` is a dependency rather than a convenience because whether a POST updates
+        // an existing row or inserts a new one depends on whether that user's assignment is live
+        // *today*, and "today" has to be the clock's.
+        $context->registerService(FinanceAssignmentService::class, function ($c) {
+            return new FinanceAssignmentService(
+                $c->query(RoleAssignmentRepository::class),
+                $c->query(UserDirectory::class),
+                $c->query(AdministratorCheck::class),
+                $c->query(Clock::class),
+                $c->query(ConfigurationAuditService::class)
+            );
         });
 
         // Application services

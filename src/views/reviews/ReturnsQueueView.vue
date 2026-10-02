@@ -139,7 +139,14 @@ function openTransactionDetail(transactionId: string): void {
 }
 
 onMounted(() => {
-	fetchQueue()
+	// Absorbed deliberately rather than left floating. `reviewsStore.fetchReturnsQueue()` rethrows
+	// after recording the message into its own `error` ref, which this view renders, so the rejection
+	// has no caller — and a mount-time load that fails would leave an unhandled rejection in the
+	// browser console on every failed returns load.
+	//
+	// `TransactionDetailView.vue:90-95` documents and fixes exactly this pattern in this same
+	// application, and `loadData()` there absorbs each of its three calls for the same reason.
+	fetchQueue().catch(() => undefined)
 })
 </script>
 

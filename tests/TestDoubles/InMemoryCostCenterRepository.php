@@ -6,6 +6,7 @@ namespace OCA\PettyCash\Tests\TestDoubles;
 
 use DateTimeImmutable;
 use OCA\PettyCash\Domain\Configuration\CostCenter;
+use OCA\PettyCash\Domain\Shared\Uuid;
 use OCA\PettyCash\Domain\Configuration\Repository\CostCenterRepository;
 
 final class InMemoryCostCenterRepository implements CostCenterRepository
@@ -72,6 +73,24 @@ final class InMemoryCostCenterRepository implements CostCenterRepository
     {
         if ($costCenter->id === null) {
             $costCenter->id = count($this->costCenters) + 1;
+        }
+        // `DbCostCenterRepository::save()` mints `public_id` on insert and publishes it back onto the
+        // aggregate. This double did not, so `publicId` stayed null here while the real adapter
+        // populated it -- and the configuration audit records a cost centre's subject as that public
+        // id. A double reporting a different shape from the implementation it stands in for gets
+        // believed; `InMemoryRoleAssignmentRepository` carries the same warning about a previous
+        // instance of this in that file.
+        if ($costCenter->publicId === null) {
+            $costCenter->publicId = (string) Uuid::random();
+        }
+        // `DbCostCenterRepository::save()` advances `lock_version` on an update and publishes the new
+        // value back onto the aggregate. This double stored it verbatim, so an update through
+        // `CostCenterService::update()` left the version at 0 and the `expectedVersion` guard could
+        // never fire -- a stale write silently overwrote the winner, and every optimistic-concurrency
+        // test for this resource would have passed against a repository that does not behave like the
+        // one production uses.
+        if (isset($this->costCenters[$costCenter->id])) {
+            $costCenter->lockVersion = $this->costCenters[$costCenter->id]->lockVersion + 1;
         }
         $this->costCenters[$costCenter->id] = $costCenter;
     }

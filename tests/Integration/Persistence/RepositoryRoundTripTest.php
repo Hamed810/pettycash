@@ -60,6 +60,399 @@ final class RepositoryRoundTripTest extends TestCase
 
     // ===== CONFIGURATION =====
 
+    // ===== T081 / T082 / T083: the application services over the real repositories =====
+    //
+    // Everything above proves the *persistence* layer round-trips. These prove the *application* layer
+    // does, against the same MariaDB instance: a service whose rules only hold against an in-memory
+    // double is a service that has never been run. Three properties each — the write lands, the
+    // authorization gate holds against a real `IGroupManager`, and the invariant the schema does not
+    // hold is enforced by the service rather than by a unique index that does not exist.
+
+    public function testTheCurrencyServiceWritesThroughToTheRealTable(): void
+    {
+        $services = $this->report('configuration')['services'];
+
+        // `minor_unit` 3 is a scale no built-in table would guess, so a projection that substituted one
+        // would be caught here. `currencyPersisted` is the value read back out of MariaDB.
+        $this->assertSame(3, $services['currencyPersisted'], 'the service-written currency must persist its configured scale');
+        $this->assertSame(3, $services['currencyMinorUnit']);
+    }
+
+    public function testTheCurrencyServiceRefusesADuplicateCodeAgainstTheRealTable(): void
+    {
+        // `pettycash_currencies_code_uniq` exists, so the database would also refuse this — but as a
+        // driver exception, which `OcsErrorMapper` cannot turn into the contract's 409. The service
+        // check is what makes the refusal speakable, and this proves it fires first.
+        $this->assertTrue(
+            $this->report('configuration')['services']['duplicateRefused'],
+            'a duplicate currency code must be refused by the service, not left to the unique index'
+        );
+    }
+
+    public function testTheCurrencyServiceRefusesANonAdministratorAgainstTheRealGroupManager(): void
+    {
+        $this->assertTrue(
+            $this->report('configuration')['services']['nonAdministratorRefused'],
+            'FR-010/FR-013 and T078: only an administrator may administer configuration'
+        );
+    }
+
+    public function testTheCurrencyServiceRefusesAStaleExpectedVersion(): void
+    {
+        $this->assertTrue($this->report('configuration')['services']['staleVersionRefused']);
+    }
+
+    public function testCostCenterManagersAreRoleAssignmentsAndNotPropertiesOfTheCentre(): void
+    {
+        // T082's whole reason for existing. The service was handed a `managerUserId` and a
+        // `seniorManagerUserId`, and neither survived as a field on the aggregate — both came back as
+        // rows scoped by the centre's surrogate key, which is the join
+        // `ManagementReviewService::getManagedCostCenterCodes()` already walks to scope a reviewer.
+        $services = $this->report('configuration')['services'];
+
+        $this->assertNotEmpty($services['costCenterCode'], 'the service must have persisted a cost centre');
+        $this->assertSame(['employee1'], $services['managerUsers'], 'FR-011: exactly one current cost-center manager, held as a role assignment');
+        $this->assertSame(['admin'], $services['seniorManagerUsers'], 'FR-011: exactly one current senior manager, held as a role assignment');
+        $this->assertCount(1, $services['managerUsers'], 'two current managers would route a submission ambiguously');
+        $this->assertCount(1, $services['seniorManagerUsers']);
+    }
+
+    public function testTheExpenseTypeServiceWritesThroughToTheRealTable(): void
+    {
+        $services = $this->report('configuration')['services'];
+
+        $this->assertNotEmpty($services['expenseTypeTitle']);
+        $this->assertTrue(
+            $services['expenseTypePersisted'],
+            'FR-012: the evidence requirement must persist as written, not default to false'
+        );
+    }
+
+    public function testTheExpenseTypeServiceRefusesADuplicateActiveTitle(): void
+    {
+        // **No unique index exists on `pettycash_expense_types.title`** — only
+        // `pettycash_currencies_code_uniq` and `pettycash_cost_centers_code_uniq` are declared. So
+        // nothing below the application layer prevents two active types sharing a title, and FR-023
+        // makes a caller choose between them with different evidence rules. This is the one invariant in
+        // this batch that only the service can hold.
+        $this->assertTrue(
+            $this->report('configuration')['services']['duplicateTitleRefused'],
+            'active-title uniqueness is service-enforced; no database index backs it'
+        );
+    }
+
+    public function testDeactivatingAnExpenseTypeKeepsTheRowAndItsHistoricalFields(): void
+    {
+        // FR-012 and US5/AC2: a deactivated type stops being offered while historical records keep their
+        // original values. The row is read back by surrogate key *after* deactivation, so this fails if
+        // deactivation deleted the row or rewrote the evidence rule records were filed against.
+        $services = $this->report('configuration')['services'];
+
+        $this->assertFalse($services['deactivated'], 'the type must be inactive');
+        $this->assertSame($services['expenseTypeTitle'], $services['titleAfterDeactivation'], 'the retained row must keep its title');
+        $this->assertTrue($services['evidenceRequiredAfterDeactivation'], 'the retained row must keep the evidence rule it was filed under');
+        $this->assertFalse($services['stillListedAsActive'], 'a deactivated type must leave the active list');
+    }
+
+    // --- T084: the shared-queue finance roster over the real table ---
+
+    public function testTheFinanceAssignmentServiceStoresAFinanceRoleWithANullCostCentreColumn(): void
+    {
+        // Asserted on the raw column, not on the aggregate. The unit suite can only ask
+        // `RoleAssignment` what it believes about itself, and an insert that quietly filled in a cost
+        // centre would leave the aggregate reporting null while the row said otherwise. FR-016's shared
+        // queue is unscoped by definition: an officer scoped to one centre would not see the other
+        // centres' transactions, which is the entire content of the queue.
+        $services = $this->report('configuration')['services'];
+
+        $this->assertSame('FINANCE', $services['financeRoleInColumn'], 'the stored role must be FINANCE');
+        $this->assertTrue(
+            $services['financeCostCenterColumnIsNull'],
+            'data-model.md: cost_center_id is null for the shared finance role, in the column itself'
+        );
+        $this->assertSame('FINANCE', $services['financeAggregateRole']);
+        $this->assertTrue($services['financeAggregateCostCenterIsNull']);
+    }
+
+    public function testTheFinanceAssignmentServicePersistsTheValidityWindowItWasGiven(): void
+    {
+        // The window was a lapsed one (ended yesterday) so that "is this user current?" has a negative
+        // answer to read. Both ends are checked, because a projection that dropped `valid_to` would
+        // leave every finance officer looking indefinitely current.
+        $services = $this->report('configuration')['services'];
+
+        $this->assertNotNull($services['financeValidFromInColumn'], 'valid_from must persist as written');
+        $this->assertNotNull($services['financeValidToInColumn'], 'valid_to must persist as written');
+    }
+
+    public function testALapsedFinanceAssignmentIsNotTreatedAsCurrent(): void
+    {
+        // This is the query the whole upsert decision rests on. If it answered "current" for a window
+        // that ended yesterday, re-appointment would rewrite history and the contract's "Active and
+        // historical finance assignments" response would have nothing historical to return.
+        $this->assertTrue(
+            $this->report('configuration')['services']['noCurrentAssignmentAfterLapse'],
+            'an assignment whose window has ended must not resolve as the current one'
+        );
+    }
+
+    public function testReappointingAFinanceOfficerRetainsTheLapsedAssignment(): void
+    {
+        $services = $this->report('configuration')['services'];
+
+        $this->assertTrue(
+            $services['lapsedRowSurvivedReAppointment'],
+            'the ended window must still be readable after the user is appointed again'
+        );
+        $this->assertSame(2, $services['rowsForFinanceUserAfterReAppointment'], 're-appointment adds a row rather than rewriting the lapsed one');
+    }
+
+    public function testAPostForAFinanceOfficerWhoAlreadyHoldsOneConvergesOnASingleRow(): void
+    {
+        // `contracts/ocs-api.yaml` declares no PATCH and no DELETE for finance assignments, so POST is
+        // the only write and has to be idempotent. Nothing below the application layer enforces this:
+        // `pettycash_role_assignments` carries only a non-unique index on `(user_uid, role, active)`.
+        $services = $this->report('configuration')['services'];
+
+        $this->assertTrue($services['repeatedPostUpdatedInPlace']);
+        $this->assertSame(2, $services['rowsForFinanceUserAfterRepeat'], 'a repeated POST must not add a row');
+    }
+
+    public function testRevokingAFinanceOfficerClearsTheFlagButKeepsAndReusesTheRow(): void
+    {
+        // Revocation has to arrive as a POST carrying `active: false`, because the contract has no other
+        // write. The row must survive (FR-016's queue is auditable, and the roster is specified as
+        // active *and historical*), and re-validating must reuse it rather than claiming the officer held
+        // the role twice over one window.
+        $services = $this->report('configuration')['services'];
+
+        $this->assertTrue($services['revocationClearedTheActiveFlag'], 'active: false must be persisted');
+        $this->assertTrue($services['revocationReusedTheSameRow'], 'revocation must not insert a second row');
+        $this->assertTrue($services['revokedRowStillInRoster'], 'a revoked assignment is history and stays listed');
+        $this->assertSame(2, $services['rowsForFinanceUserAfterRevocation']);
+
+        $this->assertTrue($services['revalidationReusedTheSameRow']);
+        $this->assertSame(2, $services['rowsForFinanceUserAfterRevalidation'], 're-validating must reuse the retained row');
+    }
+
+    public function testTheFinanceRosterContainsOnlyFinanceAssignments(): void
+    {
+        // T082 created cost-centre-manager and senior-manager assignments in the same table during the
+        // same scenario. Returning them here would answer "list the shared queue" with "list every
+        // access assignment".
+        $this->assertTrue($this->report('configuration')['services']['rosterExcludesManagerAssignments']);
+    }
+
+    public function testTheFinanceAssignmentServiceRefusesANonAdministratorAgainstTheRealGroupManager(): void
+    {
+        $this->assertTrue(
+            $this->report('configuration')['services']['financeNonAdministratorRefused'],
+            'T078: only an administrator may administer finance assignments'
+        );
+    }
+
+    public function testTheFinanceAssignmentServiceRefusesAUserThatDoesNotExist(): void
+    {
+        // `pettycash_role_assignments.user_uid` is a plain string(64) with no foreign key, so the
+        // database would happily accept an assignment naming nobody.
+        $this->assertTrue(
+            $this->report('configuration')['services']['financeUnknownHostUserRefused'],
+            'an assignment may only name a user in this Nextcloud'
+        );
+    }
+
+    // --- T082's reopened scope: `update()` against the real table ---
+
+    public function testRenamingACostCentreActuallyPersistsTheNewCode(): void
+    {
+        // T082's reopened scope. `DbCostCenterRepository::save()`'s update branch omitted `code`, so a
+        // rename reported success, advanced `lock_version`, and left the row keyed by the old code --
+        // the new code resolved to nothing and the old one still resolved to the centre just renamed.
+        // The in-memory double accepts the aggregate with any code, so no unit test could see it.
+        $services = $this->report('configuration')['services'];
+
+        $this->assertSame($services['updateNewCode'], $services['updateCodePersistedInColumn'], 'the renamed code must be the code in the column');
+        $this->assertTrue($services['updateOldCodeNoLongerResolves'], 'the pre-rename code must no longer resolve to the centre');
+        $this->assertTrue($services['updatePublicIdUnchanged'], 'and the stable uuid must survive the rename');
+        $this->assertSame('After The Rename', $services['updateNamePersistedInColumn']);
+        $this->assertFalse($services['updateDeactivatedInColumn'], 'FR-010: deactivation must persist as written');
+    }
+
+    public function testUpdatingACostCentreAdvancesLockVersionByOneAndPublishesIt(): void
+    {
+        // The contract's `CostCenter` response is required to carry `version`. If the adapter left the
+        // aggregate holding the pre-update value, a client echoing it straight back into
+        // `expectedVersion` would be refused for the write it had only just made.
+        $services = $this->report('configuration')['services'];
+
+        $this->assertSame(0, $services['updateVersionBefore']);
+        $this->assertSame(1, $services['updateVersionInColumnAfter'], 'the row must advance by exactly one');
+        $this->assertSame(
+            $services['updateVersionInColumnAfter'],
+            $services['updateVersionReturnedToCaller'],
+            'the version handed back must be the one now in the column, not the superseded one'
+        );
+    }
+
+    public function testAStaleCostCentreUpdateIsRefusedAndDoesNotOverwriteTheWinner(): void
+    {
+        $services = $this->report('configuration')['services'];
+
+        $this->assertTrue($services['updateStaleRefused'], 'a stale expectedVersion must be a 409, not a silent overwrite');
+        $this->assertSame('After The Rename', $services['updateNameAfterStaleAttempt'], 'the first writer must stand');
+    }
+
+    public function testACostCentreUpdateIsAddressedByUuidInTheAuditHistory(): void
+    {
+        $services = $this->report('configuration')['services'];
+
+        // `code` is mutable under FR-010, so an event keyed by it stops resolving on rename. The uuid is
+        // stable and is what the contract's own path parameter uses.
+        $this->assertNotSame(
+            $services['updateNewCode'],
+            $services['updateEventEntityId'],
+            'the audit subject must not be the code, which the same update just changed'
+        );
+        $this->assertSame('round trip: renaming the centre', $services['updateEventExplanation']);
+    }
+
+    public function testARefusedAuditRollsBackACostCentreUpdate(): void
+    {
+        // The real rollback for this write path. `InMemoryTransactionManager` rolls nothing back, so no
+        // in-memory test can produce this failure.
+        $services = $this->report('configuration')['services'];
+
+        $this->assertNotNull($services['updateAuditRefusal']);
+        $this->assertFalse(
+            $services['updateRowSurvivedAuditRefusal'],
+            'a cost-centre update must not stay committed when its audit record could not be written'
+        );
+    }
+
+// --- T086: the configuration audit is atomic with its mutation, over the real transaction ---
+
+    public function testAConfigurationWriteCommitsExactlyOneAuditEvent(): void
+    {
+        // FR-017 requires the actor, time, explanation, previous value and new value. One event per
+        // mutation: an administration screen that showed every change three times would be unreadable,
+        // and "an event exists" is satisfied by a double-count as happily as by a correct count.
+        $services = $this->report('configuration')['services'];
+
+        $this->assertTrue($services['auditedEventExists'], 'a configuration write must record a configuration audit event');
+        $this->assertSame(1, $services['auditedEventsForSubject'], 'exactly one event per mutation');
+        $this->assertSame('currency', $services['auditedRowEntityType']);
+        $this->assertSame($services['auditedCurrencyCode'], $services['auditedRowEntityId'], 'the event must name its subject');
+        $this->assertSame('CURRENCY_CREATED', $services['auditedRowEventType']);
+    }
+
+    public function testTheConfigurationAuditEventRecordsTheAuthenticatedActor(): void
+    {
+        // The session user, and *not* the `$administratorUid` the service authorized the write with.
+        // `AuditWriterService` resolves the actor from `CurrentUser` and ignores any `actor_uid` in the
+        // payload, because an actor supplied by a caller is a value the caller chose. `actor_role` is
+        // passed explicitly, since the writer would otherwise default every configuration change in the
+        // product to PURCHASER.
+        $services = $this->report('configuration')['services'];
+
+        $this->assertSame($services['sessionUid'], $services['auditedRowActorUid']);
+        $this->assertSame('ADMINISTRATOR', $services['auditedRowActorRole']);
+    }
+
+    public function testTheConfigurationAuditEventStoresTheAfterSnapshotRatherThanEmptyJson(): void
+    {
+        // `AuditWriterService` documents two real callers that sent `before_json` / `after_json`, keys it
+        // does not read, so every approval and return was stored with both snapshots as the literal
+        // `"[]"` -- permanently, because FR-053 makes audit rows append-only. Asserted against the raw
+        // columns rather than the domain object for that reason.
+        $services = $this->report('configuration')['services'];
+        $after = json_decode((string) $services['auditedRowAfterJson'], true);
+
+        $this->assertIsArray($after, 'the after snapshot must decode as a JSON object, not the literal "[]"');
+        $this->assertSame($services['auditedCurrencyCode'], $after['code'] ?? null);
+        $this->assertSame(2, $after['minorUnit'] ?? null, 'a scale no built-in table would guess, so a substituted value would show here');
+
+        // A *creation*'s empty `before` legitimately encodes as `"[]"`, which is byte-identical to the
+        // failure above -- so the creation cannot discriminate, and the update case below must.
+        $this->assertSame('[]', $services['auditedRowBeforeJson']);
+    }
+
+    public function testAnUpdateEventStoresAPopulatedBeforeAndAfterThatDiffer(): void
+    {
+        // The discriminating assertion for the snapshots. If `before` were read after the write, or not
+        // read at all, this pair would be empty or identical to `after`, and FR-017's "previous value,
+        // and new value" would be satisfied in form while answering nothing.
+        $services = $this->report('configuration')['services'];
+
+        $this->assertSame('CURRENCY_UPDATED', $services['updateRowEventType']);
+        $this->assertIsArray($services['updateBeforeJson'], 'an update must carry a readable previous value');
+        $this->assertIsArray($services['updateAfterJson']);
+
+        // 'Before Name'/scale 3/active -> 'After Name'/scale 0/inactive.
+        $this->assertSame('Before Name', $services['updateBeforeJson']['name'] ?? null);
+        $this->assertSame(3, $services['updateBeforeJson']['minorUnit'] ?? null);
+        $this->assertTrue($services['updateBeforeJson']['active'] ?? false);
+        $this->assertSame('After Name', $services['updateAfterJson']['name'] ?? null);
+        $this->assertSame(0, $services['updateAfterJson']['minorUnit'] ?? null);
+        $this->assertFalse($services['updateAfterJson']['active'] ?? true);
+        $this->assertNotSame(
+            $services['updateBeforeJson'],
+            $services['updateAfterJson'],
+            'a before/after pair holding the same values records that nothing changed'
+        );
+    }
+
+    public function testACurrencyEventCarriesNoExplanationBecauseTheContractSuppliesNoChangeReason(): void
+    {
+        // `contracts/ocs-api.yaml`'s `CurrencyWrite` has no `changeReason` field, so there is nothing for
+        // a caller to supply, and the application payload carries a null explanation (asserted at that
+        // boundary in `ConfigurationMutationAuditTest`).
+        //
+        // What lands in the column is `''` rather than NULL, and that is a pre-existing coercion in
+        // `DbAuditEventRepository::rowValues()` -- `$event->explanation ?? ''` -- while every other
+        // nullable column there binds a real NULL. It is asserted rather than worked around so that a
+        // future change to that coercion cannot pass unnoticed: `''` and NULL read identically here, and
+        // neither can be distinguished from "an explanation was given and it was blank". The gap is
+        // recorded in `docs/reports/T086.md`; changing shared audit persistence is not this task's to do.
+        $services = $this->report('configuration')['services'];
+
+        $this->assertFalse(
+            $services['auditedRowExplanationIsNull'],
+            'the persisted explanation is "" today; if this now passes, DbAuditEventRepository stopped coercing null and this test needs rewriting'
+        );
+        $this->assertSame('', (string) $services['auditedRowExplanation']);
+    }
+
+    public function testARefusedAuditLeavesNoCommittedConfigurationRow(): void
+    {
+        // The load-bearing atomicity assertion, and the only one that needs a real database:
+        // `InMemoryTransactionManager` runs its callback and rolls nothing back, so no in-memory test can
+        // produce this failure at all. FR-017 forbids a configuration change that is not recorded, so a
+        // write whose audit cannot be persisted must leave nothing behind -- the currency row included.
+        $services = $this->report('configuration')['services'];
+
+        $this->assertNotNull($services['auditRefusalObserved'], 'the audit refusal must propagate rather than be swallowed');
+        $this->assertFalse(
+            $services['currencyRowSurvivedAuditRefusal'],
+            'a configuration change must not stay committed when its audit record could not be written'
+        );
+        $this->assertSame(0, $services['auditRowsAfterAuditRefusal'], 'and the refused audit must leave no row either');
+    }
+
+    public function testARefusedMutationLeavesNoFurtherAuditEvent(): void
+    {
+        // The other direction: a write the domain rejects must not appear in the configuration history,
+        // or the history would describe changes that never happened.
+        $services = $this->report('configuration')['services'];
+
+        $this->assertNotNull($services['duplicateRefusalObserved'], 'the duplicate must actually be refused for this assertion to mean anything');
+        $this->assertSame(1, $services['auditCountBeforeRefusedMutation']);
+        $this->assertSame(
+            $services['auditCountBeforeRefusedMutation'],
+            $services['auditCountAfterRefusedMutation'],
+            'a refused mutation must not add an audit event'
+        );
+    }
+
     public function testCurrencySurvivesASaveAndIsFoundByItsCode(): void
     {
         $currency = $this->report('configuration')['currency'];

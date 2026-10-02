@@ -38,7 +38,6 @@ The host is used for:
 
 - OpenCode
 - Spec Kit
-- codebase-memory MCP
 - Git
 - Node.js
 - npm / npx
@@ -153,7 +152,7 @@ Use the repository development wrappers instead:
 | Settle Nextcloud's route cache | `scripts/dev/route-settle` |
 | Clear Nextcloud's route cache | `scripts/dev/route-cache-clear` |
 | OCC | `scripts/dev/occ <args>` |
-| Composer | `scripts/dev/composer <args>` |
+| Composer | `scripts/dev/composer <args>` (external tool container, host user — not the runtime container) |
 | Arbitrary container command | `scripts/dev/in-container <cmd>` |
 
 The wrappers are responsible for:
@@ -163,11 +162,68 @@ The wrappers are responsible for:
 - mapping the repository to `/var/www/html/custom_apps/pettycash`
 - settling Apache's opcode cache before a test run (see below)
 
+`composer` deliberately does none of those: it runs its own ephemeral toolchain container as
+the host user, so a dependency operation never touches shared Nextcloud state and never
+writes root-owned files into this repository. See the Composer section below.
+
 Before any shell command involving PHP or Nextcloud tooling, verify that it starts with:
 
 `scripts/dev/`
 
 Do not manually construct `docker exec` commands for normal PHP/Nextcloud work when a wrapper exists.
+
+### Composer is external development tooling, not part of the runtime
+
+Composer does **not** run in `docker-nextcloud-1`. That container is the shared application
+runtime, and installing a dependency manager into it would write a binary into
+`docker_pts-nextcloud` — the volume holding the whole Nextcloud installation and all user
+data — and make every dependency operation a mutation of shared state. There is no host PHP
+and no host Composer either, so `scripts/dev/composer` runs its own **ephemeral**
+container instead:
+
+- Toolchain image: `nextcloud:34-apache`, run as a separate `--rm` container that mounts
+  only this repository and the cache. It never mounts `/var/www/html`, shares no volume with
+  the shared lab, and does not touch the running container.
+- Why that image and not `composer:2`: this project's locked dependency set requires
+  `ext-gd` (`phpoffice/phpspreadsheet`, `tecnickcom/tc-lib-barcode`, `tecnickcom/tc-lib-pdf-image`),
+  and `composer:2` ships PHP 8.5.9 **without** `gd`. The app image has PHP 8.5.9 with `gd`
+  and every other required extension, so the Composer environment matches the environment
+  the app runs in. Do not add `--ignore-platform-req=ext-gd`: that installs a dependency set
+  that cannot actually run.
+- Composer itself is a phar provisioned once into `~/.cache/composer-docker/bin/composer.phar`
+  by copying it out of the `composer:2` image — no network, a known version, nothing installed
+  into the runtime. The wrapper re-provisions automatically if the cache is empty.
+- User: `$(id -u):$(id -g)` = `1000:1000`, so writes into this repository are owned by the
+  host development user.
+- Cache: `~/.cache/composer-docker` (override with `PETTYCASH_COMPOSER_CACHE_DIR`), outside
+  every repository.
+
+```
+scripts/dev/composer --version
+scripts/dev/composer validate
+scripts/dev/composer install
+scripts/dev/composer update ...
+```
+
+**Ownership of Composer-managed files (resolved 2026-10-02).** `composer.json`,
+`composer.lock` and `vendor/` are owned by the **host development user**, uid/gid 1000. All
+8334 entries under `vendor/` were verified uid 1000 after the migration.
+
+They were previously uid/gid 33 (`www-data`). The cause was historical, not current: Composer
+used to run *in the shared container* through this repository's own wrappers, where
+`scripts/dev/composer` delegated to `scripts/dev/in-container` and every committed revision of
+that script hardcoded `--user www-data`. It was never run as root — root would have produced
+root-owned files, and it did not.
+
+The fix was a metadata-only handoff of exactly three paths. `composer.json` and `composer.lock`
+kept their sha256, the lock `content-hash` (`acd2bc3737bb3fcc89697aa3f6513013`) and the 105
+locked packages were unchanged, and `vendor/` was not regenerated. See
+`docs/development/composer-ownership-migration.md` for the full record and the rollback.
+
+`www-data` intentionally **lost write access** to those three paths: the runtime reads
+dependencies, it does not modify them. Read access is unaffected and was verified after the
+migration (`vendor/autoload.php` loads as uid 33). The wrapper keeps a pre-flight writability
+check as a drift guard — a restore from a backup or another machine can undo this.
 
 ## Opcode Cache Settling (MANDATORY)
 
@@ -450,7 +506,7 @@ Convergence is the primary phase for repository-wide understanding.
 
 During convergence:
 
-- use codebase-memory when available
+- use Serena / LSP for semantic questions
 - inspect architecture relationships
 - inspect component relationships
 - inspect dependency relationships
@@ -460,13 +516,16 @@ During convergence:
 
 Prefer:
 
-- codebase-memory
-- LSP / symbol navigation
+- Serena / LSP symbol navigation for definitions, references, implementations, diagnostics
+- targeted textual search plus targeted reads for Spec Kit and Markdown
 - targeted file inspection
 
 Avoid unnecessary repeated full-repository scans.
 
 Normal implementation should not repeat repository-wide analysis already performed during convergence.
+
+Call Serena's `initial_instructions` once, before code-oriented investigation. It is not
+required for purely textual Spec Kit or document analysis.
 
 ---
 
@@ -487,8 +546,11 @@ During implementation:
 - do not scan the entire repository without a specific reason
 - do not rediscover known project architecture
 - use targeted investigation only
-- use codebase-memory when relevant relationships or existing patterns are unclear
-- prefer LSP over grep for PHP symbol resolution
+- use Serena / LSP when relevant relationships or existing patterns are unclear
+- prefer Serena / LSP over grep for PHP symbol resolution
+- do not fall back from a semantic reference question to a broad text search; if Serena is
+  unavailable, say so explicitly and use targeted `rg`/`grep` plus targeted reads, stating
+  the limitation
 
 For command execution:
 
@@ -523,35 +585,64 @@ If existing implementation is found:
 
 # Repository Investigation
 
-## codebase-memory
+Match the tool to the kind of question. A semantic question answered with a text match is a
+different claim from a semantic answer, and the difference has to stay visible.
 
-Primary use:
-
-- convergence
-- architecture understanding
-- dependency discovery
-- existing pattern discovery
-
-During implementation, use it only when needed for the active task.
-
-Avoid:
-
-- repeated full repository exploration
-- unnecessary rediscovery
-
-## PHP LSP / Intelephense
+## Source code (PHP) — Serena / LSP first
 
 Use for:
 
-- class definitions
-- references
+- class and method definitions
+- references and callers
 - namespaces
-- method signatures
+- implementations
 - diagnostics
+- symbol navigation
 
-Prefer LSP over grep when resolving PHP symbols.
+Prefer Serena / LSP over grep when resolving PHP symbols. A grep hit on a class name proves a
+string occurs; a reference search proves the symbol is used. Do not report the first as the
+second.
 
-LSP runs on the host for code intelligence only. It does not make host PHP a valid application runtime.
+Call Serena's `initial_instructions` once, before code-oriented investigation.
+
+Verify anything that will drive a decision against the source file. Index or graph output is
+a lead, not proof.
+
+LSP runs on the host for code intelligence only. It does not make host PHP a valid
+application runtime.
+
+## Spec Kit, Markdown and other prose — targeted text search
+
+Use targeted `grep` and read only the section or line range needed. `tasks.md`, `plan.md` and
+`spec.md` in this repository are large; grep for the heading or task ID first, then read the
+range rather than re-reading the whole file.
+
+Serena's `initial_instructions` is not required for purely textual document analysis, and
+LSP is the wrong tool for it: it carries no semantic answer a grep could not give, and it
+costs far more than reading the range.
+
+## Runtime and behaviour
+
+Tests and the actual runtime are authoritative. `scripts/dev/phpunit`, `scripts/dev/occ` and
+the live instance at `http://localhost:8080` outrank any assumption about what the code
+does.
+
+## The change set
+
+`git status` and `git diff` are authoritative for what changed.
+
+## If Serena is unavailable
+
+State that explicitly rather than silently changing method. Do not fall back from a semantic
+reference question to a broad grep: use targeted `rg`/`grep` plus targeted reads and say
+plainly that the answer came from textual search, so the limitation is understood — text
+matching cannot distinguish a definition from a reference, a declaration from a call, or a
+live symbol from a commented-out one.
+
+## codebase-memory
+
+Supplementary only. It may help generate leads, but it is not authoritative for PHP reference
+or caller data, and it is not the preferred tool for structural discovery.
 
 ---
 

@@ -8,6 +8,7 @@ import { mdiPencil, mdiUndoVariant, mdiDownload, mdiDelete, mdiFileOutline, mdiP
 import EvidenceUploader from '@/components/evidence/EvidenceUploader.vue'
 import { t } from '@nextcloud/l10n'
 import { formatMoney } from '@/utils/money'
+import { selectOptionKey, selectOptionValue } from '@/utils/selectOption'
 
 const route = useRoute()
 const router = useRouter()
@@ -147,21 +148,24 @@ watch(transactionId, () => { loadData() })
 		</div>
 
 		<NcNoteCard data-test="transaction-header">
-			<template #header>
-				<div class="card-header-row">
-					<h2 class="mb-0">{{ t('pettycash', 'transactions.detail') }}</h2>
-					<div class="d-flex gap-2">
-						<NcButton v-if="canEdit" variant="secondary" @click="goToEdit" data-test="edit-transaction-btn">
-							<NcIconSvgWrapper :path="mdiPencil" :size="16" class="mr-2" />
-							{{ t('pettycash', 'common.edit') }}
-						</NcButton>
-						<NcButton v-if="canCreateCorrection" variant="secondary" @click="goToCreateCorrection" data-test="create-correction-btn">
-							<NcIconSvgWrapper :path="mdiUndoVariant" :size="16" class="mr-2" />
-							{{ t('pettycash', 'transactions.createCorrection') }}
-						</NcButton>
-					</div>
+			<!--
+				This row is a child of the card, not a `#header` slot: `@nextcloud/vue` 9.12.0's
+				`NcNoteCard` has no `header` slot, so a `#header` template is dropped silently and takes
+				Edit and Create correction with it. `SheetDetailView.vue` records the full reasoning.
+			-->
+			<div class="card-header-row">
+				<h2 class="mb-0">{{ t('pettycash', 'transactions.detail') }}</h2>
+				<div class="d-flex gap-2">
+					<NcButton v-if="canEdit" variant="secondary" @click="goToEdit" data-test="edit-transaction-btn">
+						<NcIconSvgWrapper :path="mdiPencil" :size="16" class="mr-2" />
+						{{ t('pettycash', 'common.edit') }}
+					</NcButton>
+					<NcButton v-if="canCreateCorrection" variant="secondary" @click="goToCreateCorrection" data-test="create-correction-btn">
+						<NcIconSvgWrapper :path="mdiUndoVariant" :size="16" class="mr-2" />
+						{{ t('pettycash', 'transactions.createCorrection') }}
+					</NcButton>
 				</div>
-			</template>
+			</div>
 
 			<div class="card-details" v-if="transactionStore.currentTransaction">
 				<div class="detail-item">
@@ -208,18 +212,18 @@ watch(transactionId, () => { loadData() })
 		</NcNoteCard>
 
 		<NcNoteCard data-test="revision-history">
-			<template #header>
-				<div class="card-header-row">
-					<span>{{ t('pettycash', 'transactions.revisionHistory') }}</span>
-					<NcSelect
-						v-model="selectedRevisionId"
-						:options="revisionOptions"
-						:label="t('pettycash', 'transactions.selectRevision')"
-						data-test="revision-selector"
-						style="max-width: 300px"
-					/>
-				</div>
-			</template>
+			<div class="card-header-row">
+				<span>{{ t('pettycash', 'transactions.revisionHistory') }}</span>
+				<NcSelect
+					v-model="selectedRevisionId"
+					:options="revisionOptions"
+					:reduce="selectOptionValue"
+					:get-option-key="selectOptionKey"
+					:label="t('pettycash', 'transactions.selectRevision')"
+					data-test="revision-selector"
+					style="max-width: 300px"
+				/>
+			</div>
 
 			<div class="revision-tabs" data-test="revision-tabs">
 				<div class="tab-list" role="tablist">
@@ -275,11 +279,7 @@ watch(transactionId, () => { loadData() })
 		     append-only, so this region is deliberately inert: no control in it can change a past
 		     revision. The revision selector above lets a reader page through history; this states that
 		     what they are reading is retained history rather than a previous state of an editable row. -->
-		<NcNoteCard v-if="priorRevisions.length > 0" data-test="prior-revisions">
-			<template #header>
-				{{ t('pettycash', 'transactions.priorRevisions') }}
-			</template>
-
+		<NcNoteCard v-if="priorRevisions.length > 0" :heading="t('pettycash', 'transactions.priorRevisions')" data-test="prior-revisions">
 			<p class="prior-revisions__note">
 				{{ t('pettycash', 'transactions.priorRevisionsRetained') }}
 			</p>
@@ -307,11 +307,7 @@ watch(transactionId, () => { loadData() })
 			</ul>
 		</NcNoteCard>
 
-		<NcNoteCard data-test="decision-list">
-			<template #header>
-				{{ t('pettycash', 'transactions.decisions') }}
-			</template>
-
+		<NcNoteCard :heading="t('pettycash', 'transactions.decisions')" data-test="decision-list">
 			<div v-if="transactionStore.currentTransaction?.decisions?.length" class="decision-list">
 				<div v-for="decision in transactionStore.currentTransaction.decisions" :key="decision.id" class="decision-item" data-test="decision-item">
 					<div class="decision-header">
@@ -339,15 +335,13 @@ watch(transactionId, () => { loadData() })
 		</NcNoteCard>
 
 		<NcNoteCard data-test="evidence-list">
-			<template #header>
-				<div class="card-header-row">
-					<span>{{ t('pettycash', 'evidence.list') }} ({{ transactionStore.currentTransaction?.evidence?.length ?? 0 }})</span>
-					<NcButton v-if="!isSubmitted" variant="primary" @click="showEvidenceUploader = true" data-test="upload-evidence-btn">
-						<NcIconSvgWrapper :path="mdiPlus" :size="16" class="mr-2" />
-						{{ t('pettycash', 'evidence.upload') }}
-					</NcButton>
-				</div>
-			</template>
+			<div class="card-header-row">
+				<span>{{ t('pettycash', 'evidence.list') }} ({{ transactionStore.currentTransaction?.evidence?.length ?? 0 }})</span>
+				<NcButton v-if="!isSubmitted" variant="primary" @click="showEvidenceUploader = true" data-test="upload-evidence-btn">
+					<NcIconSvgWrapper :path="mdiPlus" :size="16" class="mr-2" />
+					{{ t('pettycash', 'evidence.upload') }}
+				</NcButton>
+			</div>
 
 			<div v-if="transactionStore.currentTransaction?.evidence?.length" class="evidence-list">
 				<div v-for="ev in transactionStore.currentTransaction.evidence" :key="ev.id" class="evidence-item" data-test="evidence-list-item">
@@ -624,7 +618,7 @@ watch(transactionId, () => { loadData() })
 }
 
 	.mr-2 {
-		margin-right: 0.5rem;
+		margin-inline-end: 0.5rem;
 	}
 
 	.d-flex {

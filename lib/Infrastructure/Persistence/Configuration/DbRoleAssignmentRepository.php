@@ -87,6 +87,43 @@ final class DbRoleAssignmentRepository implements RoleAssignmentRepository
         return array_map([$this, 'mapRow'], $rows);
     }
 
+    /** @return list<RoleAssignment> */
+    public function findAllByRole(Role $role): array
+    {
+        // Deliberately no `active` predicate and no date predicate. See the port: this is the read
+        // behind a listing whose contract response is "Active and historical finance assignments", so
+        // filtering either would silently drop the rows that make it a history. `findActiveByRoleAnd
+        // CostCenter()` cannot serve it at all -- a finance row has `cost_center_id` NULL.
+        $qb = $this->connection->getQueryBuilder();
+        $qb->select('*')
+            ->from('pettycash_role_assignments')
+            ->where($qb->expr()->eq('role', $qb->createNamedParameter($role->value)))
+            ->orderBy('id', 'ASC');
+        $rows = $qb->executeQuery()->fetchAllAssociative();
+        return array_map([$this, 'mapRow'], $rows);
+    }
+
+    public function findCurrentByUserAndRole(string $userUid, Role $role, DateTimeImmutable $date): ?RoleAssignment
+    {
+        // No `active` predicate: this is the lookup that must be able to find a switched-off row.
+        // See the port for why the flag and the window are separate questions.
+        $day = $date->format('Y-m-d');
+        $qb = $this->connection->getQueryBuilder();
+        $qb->select('*')
+            ->from('pettycash_role_assignments')
+            ->where($qb->expr()->eq('user_uid', $qb->createNamedParameter($userUid)))
+            ->andWhere($qb->expr()->eq('role', $qb->createNamedParameter($role->value)))
+            ->andWhere($qb->expr()->lte('valid_from', $qb->createNamedParameter($day)))
+            ->andWhere($qb->expr()->orX(
+                $qb->expr()->isNull('valid_to'),
+                $qb->expr()->gte('valid_to', $qb->createNamedParameter($day))
+            ))
+            ->orderBy('id', 'DESC')
+            ->setMaxResults(1);
+        $row = $qb->executeQuery()->fetchAssociative();
+        return $row ? $this->mapRow($row) : null;
+    }
+
     public function save(RoleAssignment $roleAssignment): void
     {
         $qb = $this->connection->getQueryBuilder();

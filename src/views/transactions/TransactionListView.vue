@@ -154,7 +154,7 @@ onMounted(() => {
 .nc-table th,
 .nc-table td {
 	padding: 0.75rem;
-	text-align: right;
+	text-align: start;
 	border-bottom: 1px solid var(--nc-color-outline-variant, #e0e0e0);
 }
 
@@ -204,7 +204,7 @@ onMounted(() => {
 }
 
 	.mr-2 {
-		margin-right: 0.5rem;
+		margin-inline-end: 0.5rem;
 	}
 
 	.text-center {

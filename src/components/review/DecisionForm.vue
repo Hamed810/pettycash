@@ -6,6 +6,8 @@
 			<NcSelect
 				v-model="selectedDecision"
 				:options="decisionItems"
+				:reduce="selectOptionValue"
+				:get-option-key="selectOptionKey"
 				:input-label="t('pettycash', 'reviews.decision')"
 				:required="true"
 				:error="!!decisionError"
@@ -66,6 +68,7 @@ import NcLoadingIcon from '@nextcloud/vue/components/NcLoadingIcon'
 import NcSelect from '@nextcloud/vue/components/NcSelect'
 import NcTextArea from '@nextcloud/vue/components/NcTextArea'
 import { useReviewsStore } from '@/stores/reviews'
+import { selectOptionKey, selectOptionValue } from '@/utils/selectOption'
 
 type Decision = 'APPROVE' | 'REJECT' | 'RETURN'
 
@@ -142,10 +145,6 @@ async function submitDecision() {
 </script>
 
 <style scoped>
-.decision-form {
-	direction: rtl;
-}
-
 .decision-form__title {
 	margin-block-end: 16px;
 }

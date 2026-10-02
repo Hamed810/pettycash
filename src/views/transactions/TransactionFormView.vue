@@ -13,6 +13,7 @@ import { listActiveExpenseTypes, listCostCenters } from '@/services/configuratio
 import { useSheetStore } from '@/stores/sheets'
 import { useTransactionStore } from '@/stores/transactions'
 import type { CostCenter, ExpenseType, TransactionDraftWrite } from '@/types/api'
+import { selectOptionKey, selectOptionValue } from '@/utils/selectOption'
 
 const route = useRoute()
 const router = useRouter()
@@ -316,20 +317,24 @@ onMounted(() => {
 				</div>
 
 				<div class="form-row">
-					<NcSelect
-						v-model="draft.costCenterId"
-						:options="costCenters.map(center => ({ label: center.name, value: center.id }))"
-						:input-label="t('pettycash', 'transactions.costCenter')"
-						:error="!!errors.costCenterId"
-						:helper-text="errors.costCenterId || ''"
-						:loading="loadingOptions"
-						:disabled="!editable"
-						required
-						data-test="cost-center-select" />
-					<NcSelect
-						v-model="draft.expenseTypeId"
-						:options="expenseTypes.map(type => ({ label: type.title, value: type.id }))"
-						:input-label="t('pettycash', 'transactions.expenseType')"
+				<NcSelect
+					v-model="draft.costCenterId"
+					:options="costCenters.map(center => ({ label: center.name, value: center.id }))"
+					:reduce="selectOptionValue"
+					:get-option-key="selectOptionKey"
+					:input-label="t('pettycash', 'transactions.costCenter')"
+					:error="!!errors.costCenterId"
+					:helper-text="errors.costCenterId || ''"
+					:loading="loadingOptions"
+					:disabled="!editable"
+					required
+					data-test="cost-center-select" />
+				<NcSelect
+					v-model="draft.expenseTypeId"
+					:options="expenseTypes.map(type => ({ label: type.title, value: type.id }))"
+					:reduce="selectOptionValue"
+					:get-option-key="selectOptionKey"
+					:input-label="t('pettycash', 'transactions.expenseType')"
 						:error="!!errors.expenseTypeId"
 						:helper-text="errors.expenseTypeId || ''"
 						:loading="loadingOptions"

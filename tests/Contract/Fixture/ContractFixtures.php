@@ -148,6 +148,20 @@ final class ContractFixtures
         return self::id('ledgerRevisionId');
     }
 
+    /**
+     * The evidence row seeded by the `correction` state, and `null` in every other state.
+     *
+     * Needed by the correction suite to exercise the evidence half of `workflow.md`'s Correction
+     * Contract clause 4 — a resubmission must be refused once the transaction's evidence has been
+     * deactivated, which is only reachable through a state that has some.
+     */
+    public static function evidenceId(): ?string
+    {
+        $id = self::all()['evidenceId'] ?? null;
+
+        return is_string($id) ? $id : null;
+    }
+
     public static function costCenterId(): string
     {
         return self::id('costCenterId');

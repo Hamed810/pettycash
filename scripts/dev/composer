@@ -1,7 +1,279 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Run Composer as an EXTERNAL DEVELOPMENT TOOL, outside the Nextcloud runtime container.
+#
+# WHY NOT docker-nextcloud-1
+#
+# That container is the shared application runtime — one Nextcloud instance used by two
+# applications. It is the right place to run `occ`, `php -l` and PHPUnit, because those have
+# to behave like the app. It is the wrong place to run a dependency installer:
+#
+#   * Composer would have to be installed into `docker_pts-nextcloud`, the volume holding the
+#     entire Nextcloud installation and all user data, for a tool that is not part of the app;
+#   * a dependency operation would become a mutation of shared environment state;
+#   * it produces the wrong owner for a host repository. Historically Composer ran HERE, as
+#     `www-data`: the committed `scripts/dev/composer` delegated to `scripts/dev/in-container`,
+#     which hardcoded `--user www-data` (verified in the committed source of both files, at
+#     every revision in this repository's history). The files that produced — `composer.json`,
+#     `composer.lock` and `vendor/` — are therefore owned by uid/gid 33 today. Root was NOT
+#     involved: running as root would have produced root-owned files, and it did not. Measured
+#     current state: uid 1000 can write neither those paths nor `scripts/`, while uid 33 can
+#     still write the paths it owns, which is exactly why the old invocation kept working and
+#     exactly what is being migrated away from.
+#
+# # WHY THIS IMAGE, AND WHY NOT composer:2
+#
+# The obvious choice is the official Composer image, and for a project whose dependencies
+# need only common extensions it is the right one. It is not sufficient here, and the reason
+# is measured rather than assumed. `composer:2` ships PHP 8.5.9 without `gd`; this project's
+# locked dependency set has three packages that require it:
+#
+#   phpoffice/phpspreadsheet 5.10.0 requires ext-gd
+#   tecnickcom/tc-lib-barcode 2.16.3 requires ext-gd
+#   tecnickcom/tc-lib-pdf-image 3.14.3 requires ext-gd
+#
+# Verified against the image:
+#
+#   $ scripts/dev/composer install --dry-run
+#   … phpoffice/phpspreadsheet 5.10.0 requires ext-gd * -> it is missing from your system.
+#
+# Adding `--ignore-platform-req=ext-gd` would silence that message while installing a
+# dependency set that cannot actually run, so it is not an option: it makes the install a lie
+# instead of a failure.
+#
+# The toolchain is therefore the `nextcloud:34-apache` image run as a SEPARATE, EPHEMERAL
+# container — not the running one. It is the same image the app runs on, so the Composer
+# environment provably matches the environment the app executes in:
+#
+#   PHP 8.5.9, and every extension the dependency set requires:
+#   apcu bcmath ctype curl date dom exif fileinfo filter ftp gd gmp hash iconv igbinary
+#   imagick intl json ldap lexbor libxml mbstring memcached mysqlnd openssl pcntl pcre pdo
+#   pdo_mysql pdo_pgsql pdo_sqlite phar posix random readline redis reflection session
+#   simplexml sodium spl sqlite3 standard sysvsem tokenizer uri xml xmlreader xmlwriter zip
+#   zlib
+#
+# That covers all 24 hard `ext-*` requirements in the locked set, including gd. This image has
+# no `git` binary, which is immaterial: every dependency resolves from a dist archive and the
+# `zip` extension is present. `--prefer-source` would need a git-capable image.
+#
+# The container used here mounts only this repository and the Composer cache. It does not
+# mount `/var/www/html`, shares no volume with the shared lab, and is removed on exit
+# (`--rm`), so the shared Nextcloud state is untouched.
+#
+# `--tmpfs /var/www/html` is passed because this image declares `VOLUME /var/www/html`.
+# Without it Docker silently creates an anonymous volume for every invocation. `--rm`
+# reclaims it on a clean exit, but an INTERRUPTED run (a killed `timeout`, a dropped
+# client, Ctrl-C) leaves it behind, and those accumulate. A tmpfs satisfies the image's
+# volume declaration with an in-memory mount that has nothing to leak and is discarded with
+# the container. The toolchain never reads or writes `/var/www/html`; the directory exists
+# only to satisfy the image.
+#
+# WHERE COMPOSER ITSELF COMES FROM
+#
+# That image ships no Composer binary. Rather than installing one into the runtime container,
+# the phar is provisioned ONCE into a host cache directory outside every repository, by
+# copying it out of the official Composer image (no network at provisioning time, exact known
+# version). The wrapper re-provisions automatically whenever the cached phar is missing or
+# is not COMPOSER_VERSION, and prints what it did.
+#
+# COMPOSER_VERSION is pinned, and the source image is pinned by digest, so the toolchain is
+# reproducible rather than floating. Verified contents of the pinned provisioning image:
+#
+#   composer@sha256:af98f42dfff7c68ba8d53c2164fd9fde1087b7d449514baa38c418b1f6bc4bac
+#     Composer 2.10.3  (2026-08-27)   PHP 8.5.11
+#
+# The previous 2.10.2 phar was deliberately replaced: it is affected by published advisories
+# fixed in 2.10.3 (CVE-2026-59944, medium; CVE-2026-84361, high — arbitrary command
+# execution via a malicious package's source). A development tool is still a tool that
+# executes code, so it is held to the same floor.
+#
+# Ownership, which is the point of the whole exercise:
+#
+#   container user   $(id -u):$(id -g)   -> 1000:1000 on this host
+#   writes into      this repository (host-owned bind mount)
+#   owned by         the host development user
+#
+# No root-owned files, no chown step afterwards, and no change to any existing ownership in
+# this tree.
+#
+# `composer.json`, `composer.lock` and `vendor/` remain this project's alone. No shared or
+# merged vendor directory, no symlink to the sibling app's dependencies.
+#
+# CACHE
+#
+# `$PETTYCASH_COMPOSER_CACHE_DIR` (default `~/.cache/composer-docker`) holds Composer's
+# download cache and `bin/composer.phar`. It is outside every repository, so caching never
+# dirties a working tree or a lockfile. Global Composer config and credentials are not
+# persisted there: `COMPOSER_HOME` stays on the container's ephemeral `/tmp`.
+#
+# USAGE
+#
+#   scripts/dev/composer --version
+#   scripts/dev/composer validate
+#   scripts/dev/composer install
+#   scripts/dev/composer install --dry-run
+#   scripts/dev/composer update
+#
+#   PETTYCASH_COMPOSER_IMAGE=other/image:tag scripts/dev/composer validate
+#   PETTYCASH_COMPOSER_CACHE_DIR=/path scripts/dev/composer install
 
-exec "$SCRIPT_DIR/in-container" \
-  composer "$@"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+# Toolchain image: same image as the app runtime, run ephemerally. Must provide every
+# extension the locked dependency set requires — for this project that includes ext-gd.
+readonly IMAGE="${PETTYCASH_COMPOSER_IMAGE:-nextcloud:34-apache}"
+
+# The Composer release this repository's tooling is pinned to. Held to >= 2.10.3 because
+# 2.10.2 is affected by published advisories fixed in 2.10.3 (CVE-2026-59944, medium;
+# CVE-2026-84361, high). Bumping this constant is how the toolchain is upgraded; the
+# wrapper re-provisions the cached phar to match automatically.
+readonly COMPOSER_VERSION=2.10.3
+
+# Where the Composer phar comes from. Pinned by DIGEST, not by tag: `composer:2` is a
+# moving tag, and an unpinned tag would silently change the toolchain version under the
+# repository's feet. Verified contents: Composer 2.10.3, PHP 8.5.11.
+readonly PROVISION_IMAGE="${PETTYCASH_COMPOSER_PROVISION_IMAGE:-composer@sha256:af98f42dfff7c68ba8d53c2164fd9fde1087b7d449514baa38c418b1f6bc4bac}"
+
+readonly CACHE_DIR="${PETTYCASH_COMPOSER_CACHE_DIR:-$HOME/.cache/composer-docker}"
+readonly PHAR_IN_CONTAINER=/composer-cache/bin/composer.phar
+readonly PHAR_ON_HOST="$CACHE_DIR/bin/composer.phar"
+readonly PHAR_STAMP="$CACHE_DIR/bin/composer.phar.version"
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "composer: docker is not available on this host." >&2
+  echo "composer: Composer runs in a container by design, because it must not be installed in" >&2
+  echo "composer: the shared Nextcloud runtime and must not write root-owned files into this" >&2
+  echo "composer: repository. There is no host PHP and no host Composer fallback." >&2
+  exit 1
+fi
+
+if [ $# -eq 0 ]; then
+  echo "composer: no arguments given." >&2
+  echo "composer: Composer needs a command or option, for example:" >&2
+  echo "composer:   scripts/dev/composer --version" >&2
+  echo "composer:   scripts/dev/composer validate" >&2
+  exit 2
+fi
+
+if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+  echo "composer: the toolchain image '${IMAGE}' is not present locally." >&2
+  echo "composer: Fetch it once with:" >&2
+  echo "composer:   docker pull ${IMAGE}" >&2
+  echo "composer: It is used as an ephemeral toolchain container, not as the runtime." >&2
+  exit 1
+fi
+
+mkdir -p "$CACHE_DIR/bin" || {
+  echo "composer: could not create the Composer cache directory ${CACHE_DIR}/bin." >&2
+  echo "composer: Override it with PETTYCASH_COMPOSER_CACHE_DIR=<path>." >&2
+  exit 1
+}
+
+# Provision the pinned phar once, as the host user, so it is never root-owned either.
+# Re-provisioned whenever the cache holds no phar, or one that is not COMPOSER_VERSION.
+# The stamp is the record of which version the cached phar is; the phar's own version is
+# verified after copying, so a stamp that lies cannot survive.
+cached_version=""
+if [ -f "$PHAR_STAMP" ]; then
+  cached_version="$(cat "$PHAR_STAMP" 2>/dev/null || true)"
+fi
+
+if [ ! -f "$PHAR_ON_HOST" ] || [ "$cached_version" != "$COMPOSER_VERSION" ]; then
+  if ! docker image inspect "$PROVISION_IMAGE" >/dev/null 2>&1; then
+    echo "composer: no Composer ${COMPOSER_VERSION} phar in ${CACHE_DIR} and the provisioning" >&2
+    echo "composer: image '${PROVISION_IMAGE}' is not present locally. Fetch it with:" >&2
+    echo "composer:   docker pull ${PROVISION_IMAGE}" >&2
+    exit 1
+  fi
+  if [ -f "$PHAR_ON_HOST" ]; then
+    echo "composer: cached Composer is '${cached_version:-unknown}', need ${COMPOSER_VERSION};" >&2
+  else
+    echo "composer: no Composer phar in ${CACHE_DIR}; provisioning ${COMPOSER_VERSION}." >&2
+  fi
+  echo "composer: from ${PROVISION_IMAGE}." >&2
+  # --tmpfs /var/www/html for the same reason as the main invocation: this image declares
+  # VOLUME /var/www/html, and a leaked anonymous volume per run is pure waste.
+  if ! docker run --rm \
+    --user "$(id -u):$(id -g)" \
+    --tmpfs /var/www/html \
+    -v "$CACHE_DIR:/composer-cache" \
+    --entrypoint sh "$PROVISION_IMAGE" \
+    -c "cp /usr/bin/composer '${PHAR_IN_CONTAINER}'"; then
+    echo "composer: could not provision the Composer phar; nothing was changed." >&2
+    exit 1
+  fi
+  # Verify what actually landed before trusting it.
+  #
+  # The pattern is matched anywhere in the output, not on a fixed line: PHP writes its
+  # version block and Composer's own line on separate streams, so their interleaving — and
+  # therefore the line number — varies between runs. Matching the line by shape is stable;
+  # counting lines is not.
+  provisioned="$(
+    docker run --rm --user "$(id -u):$(id -g)" \
+      --tmpfs /var/www/html \
+      -v "$CACHE_DIR:/composer-cache" \
+      --entrypoint php "$PROVISION_IMAGE" \
+      "$PHAR_IN_CONTAINER" --version 2>&1 |
+      sed -n 's/^Composer version \([^ ]*\).*/\1/p' | head -1
+  )"
+  if [ "$provisioned" != "$COMPOSER_VERSION" ]; then
+    echo "composer: provisioned phar reports '${provisioned:-unknown}', expected ${COMPOSER_VERSION}." >&2
+    echo "composer: Refusing to stamp it; remove ${PHAR_ON_HOST} and investigate." >&2
+    exit 1
+  fi
+  printf '%s\n' "$COMPOSER_VERSION" > "$PHAR_STAMP"
+  echo "composer: provisioned Composer ${COMPOSER_VERSION} at ${PHAR_ON_HOST}" >&2
+  echo "composer: (sha256 $(sha256sum "$PHAR_ON_HOST" | cut -d' ' -f1))." >&2
+fi
+
+# Warn, do not refuse, when this tree cannot be written by the invoking user.
+#
+# This is a drift guard, not a diagnosis of a fixed historical state. The tree's Composer files
+# were owned by uid/gid 33 (`www-data`) — 8334 entries under `vendor/` — because Composer used
+# to run in `docker-nextcloud-1` through this repository's `scripts/dev/in-container`, which
+# hardcoded `--user www-data`. It was never run as root. That ownership was migrated to the host
+# user on 2026-10-02 (docs/development/composer-ownership-migration.md), so this warning no
+# longer fires there. It stays because ownership can drift again — a restore from a backup, a
+# copy from another machine, a container-run Composer — and a raw EACCES from deep inside
+# Composer is a bad way to discover it.
+#
+# `www-data` no longer owns anything Composer writes, which is intentional: the runtime reads
+# dependencies, it does not modify them.
+case "${1:-}" in
+  install|update|require|remove|config|repositories|repository|patch|bump|init|archive|create-project)
+    if ! docker run --rm \
+      --user "$(id -u):$(id -g)" \
+      --tmpfs /var/www/html \
+      -v "$REPO_ROOT:$REPO_ROOT" \
+      --workdir "$REPO_ROOT" \
+      --entrypoint sh "$IMAGE" \
+      -c 'test -w composer.json && test -w .' >/dev/null 2>&1; then
+      echo "composer: warning: this repository's composer.json / composer.lock / vendor/" >&2
+      echo "composer: are not writable by uid $(id -u), so a command that installs or edits" >&2
+      echo "composer: dependencies will fail on permissions. Read-only commands (--version," >&2
+      echo "composer: validate, install --dry-run) work regardless. Inspect with:" >&2
+      echo "composer:   scripts/dev/composer-ownership-status" >&2
+      echo "composer: Expected ownership: uid $(id -u):$(id -g) on composer.json, composer.lock" >&2
+      echo "composer: and vendor/. See docs/development/composer-ownership-migration.md." >&2
+    fi
+    ;;
+esac
+
+# --entrypoint php bypasses the Nextcloud image's own entrypoint entirely; this container has
+# no role in the shared instance and runs no Nextcloud code.
+#
+# --tmpfs /var/www/html satisfies the image's `VOLUME /var/www/html` declaration with an
+# in-memory mount, so no anonymous volume is created per run. See the header for why.
+exec docker run --rm -i \
+  --user "$(id -u):$(id -g)" \
+  --tmpfs /var/www/html \
+  --workdir "$REPO_ROOT" \
+  -e HOME=/tmp \
+  -e COMPOSER_CACHE_DIR=/composer-cache \
+  -v "$REPO_ROOT:$REPO_ROOT" \
+  -v "$CACHE_DIR:/composer-cache" \
+  --entrypoint php \
+  "$IMAGE" \
+  "$PHAR_IN_CONTAINER" "$@"

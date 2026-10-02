@@ -173,9 +173,24 @@ final class DbTransactionRevisionRepository implements TransactionRevisionReposi
     /**
      * Whether the revision has at least one active evidence item.
      *
-     * `data-model.md` keeps evidence requirement a validation over "active evidence
-     * related to the revision/transaction" rather than a column on the revision, so
-     * the flag is derived from `pettycash_evidence` on every read.
+     * `data-model.md:248` states the rule: "Required evidence is validated against active evidence
+     * related to the revision/**transaction**." The predicate below was scoped to the revision only —
+     * evidence whose `origin_revision_id` equalled *this* revision's, or was null — so it answered
+     * a strictly narrower question than the one the model documents, and the docblock above it
+     * described the wider rule the code did not implement.
+     *
+     * The narrower scope is what made correction unusable. A returned transaction's evidence belongs
+     * to the revision it was uploaded against, and `workflow.md`'s Correction Contract clause 6 keeps
+     * that evidence history unchanged. So a correction draft — a *new* revision, per clause 3 —
+     * inherited no evidence at all, and `ResubmitCorrection`'s `hasEvidence()` check refused every
+     * resubmission with `422 "Transaction missing required evidence"` on a transaction that plainly
+     * had evidence. Measured against the contract fixture: a complete, correctly-edited correction
+     * could not be resubmitted, which is US4/AC2's whole request.
+     *
+     * Scoping to the transaction is what `data-model.md` already says, and it is the right unit here:
+     * evidence is a property of the expense, not of one attempt at describing it. Deactivation still
+     * counts correctly — `active` is required, so evidence removed after submission stops satisfying
+     * it, which is what FR-058's "marked inactive rather than physically removed" relies on.
      */
     private function hasActiveEvidence(int $transactionDbId, int $revisionDbId): bool
     {
@@ -184,10 +199,6 @@ final class DbTransactionRevisionRepository implements TransactionRevisionReposi
             ->from('pettycash_evidence')
             ->where($qb->expr()->eq('transaction_id', $qb->createNamedParameter($transactionDbId)))
             ->andWhere($qb->expr()->eq('active', $qb->createNamedParameter(true, IQueryBuilder::PARAM_BOOL)))
-            ->andWhere($qb->expr()->orX(
-                $qb->expr()->eq('origin_revision_id', $qb->createNamedParameter($revisionDbId)),
-                $qb->expr()->isNull('origin_revision_id')
-            ))
             ->setMaxResults(1);
 
         return $qb->executeQuery()->fetchAssociative() !== false;
@@ -273,17 +284,50 @@ final class DbTransactionRevisionRepository implements TransactionRevisionReposi
         $revision->dbId = $revisionDbId;
         $revision->publicId = $row['public_id'];
 
-        // A submitted revision is one that has been activated; the domain keeps no
-        // separate flag in `pettycash_transaction_revisions`.
         $revision->hydrate(
             $row['description'] !== null && $row['description'] !== '' ? (string) $row['description'] : null,
             $costCenterDbId !== null ? $this->getCostCenterPublicId($costCenterDbId) : null,
             $row['expense_type_title'] !== null && $row['expense_type_title'] !== '' ? (string) $row['expense_type_title'] : null,
             $transactionDbId > 0 && $this->hasActiveEvidence($transactionDbId, $revisionDbId),
-            $activatedAt !== null
+            $this->isCurrentRevision($transactionDbId, $revisionDbId)
         );
 
         return $revision;
+    }
+
+    /**
+     * Whether this revision is the transaction's current one.
+     *
+     * **This is the projection `Revision.active` is read from, and it used to be `activated_at IS NOT
+     * NULL`.** That answers a different question. `activated_at` records that a revision was *once*
+     * submitted; the contract's `Revision.active` means *is current*, which is what
+     * `TransactionDetailView.vue:82` relies on when it does `revisions.find(r => r.active)` and what
+     * FR-050 rests on — "the active revision MUST determine the current transaction information".
+     *
+     * The two diverge the moment a correction happens. A correction adds a revision; the superseded
+     * one keeps its `activated_at` forever, so deriving from it reported **two** active revisions
+     * after every resubmission, with a client taking whichever the list returned first. Measured
+     * against the contract fixture: revision 1 and revision 3 both read `active: true`.
+     *
+     * `pettycash_transactions.active_revision_id` is the only durable record of which revision is
+     * current, and exactly one row points at exactly one revision — so reading it makes "exactly one
+     * active" a property of the data rather than something the query has to infer.
+     */
+    private function isCurrentRevision(int $transactionDbId, int $revisionDbId): bool
+    {
+        if ($transactionDbId <= 0) {
+            return false;
+        }
+
+        $qb = $this->connection->getQueryBuilder();
+        $qb->select('active_revision_id')
+            ->from('pettycash_transactions')
+            ->where($qb->expr()->eq('id', $qb->createNamedParameter($transactionDbId)))
+            ->setMaxResults(1);
+
+        $current = $qb->executeQuery()->fetchOne();
+
+        return $current !== false && $current !== null && (int) $current === $revisionDbId;
     }
 
     private function getRevisionPublicId(int $id): string

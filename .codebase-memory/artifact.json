@@ -1,12 +1,11 @@
 {
     "schema_version": 2,
-    "commit": "ac6fd9d3fe037f44fa7a180c59b5927c742191f9",
-    "indexed_at": "2026-09-29T20:02:27Z",
+    "commit": "631d4ff96ded286608a03a122283d54c0f487ee0",
+    "indexed_at": "2026-10-01T22:22:43Z",
     "project": "home-ubuntu-projects-pettycash",
-    "nodes": 13213,
-    "edges": 45680,
-    "original_size": 44433408,
-    "compressed_size": 8443317,
-    "compression_level": 3,
-    "reconcile_basis": "git-clean-head"
+    "nodes": 6796,
+    "edges": 23907,
+    "original_size": 27656192,
+    "compressed_size": 5671028,
+    "compression_level": 3
 }

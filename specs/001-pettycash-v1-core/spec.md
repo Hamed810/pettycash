@@ -4,7 +4,9 @@
 
 **Created**: 2026-09-19
 
-**Status**: Draft — ready for planning
+**Status**: Approved for implementation — under convergence. 205 of 276 ledger tasks complete; the
+open CRITICAL items are T326 and T327, which between them leave a purchaser unable to read a sheet's
+transactions or submit it.
 
 **Input**: User description: "Read the existing business requirements and create feature
 specifications from them. Do not implement anything. Only create specs."
@@ -48,6 +50,20 @@ specifications from them. Do not implement anything. Only create specs."
 - Q: When a finance approval consumes an account's balance, which audit stream records that the officer charged that account? (FR-055, T294) → A: Settlement also writes a configuration audit event naming the charged account, so a charge appears in both streams and the derivation is not left empty.
 - Q: What counts as a view being "usable" within three seconds, so that SC-008 can actually be measured? (SC-008) → A: The view finishes loading and shows the rows the user is entitled to see, with no error state, measured end to end as a user sees it.
 - Q: Should SC-008's three-second usability target be verified during V1, or is that verification deferred to a later milestone? (SC-008) → A: Verified during V1, not deferred; the measurement is performed and its result recorded, so the criterion is reported as met or not met rather than assumed.
+
+### Session 2026-09-30
+
+- Q: Both requirements about exporting selected records are numbered FR-068, so which number should the requirement about refusing unsatisfiable selections get? (FR-068) → A: Renumber it to FR-082. Both rules stay separately traceable, and the group-export coverage rule keeps FR-068 because every existing cross-reference uses FR-068 for it.
+- Q: When a user opens an evidence file, should the app try to render it in the browser or only ever download it? (FR-060) → A: Render inline-safe media types in the browser -- images, PDF, plain text -- using the file's stored media type with an `inline` disposition; send every other media type as `application/octet-stream` with an `attachment` disposition, never rendered inline. The contract is amended to match, not the requirement.
+- Q: When one stored record is corrupt or incomplete, what should a list or dashboard request return to the user? (FR-083) → A: `422` with an explanatory message on sheets, sheet detail and dashboard too, matching reports, with `500` reserved for genuinely unexpected faults and no unreadable record silently omitted or defaulted.
+- Q: Is producing a PDF export part of V1, or is it deferred to a later release? (FR-066) → A: Part of V1. An OFL-licensed Persian font is vendored into the repository under an app-owned path with its licence text, so `pdf` is supported unconditionally and never depends on a host- or container-installed font.
+- Q: Does SC-010's moderated usability test have to be run before V1 can be released? (SC-010) → A: It is measured and its result recorded, but it does not block release. When representative users or a facilitator are unavailable it is recorded explicitly as not measured, with the reason, and is never reported as met by default.
+- Q: When someone picks the "month" or "quarter" export preset, which calendar defines that period's boundaries? (FR-068) → A: Jalali (Solar Hijri), matching the calendar every date in the interface is already rendered in. A period spans Farvardin to Esfand and a quarter begins at Farvardin; it resolves to a Gregorian from/to pair for querying without altering any stored expense date, and is never identified by a Gregorian year number.
+- Q: When someone picks the "month" export preset, which Jalali month does it select? (FR-068) → A: The current Jalali period, running from its first day through its last, not the previous completed period and not a trailing window. Because a period in progress is incomplete, every response that resolved a predefined period states the exact date range it resolved; a previous or trailing period is requested with the explicit custom date range instead.
+- Q: Which time zone decides where a Jalali month begins and ends? (FR-068) → A: The time zone of the account making the request, from that user's own account settings, falling back to the instance's configured default when the account states none; no zone is hardcoded. The resolved range is therefore relative to the requesting user, and the response states both the range and the zone it was resolved in.
+- Q: When a period's boundary lands on a day, does that day count as inside the period or outside it? (FR-068) → A: Inclusive at both ends. A period covers every expense date from its first day through its last day, so a predefined period and the equivalent explicit date range select exactly the same records. A Jalali year is 365 or 366 days and is never treated as a fixed length.
+- Q: If a request supplies both a predefined period and an explicit date range, which one decides the records? (FR-068) → A: They are mutually exclusive within one request. Supplying both is refused with a `422` naming the conflict and stating which of the two to remove; the application never honours one while discarding the other, and never intersects them.
+- Q: When someone filters by a period such as "this month", is that a filter in its own right or simply another way of expressing a date range? (FR-064) → A: A filter in its own right. It joins FR-064's accepted list explicitly, scoped to the export and report endpoints that already accept a date range, and because FR-068 makes the two mutually exclusive it is refused alongside a date range rather than merged into or silently narrowing one.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -252,9 +268,11 @@ records and fields allowed for that role.
 4. **Given** a group of records is selected, **When** an export is requested with a supported
    `fileFormat`, **Then** the system produces a complete grouped export in that format, and refuses a
    format it cannot yet produce with an explanation naming the reason.
-   The supported `fileFormat` values are `csv`, `xlsx` and `zip`; `pdf` is supported only once a
-   Persian-capable font is available, and until then a `pdf` request is refused rather than answered
-   with a document that cannot be read.
+   The supported `fileFormat` values are `csv`, `xlsx`, `zip` and `pdf`. All four are supported in V1,
+   including `pdf`, because an OFL-licensed Persian font is vendored into the repository under an
+   app-owned path with its licence text, so a Persian PDF renders identically in every deployment
+   rather than depending on a machine-specific font location. A `fileFormat` outside these four is
+   still refused with a reason naming what is supported.
    The field is named `fileFormat` and not `format` because the response-envelope format is selected by
    a request parameter of that name, so a request field called `format` would silently change the shape
    of the response instead of describing the export.
@@ -393,7 +411,13 @@ of all primary workflow actions.
 - **FR-020**: A purchaser with one active account MUST receive its currency automatically; a
   purchaser with multiple active accounts MUST choose from only those account currencies; a purchaser
   with zero active accounts has a default active rial account auto-created on first sheet creation
-  attempt (idempotent provisioning per FR-014/T085).
+  attempt (idempotent provisioning).
+  **This requirement owns the provisioning rule.** It previously cross-referenced "FR-014/T085" here
+  while `spec.md:26` (Clarifications, session 2026-09-22) cited only FR-020, so the same normative
+  behaviour had two identifiers and no consistent citation. FR-014 states the *account model* — that
+  every user has a default active rial account — but not the *provisioning trigger*; the trigger is
+  what this requirement specifies and what T085 implements. FR-014 is therefore left as the account
+  model and is not a second owner of provisioning. Recorded 2026-10-01.
 - **FR-021**: Every transaction in a sheet MUST inherit the sheet currency and MUST NOT define an
   independent currency.
 - **FR-022**: An open transaction MUST be savable with an expense date and positive amount as its
@@ -500,7 +524,18 @@ of all primary workflow actions.
 - **FR-059**: After submission, removing evidence MUST mark it inactive rather than physically
   delete it, and its history MUST remain viewable.
 - **FR-060**: Authorized users MUST be able to preview supported evidence, download it, and see its
-  active state and change history.
+  active state and change history. Preview means the browser renders the evidence in place rather than
+  saving it: a response whose stored media type is inline-safe -- images, PDF, and plain text -- MUST
+  be sent with that stored media type and an `inline` disposition so it renders. Any other media type
+  MUST be sent as `application/octet-stream` with an `attachment` disposition, so it is offered as a
+  download and is never rendered in the Nextcloud origin, because an attacker-supplied type served
+  inline would execute as script in the viewer's session. A caller MUST be able to request either
+  disposition explicitly. (Clarified 2026-09-30: `contracts/ocs-api.yaml` declares
+  `application/octet-stream` as the only success content type for `GET /evidence/{evidenceId}/content`,
+  which makes this requirement's preview unimplementable, while the same contract declares a
+  `disposition` parameter defaulting to `inline` -- a value that cannot render an octet-stream body.
+  The contract is therefore the artifact that was wrong and MUST be amended to match this requirement;
+  T275 owns that change and owns naming the concrete inline-safe media-type list.)
 
 #### Dashboards, Search, Reports, and Exports
 
@@ -513,15 +548,24 @@ of all primary workflow actions.
 - **FR-063**: Sheet lists and details MUST show identity, owner, currency, status, transaction count,
   key dates, current and submitted totals, summary amounts, and the active transaction revision.
 - **FR-064**: Users MUST be able to filter sheets by status, date, currency, and creator;
-  transactions by status, cost center, expense type, date, and amount; and audit by actor, stage,
-  event type, and date range. Each facet resolves to exactly one source, so that "filter by creator"
+  transactions by status, cost center, expense type, date, and amount; audit by actor, stage,
+  event type, and date range; and group exports by period, which is the predefined Jalali period
+  defined in FR-068. **`period` is a filter in its own right, not a form of the date or date-range
+  filters**, and it is scoped to the export and report endpoints that already accept a date range.
+  Each facet resolves to exactly one source, so that "filter by creator"
   has a single meaning: a sheet's **creator** is its owner; a transaction's **cost center** is the one
   recorded on that transaction's own active revision -- not the sheet's, because a sheet may hold
   transactions for several cost centers (FR-028); a transaction's **expense type** and **amount** also
   come from its active revision; and an audit event's **stage** is the stage recorded on the event.
   A filter naming any field outside this set MUST be refused with a 422 naming the accepted filters, and
   MUST NOT be ignored -- an unrecognised filter silently returning the unfiltered report is a wrong
-  answer, not an empty one.
+  answer, not an empty one. Because FR-068 makes `period` and an explicit date range mutually exclusive
+  within one request, supplying both MUST be refused as FR-068 requires; `period` MUST NOT silently
+  narrow a supplied date range, and MUST NOT be merged into one. (Clarified 2026-09-30: this set omitted
+  `period` while FR-068 required it, so the specification both required the filter and -- through the
+  422 rule below -- forbade it. `period` is now a named member of the accepted set rather than being
+  declared a parameterisation of `date`, because FR-068 presents periods and custom date ranges as
+  alternatives and makes them mutually exclusive, which a parameterisation and its own host cannot be.)
 - **FR-065**: Reports MUST cover sheets, transactions, cost centers, current process status, evidence,
   and history within the requester's access scope. Petty-cash balances and movements MUST be reachable
   as data of the `accounts` report -- one account per row, carrying that account's balance and its
@@ -531,18 +575,62 @@ of all primary workflow actions.
   charge. The reporting API publishes exactly seven report types -- sheets, transactions, cost-centers,
   accounts, process, evidence and audit -- and no requirement may add an eighth.
 - **FR-066**: Authorized users MUST be able to export permitted reports, sheets, transactions,
-  audit histories, and evidence in a supported `fileFormat` (`csv`, `xlsx`, or `zip`; `pdf` once a
-  Persian-capable font is available), and a format that cannot yet be produced MUST be refused with a
-  reason rather than answered with an unreadable or empty document.
-- **FR-068**: Group exports MUST honour the records the caller selected. A selection the system cannot
+  audit histories, and evidence in a supported `fileFormat` (`csv`, `xlsx`, `zip`, or `pdf`), and a
+  format outside that set MUST be refused with a reason naming what is supported rather than answered
+  with an unreadable or empty document. All four formats MUST be supported in V1. A Persian-capable
+  font MUST be vendored into the repository under an app-owned path together with its licence text, and
+  PDF export MUST NOT depend on a font installed on the host or inside a container, so that a Persian
+  PDF renders identically in every deployment. (Clarified 2026-09-30: `pdf` was previously conditional
+  on "a Persian-capable font being available", which no artifact ever established a location for, so V1
+  shipped without PDF by accident rather than by decision and T109 was permanently blocked. Verified
+  during that task: `tc-lib-pdf` is installed but `tecnickcom/tcpdf` is not, `vendor/` holds no font
+  files at all, and `tc-lib-pdf-font` ships none and documents that they must be generated by the
+  consuming project's install hooks. Bidirectional text shaping is not the constraint and was verified
+  working through `tc-lib-unicode`'s UAX#9 bidi and Arabic shaping plus `setRTL()`.)
+- **FR-082**: Group exports MUST honour the records the caller selected. A selection the system cannot
   satisfy MUST be refused with a reason; it MUST NOT be answered with an export that omits the selected
   records. A filter the report's records cannot answer MUST also be refused, never reported as an empty
-  result.
+  result. (Numbered FR-082 rather than FR-068 by the 2026-09-30 clarification: this rule and the group-export
+  coverage rule below were both numbered FR-068. FR-068 is retained for the coverage rule because every
+  existing cross-reference -- `tasks.md` and `plan.md`'s Reporting Periods note -- uses FR-068 for it. This
+  rule therefore takes the next free identifier and keeps its position among the export requirements.)
 - **FR-067**: A complete sheet export MUST preserve the relationships among sheet information,
   transactions, decisions, revisions, audit events, and evidence.
 - **FR-068**: Group exports MUST support selected sheets, date ranges, cost center transactions, and
-  reporting periods (predefined calendar periods: month, quarter, year; plus custom date range)
-  without including records outside the requester's access scope.
+  reporting periods (predefined periods: month, quarter, year; plus custom date range) without
+  including records outside the requester's access scope. **The predefined periods are Jalali
+  (Solar Hijri) periods, because that is the calendar every date in the interface is already
+  rendered in**; a period therefore MUST span Farvardin through Esfand, and a Jalali quarter MUST
+  begin at Farvardin rather than at a Gregorian quarter boundary. A predefined period MUST resolve
+  to an equivalent Gregorian from/to pair for querying, and MUST NOT alter, re-encode or re-interpret
+  any stored expense date; stored dates remain Gregorian calendar dates without a time zone. A Jalali
+  year is not a Gregorian year, so a period MUST NOT be identified in the request or the response by
+  a Gregorian year number. **Each predefined period denotes the period in progress at the moment of
+  the request** — the current Jalali month, quarter or year — running from its first day through its
+  last, rather than the previous completed period or a trailing window of the same length. Because a
+  period in progress is necessarily incomplete, every response that resolved a predefined period MUST
+  state the exact date range it resolved, so that a partial period cannot be mistaken for a complete
+  one. A request for a previous or trailing period is expressed with the explicit custom date range
+  this requirement already supports, not by a second preset. **Period boundaries MUST be resolved in
+  the time zone of the account making the request**, taken from that user's own account settings and
+  falling back to the instance's configured default time zone when the account does not state one;
+  the application MUST NOT hardcode a single zone. Because the zone belongs to the caller, the range
+  a predefined period resolves to is **relative to the requesting user**, and two users in different
+  time zones resolving the same period name MAY obtain different date ranges. A response MUST state
+  both the resolved range and the time zone it was resolved in, so that a difference between two
+  users' exports is explainable from the response rather than appearing as missing records.
+  **Period boundaries are inclusive at both ends**: a period covers every expense date from its first
+  day through its last day, so no day belonging to the period is excluded and no day outside it is
+  included. Expense dates are whole calendar dates carrying no time of day, so a boundary cannot fall
+  inside a record and there is no half-open interval to reason about. A predefined period and the
+  equivalent explicit custom date range MUST therefore select exactly the same records. A Jalali year
+  MUST NOT be treated as a fixed length: it has 365 or 366 days, and a period's record count MUST
+  reflect its actual length. **A predefined period and an explicit custom date range are mutually
+  exclusive within one request.** A request supplying both MUST be refused with a `422` whose message
+  names the conflict and states which of the two to remove, and the application MUST NOT resolve the
+  conflict by honouring one and discarding the other, nor by intersecting them. Silently dropping
+  either instruction would make it impossible for a caller to tell which was applied, and this
+  requirement already refuses rather than ignores elsewhere for the same reason.
 - **FR-069**: Group evidence exports MUST identify the sheet, transaction, revision relationship,
   file metadata, and active state for every exported item.
 - **FR-070**: Scheduled exports, automatic report delivery, external export interfaces, custom
@@ -561,6 +649,37 @@ of all primary workflow actions.
   automatically resume interrupted operations.
 - **FR-076**: Independent application backup and restore, active multilingual UI, a standalone
   mobile application, and advanced dashboard shortcuts MUST remain outside V1.
+- **FR-083**: Every read endpoint MUST answer an unreadable stored record — a broken reference, an
+  incomplete row — with the same status and the same class of explanation, so that a client writes
+  one handler rather than one per endpoint. `GET /sheets`, `GET /sheets/{id}`, `GET /dashboard` and
+  the report endpoints MUST all return `422` with a message identifying the condition as a data fault
+  and ruling out permissions and filters, and MUST NOT return `500`; `500` remains reserved for
+  genuinely unexpected faults. An unreadable record MUST NOT be silently omitted from a result set,
+  defaulted to a valid-looking value, or rendered as if healthy: a stored record whose reference does
+  not resolve is a fault to be reported, not one to paper over. (Clarified 2026-09-30: the same fault
+  had two answers depending on the endpoint — the report endpoints returned `422` because
+  `ReportController` translated it, while sheets and dashboard fell through to the default mapper's
+  `500` with the message withheld. T313 owns making them consistent and T314 pins the settled
+  behaviour with tests, including the administrator and dashboard paths that no test currently
+  exercises.)
+- **FR-084**: Every mutating operation MUST be replay-safe, so that a client retry, a double-click, or
+  a duplicated network request can never apply a second business effect. The client MUST supply a
+  `X-PettyCash-Command-ID` identifying the command, and the server MUST record the outcome of an
+  applied command keyed by that identifier, so that a repeat of an already-applied command returns
+  **the first outcome** rather than producing a second decision, revision, settlement or deletion. The
+  recorded outcome MUST be the original response, not a recomputation. A command identifier reused
+  with **different content** MUST be refused as a conflict rather than applied, and a mutating
+  operation that receives **no** command identifier MUST be refused rather than assigned a
+  server-generated one. The reason a server-generated fallback is forbidden is specific rather than
+  stylistic: it makes a replay arrive under a different key, so the store has nothing to match and the
+  idempotency wrapper silently degrades into "apply twice" — the request is accepted, and the client
+  cannot recognise the result as the same command. Replay safety composes with FR-042's atomicity: a
+  recorded outcome MUST describe a state that was actually committed, never one that was rolled back.
+  (Added 2026-10-02 to close the gap recorded under **Command Result**:
+  `contracts/ocs-api.yaml:767-772` marks the header required on every mutating operation and the
+  schema, persistence layer and roughly a dozen tasks implement replay, but no requirement stated the
+  rule, leaving implemented business behavior untraceable to a requirement. T027, T317 and T318 are the
+  delivered implementation; T134's traceability range covers it.)
 - **FR-077**: PettyCash MUST remain database-portable across the declared V1 database backends:
   MySQL/MariaDB, PostgreSQL, and SQLite. The MariaDB development environment is not an
   application-level dependency, and behavior MUST remain equivalent across the declared backends.
@@ -629,6 +748,30 @@ of all primary workflow actions.
   or access change.
 - **Role Assignment**: A user's role and responsibility scope, including cost center or finance
   responsibility where applicable.
+- **Currency**: A supported currency code with its configured minor-unit scale, against which every
+  amount in the system is interpreted and every amount is displayed. Referenced by FR-008 and FR-020
+  (the default rial account) and by the presentation rules that render an amount at its own scale.
+  Added 2026-10-01: this is one of three entity families the schema has always had and this list
+  omitted. It listed 12 against `plan.md`'s 15 persistent entity families and the 15 `pettycash_*`
+  tables; adding Currency, Public Evidence Link and Command Result brings this list to **15**, so the
+  two artifacts and the schema now agree.
+- **Public Evidence Link**: A revocable, optionally-expiring share token for one evidence item,
+  stored as a hash rather than in the clear, disabled by default, with per-access audit written to
+  configuration audit. Required by FR-031 and FR-055/FR-056's configuration-audit scope. Added
+  2026-10-01, for the same count discrepancy as Currency.
+- **Command Result**: The recorded outcome of an applied mutating command, keyed by the
+  client-generated command identifier, so that a repeat of an already-applied command returns the
+  first outcome instead of applying a second business effect. Added 2026-10-01 for the same count
+  discrepancy as Currency.
+  **The gap this entity had is closed.** On 2026-10-01 this entry recorded that the entity had **no
+  owning functional requirement** — `contracts/ocs-api.yaml:767-772` marks `X-PettyCash-Command-ID`
+  required on every mutating operation and the schema, persistence layer and roughly a dozen tasks
+  implement replay, but no FR stated the rule, so implemented business behavior was traceable to
+  tasks but not to a requirement. **FR-084** now states it, and T134's range reads FR-001–FR-084. The
+  requirement was added *before* the range was widened, not after: widening first would have produced
+  a traceability matrix citing a requirement nothing defines, which is the same defect that range was
+  widened twice for previously. Adding FR-084 moved the count from 83 to 84, which is also the change
+  `plan.md`'s Scale/Scope now records.
 
 ## Success Criteria *(mandatory)*
 
@@ -658,7 +801,17 @@ of all primary workflow actions.
 - **SC-009**: All primary purchaser, manager, senior manager, finance, and administrator journeys
   can be completed in Persian RTL at desktop and mobile viewport sizes in each supported browser.
 - **SC-010**: In moderated acceptance testing, at least 90% of representative users complete their
-  primary role journey on the first attempt without facilitator intervention.
+  primary role journey on the first attempt without facilitator intervention. The result MUST be
+  measured and recorded, and this criterion MUST NOT be reported as met by default. When
+  representative users or a facilitator are unavailable, it MUST be recorded explicitly as **not
+  measured**, naming the reason, rather than treated as satisfied or omitted from the review. It is
+  not a blocking release gate; its purpose in V1 is to make both the figure and its availability
+  visible, on the same principle already applied to SC-008. No automated test can produce this number,
+  so no task is expected to assert it; the release-readiness review owns recording the outcome,
+  whichever way it falls. (Clarified 2026-09-30: this was the only one of the fourteen success criteria
+  with neither an automatable proxy nor a task referencing it, so the review would otherwise have had
+  nothing to check it against. It is distinct from SC-002, which measures the same journeys under
+  fixture accounts and is automated.)
 - **SC-011**: 100% of completed and completed-with-rejections sheets reject attempts to add or edit
   business records while remaining fully available for authorized viewing and reporting.
 - **SC-012**: Disabling a test user leaves 100% of that user's historical actor identity, roles,
@@ -673,9 +826,8 @@ of all primary workflow actions.
 
 ## Assumptions
 
-- The requirements set is version 1.0 and remains Draft; this feature specification consolidates
-  its currently stated rules while exposing unresolved decisions rather than treating them as
-  approved facts.
+- The requirements set is version 1.1; this feature specification consolidates its currently stated
+  rules. Decisions still open are named where they occur rather than resolved silently.
 - V1 uses the organization's existing authenticated user directory, file service, and platform
   security controls; account creation, passwords, login policy, and infrastructure events are
   outside PettyCash business scope.

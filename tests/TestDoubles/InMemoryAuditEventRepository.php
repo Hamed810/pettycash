@@ -40,6 +40,31 @@ final class InMemoryAuditEventRepository implements \OCA\PettyCash\Domain\Audit\
     }
 
     /**
+     * Counts the whole set rather than a window, mirroring
+     * `DbAuditEventRepository::countByTransactionId()`.
+     *
+     * Faithful in the property T319 depends on: the predicate matches this class's
+     * `findByTransactionId()`'s exactly, so the endpoint can never answer 200 with a `total` that
+     * disagrees with the rows it was counted beside.
+     *
+     * **Deliberately narrower than production on one rule, and T321 is why.** The real repository
+     * widens the transaction timeline to include the sheet's sheet-scoped events
+     * (`transaction_id IS NULL`) so that FR-051's "formal transaction audit MUST begin with sheet
+     * submission" holds. This double filters on `transactionId` alone and cannot do otherwise: folding
+     * in a sheet-scoped event needs a transaction -> sheet lookup, and this double holds audit events
+     * with no transaction table behind it. Inventing one would be a fixture that could disagree with
+     * the database, which is the failure mode doubles exist to avoid.
+     *
+     * So this double mirrors count/read *agreement* and not the *inclusion* rule. The inclusion rule is
+     * pinned by `TransactionTimelineSubmissionTest`, which goes through the real repository over live
+     * HTTP — a double could not detect a regression there anyway, since it is the thing being replaced.
+     */
+    public function countByTransactionId(int $transactionId): int
+    {
+        return count(array_filter($this->events, fn($e) => $e->transactionId === $transactionId));
+    }
+
+    /**
      * @return list<AuditEvent>
      */
     public function findBySheetId(int $sheetId, int $offset = 0, int $limit = 100): array

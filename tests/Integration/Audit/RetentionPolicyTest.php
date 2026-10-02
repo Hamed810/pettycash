@@ -241,7 +241,16 @@ final class RetentionPolicyTest extends TestCase
         // question about the whole stream that no actor- or date-scoped read can answer. The
         // invariant this test still protects is unchanged — the port gains reads and one append,
         // and never a way to delete or rewrite an event.
+        //
+        // `countByTransactionId` (T319) is a read on the same reasoning, and for the same reason it
+        // matters: `contracts/ocs-api.yaml:581` declares the transaction audit page as returning
+        // `AuditPage`, whose `PageMeta` requires `total`, and `findByTransactionId()` is bounded by
+        // `setMaxResults` so its return value can only describe the window it was given. Counting in
+        // the database is what makes `total` describe the history rather than the page. The list
+        // below has changed and the diff is the point: adding a read to an append-only audit port is
+        // an act somebody should have to make consciously.
         self::assertSame([
+            'countByTransactionId',
             'findByActorUid',
             'findByDateRange',
             'findById',

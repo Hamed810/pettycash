@@ -93,10 +93,6 @@ function formatDateTime(dateStr: string): string {
 </script>
 
 <style scoped>
-.revision-info {
-	direction: rtl;
-}
-
 .revision-info__title {
 	margin-block-end: 16px;
 }

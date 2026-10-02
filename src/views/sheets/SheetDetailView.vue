@@ -102,25 +102,34 @@ const transactionHeaders = [
 		</div>
 
 		<NcNoteCard data-test="sheet-header">
-			<template #header>
-				<div class="card-header-row">
-					<h2 class="mb-0" data-test="sheet-title">{{ sheetStore.currentSheet?.title }}</h2>
-					<div class="d-flex gap-2">
-						<NcButton v-if="!isSubmitted" variant="secondary" @click="goToEdit" data-test="edit-sheet-btn">
-							<NcIconSvgWrapper :path="mdiPencil" :size="16" class="mr-2" />
-							{{ t('pettycash', 'common.edit') }}
-						</NcButton>
-						<NcButton v-if="!isSubmitted" variant="primary" @click="goToCreateTransaction" data-test="create-transaction-btn">
-							<NcIconSvgWrapper :path="mdiPlus" :size="16" class="mr-2" />
-							{{ t('pettycash', 'transactions.add') }}
-						</NcButton>
-						<NcButton v-if="sheetStore.canSubmit" variant="primary" @click="handleSubmit" data-test="submit-sheet-button">
-							<NcIconSvgWrapper :path="mdiSend" :size="16" class="mr-2" />
-							{{ t('pettycash', 'sheets.submit') }}
-						</NcButton>
-					</div>
+			<!--
+				The card's heading row lives in the default slot, not in a `#header` slot.
+
+				`@nextcloud/vue` 9.12.0's `NcNoteCard` renders `heading` (a string prop) and `default`;
+				**it has no `header` slot**. A `<template #header>` is therefore dropped without a
+				warning, and everything inside it disappears from the rendered page while remaining
+				present in the source — which is how this card came to have no Edit, no Add transaction
+				and no Submit button at all, in the one view a purchaser has to pass through. Anything
+				richer than a string therefore has to be a normal child of the card, and the app's
+				existing `.card-header-row` gives it the same shape the dropped slot intended.
+			-->
+			<div class="card-header-row">
+				<h2 class="mb-0" data-test="sheet-title">{{ sheetStore.currentSheet?.title }}</h2>
+				<div class="d-flex gap-2">
+					<NcButton v-if="!isSubmitted" variant="secondary" @click="goToEdit" data-test="edit-sheet-btn">
+						<NcIconSvgWrapper :path="mdiPencil" :size="16" class="mr-2" />
+						{{ t('pettycash', 'common.edit') }}
+					</NcButton>
+					<NcButton v-if="!isSubmitted" variant="primary" @click="goToCreateTransaction" data-test="create-transaction-btn">
+						<NcIconSvgWrapper :path="mdiPlus" :size="16" class="mr-2" />
+						{{ t('pettycash', 'transactions.add') }}
+					</NcButton>
+					<NcButton v-if="sheetStore.canSubmit" variant="primary" @click="handleSubmit" data-test="submit-sheet-button">
+						<NcIconSvgWrapper :path="mdiSend" :size="16" class="mr-2" />
+						{{ t('pettycash', 'sheets.submit') }}
+					</NcButton>
 				</div>
-			</template>
+			</div>
 
 			<div class="card-details">
 				<div class="detail-item">
@@ -134,11 +143,7 @@ const transactionHeaders = [
 			</div>
 		</NcNoteCard>
 
-		<NcNoteCard data-test="sheet-totals">
-			<template #header>
-				{{ t('pettycash', 'sheets.totals') }}
-			</template>
-
+		<NcNoteCard :heading="t('pettycash', 'sheets.totals')" data-test="sheet-totals">
 			<div class="totals-grid">
 				<div class="total-chip" data-test="current-total">
 					<span class="total-label">{{ t('pettycash', 'sheets.currentTotal') }}</span>
@@ -182,17 +187,7 @@ const transactionHeaders = [
 			</div>
 		</NcNoteCard>
 
-		<NcNoteCard data-test="transaction-list">
-			<template #header>
-				<div class="card-header-row">
-					<span>{{ t('pettycash', 'transactions.list') }} ({{ transactionStore.pagination.total }})</span>
-					<NcButton v-if="!isSubmitted" variant="primary" @click="goToCreateTransaction" data-test="create-transaction-btn">
-						<NcIconSvgWrapper :path="mdiPlus" :size="16" class="mr-2" />
-						{{ t('pettycash', 'transactions.add') }}
-					</NcButton>
-				</div>
-			</template>
-
+		<NcNoteCard :heading="`${t('pettycash', 'transactions.list')} (${transactionStore.pagination.total})`" data-test="transaction-list">
 			<div class="table-container">
 				<table class="nc-table" data-test="transaction-table">
 					<thead>
@@ -237,11 +232,7 @@ const transactionHeaders = [
 			</div>
 		</NcNoteCard>
 
-		<NcNoteCard data-test="audit-tab">
-			<template #header>
-				{{ t('pettycash', 'audit.title') }}
-			</template>
-
+		<NcNoteCard :heading="t('pettycash', 'audit.title')" data-test="audit-tab">
 			<div class="table-container">
 				<table class="nc-table" data-test="audit-table">
 					<thead>
@@ -416,7 +407,7 @@ const transactionHeaders = [
 .nc-table th,
 .nc-table td {
 	padding: 0.75rem;
-	text-align: right;
+	text-align: start;
 	border-bottom: 1px solid var(--nc-color-outline-variant, #e0e0e0);
 }
 
@@ -462,7 +453,7 @@ const transactionHeaders = [
 }
 
 	.mr-2 {
-		margin-right: 0.5rem;
+		margin-inline-end: 0.5rem;
 	}
 
 	.d-flex {

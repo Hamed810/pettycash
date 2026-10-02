@@ -74,9 +74,16 @@ class CreateCorrectionDraft
             // Save the new revision
             $this->revisionRepository->save($newRevision);
 
-            // Update transaction to point to new active revision (as draft)
-            // The revision is created as a draft (not activated)
-            // We don't call activate() here - the draft remains editable until resubmit
+            // Attach it to the transaction.
+            //
+            // This was missing, and it made the whole correction path inert: the draft was an orphan
+            // row that nothing referenced, so every later read re-loaded the revision being
+            // corrected and `resubmitCorrection()`'s `activate($this->activeRevision)` activated
+            // **that** one. The purchaser's corrections were stored and then thrown away on
+            // resubmission. `attachWorkingRevision()` moves the working pointer and deliberately
+            // leaves the draft inactive, the stage at `CORRECTION`, and the status awaiting the
+            // purchaser — `workflow.md`'s clause 5 puts activation at resubmission, not here.
+            $transaction->attachWorkingRevision($newRevision);
 
             // Save transaction (lock version will be incremented)
             $this->transactionRepository->save($transaction);

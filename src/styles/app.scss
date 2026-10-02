@@ -40,3 +40,35 @@
 	background: var(--color-main-background);
 	font-size: var(--font-size-floor);
 }
+
+/**
+ * The app's scroll container, and the reason this rule exists at all.
+ *
+ * Nextcloud 34 makes `#content` — the element the app is mounted into — a **`position: fixed`,
+ * `overflow: clip` flex container** of the viewport's height. `clip` means what it says: nothing
+ * scrolls, and nothing is reachable. So the app has to establish its own scrolling region, or any
+ * view taller than the viewport loses its lower half.
+ *
+ * This was not a cosmetic overflow. Measured in the browser on the transaction form at a 1280×720
+ * viewport: `#content` was 662px tall, the form's own content was 1041px, and the Save draft,
+ * Create and Cancel buttons sat at y=925–959 — inside a clipped box with no scrollbar. Playwright
+ * reported `element is visible, enabled and stable` and then `element is outside of the viewport`
+ * forever, because scrolling could not reach it. A purchaser could open the transaction form and
+ * then not be able to save a draft or submit anything from it.
+ *
+ * `min-height: 0` is load-bearing, not decoration. `#pettycash-app` is a flex item, and a flex item's
+ * automatic minimum size is its content size, so without it the item is grown to 1041px by its
+ * content and then clipped by `#content` — which is precisely the bug. Setting it to zero lets the
+ * item be sized by `#content` instead, and `overflow-y: auto` then has something to scroll.
+ *
+ * `overflow-x` is deliberately left alone. Declaring it would either hide a genuine horizontal
+ * overflow or, because CSS computes a `visible` overflow on one axis to `auto` once the other axis
+ * is not `visible`, quietly add a horizontal scrollbar. FR-071's "no horizontal scroll at 390px" is a
+ * requirement to *fix* the overflow, and it is measured in a browser by T116/T122 — not to clip it.
+ */
+#pettycash-app {
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+	overflow-y: auto;
+}

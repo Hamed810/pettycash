@@ -91,8 +91,18 @@ use OCA\PettyCash\Infrastructure\Persistence\Audit\DbAuditEventRepository;
 use OCA\PettyCash\Infrastructure\Persistence\Command\DbCommandResultRepository;
 use OCA\PettyCash\Infrastructure\Persistence\Configuration\DbCostCenterRepository;
 use OCA\PettyCash\Infrastructure\Persistence\Configuration\DbCurrencyRepository;
+use OCA\PettyCash\Application\Configuration\CostCenterService;
+use OCA\PettyCash\Application\Configuration\CurrencyService;
+use OCA\PettyCash\Application\Configuration\ExpenseTypeService;
+use OCA\PettyCash\Application\Audit\AuditWriterService;
+use OCA\PettyCash\Application\Audit\ConfigurationAuditService;
+use OCA\PettyCash\Application\Configuration\FinanceAssignmentService;
+use OCA\PettyCash\Infrastructure\Nextcloud\NextcloudAdministratorCheck;
+use OCA\PettyCash\Infrastructure\Nextcloud\SystemClock;
 use OCA\PettyCash\Infrastructure\Persistence\Configuration\DbExpenseTypeRepository;
 use OCA\PettyCash\Infrastructure\Persistence\Configuration\DbRoleAssignmentRepository;
+use OCA\PettyCash\Infrastructure\Persistence\NextcloudTransactionManager;
+use OCA\PettyCash\Tests\TestDoubles\FailingAuditWriter;
 use OCA\PettyCash\Infrastructure\Persistence\Evidence\DbEvidenceLinkRepository;
 use OCA\PettyCash\Infrastructure\Persistence\Evidence\DbEvidenceRepository;
 use OCA\PettyCash\Infrastructure\Persistence\Expense\DbExpenseSheetRepository;
@@ -138,6 +148,31 @@ $session = \OCP\Server::get(IUserSession::class);
 $session->setUser($actingUser);
 $currentUser = new NextcloudCurrentUser($session);
 
+// T081/T082/T083 exercise the *services* over the real repositories, so the round trip proves the
+// application layer against MariaDB and not only the persistence layer against an in-memory double.
+//
+// The acting identity for authorization is resolved separately from the session user: the services
+// take an actor uid as a parameter and ask `AdministratorCheck` whether it may write, exactly as
+// `AccountService::charge($uid, ...)` does, while the repositories stamp their audit columns from the
+// session. `PETTYCASH_TEST_USER` is not an administrator in this instance, so a real administrator uid
+// is discovered rather than assumed. Nothing here asserts on the audit columns, which is why the two
+// identities may differ.
+$groupManager = \OCP\Server::get(\OCP\IGroupManager::class);
+$administratorUid = null;
+$adminGroup = $groupManager->get('admin');
+if ($adminGroup !== null) {
+    foreach ($adminGroup->getUsers() as $member) {
+        $administratorUid = $member->getUID();
+        break;
+    }
+}
+if ($administratorUid === null) {
+    fwrite(STDERR, "The 'configuration' scenario needs a member of the admin group.\n");
+    exit(1);
+}
+$administrators = new NextcloudAdministratorCheck($groupManager);
+$clock = new SystemClock();
+
 $currencies = new DbCurrencyRepository($db, $userDirectory, $currentUser);
 $costCenters = new DbCostCenterRepository($db, $userDirectory, $currentUser);
 $expenseTypes = new DbExpenseTypeRepository($db, $userDirectory, $currentUser);
@@ -156,6 +191,59 @@ $configurationAuditEvents = new DbAuditEventRepository($db, $userDirectory, $cur
 $evidence = new DbEvidenceRepository($db, $userDirectory, $currentUser);
 $evidenceLinks = new DbEvidenceLinkRepository($db, $userDirectory, $currentUser);
 $commandResults = new DbCommandResultRepository($db, $userDirectory, $currentUser);
+
+// T086 / FR-017. The real `AuditWriterService` over both real streams, and the *real*
+// `NextcloudTransactionManager`. This is the only place in the test suite where the configuration audit
+// can be shown to be atomic with its mutation: `InMemoryTransactionManager` runs its callback and rolls
+// nothing back, so an in-memory run can show that an append was attempted and never that a refused
+// audit leaves no committed configuration row.
+$transactionAuditEvents = new DbAuditEventRepository($db, $userDirectory, $currentUser);
+$auditWriter = new AuditWriterService($transactionAuditEvents, $currentUser, $userDirectory, $configurationAuditEvents);
+$transactionManager = new NextcloudTransactionManager($db);
+$configurationAudit = new ConfigurationAuditService($auditWriter, $transactionManager);
+
+/**
+ * One configuration-audit row, read as raw columns.
+ *
+ * Read raw rather than through `AuditEventRepository` because the load-bearing assertion is that
+ * `before_json`/`after_json` hold the snapshots rather than the literal `"[]"` -- which is what a
+ * projection could substitute while the object still reported something plausible.
+ */
+$configurationAuditRowOf = static function (?int $eventId) use ($db): ?array {
+    if ($eventId === null) {
+        return null;
+    }
+    $qb = $db->getQueryBuilder();
+    $qb->select('entity_type', 'entity_id', 'event_type', 'actor_uid', 'actor_role', 'explanation', 'before_json', 'after_json')
+        ->from('pettycash_configuration_audit')
+        ->where($qb->expr()->eq('id', $qb->createNamedParameter($eventId)))
+        ->setMaxResults(1);
+    $row = $qb->executeQuery()->fetchAssociative();
+    return $row === false ? null : $row;
+};
+
+/** How many configuration-audit rows name one subject. */
+$configurationAuditCountFor = static function (string $entityType, string $entityId) use ($db): int {
+    $qb = $db->getQueryBuilder();
+    $qb->select($qb->func()->count('id', 'total'))
+        ->from('pettycash_configuration_audit')
+        ->where($qb->expr()->eq('entity_type', $qb->createNamedParameter($entityType)))
+        ->andWhere($qb->expr()->eq('entity_id', $qb->createNamedParameter($entityId)));
+    return (int) $qb->executeQuery()->fetchOne();
+};
+
+/** The surrogate key of the configuration-audit row T086 wrote for one subject, for cleanup. */
+$configurationAuditIdOf = static function (string $entityType, string $entityId) use ($db): ?int {
+    $qb = $db->getQueryBuilder();
+    $qb->select('id')
+        ->from('pettycash_configuration_audit')
+        ->where($qb->expr()->eq('entity_type', $qb->createNamedParameter($entityType)))
+        ->andWhere($qb->expr()->eq('entity_id', $qb->createNamedParameter($entityId)))
+        ->orderBy('id', 'DESC')
+        ->setMaxResults(1);
+    $id = $qb->executeQuery()->fetchOne();
+    return $id === false ? null : (int) $id;
+};
 
 /** Surrogate keys inserted by this run, for deletion in reverse dependency order. */
 $inserted = [];
@@ -184,6 +272,24 @@ $surrogateIdOf = static function (string $table, string $publicId) use ($db): in
  * `name`, `minor_unit` and the audit columns, and currencies are referenced by code. So this table
  * needs its own lookup, and the difference is worth a named function rather than a duplicated block.
  */
+/**
+ * The raw columns of one role-assignment row, read straight from the table.
+ *
+ * T084 needs to see `cost_center_id` as a *column* rather than as a property of the aggregate: the
+ * unit suite can only assert what `RoleAssignment` reports about itself, and an insert or a
+ * projection that quietly filled in a cost centre would leave that report saying null while the row
+ * said otherwise. The scenario has no `$db`, so this is built here and passed in like `$surrogateIdOf`.
+ */
+$financeColumnsOf = static function (string $publicId) use ($db): ?array {
+    $qb = $db->getQueryBuilder();
+    $qb->select('role', 'cost_center_id', 'active', 'valid_from', 'valid_to')
+        ->from('pettycash_role_assignments')
+        ->where($qb->expr()->eq('public_id', $qb->createNamedParameter($publicId)))
+        ->setMaxResults(1);
+    $row = $qb->executeQuery()->fetchAssociative();
+    return $row === false ? null : $row;
+};
+
 $surrogateIdOfCurrency = static function (string $code) use ($db): int {
     $qb = $db->getQueryBuilder();
     $qb->select('id')
@@ -246,6 +352,18 @@ try {
             $costCenters,
             $expenseTypes,
             $roleAssignments,
+            (new CurrencyService($currencies, $administrators, $configurationAudit)),
+            (new CostCenterService($costCenters, $roleAssignments, $userDirectory, $administrators, $clock, $configurationAudit)),
+            (new ExpenseTypeService($expenseTypes, $administrators, $configurationAudit)),
+            (new FinanceAssignmentService($roleAssignments, $userDirectory, $administrators, $clock, $configurationAudit)),
+            // The same repositories and the same *real* transaction manager, behind an audit writer that
+            // refuses. Nothing is faked here except the one failure under test.
+            (new CurrencyService($currencies, $administrators, new ConfigurationAuditService(new FailingAuditWriter($auditWriter), $transactionManager))),
+            $currencies,
+            // The same repository and the same *real* transaction manager, behind an audit writer that
+            // refuses. Nothing is faked here except the one failure under test.
+            (new CostCenterService($costCenters, $roleAssignments, $userDirectory, $administrators, $clock, new ConfigurationAuditService(new FailingAuditWriter($auditWriter), $transactionManager))),
+            $administratorUid,
             $actorUid,
             $today,
             $now,
@@ -253,7 +371,11 @@ try {
             $surrogateIdOf,
             $surrogateIdOfCurrency,
             $currencyCode,
-            $marker
+            $marker,
+            $financeColumnsOf,
+            $configurationAuditIdOf,
+            $configurationAuditRowOf,
+            $configurationAuditCountFor
         ),
         'account' => scenarioAccount(
             $currencies,
@@ -371,6 +493,14 @@ function scenarioConfiguration(
     DbCostCenterRepository $costCenters,
     DbExpenseTypeRepository $expenseTypes,
     DbRoleAssignmentRepository $roleAssignments,
+    CurrencyService $currencyService,
+    CostCenterService $costCenterService,
+    ExpenseTypeService $expenseTypeService,
+    FinanceAssignmentService $financeAssignmentService,
+    CurrencyService $unwritableCurrencyService,
+    DbCurrencyRepository $unwritableCurrencies,
+    CostCenterService $unwritableCostCenterService,
+    string $administratorUid,
     string $actorUid,
     string $today,
     DateTimeImmutable $now,
@@ -378,7 +508,11 @@ function scenarioConfiguration(
     callable $surrogateIdOf,
     callable $surrogateIdOfCurrency,
     callable $currencyCode,
-    callable $marker
+    callable $marker,
+    callable $financeColumnsOf,
+    callable $configurationAuditIdOf,
+    callable $configurationAuditRowOf,
+    callable $configurationAuditCountFor
 ): array {
     // --- currency, with a three-digit minor unit no built-in table would guess ---
     $code = $currencyCode();
@@ -463,7 +597,506 @@ function scenarioConfiguration(
         }
     }
 
+    // --- T081/T082/T083: the application services over the real repositories ---
+    //
+    // Everything below is a *service* call, so what is being proved is that the application layer
+    // works against MariaDB rather than only against an in-memory double. Three properties each:
+    // the write persists and reads back, the authorization gate holds against a real
+    // `IGroupManager`, and the invariant the schema does not hold is enforced here rather than by a
+    // unique index that does not exist.
+    $serviceCode = $currencyCode();
+    $serviceCurrency = $currencyService->create(
+        $administratorUid,
+        $serviceCode,
+        'Service Currency',
+        3
+    );
+    $track('pettycash_currencies', $surrogateIdOfCurrency($serviceCode));
+
+    $serviceDuplicateRefused = false;
+    try {
+        $currencyService->create($administratorUid, $serviceCode, 'Duplicate', 3);
+    } catch (\OCA\PettyCash\Application\Configuration\ConfigurationConflict) {
+        $serviceDuplicateRefused = true;
+    }
+
+    $serviceNonAdminRefused = false;
+    try {
+        $currencyService->create($actorUid, $currencyCode(), 'Not An Admin', 2);
+    } catch (\LogicException) {
+        $serviceNonAdminRefused = true;
+    }
+
+    $serviceStaleVersionRefused = false;
+    try {
+        $currencyService->update($administratorUid, $serviceCode, 'Stale', 3, true, 99);
+    } catch (\OCA\PettyCash\Application\Configuration\ConfigurationConflict) {
+        $serviceStaleVersionRefused = true;
+    }
+
+    $serviceCostCenterCode = $marker('SVC');
+    $serviceCostCenter = $costCenterService->create(
+        $administratorUid,
+        $serviceCostCenterCode,
+        'Service Cost Center',
+        'created through CostCenterService',
+        $now,
+        null,
+        $actorUid,
+        'admin'
+    )['costCenter'];
+    $track('pettycash_cost_centers', $surrogateIdOf('pettycash_cost_centers', $serviceCostCenter->publicId));
+
+    // T082's whole point: the managers are role assignments scoped by the centre's surrogate key,
+    // and the service's own read walks that join back. This is the same join
+    // `ManagementReviewService::getManagedCostCenterCodes()` performs.
+    $serviceManagers = $costCenterService->currentManagersOn($serviceCostCenter, $now);
+    foreach ($serviceManagers as $roleAssignmentsForRole) {
+        foreach ($roleAssignmentsForRole as $assignment) {
+            $track(
+                'pettycash_role_assignments',
+                $surrogateIdOf('pettycash_role_assignments', $assignment->publicId)
+            );
+        }
+    }
+
+    $serviceTitle = 'Service Expense ' . strtoupper(substr(str_replace('-', '', (string) Uuid::random()), 0, 6));
+    $serviceExpenseType = $expenseTypeService->create(
+        $administratorUid,
+        $serviceTitle,
+        'created through ExpenseTypeService',
+        true
+    );
+    $track('pettycash_expense_types', $surrogateIdOf('pettycash_expense_types', $serviceExpenseType->publicId));
+
+    $serviceDuplicateTitleRefused = false;
+    try {
+        $expenseTypeService->create($administratorUid, $serviceTitle, 'duplicate', false);
+    } catch (\OCA\PettyCash\Application\Configuration\ConfigurationConflict) {
+        $serviceDuplicateTitleRefused = true;
+    }
+
+    // Read back *before* deactivating. `findActiveByTitle()` stops matching once the type is inactive,
+    // so a value gathered afterwards would be null for the right reason and would prove nothing.
+    $serviceEvidenceRequiredBeforeDeactivation = $expenseTypes->findActiveByTitle($serviceTitle)?->evidenceRequired;
+
+    $serviceDeactivated = $expenseTypeService->deactivate($administratorUid, $serviceTitle, 0);
+    $serviceTitleAfterDeactivation = $expenseTypes->findById((int) $serviceDeactivated->id)?->title;
+    $serviceEvidenceRequiredAfterDeactivation = $expenseTypes->findById((int) $serviceDeactivated->id)?->evidenceRequired;
+
+    // --- T084: the shared-queue finance roster over MariaDB ---
+    //
+    // Three properties that only a real table can decide. First, `cost_center_id` must be NULL *in the
+    // column*, not merely on the aggregate: `data-model.md` scopes a finance assignment to the shared
+    // queue and nowhere else, and an aggregate that reported null while the row held an id would pass
+    // every aggregate-level assertion in the unit suite. Second, a lapsed assignment must not be reused
+    // on re-appointment, because the contract lists active *and historical* finance assignments and the
+    // history only exists if the ended row survives. Third, `POST` must converge on one row, because
+    // `pettycash_role_assignments` carries no unique index that would do it.
+    $financeUser = $actorUid;
+
+    // A window that ended yesterday, so "is this user current?" has a negative answer to read.
+    $lapsedFrom = $now->modify('-400 days')->format('Y-m-d');
+    $lapsedTo = $now->modify('-1 day')->format('Y-m-d');
+    $lapsed = $financeAssignmentService->create(
+        $administratorUid,
+        $financeUser,
+        $lapsedFrom,
+        'round trip: an appointment that has since lapsed',
+        $lapsedTo
+    );
+    $track('pettycash_role_assignments', $surrogateIdOf('pettycash_role_assignments', $lapsed->publicId));
+    /** The public ids of the finance assignments *this run* created, for scoped counting below. */
+    $financeRunPublicIds = [(string) $lapsed->publicId];
+
+    // Read the column itself, not the aggregate: this is the assertion that would fail if a projection
+    // or an insert quietly filled in a cost centre.
+    $financeColumns = $financeColumnsOf($lapsed->publicId);
+
+    // The repository lookup the whole upsert decision rests on, asked for directly.
+    $noCurrentAfterLapse = $roleAssignments->findCurrentByUserAndRole($financeUser, Role::Finance, $now) === null;
+
+    // Re-appointment over a lapsed row must ADD a row, not rewrite the historical window.
+    $financeLive = $financeAssignmentService->create(
+        $administratorUid,
+        $financeUser,
+        $today,
+        'round trip: appointed with an open window'
+    );
+    $track('pettycash_role_assignments', $surrogateIdOf('pettycash_role_assignments', $financeLive->publicId));
+
+    $financeRunPublicIds[] = (string) $financeLive->publicId;
+
+    // Scoped to the rows this run created, **not** to every FINANCE row belonging to the user.
+    //
+    // `$financeUser` is `PETTYCASH_TEST_USER`, which is also the contract suite's actor, and
+    // `seed-contract-fixtures.php` seeds it a FINANCE assignment of its own. Counting by `userUid`
+    // therefore included that fixture row whenever the contract suite had been seeded and excluded it
+    // when it had not, so the expected totals tracked the order the suites ran in rather than anything
+    // this scenario did. It surfaced only once T086's additions changed how often the suite was run.
+    // Filtering on the public ids created here makes the count a statement about this scenario alone.
+    $financeRowsFor = static fn(): array => array_values(array_filter(
+        $financeAssignmentService->listForCaller($administratorUid),
+        static fn(RoleAssignment $a): bool => in_array((string) $a->publicId, $financeRunPublicIds, true)
+    ));
+    $rosterPublicIds = static fn(array $rows): array => array_map(
+        static fn(RoleAssignment $a): string => (string) $a->publicId,
+        $rows
+    );
+
+    $rowsAfterReAppointment = $financeRowsFor();
+    $lapsedWindowRetained = in_array(
+        $lapsedFrom . '/' . $lapsedTo,
+        array_map(
+            static fn(RoleAssignment $a): string => $a->validFrom->format('Y-m-d') . '/' . ($a->validTo?->format('Y-m-d') ?? 'open'),
+            $rowsAfterReAppointment
+        ),
+        true
+    );
+
+    // A repeated POST for a user who already holds a current assignment must update that row.
+    $financeRepeated = $financeAssignmentService->create(
+        $administratorUid,
+        $financeUser,
+        $today,
+        'round trip: a repeated post for the same officer'
+    );
+    $rowsAfterRepeat = $financeRowsFor();
+
+    // Revocation arrives as a POST with `active: false`, because the contract declares no PATCH or
+    // DELETE for this resource.
+    $financeRevoked = $financeAssignmentService->create(
+        $administratorUid,
+        $financeUser,
+        $today,
+        'round trip: revoked from the shared queue',
+        null,
+        false
+    );
+    $rowsAfterRevocation = $financeRowsFor();
+
+    // Re-validating the very same window must reuse the retained row rather than adding a third, or a
+    // revoked officer's history would claim they held the role three times over one window.
+    $financeRevalidated = $financeAssignmentService->create(
+        $administratorUid,
+        $financeUser,
+        $today,
+        'round trip: revalidated after revocation'
+    );
+    $rowsAfterRevalidation = $financeRowsFor();
+
+    $financeNonAdminRefused = false;
+    try {
+        $financeAssignmentService->create($financeUser, $financeUser, $today, 'round trip: self-appointment');
+    } catch (\LogicException) {
+        $financeNonAdminRefused = true;
+    }
+
+    $financeUnknownUserRefused = false;
+    try {
+        $financeAssignmentService->create(
+            $administratorUid,
+            'definitely-not-a-real-user-' . strtolower(substr(str_replace('-', '', (string) Uuid::random()), 0, 8)),
+            $today,
+            'round trip: unknown host user'
+        );
+    } catch (\InvalidArgumentException) {
+        $financeUnknownUserRefused = true;
+    }
+
+    // --- T082 reopened scope: `CostCenterService::update()` against real MariaDB ---
+    //
+    // Two properties only a real table can show, and both are the reason this method needed reopening
+    // rather than a stub:
+    //
+    // 1. **A rename actually persists.** `DbCostCenterRepository::save()`'s update branch wrote `name`,
+    //    `description`, the validity window and `active` but never `code`, so a rename reported success,
+    //    advanced `lock_version`, and left the row keyed by the old code. Every double accepts the
+    //    aggregate with any code, so no unit test could have seen it.
+    // 2. **`lock_version` advances and is published back.** The contract's `CostCenter` response is
+    //    required to carry `version`; if the adapter left the aggregate holding the pre-update value,
+    //    a client echoing it straight back into `expectedVersion` would be refused for a write it had
+    //    just made.
+    $updateCostCenter = $costCenterService->create(
+        $administratorUid,
+        $marker('UPD'),
+        'Before The Rename',
+        'created for the reopened T082 scope',
+        $now,
+        null,
+        $actorUid,
+        'admin'
+    );
+    $updateSubject = $updateCostCenter['costCenter'];
+    $track('pettycash_cost_centers', $surrogateIdOf('pettycash_cost_centers', $costCenter->publicId));
+    foreach ($costCenterService->currentManagersOn($updateSubject, $now) as $forRole) {
+        foreach ($forRole as $assignment) {
+            $track('pettycash_role_assignments', $surrogateIdOf('pettycash_role_assignments', $assignment->publicId));
+        }
+    }
+
+    $originalCode = $updateSubject->code();
+    $updateCentreCode = $originalCode . 'X';
+    $versionBefore = $costCenters->findByPublicId((string) $updateSubject->publicId)?->lockVersion;
+
+    $renamed = $costCenterService->update(
+        $administratorUid,
+        (string) $updateSubject->publicId,
+        (int) $versionBefore,
+        $updateCentreCode,
+        'After The Rename',
+        'updated through CostCenterService::update()',
+        $now,
+        null,
+        false,
+        null,
+        null,
+        'round trip: renaming the centre'
+    );
+
+    $versionAfter = $costCenters->findByPublicId((string) $updateSubject->publicId)?->lockVersion;
+    $updateCentreEventId = $configurationAuditIdOf('cost_center', (string) $updateSubject->publicId);
+    if ($updateCentreEventId !== null) {
+        $track('pettycash_configuration_audit', $updateCentreEventId);
+    }
+    $updateEventRow = $configurationAuditRowOf($updateCentreEventId);
+    $updateEventsForCentre = $configurationAuditCountFor('cost_center', (string) $updateSubject->publicId);
+
+    // A stale write must be refused and must leave the row as the first writer left it.
+    $staleRefused = false;
+    try {
+        $costCenterService->update(
+            $administratorUid,
+            (string) $updateSubject->publicId,
+            (int) $versionBefore,
+            $originalCode,
+            'Stale Write',
+            null,
+            $now,
+            null,
+            true,
+            null,
+            null,
+            'round trip: a stale write'
+        );
+    } catch (\OCA\PettyCash\Application\Configuration\ConfigurationConflict) {
+        $staleRefused = true;
+    }
+
+    // A refused audit must leave the row uncommitted -- the real rollback for this write path.
+    $updateRollbackCode = $marker('URB');
+    $updateAuditRefusal = null;
+    try {
+        $unwritableCostCenterService->update(
+            $administratorUid,
+            (string) $updateSubject->publicId,
+            (int) $costCenters->findByPublicId((string) $updateSubject->publicId)?->lockVersion,
+            $updateRollbackCode,
+            'Never Committed',
+            null,
+            $now,
+            null,
+            true,
+            null,
+            null,
+            'round trip: an update whose audit cannot be written'
+        );
+    } catch (\RuntimeException $e) {
+        $updateAuditRefusal = $e->getMessage();
+    }
+
+    // --- T086: the configuration audit, atomically, over real MariaDB ---
+    //
+    // Everything above proves persistence and the services' own rules. This proves the one property only
+    // a real database transaction can show: a configuration change and its audit record are a single
+    // unit. Three cases, each a failure the in-memory doubles cannot produce:
+    //
+    //   1. a successful write leaves exactly one committed row in `pettycash_configuration_audit`;
+    //   2. an audit that cannot be persisted leaves **no** committed configuration row;
+    //   3. a refused mutation leaves no *further* audit row.
+    //
+    // The actor recorded is the *session* user (`PETTYCASH_TEST_USER`), not `$administratorUid`, because
+    // `AuditWriterService` resolves the actor from `CurrentUser` and deliberately ignores any
+    // `actor_uid` in the payload -- an actor supplied by a caller would be a value the caller chose.
+    $auditedCode = $currencyCode();
+    $currencyService->create($administratorUid, $auditedCode, 'Audited Currency', 2);
+    $track('pettycash_currencies', $surrogateIdOfCurrency($auditedCode));
+
+    $auditedEventId = $configurationAuditIdOf('currency', $auditedCode);
+    if ($auditedEventId !== null) {
+        $track('pettycash_configuration_audit', $auditedEventId);
+    }
+
+    $auditedRow = $configurationAuditRowOf($auditedEventId);
+    $auditCountFor = $configurationAuditCountFor;
+    $auditCountForAudited = $auditCountFor('currency', $auditedCode);
+
+    // Case 2: the audit stream refuses. The currency must not survive, because an unrecorded
+    // configuration change is exactly what FR-017 forbids.
+    $rolledBackCode = $currencyCode();
+    $auditRefusalObserved = null;
+    try {
+        $unwritableCurrencyService->create($administratorUid, $rolledBackCode, 'Never Committed', 2);
+    } catch (\RuntimeException $e) {
+        $auditRefusalObserved = $e->getMessage();
+    }
+    $currencyRowAfterAuditRefusal = $currencies->findByCode($rolledBackCode);
+    $auditRowsAfterAuditRefusal = $auditCountFor('currency', $rolledBackCode);
+
+    // Case 3: the mutation itself is refused, so no *further* audit row may exist for that subject. A
+    // duplicate code is the natural way to make the domain refuse, and it refuses before writing.
+    $refusedCode = $currencyCode();
+    $currencyService->create($administratorUid, $refusedCode, 'First', 2);
+    $track('pettycash_currencies', $surrogateIdOfCurrency($refusedCode));
+    $firstEventId = $configurationAuditIdOf('currency', $refusedCode);
+    if ($firstEventId !== null) {
+        $track('pettycash_configuration_audit', $firstEventId);
+    }
+    $auditCountBeforeRefusal = $auditCountFor('currency', $refusedCode);
+
+    $duplicateRefusalObserved = null;
+    try {
+        $currencyService->create($administratorUid, $refusedCode, 'Duplicate', 2);
+    } catch (\Throwable $e) {
+        $duplicateRefusalObserved = $e::class;
+    }
+    $auditCountAfterRefusal = $auditCountFor('currency', $refusedCode);
+
+    // The discriminating case for the snapshots. A *creation* encodes an empty `before` as the JSON
+    // literal `"[]"`, which is indistinguishable from the failure `AuditWriterService` documents --
+    // a payload whose `before`/`after` keys were never read also stores `"[]"` in both columns. So the
+    // creation proves nothing about the snapshots, and an update is the only observation that can:
+    // its `before` must hold the pre-update values and differ from its `after`.
+    $updatedCode = $currencyCode();
+    $currencyService->create($administratorUid, $updatedCode, 'Before Name', 3);
+    $track('pettycash_currencies', $surrogateIdOfCurrency($updatedCode));
+    $creationEventId = $configurationAuditIdOf('currency', $updatedCode);
+    if ($creationEventId !== null) {
+        $track('pettycash_configuration_audit', $creationEventId);
+    }
+
+    $currencyService->update($administratorUid, $updatedCode, 'After Name', 0, false, 0);
+    $updateEventId = $configurationAuditIdOf('currency', $updatedCode);
+    if ($updateEventId !== null) {
+        $track('pettycash_configuration_audit', $updateEventId);
+    }
+    $updateRow = $configurationAuditRowOf($updateEventId);
+    $updateBefore = json_decode((string) ($updateRow['before_json'] ?? ''), true);
+    $updateAfter = json_decode((string) ($updateRow['after_json'] ?? ''), true);
+
     return [
+        'services' => [
+            'currencyCode' => $serviceCode,
+            'currencyPersisted' => $currencies->findActiveByCode($serviceCode)?->minorUnit,
+            'currencyMinorUnit' => $serviceCurrency->minorUnit,
+            'duplicateRefused' => $serviceDuplicateRefused,
+            'nonAdministratorRefused' => $serviceNonAdminRefused,
+            'staleVersionRefused' => $serviceStaleVersionRefused,
+            'costCenterCode' => $serviceCostCenter->code(),
+            'managerUsers' => array_map(
+                static fn (RoleAssignment $a): string => $a->userUid,
+                $serviceManagers[Role::CostCenterManager->value] ?? []
+            ),
+            'seniorManagerUsers' => array_map(
+                static fn (RoleAssignment $a): string => $a->userUid,
+                $serviceManagers[Role::SeniorManager->value] ?? []
+            ),
+            'expenseTypeTitle' => $serviceTitle,
+            'expenseTypePersisted' => $serviceEvidenceRequiredBeforeDeactivation,
+            'duplicateTitleRefused' => $serviceDuplicateTitleRefused,
+            'deactivated' => $serviceDeactivated->active,
+            'titleAfterDeactivation' => $serviceTitleAfterDeactivation,
+            'evidenceRequiredAfterDeactivation' => $serviceEvidenceRequiredAfterDeactivation,
+            'stillListedAsActive' => in_array($serviceTitle, $etActiveTitles, true),
+            // --- T084 ---
+            'financeUser' => $financeUser,
+            // The column, not the aggregate. `cost_center_id` must be NULL in MariaDB itself.
+            'financeRoleInColumn' => $financeColumns['role'] ?? null,
+            // `array_key_exists`, not `??`: `??` returns its fallback for a key that is *present and
+            // null*, which is exactly the value this assertion is about. `??` would report a correctly
+            // NULL `cost_center_id` as absent and fail the assertion that matters most here.
+            'financeCostCenterColumnIsNull' => $financeColumns !== null
+                && array_key_exists('cost_center_id', $financeColumns)
+                && $financeColumns['cost_center_id'] === null,
+            'financeValidFromInColumn' => $financeColumns['valid_from'] instanceof DateTimeInterface
+                ? $financeColumns['valid_from']->format('Y-m-d')
+                : (is_string($financeColumns['valid_from'] ?? null) ? $financeColumns['valid_from'] : null),
+            'financeValidToInColumn' => ($financeColumns['valid_to'] ?? null) instanceof DateTimeInterface
+                ? $financeColumns['valid_to']->format('Y-m-d')
+                : (is_string($financeColumns['valid_to'] ?? null) ? $financeColumns['valid_to'] : null),
+            'financeAggregateRole' => $lapsed->role->value,
+            'financeAggregateCostCenterIsNull' => $lapsed->costCenterId === null,
+            // The lookup the upsert decision rests on: an ended window is not "current".
+            'noCurrentAssignmentAfterLapse' => $noCurrentAfterLapse,
+            // Re-appointment must add a row so the contract's "historical" half has something to return.
+            'lapsedRowSurvivedReAppointment' => $lapsedWindowRetained,
+            'rowsForFinanceUserAfterReAppointment' => count($rowsAfterReAppointment),
+            // A repeated POST must converge on one row.
+            'repeatedPostUpdatedInPlace' => $financeRepeated->id === $financeLive->id,
+            'rowsForFinanceUserAfterRepeat' => count($rowsAfterRepeat),
+            // Revocation is a POST with active:false, since the contract has no PATCH or DELETE.
+            'revocationClearedTheActiveFlag' => $financeRevoked->active === false,
+            'revocationReusedTheSameRow' => $financeRevoked->id === $financeLive->id,
+            'revokedRowStillInRoster' => in_array((string) $financeRevoked->publicId, $rosterPublicIds($rowsAfterRevocation), true),
+            'rowsForFinanceUserAfterRevocation' => count($rowsAfterRevocation),
+            // Re-validating the same window must reuse the retained row, not add another.
+            'revalidationReusedTheSameRow' => $financeRevalidated->id === $financeLive->id,
+            'rowsForFinanceUserAfterRevalidation' => count($rowsAfterRevalidation),
+            'financeNonAdministratorRefused' => $financeNonAdminRefused,
+            'financeUnknownHostUserRefused' => $financeUnknownUserRefused,
+            // FR-016: the roster this service returns must be the finance queue, and must not include
+            // the manager assignments T082 created for the same table in the same scenario.
+            'rosterExcludesManagerAssignments' => array_values(array_filter(
+                $financeAssignmentService->listForCaller($administratorUid),
+                static fn(RoleAssignment $a): bool => $a->role !== Role::Finance
+            )) === [],
+            // --- T082 reopened scope (T086 wiring below) ---
+            'updateOriginalCode' => $originalCode,
+            'updateNewCode' => $updateCentreCode,
+            'updateCodePersistedInColumn' => $costCenters->findByCode($updateCentreCode)?->code(),
+            'updateOldCodeNoLongerResolves' => $costCenters->findByCode($originalCode) === null,
+            'updateNamePersistedInColumn' => $costCenters->findByPublicId((string) $updateSubject->publicId)?->name,
+            'updateDeactivatedInColumn' => $costCenters->findByPublicId((string) $updateSubject->publicId)?->active,
+            'updatePublicIdUnchanged' => $costCenters->findByCode($updateCentreCode)?->publicId === (string) $updateSubject->publicId,
+            'updateVersionBefore' => $versionBefore,
+            'updateVersionInColumnAfter' => $versionAfter,
+            'updateVersionReturnedToCaller' => $renamed->lockVersion,
+            'updateEventsForCentre' => $updateEventsForCentre,
+            'updateEventEntityId' => $updateEventRow['entity_id'] ?? null,
+            'updateEventExplanation' => $updateEventRow['explanation'] ?? null,
+            'updateStaleRefused' => $staleRefused,
+            'updateNameAfterStaleAttempt' => $costCenters->findByPublicId((string) $updateSubject->publicId)?->name,
+            'updateAuditRefusal' => $updateAuditRefusal,
+            'updateRowSurvivedAuditRefusal' => $costCenters->findByCode($updateRollbackCode) !== null,
+            'auditedCurrencyCode' => $auditedCode,
+            'auditedEventExists' => $auditedEventId !== null,
+            'auditedEventsForSubject' => $auditCountForAudited,
+            'auditedRowEntityType' => $auditedRow['entity_type'] ?? null,
+            'auditedRowEntityId' => $auditedRow['entity_id'] ?? null,
+            'auditedRowEventType' => $auditedRow['event_type'] ?? null,
+            // The session user, not `$administratorUid`. See the note above the block.
+            'auditedRowActorUid' => $auditedRow['actor_uid'] ?? null,
+            'sessionUid' => $actorUid,
+            'auditedRowActorRole' => $auditedRow['actor_role'] ?? null,
+            // `array_key_exists`, not `??`: `??` yields its fallback for a key that is *present and
+            // null*, which is exactly the value being asserted.
+            'auditedRowExplanation' => $auditedRow['explanation'] ?? null,
+            'auditedRowExplanationIsNull' => $auditedRow !== null
+                && array_key_exists('explanation', $auditedRow)
+                && $auditedRow['explanation'] === null,
+            'auditedRowBeforeJson' => $auditedRow['before_json'] ?? null,
+            'auditedRowAfterJson' => $auditedRow['after_json'] ?? null,
+            'auditRefusalObserved' => $auditRefusalObserved,
+            'currencyRowSurvivedAuditRefusal' => $currencyRowAfterAuditRefusal !== null,
+            'auditRowsAfterAuditRefusal' => $auditRowsAfterAuditRefusal,
+            'duplicateRefusalObserved' => $duplicateRefusalObserved,
+            'auditCountBeforeRefusedMutation' => $auditCountBeforeRefusal,
+            'auditCountAfterRefusedMutation' => $auditCountAfterRefusal,
+            'updatedCurrencyCode' => $updatedCode,
+            'updateRowEventType' => $updateRow['event_type'] ?? null,
+            'updateBeforeJson' => $updateBefore,
+            'updateAfterJson' => $updateAfter,
+        ],
         'currency' => [
             'code' => $code,
             'byCode' => $byCode === null ? null : [

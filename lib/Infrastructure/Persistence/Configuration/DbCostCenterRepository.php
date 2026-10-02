@@ -96,7 +96,22 @@ final class DbCostCenterRepository implements CostCenterRepository
         $currentUser = $this->currentUser->uid();
 
         if ($existing) {
+            // `code` is written here, and its absence was a silent no-op rather than a failure.
+            //
+            // FR-010 makes code one of the updatable fields of a cost center and `CostCenterWrite`
+            // carries it, but this branch updated `name`, `description`, the validity window and
+            // `active` while never touching `code`. A rename therefore reported success, advanced
+            // `lock_version`, and left the row keyed by the old code -- so the new code resolved to
+            // nothing while the old one still resolved to the centre the caller had just renamed. The
+            // in-memory double accepts the aggregate with any code, so no unit test could see it; this
+            // is the same family of defect as the `manager_uid` columns this repository was reopened
+            // over, and it is only reachable from a real database.
+            //
+            // `DbCurrencyRepository` also omits `code`, and there that is correct: a currency's code is
+            // its identity and `CurrencyService::update()` cannot express a rename. A cost centre's code
+            // is an attribute, so the two must not be made "consistent" here.
             $qb->update('pettycash_cost_centers')
+                ->set('code', $qb->createNamedParameter($costCenter->code()))
                 ->set('name', $qb->createNamedParameter($costCenter->name))
                 ->set('description', $qb->createNamedParameter($costCenter->description))
                 ->set('valid_from', $qb->createNamedParameter($costCenter->validFrom->format('Y-m-d')))
@@ -108,6 +123,16 @@ final class DbCostCenterRepository implements CostCenterRepository
                 ->where($qb->expr()->eq('id', $qb->createNamedParameter($existing->id)))
                 ->andWhere($qb->expr()->eq('lock_version', $qb->createNamedParameter($existing->lockVersion)))
                 ->executeStatement();
+
+            // Published back onto the aggregate, as `publicId` and `id` already are below.
+            //
+            // Without this the caller's aggregate still carried the *pre-update* version, so the value
+            // `CostCenterService::update()` returned -- and therefore the `version` the contract's
+            // `CostCenter` response is required to carry -- was the version that had just been
+            // superseded. A client that echoed it straight back into `expectedVersion` would be refused
+            // for a write it had only just made, which is a self-inflicted 409 on the normal
+            // read-modify-write path.
+            $costCenter->lockVersion = $existing->lockVersion + 1;
         } else {
             // `pettycash_cost_centers.public_id` is NOT NULL with no default, and this insert did not
             // supply it, so every cost-center write failed on the column constraint before it could

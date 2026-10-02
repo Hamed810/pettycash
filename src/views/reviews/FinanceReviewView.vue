@@ -34,7 +34,9 @@
 				<p>{{ t('pettycash', 'common.loading') }}</p>
 			</div>
 
-			<div v-else-if="error" class="finance-review__state" data-testid="error">
+			<!-- FR-075 requires a clear error and a person's decision, and `role="alert"` is what makes
+			     "clear" reach a screen-reader user rather than only a sighted one. -->
+			<div v-else-if="error" class="finance-review__state" data-testid="error" role="alert" aria-live="assertive">
 				<NcIconSvgWrapper :path="mdiAlertCircle" :size="44" class="finance-review__state-icon--error" />
 				<p class="finance-review__error-message" data-testid="error-message">{{ error }}</p>
 				<p class="finance-review__error-hint" data-testid="manual-retry-hint">

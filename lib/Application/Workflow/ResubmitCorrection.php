@@ -12,6 +12,7 @@ use OCA\PettyCash\Domain\Expense\Repository\ExpenseTransactionRepository;
 use OCA\PettyCash\Domain\Configuration\Repository\CostCenterRepository;
 use OCA\PettyCash\Domain\Configuration\CostCenter;
 use OCA\PettyCash\Domain\Expense\TransactionRevision;
+use OCA\PettyCash\Domain\Expense\Repository\TransactionRevisionRepository;
 use OCA\PettyCash\Application\Port\UserDirectory;
 use OCA\PettyCash\Application\Port\AuditWriter;
 use OCA\PettyCash\Application\Port\TransactionManager;
@@ -36,7 +37,8 @@ class ResubmitCorrection
         private AuditWriter $auditWriter,
         private TransactionManager $transactionManager,
         private IdempotencyService $idempotencyService,
-        private AuthorizationService $authorizationService
+        private AuthorizationService $authorizationService,
+        private TransactionRevisionRepository $revisionRepository
     ) {}
 
     /**
@@ -112,6 +114,23 @@ class ResubmitCorrection
 
                 // Submit the correction (activate revision and route to cost-center review)
                 $submittedTotal = $transaction->resubmitCorrection();
+
+                // Persist the revision that was just activated.
+                //
+                // `resubmitCorrection()` calls `activate()`, which sets `active` and `activated_at` on
+                // the revision **in memory**, but nothing here wrote the row — only the transaction
+                // was saved, and its `active_revision_id` points *at* the revision rather than carrying
+                // its state. So the activation was silently discarded and the next read loaded the
+                // revision still inactive. Measured: the resubmission answered `200` with
+                // `activeRevision.amountMinor: 24680` and `activeRevision.active: false`, while the
+                // revision history still showed the superseded revision 1 as the only active one — so
+                // FR-050's "the active revision determines current information" was decided by a
+                // revision the database still considered superseded.
+                //
+                // Saving the revision is also what makes `workflow.md`'s clause 5 durable: activation
+                // is meant to be the moment the new revision becomes current, and it has to survive
+                // the request that caused it.
+                $this->revisionRepository->save($transaction->revision());
 
                 // Create audit event for correction resubmission.
                 //

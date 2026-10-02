@@ -36,6 +36,9 @@ final class ExpenseTransaction
         return $this->activeRevision;
     }
 
+    /**
+     * Make a revision the transaction's current one and route it to cost-center review.
+     */
     public function activate(TransactionRevision $revision): void
     {
         $revision->activate();
@@ -208,6 +211,57 @@ final class ExpenseTransaction
             throw new \LogicException('Cannot correct a finance-approved or finance-rejected transaction');
         }
         return $this->activeRevision->correction($revisionId);
+    }
+
+    /**
+     * Make a revision the one being worked on, without activating it.
+     *
+     * ## Why this exists
+     *
+     * `CreateCorrectionDraft::execute()` created the draft, saved it, and returned it — but never
+     * attached it here. The draft was therefore an orphan: the transaction still referenced the
+     * revision it was correcting, every later read re-loaded that one, and
+     * `resubmitCorrection()`'s `activate($this->activeRevision)` activated **the version the
+     * purchaser was trying to replace**. Measured against the contract fixture: after
+     * create-then-resubmit the active revision was `77777777-…`, the fixture's original, and not the
+     * created draft. The purchaser's corrections were computed, persisted, and then discarded —
+     * the precise failure US4 exists to prevent, and what FR-049 and FR-050 forbid.
+     *
+     * The link is what `DbExpenseTransactionRepository::save()` writes to `active_revision_id`, and
+     * `findActiveByTransactionId()` resolves through that column rather than the revision's own
+     * `active` flag, so the revision round-trips as the working one while it is still a draft.
+     *
+     * ## Why this does not activate
+     *
+     * `workflow.md`'s Correction Contract clause 5 puts activation at **resubmission**: "Activation
+     * atomically switches the active revision and routes it to cost-center review." Activating here
+     * would change the transaction's current information (FR-050) before the purchaser had finished,
+     * and would route a half-entered revision to a manager.
+     *
+     * The stage and status are deliberately left alone for the same reason. This is what
+     * `updateTransaction()` must use while a transaction is being corrected: it previously called
+     * `activate()`, which on every edit of a correction draft set the stage to `COST_CENTER` and the
+     * status to `AWAITING_COST_CENTER_REVIEW` — so a purchaser's second edit ended correction and
+     * routed the expense to a manager *before they resubmitted anything*.
+     *
+     * ## Why it does not deactivate what it replaces
+     *
+     * There is nowhere to deactivate it *to*. `pettycash_transaction_revisions` has no `active`
+     * column — `DbTransactionRevisionRepository::mapRow()` derives `active` for the API — so
+     * "which revision is current" is carried solely by `pettycash_transactions.active_revision_id`.
+     * That pointer is what this method moves, and it is the whole of the answer: exactly one revision
+     * is current because exactly one row points at it.
+     *
+     * An earlier attempt deactivated the superseded revision in memory and saved it, which silently
+     * did nothing — `save()` writes `activated_at` and there is no flag to clear — and the correction
+     * still came back with two revisions reporting `active: true`. The projection is fixed in
+     * `mapRow()` instead, which is where the value actually comes from.
+     */
+    public function attachWorkingRevision(TransactionRevision $revision): void
+    {
+        $this->activeRevision = $revision;
+        $this->lockVersion++;
+        $this->updatedAt = new DateTimeImmutable('now', new \DateTimeZone('UTC'));
     }
 
     /**

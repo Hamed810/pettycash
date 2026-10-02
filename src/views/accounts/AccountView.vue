@@ -25,7 +25,11 @@
 				<p>{{ t('pettycash', 'common.loading') }}</p>
 			</div>
 
-			<div v-else-if="error" class="account-view__state" data-testid="error">
+			<!-- `role="alert"` + `aria-live` so the failure is announced, not merely drawn. This is the
+			     view's entire failed state, so without a live region a screen-reader user who triggers a
+			     communication failure is told nothing at all. Same pattern as `SheetDetailView.vue:272`
+			     and `TransactionFormView.vue:249-254`; T116's gate checks it. -->
+			<div v-else-if="error" class="account-view__state" data-testid="error" role="alert" aria-live="assertive">
 				<NcIconSvgWrapper :path="mdiAlertCircle" :size="44" class="account-view__state-icon--error" />
 				<p class="account-view__error-message" data-testid="error-message">{{ error }}</p>
 				<p data-testid="manual-retry-hint">{{ t('pettycash', 'accounts.manualRetryRequired') }}</p>
@@ -92,7 +96,10 @@
 						<p>{{ t('pettycash', 'common.loading') }}</p>
 					</div>
 
-					<div v-else-if="movementsError" class="account-view__state" data-testid="movements-error">
+					<!-- Kept apart from the account list's own error on purpose (FR-075): a ledger that
+					     failed to load must not read as "you have no account", and it must be announced
+					     separately so the two are not conflated. -->
+					<div v-else-if="movementsError" class="account-view__state" data-testid="movements-error" role="alert" aria-live="assertive">
 						<NcIconSvgWrapper :path="mdiAlertCircle" :size="44" class="account-view__state-icon--error" />
 						<p class="account-view__error-message" data-testid="movements-error-message">
 							{{ movementsError }}

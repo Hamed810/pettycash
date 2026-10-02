@@ -10,6 +10,7 @@ import {
 	type ReportPeriodPreset,
 	type ReportType,
 } from '@/types/reporting'
+import { selectOptionKey, selectOptionValue } from '@/utils/selectOption'
 
 const props = withDefaults(defineProps<{
 	filters: ReportFilters
@@ -96,6 +97,8 @@ function reset(): void {
 			<NcSelect
 				v-model="selectedPeriod"
 				:options="periodOptions"
+				:reduce="selectOptionValue"
+				:get-option-key="selectOptionKey"
 				:label="t('pettycash', 'reports.period.label')"
 				:disabled="disabled"
 				data-testid="report-filter-period"

@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useSheetStore } from '@/stores/sheets'
 import { useAccountStore } from '@/stores/accounts'
 import type { SheetCreate } from '@/types/api'
+import { selectOptionKey, selectOptionValue } from '@/utils/selectOption'
 import NcButton from '@nextcloud/vue/components/NcButton'
 import NcNoteCard from '@nextcloud/vue/components/NcNoteCard'
 import NcSelect from '@nextcloud/vue/components/NcSelect'
@@ -130,11 +131,7 @@ onMounted(() => {
 		<div class="mb-4">
 		</div>
 
-		<NcNoteCard>
-			<template #header>
-				{{ isEditing ? t('pettycash', 'sheets.edit') : t('pettycash', 'sheets.create') }}
-			</template>
-
+		<NcNoteCard :heading="isEditing ? t('pettycash', 'sheets.edit') : t('pettycash', 'sheets.create')">
 			<form @submit.prevent="handleSubmit" data-test="sheet-form">
 				<!-- A summary as well as the per-field messages: after a refused submit the purchaser
 				     needs to see what is missing without hunting for each red field. -->
@@ -168,6 +165,8 @@ onMounted(() => {
 						<NcSelect
 							v-model="form.accountId"
 							:options="accountOptions"
+							:reduce="selectOptionValue"
+							:get-option-key="selectOptionKey"
 							:label="t('pettycash', 'sheets.account')"
 							:input-label="t('pettycash', 'sheets.account')"
 							:aria-label-combobox="t('pettycash', 'sheets.account')"

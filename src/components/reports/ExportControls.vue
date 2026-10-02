@@ -4,6 +4,7 @@ import { t } from '@nextcloud/l10n'
 import NcButton from '@nextcloud/vue/components/NcButton'
 import NcSelect from '@nextcloud/vue/components/NcSelect'
 import type { ExportFormat } from '@/types/reporting'
+import { selectOptionKey, selectOptionValue } from '@/utils/selectOption'
 
 const props = withDefaults(defineProps<{
 	availableFormats: ExportFormat[]
@@ -47,6 +48,8 @@ function run(): void {
 			<NcSelect
 				v-model="selected"
 				:options="formatOptions"
+				:reduce="selectOptionValue"
+				:get-option-key="selectOptionKey"
 				:label="t('pettycash', 'reports.export.format')"
 				:disabled="exporting"
 				data-testid="export-format"

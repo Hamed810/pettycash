@@ -88,7 +88,12 @@ if docker inspect -f '{{.State.Running}}' "$DB_CONTAINER" 2>/dev/null | grep -qx
 		# between an approved document and a database rather than a fault in either one. Failing here
 		# would replace T252 -- a documentation defect -- with a blocked build, and reproduce the
 		# always-red gate this task was raised to fix.
-		printf 'preflight: WARNING - spec.md:333 declares the legacy tables are oc_pcash_* and none exists, while oc_pc_* tables do; T252 owns the reconciliation\n' >&2
+		#
+		# The two LIKE patterns above are deliberate and both are required. DECLARED matches the name
+		# spec.md states; OBSERVED matches the name the discarded prototype actually used. Collapsing
+		# them into one pattern would hide the very disagreement this warning reports, which is the
+		# only reason the query returns two counts instead of one.
+		printf 'preflight: WARNING - spec.md:351 declares the legacy tables are oc_pcash_* and none exists, while oc_pc_* tables do; T263 owns the reconciliation (supersedes T252)\n' >&2
 	fi
 else
 	printf 'preflight: database container not running; skipped legacy table inventory\n'

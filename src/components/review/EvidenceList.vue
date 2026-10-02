@@ -44,10 +44,6 @@ defineProps<Props>()
 </script>
 
 <style scoped>
-.evidence-list {
-	direction: rtl;
-}
-
 .evidence-list__title {
 	display: flex;
 	justify-content: space-between;

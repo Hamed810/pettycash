@@ -14,6 +14,24 @@ interface AuditEventRepository
     public function findByPublicId(string $publicId): ?AuditEvent;
     /** @return list<AuditEvent> */
     public function findByTransactionId(int $transactionId, int $offset = 0, int $limit = 100): array;
+    /**
+     * How many events exist for this transaction, ignoring any window.
+     *
+     * Added for T319. `contracts/ocs-api.yaml:581` declares
+     * `GET /transactions/{transactionId}/audit` as returning `AuditPage`, whose `PageMeta` requires
+     * `total`, and no read produced one: `findByTransactionId()` bounds its result, so a count taken
+     * from its return value describes the **page**, not the set.
+     *
+     * That distinction is the whole reason this method exists. A client that reads `total` as the
+     * length of one page concludes the history ends there and stops paging, having silently missed
+     * every later event on a record whose purpose is to be complete — US6/AC1 requires every
+     * official event to be reachable, and `AccountControllerTest` already pins the same rule for the
+     * account page ("total counts the ledger, not the page").
+     *
+     * Zero, not an exception, when nothing matches: every freshly created draft reaches this with no
+     * recorded history yet.
+     */
+    public function countByTransactionId(int $transactionId): int;
     /** @return list<AuditEvent> */
     public function findBySheetId(int $sheetId, int $offset = 0, int $limit = 100): array;
     /** @return list<AuditEvent> */

@@ -1229,6 +1229,9 @@ echo json_encode([
     'transactionId'      => FIXTURE_IDS['transaction'],
     'revisionId'         => FIXTURE_IDS['revision'],
     'ledgerRevisionId'   => FIXTURE_IDS['ledgerRevision'],
+    // Seeded only in the `correction` state, like the row itself. A suite that needs it in another
+    // state gets `null` and fails loudly rather than deleting an evidence id that matches nothing.
+    'evidenceId'         => $state === 'correction' ? FIXTURE_IDS['evidence'] : null,
     'revisionNumber'     => 1,
     // The optimistic-lock values the suites must echo back as `expectedVersion`.
     'sheetVersion'       => columnValue($db, 'pettycash_sheets', FIXTURE_IDS['sheet'], 'lock_version'),

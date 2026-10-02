@@ -47,11 +47,7 @@ onMounted(() => {
 			region instead of sitting in one undifferentiated table. The store already computed
 			`openSheets`; the view simply never used it.
 		-->
-		<NcNoteCard data-test="open-sheets">
-			<template #header>
-				{{ t('pettycash', 'sheets.openSheets') }}
-			</template>
-
+		<NcNoteCard :heading="t('pettycash', 'sheets.openSheets')" data-test="open-sheets">
 			<table v-if="sheetStore.openSheets.length" class="nc-table">
 				<thead>
 					<tr>
@@ -211,7 +207,7 @@ onMounted(() => {
 .nc-table th,
 .nc-table td {
 	padding: 0.75rem;
-	text-align: right;
+	text-align: start;
 	border-bottom: 1px solid var(--nc-color-outline-variant, #e0e0e0);
 }
 
@@ -264,7 +260,7 @@ onMounted(() => {
 }
 
 	.mr-2 {
-		margin-right: 0.5rem;
+		margin-inline-end: 0.5rem;
 	}
 
 	.text-center {

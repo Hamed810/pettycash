@@ -10,8 +10,10 @@ use OCA\PettyCash\Application\Evidence\EvidenceService;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Application\Expense\TransactionService;
 use OCA\PettyCash\Domain\Expense\Repository\ExpenseTransactionRepository;
+use OCA\PettyCash\Domain\Expense\Repository\ExpenseSheetRepository;
 use OCA\PettyCash\Domain\Evidence\Repository\EvidenceRepository;
 use OCA\PettyCash\Domain\Workflow\TransactionStatus;
+use OCA\PettyCash\Domain\Workflow\SheetStatus;
 use OCA\PettyCash\Infrastructure\Http\OcsErrorMapper;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
 use OCP\AppFramework\Http\DataResponse;
@@ -29,6 +31,7 @@ class EvidenceController extends OCSController
         private EvidenceRepository $evidenceRepository,
         private TransactionService $transactionService,
         private ExpenseTransactionRepository $transactionRepository,
+        private ExpenseSheetRepository $sheetRepository,
         private CurrentUser $currentUser,
         private OcsErrorMapper $ocsErrorMapper
     ) {
@@ -104,6 +107,11 @@ class EvidenceController extends OCSController
                 $transactionId,
                 $transaction->dbId ?? 0,
                 $transaction->revision()->number(),
+                // The revision's database id, which is what `origin_revision_id` joins against. The
+                // *number* above only names the AppData key: the two are different identifier spaces,
+                // and passing the number made every upload attach itself to whichever revision happened
+                // to have that id (T072).
+                $transaction->revision()->dbId,
                 $originalFilename,
                 $content,
                 $mediaType
@@ -227,9 +235,59 @@ public function destroy(string $evidenceId): DataResponse
                 return $this->ocsErrorMapper->notFound('Evidence not found');
             }
 
-            // Check if transaction is in draft state (allows full deletion) or submitted (only deactivation)
-            // For simplicity, we'll deactivate in both cases - the service handles the actual file deletion for drafts
-            $this->evidenceService->deleteDraftEvidence($evidenceId);
+            // Two different removals, chosen by the transaction's state.
+            //
+            // The comment that used to sit here said "For simplicity, we'll deactivate in both cases —
+            // the service handles the actual file deletion for drafts", and that "for simplicity" was
+            // the defect: `deleteDraftEvidence()` deletes the AppData binary, so a **submitted**
+            // transaction's evidence had its content physically removed. FR-058 requires the opposite —
+            // "evidence is marked inactive rather than physically removed and its history remains
+            // visible" — and `workflow.md`'s Correction Contract clause 6 requires "evidence history" to
+            // remain unchanged. The evidence *row* survived either way, which is why nothing noticed:
+            // the difference is the file behind it, and the row looks identical in both cases.
+            //
+            // So: a draft is genuinely deleted (FR-025, evidence removable before submission), and
+            // anything already submitted is deactivated with its content retained. Both branches are
+            // repeatable, per T318.
+            // The boundary is the **sheet**, not the transaction.
+            //
+            // The transaction's own status is the wrong signal, and measuring it is what corrected this:
+            // after `POST /sheets/{id}/submit` the sheet leaves `OPEN` while the transaction still reads
+            // `DRAFT` — submission routes the transaction to a stage without rewriting that field. So a
+            // transaction-status check sends every submitted transaction down the draft path and deletes
+            // the binary, which is the bug this routing exists to prevent.
+            //
+            // The sheet is also the right unit on the merits: FR-025 and FR-058 both tie evidence
+            // removability to submission, and submission is a property of the sheet. This mirrors
+            // `TransactionService::deleteTransaction()` and `deleteDraftEvidence()`, which both ask the
+            // sheet the same question.
+            //
+            // An unresolved parent is not treated as "draft": the safe reading of a failed lookup is the
+            // restrictive one, because deleting a binary on the strength of a lookup that failed is the
+            // irreversible half of this decision.
+            $transaction = $this->transactionRepository->findById($evidence->transactionId);
+            $sheet = $transaction === null ? null : $this->sheetRepository->findById($transaction->sheetId ?? 0);
+
+            if ($sheet !== null && $sheet->status === SheetStatus::Open) {
+                $this->evidenceService->deleteDraftEvidence($evidenceId);
+            } else {
+                // The command id is optional here: this branch is effect-idempotent, so a retry with
+                // no header still returns the same state rather than re-recording a deactivation. The id
+                // is used only to correlate the audit event, and a real one is a better correlation than
+                // a generated one, not a better behaviour.
+                //
+                // Trimmed before the fallback, because `IRequest::getHeader()` answers an **empty
+                // string** for an absent header rather than null. Without the emptiness check the
+                // fallback never fired and every headerless call reached `IdempotencyService` under the
+                // same empty key — so the second such call anywhere in the installation was refused with
+                // `409 IDEMPOTENCY_CONFLICT`, attributing a replay conflict to an unrelated request.
+                $commandId = trim((string) $this->request->getHeader('X-PettyCash-Command-ID'));
+                $this->evidenceService->deactivateEvidence(
+                    $evidenceId,
+                    'Removed after submission',
+                    $commandId === '' ? (string)\OCA\PettyCash\Domain\Shared\Uuid::random() : $commandId
+                );
+            }
 
             // Re-read rather than formatting the instance loaded above. The repository returns a
             // freshly mapped object per call, so the pre-delete snapshot still reads `active: true`

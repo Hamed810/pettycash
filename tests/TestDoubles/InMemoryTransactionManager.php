@@ -27,12 +27,37 @@ final class InMemoryTransactionManager implements TransactionManager
      */
     private $onTransaction = null;
 
+    /** How many `transactional()` calls are currently open. */
+    private int $depth = 0;
+
     public function transactional(callable $callback): mixed
     {
-        if ($this->onTransaction !== null) {
-            ($this->onTransaction)($this);
+        $this->depth++;
+        try {
+            if ($this->onTransaction !== null) {
+                ($this->onTransaction)($this);
+            }
+
+            return $callback();
+        } finally {
+            $this->depth--;
         }
-        return $callback();
+    }
+
+    /**
+     * Whether a transaction is open right now.
+     *
+     * Added so a test can assert *where* a write happened relative to the transaction, not merely that
+     * one was opened. Recording `onTransaction` only proves a transaction began; an audit appended
+     * after the callback returned -- the ordering that satisfies "an event exists" while committing the
+     * mutation unrecorded -- is indistinguishable without this.
+     *
+     * Note the `finally`: a thrown operation still decrements, so a rolled-back transaction does not
+     * leave the probe permanently open and make the next assertion pass for the wrong reason.
+     */
+    public function isTransactionOpen(): bool
+    {
+        return $this->depth > 0;
     }
 
     public function runInTransaction(callable $callback): mixed

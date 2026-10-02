@@ -127,6 +127,39 @@ async function signIn(context: BrowserContext, baseURL: string, user: string, pa
 				+ 'missing `#[NoAdminRequired]`; 412 means it is missing `#[NoCSRFRequired]`.',
 			)
 		}
+
+		// The Nextcloud first-run wizard is suppressed by a **server-side user setting**, not by clicking
+		// through it, and the distinction matters.
+		//
+		// Background, because this cost real time to establish: a user created with `occ user:add` has
+		// never seen Nextcloud, so the server overlays the "Welcome to Nextcloud!" wizard
+		// (`div#firstrunwizard[role="dialog"]`, carrying `modal-mask--opaque`). It covers the app, and
+		// Playwright's `page.click()` then waits for an intercepted element and times out — so all 7
+		// tests in `purchaser-submit.spec.ts` failed on `waiting for
+		// locator('[data-test="create-sheet-button"]')` while the app underneath had loaded and
+		// authenticated correctly. This is **not** a PettyCash defect and must never be reported as one.
+		//
+		// Two attempts to dismiss it through the UI both failed, and both failures are informative:
+		//  - The wizard has no `Close` control. `#firstrunwizard` exposes only Previous / Skip / Next, so
+		//    a locator looking for "Close" (as the tour panel's inner button would suggest) matches
+		//    nothing. Guessing the control from the accessibility snapshot would have left the suite red
+		//    with no explanation; probing the DOM is what settled it.
+		//  - `id="firstrunwizard"` is **duplicated** in the page: an empty `data-v-app` placeholder plus
+		//    the dialog. A bare `#firstrunwizard` locator is a strict-mode violation, and a
+		//    `.catch(() => false)` wrapped around `isVisible()` silently converted that violation into
+		//    "not visible" — skipping the dismissal entirely and reporting success. A setup step that
+		//    cannot decide whether it ran must fail loudly rather than swallow the reason.
+		//  - Even a correct `Skip` click left the dialog on screen, so the UI route is not dependable.
+		//
+		// The supported mechanism is `WizardController::disable()`, which writes the user config
+		// `firstrunwizard` / `show` = the server's `major.minor.patch`. Set it once per test account:
+		//
+		//   scripts/dev/occ user:setting pettycash-e2e firstrunwizard show 34.0.2
+		//
+		// That is deterministic, has no DOM dependency, and states the server version it is claiming the
+		// user has seen — so the wizard reappears on a real upgrade, which is the behaviour Nextcloud
+		// intends. It is environment provisioning rather than test logic, so it is documented here and in
+		// `.env.example` instead of being run from `globalSetup`, which cannot reach `occ`.
 	} finally {
 		await page.close()
 	}

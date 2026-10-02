@@ -219,7 +219,30 @@ final readonly class TransactionService
         }
 
         $sheet = $this->sheetRepository->findById($transaction->sheetId ?? 0);
-        if ($sheet === null || $sheet->status !== \OCA\PettyCash\Domain\Workflow\SheetStatus::Open) {
+        if ($sheet === null) {
+            // The sheet is still required even where the edit is permitted, because the revision
+            // built below takes its currency from it. An unresolvable sheet is a data fault, not a
+            // permission question, so it is refused here rather than defaulted.
+            throw new InvalidArgumentException('Cannot update transactions in a submitted sheet');
+        }
+
+        // FR-026 forbids the purchaser from editing a transaction's business information after
+        // submission, and names exactly one exception: correcting a *returned* transaction. That
+        // exception was unreachable, because the check was made against the **sheet** and a returned
+        // transaction's sheet is `CORRECTION` rather than `Open`. Every `PATCH` on a correction
+        // draft was refused with "Cannot update transactions in a submitted sheet" (422), so US4/AC2
+        // — "the purchaser changes its business information and resubmits it" — had no implementation
+        // at all.
+        //
+        // The rule belongs to the transaction, not the sheet: what decides whether a purchaser may
+        // edit is whether *this transaction* is still the purchaser's to correct. `AWAITING_PURCHASER_CORRECTION`
+        // is exactly that state, and `workflow.md`'s Correction Contract clause 2 requires the owner
+        // to be able to "create and edit the correction draft".
+        //
+        // This widens nothing else: a submitted, in-review, or settled transaction is still refused,
+        // because the sheet is not open and its status is not `AWAITING_PURCHASER_CORRECTION`.
+        $isCorrection = $transaction->status === \OCA\PettyCash\Domain\Workflow\TransactionStatus::AwaitingPurchaserCorrection;
+        if ($sheet->status !== \OCA\PettyCash\Domain\Workflow\SheetStatus::Open && !$isCorrection) {
             throw new InvalidArgumentException('Cannot update transactions in a submitted sheet');
         }
 
@@ -307,8 +330,25 @@ final readonly class TransactionService
             $current->hasEvidence()
         );
 
-        $transaction->activate($revision);
-        $transaction->lockVersion++;
+        // A transaction being corrected must NOT be activated by an edit.
+        //
+        // `activate()` does three things at once — it marks the revision active, moves the stage to
+        // `COST_CENTER`, and sets the status to `AWAITING_COST_CENTER_REVIEW`. On an ordinary draft
+        // that is harmless, because nothing has been submitted yet. On a **correction draft** it meant
+        // a purchaser's edit ended correction and routed the expense to a cost-centre manager before
+        // they had resubmitted anything, contradicting `workflow.md`'s Correction Contract clause 5
+        // ("Activation atomically switches the active revision and routes it to cost-center review" —
+        // at resubmission) and FR-050's rule that the active revision determines current information.
+        //
+        // So a correction attaches its edited revision as the one being worked on and leaves stage,
+        // status, and the revision's own `active` flag untouched. Everything else — the drafts on an
+        // open sheet — keeps the previous behaviour, because `TransactionServiceUpdateTest` pins it.
+        if ($isCorrection) {
+            $transaction->attachWorkingRevision($revision);
+        } else {
+            $transaction->activate($revision);
+            $transaction->lockVersion++;
+        }
 
             // See createTransaction(): the revision needs the transaction's internal
             // id, and the transaction's active_revision_id needs the revision's.

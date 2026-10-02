@@ -78,35 +78,197 @@ final class DbAuditEventRepository implements AuditEventRepository
         return $row ? $this->mapRow($row) : null;
     }
 
-    /** @return list<AuditEvent> */
+    /**
+     * The event type this repository orders by.
+     *
+     * ## Why the tiebreak is not optional
+     *
+     * `occurred_at` is stored at second granularity — every writer formats `Y-m-d H:i:s` — and a submit
+     * followed by two approvals lands inside one second routinely. Ordering by `occurred_at` alone
+     * therefore leaves same-second events in whatever order the database returns, which varies between
+     * runs and, worse, between page boundaries. Measured: with a single-key ordering the
+     * `occurred_at` sequence of a three-event timeline was *ascending* while the events themselves were
+     * in reverse order, because all three shared one second.
+     *
+     * `id` is a monotonic autoincrement, so it is the insertion order — which for an append-only stream
+     * is the order things happened. Adding it makes the sequence total, so the timeline is stable and
+     * T319's paged walk cannot repeat or skip an event at a page seam.
+     */
+    private const TIMELINE_ORDER = ['occurred_at' => 'ASC', 'id' => 'ASC'];
+
+    /** Apply the timeline ordering. */
+    private function inTimelineOrder(IQueryBuilder $qb): void
+    {
+        foreach (self::TIMELINE_ORDER as $column => $direction) {
+            $qb->addOrderBy($column, $direction);
+        }
+    }
+
+    /**
+     * T321: the sheet a transaction belongs to, as an internal id.
+     *
+     * Resolved with a second, indexed lookup rather than a correlated subquery in the timeline's
+     * `WHERE`. The subquery would have been fewer lines but it cannot be built through
+     * `IQueryBuilder`'s expression API without hand-assembling the table prefix, and a hand-assembled
+     * prefix is the kind of thing that works until the deployment's `dbprefix` differs. This is the
+     * same `select(...)->from('pettycash_transactions')` shape `DbExpenseTransactionRepository` uses,
+     * so the prefix is handled by the driver.
+     *
+     * `null` when the transaction does not exist, which leaves the timeline reading as the plain
+     * transaction predicate instead of matching nothing.
+     */
+    private function sheetDbIdFor(int $transactionId): ?int
+    {
+        $qb = $this->connection->getQueryBuilder();
+        $sheetId = $qb->select('sheet_id')
+            ->from('pettycash_transactions')
+            ->where($qb->expr()->eq('id', $qb->createNamedParameter($transactionId)))
+            ->executeQuery()
+            ->fetchOne();
+
+        if ($sheetId === false || $sheetId === null) {
+            return null;
+        }
+
+        // `BIGINT` arrives as a string on some drivers and an int on others, the same reason
+        // `mapRow()` coerces rather than assumes.
+        return (int) $sheetId;
+    }
+
+    /**
+     * T321: what belongs on a transaction's audit timeline.
+     *
+     * **Resolution (B)**, and the reason it is not (A). A sheet submission is one fact about one sheet
+     * that covers every transaction in it, so it is recorded once, with `sheet_id` set and
+     * `transaction_id => null` (`SubmitSheet.php:119-120`) and `entity_type => 'sheet'`. That row is
+     * correct, and `data-model.md:314` declares `transaction_id` nullable for exactly this reason.
+     *
+     * But a read filtered on `transaction_id` alone could never return it, so a transaction's audit
+     * opened with `ROUTED` — the routing that happened *after* submission — and contained no submission
+     * at all. FR-051 requires that "formal transaction audit MUST begin with sheet submission", and
+     * US6/AC1 that submission is "the first formal event" a reader sees.
+     *
+     * (A) — writing one `SUBMITTED` event per transaction — was rejected because it would record the
+     * same submission N times and contradict the `entity_type`/`entity_id` snapshot already on the row.
+     * Folding the sheet's events in at read time keeps the fact single and the row honest, and the
+     * `transaction_id IS NULL` clause is what makes it *singleton by construction*: a sheet-scoped
+     * event matches no matter how many transactions the sheet later gains, and matches exactly once.
+     *
+     * **This helper is used by the count as well as the read, and that is the point.** T319 requires
+     * `countByTransactionId()` to filter identically to `findByTransactionId()`, because a `total` that
+     * does not describe its own page is worse than no total. Widening the read without widening the
+     * count through this same helper would have shipped exactly that bug; sharing the predicate makes
+     * the two unable to drift.
+     */
+    private function applyTransactionTimelineScope(IQueryBuilder $qb, int $transactionId): void
+    {
+        $ownEvents = $qb->expr()->eq('transaction_id', $qb->createNamedParameter($transactionId));
+        $sheetId = $this->sheetDbIdFor($transactionId);
+
+        if ($sheetId === null) {
+            $qb->andWhere($ownEvents);
+            return;
+        }
+
+        $qb->andWhere($qb->expr()->orX(
+            $ownEvents,
+            $qb->expr()->andX(
+                $qb->expr()->isNull('transaction_id'),
+                $qb->expr()->eq('sheet_id', $qb->createNamedParameter($sheetId, IQueryBuilder::PARAM_INT))
+            )
+        ));
+    }
+
+    /**
+     * A transaction's official history — US6/AC1's "transaction timeline".
+     *
+     * Ordered by `inTimelineOrder()`, and scoped by `applyTransactionTimelineScope()`, so the sheet's
+     * submission is the first event rather than an absent one. The submission precedes the
+     * transaction's own `ROUTED`, and both share the `occurred_at` second that submission and routing
+     * happen in, so the `id` tiebreak in `inTimelineOrder()` is what places the sheet-scoped row first:
+     * `SubmitSheet` appends `SUBMITTED` before the per-transaction `ROUTED` events, so insertion order
+     * and time order agree.
+     *
+     * @return list<AuditEvent>
+     */
     public function findByTransactionId(int $transactionId, int $offset = 0, int $limit = 100): array
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
-            ->from($this->table())
-            ->where($qb->expr()->eq('transaction_id', $qb->createNamedParameter($transactionId)))
-            ->orderBy('occurred_at', 'DESC')
-            ->setFirstResult($offset)
+            ->from($this->table());
+        $this->applyTransactionTimelineScope($qb, $transactionId);
+        $qb->setFirstResult($offset)
             ->setMaxResults($limit);
+        $this->inTimelineOrder($qb);
         $rows = $qb->executeQuery()->fetchAllAssociative();
         return array_map([$this, 'mapRow'], $rows);
     }
 
-    /** @return list<AuditEvent> */
+    /**
+     * T319: the untruncated size of the set behind a page.
+     *
+     * Counted by the database rather than by reading a page and counting it. `findByTransactionId()`
+     * is bounded by `setMaxResults`, so its return value can only ever describe the window it was
+     * given; deriving the total from it produces a response that carries every key `PageMeta`
+     * requires and still tells the client the history ends at the end of page one.
+     *
+     * The predicate is identical to the find's, deliberately, and it is the *same code* — both call
+     * `applyTransactionTimelineScope()`. A count filtered slightly differently from the read it
+     * describes is worse than no count at all: it looks authoritative and is not. T321 widened both
+     * sides together; had only the read been widened, this would have reported a `total` that
+     * contradicted its own page.
+     *
+     * `fetchOne()` returns the aggregate as the driver gives it — `COUNT(*)` is `BIGINT`, which
+     * arrives as a string on some drivers and an int on others (the same reason `mapRow()` coerces
+     * its integer columns rather than assuming). Cast rather than trust.
+     */
+    public function countByTransactionId(int $transactionId): int
+    {
+        $qb = $this->connection->getQueryBuilder();
+        $qb->select($qb->func()->count('*', 'pettycash_audit_count'))
+            ->from($this->table());
+        $this->applyTransactionTimelineScope($qb, $transactionId);
+
+        return (int) $qb->executeQuery()->fetchOne();
+    }
+
+    /**
+     * The sheet's history — US6/AC1's "history table".
+     *
+     * Chronological, with the same tiebreak as `findByTransactionId()` and for the same reason: this
+     * is a timeline, and the sheet view renders it beside the transaction revisions, which already come
+     * back `revision_number ASC`. Ascending here and descending there put the two halves of one screen
+     * in opposite directions.
+     *
+     * @return list<AuditEvent>
+     */
     public function findBySheetId(int $sheetId, int $offset = 0, int $limit = 100): array
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('*')
             ->from($this->table())
             ->where($qb->expr()->eq('sheet_id', $qb->createNamedParameter($sheetId)))
-            ->orderBy('occurred_at', 'DESC')
             ->setFirstResult($offset)
             ->setMaxResults($limit);
+        $this->inTimelineOrder($qb);
         $rows = $qb->executeQuery()->fetchAllAssociative();
         return array_map([$this, 'mapRow'], $rows);
     }
 
-    /** @return list<AuditEvent> */
+    /**
+     * One actor's events, for the audit report — **not** the transaction timeline.
+     *
+     * Left newest-first deliberately, and the decision is recorded here rather than left implicit.
+     * `ReportController:518` is the only caller and hands the rows to the report machinery, which does
+     * not re-sort them; a bounded report read newest-first is the conventional order and **no artifact
+     * states an order for reports** — US6/AC1 and SC-006 are about the timeline and the history table,
+     * and FR-065/FR-066 speak of report *contents*, not sequence.
+     *
+     * Changing it would have been a silent behaviour change to a completed surface (T106, T112) on the
+     * strength of a requirement that does not reach it. It is flagged rather than swept along.
+     *
+     * @return list<AuditEvent>
+     */
     public function findByActorUid(string $actorUid, int $offset = 0, int $limit = 100): array
     {
         $qb = $this->connection->getQueryBuilder();
@@ -114,13 +276,23 @@ final class DbAuditEventRepository implements AuditEventRepository
             ->from($this->table())
             ->where($qb->expr()->eq('actor_uid', $qb->createNamedParameter($actorUid)))
             ->orderBy('occurred_at', 'DESC')
+            ->addOrderBy('id', 'DESC')
             ->setFirstResult($offset)
             ->setMaxResults($limit);
         $rows = $qb->executeQuery()->fetchAllAssociative();
         return array_map([$this, 'mapRow'], $rows);
     }
 
-    /** @return list<AuditEvent> */
+    /**
+     * Events within a period — a **history** read, so chronological.
+     *
+     * Decided rather than deferred, as T320 required. It has no production caller, so nothing is
+     * pinned either way, but it returns the same event stream the timeline does over a bounded window —
+     * leaving it reverse-chronological would hand the next caller the identical defect, and a caller
+     * cannot tell from the signature that one method is a timeline and the other is not.
+     *
+     * @return list<AuditEvent>
+     */
     public function findByDateRange(DateTimeImmutable $from, DateTimeImmutable $to, int $offset = 0, int $limit = 100): array
     {
         $qb = $this->connection->getQueryBuilder();
@@ -128,9 +300,9 @@ final class DbAuditEventRepository implements AuditEventRepository
             ->from($this->table())
             ->where($qb->expr()->gte('occurred_at', $qb->createNamedParameter($from->format('Y-m-d H:i:s'))))
             ->andWhere($qb->expr()->lte('occurred_at', $qb->createNamedParameter($to->format('Y-m-d H:i:s'))))
-            ->orderBy('occurred_at', 'DESC')
             ->setFirstResult($offset)
             ->setMaxResults($limit);
+        $this->inTimelineOrder($qb);
         $rows = $qb->executeQuery()->fetchAllAssociative();
         return array_map([$this, 'mapRow'], $rows);
     }
