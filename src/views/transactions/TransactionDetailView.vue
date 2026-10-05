@@ -4,8 +4,9 @@ import { useRoute, useRouter } from 'vue-router'
 import { useTransactionStore } from '@/stores/transactions'
 import type { TransactionStatus } from '@/types/api'
 import { NcButton, NcChip, NcIconSvgWrapper, NcNoteCard, NcBreadcrumbs, NcSelect, NcDialog } from '@nextcloud/vue'
-import { mdiPencil, mdiUndoVariant, mdiDownload, mdiDelete, mdiFileOutline, mdiPlus, mdiLock } from '@mdi/js'
+import { mdiPencil, mdiUndoVariant, mdiPlus, mdiLock } from '@mdi/js'
 import EvidenceUploader from '@/components/evidence/EvidenceUploader.vue'
+import EvidenceList from '@/components/evidence/EvidenceList.vue'
 import { t } from '@nextcloud/l10n'
 import { formatMoney } from '@/utils/money'
 import { selectOptionKey, selectOptionValue } from '@/utils/selectOption'
@@ -52,14 +53,56 @@ const showReadOnly = computed(() => isSubmitted.value && !isReturned.value)
  */
 const priorRevisions = computed(() => transactionStore.revisions.filter((rev) => !rev.active))
 
-function formatFileSize(bytes: number) {
-	if (bytes < 1024) return bytes + ' B'
-	if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
-	return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
-}
+/**
+ * The evidence rows.
+ *
+ * This view used to render its own list inline, with `downloadEvidence()` and `removeEvidence()` as
+ * empty `// TODO: Implement …` bodies bound to the buttons — so every purchaser with a draft receipt
+ * was shown a download and a delete control that did nothing, with no error and no state change. The
+ * working implementation already existed at `src/components/evidence/EvidenceList.vue` and was
+ * imported by **no view**; only `PurchaserFlow.spec.ts` imported it, which is how the tested surface
+ * and the shipped surface came to be two different files (T360).
+ *
+ * **The component is the better of the two, and adopting it fixes three requirement clauses the inline
+ * markup got wrong** — which is the argument for deleting the inline copy rather than wiring the two
+ * handlers to the service:
+ *
+ * - **FR-060.** The inline buttons were both `v-if="ev.active && !isSubmitted"`, so a reviewer
+ *   looking at a *submitted* transaction could not download its evidence at all. FR-060 requires an
+ *   authorized viewer to be able to preview and download; the component offers download whenever the
+ *   item is active.
+ * - **FR-058.** Removal stays the purchaser's and stays pre-submission, which the component keeps as
+ *   `v-if="ev.active && props.isDraft"`.
+ * - **FR-059.** The component renders `deactivation-info` — when the file was withdrawn, or that the
+ *   time is unknown. The inline row said only "inactive", which is not the same information.
+ *
+ * It also carries a confirm before removal, a `deleting` guard so a double press cannot issue two
+ * DELETEs, an `role="alert"` error region, and `aria-label`s naming the file each button acts on.
+ */
+const evidenceItems = computed(() => transactionStore.currentTransaction?.evidence ?? [])
 
 function goToEdit() { router.push({ name: 'transaction-edit', params: { id: transactionId.value } }) }
-function goToCreateCorrection() { router.push({ name: 'transaction-correction-create', params: { id: transactionId.value } }) }
+
+/**
+ * FR-026's one carve-out after submission: a returned transaction stays editable.
+ *
+ * This pushed a route named `transaction-correction-create`, which **no route in
+ * `src/router/index.ts` declares** — `vue-router` throws `MATCHER_NOT_FOUND` synchronously from
+ * `router.push`, so pressing the button aborted the handler and nothing was caught (T359). Every
+ * test asserting this button asserted only that it *exists*; none pressed it, and
+ * `PurchaserFlow.spec.ts` re-declared the application's ten routes in its own test router, so a
+ * missing name could not have been caught even if one had pushed it.
+ *
+ * **`transaction-edit` is the correct destination rather than a new route.** `TransactionFormView`
+ * already treats `AWAITING_PURCHASER_CORRECTION` as editable — the `editable` computed at `:71`
+ * names that status explicitly, and this button only renders when it holds — and its `persist()`
+ * calls `updateExistingTransaction`, whose `PATCH` the server accepts for exactly this state:
+ * `TransactionService.php:245` admits the update when `$isCorrection`, which it derives from
+ * `TransactionStatus::AwaitingPurchaserCorrection`. That PATCH creates a new revision, so FR-048 is
+ * satisfied on this path too. Registering a second route would have produced two URLs for one
+ * behaviour with nothing to tell them apart.
+ */
+function goToCreateCorrection() { router.push({ name: 'transaction-edit', params: { id: transactionId.value } }) }
 
 const selectedRevisionId = ref('')
 const showEvidenceUploader = ref(false)
@@ -95,20 +138,16 @@ async function loadData() {
 	// surfacing as an unhandled promise rejection in the user's console.
 	await transactionStore.loadTransaction(transactionId.value).catch(() => undefined)
 	await transactionStore.loadRevisions(transactionId.value).catch(() => undefined)
-	await transactionStore.loadAudit(transactionId.value).catch(() => undefined)
+	// The audit fetch that used to stand here was removed by T343, with the sheet detail's audit card.
+	// It resolved a page and discarded it: `loadAudit()` returns the page and stores nothing, and this
+	// view bound no part of it, so the request bought a network round trip and a rendered nothing — which
+	// is the same "header, no data" failure the sheet card was. The audit endpoint exists and is
+	// unaffected; Phase 50 owns binding it once the page's shape and pagination are settled.
 }
 
 async function handleEvidenceUploaded() {
 	showEvidenceUploader.value = false
 	await loadData()
-}
-
-async function downloadEvidence(_evidenceId: string) {
-	// TODO: Implement download
-}
-
-async function removeEvidence(_evidenceId: string) {
-	// TODO: Implement remove
 }
 
 onMounted(() => { loadData() })
@@ -336,39 +375,23 @@ watch(transactionId, () => { loadData() })
 
 		<NcNoteCard data-test="evidence-list">
 			<div class="card-header-row">
-				<span>{{ t('pettycash', 'evidence.list') }} ({{ transactionStore.currentTransaction?.evidence?.length ?? 0 }})</span>
+				<span>{{ t('pettycash', 'evidence.list') }} ({{ evidenceItems.length }})</span>
 				<NcButton v-if="!isSubmitted" variant="primary" @click="showEvidenceUploader = true" data-test="upload-evidence-btn">
 					<NcIconSvgWrapper :path="mdiPlus" :size="16" class="mr-2" />
 					{{ t('pettycash', 'evidence.upload') }}
 				</NcButton>
 			</div>
 
-			<div v-if="transactionStore.currentTransaction?.evidence?.length" class="evidence-list">
-				<div v-for="ev in transactionStore.currentTransaction.evidence" :key="ev.id" class="evidence-item" data-test="evidence-list-item">
-					<div class="evidence-info">
-						<NcIconSvgWrapper :path="mdiFileOutline" :size="24" class="evidence-icon" />
-						<div class="evidence-details">
-							<span class="evidence-name">{{ ev.name }}</span>
-							<small class="evidence-meta">{{ ev.mediaType }} · {{ formatFileSize(ev.sizeBytes) }} · {{ new Date(ev.uploadedAt).toLocaleString('fa-IR') }}</small>
-						</div>
-					</div>
-					<div class="evidence-actions">
-						<NcChip data-test="evidence-active-badge">
-							{{ ev.active ? t('pettycash', 'evidence.active') : t('pettycash', 'evidence.inactive') }}
-						</NcChip>
-						<NcButton v-if="ev.active && !isSubmitted" variant="tertiary" @click="downloadEvidence(ev.id)" data-test="download-evidence">
-							<NcIconSvgWrapper :path="mdiDownload" :size="16" />
-						</NcButton>
-						<NcButton v-if="ev.active && !isSubmitted" variant="tertiary" @click="removeEvidence(ev.id)" data-test="remove-evidence">
-							<NcIconSvgWrapper :path="mdiDelete" :size="16" />
-						</NcButton>
-						<NcChip v-if="!ev.active" variant="error" data-test="inactive-badge">
-							{{ t('pettycash', 'evidence.inactive') }}
-						</NcChip>
-					</div>
-				</div>
-			</div>
-			<div v-else class="text-center py-4">{{ t('pettycash', 'evidence.none') }}</div>
+			<!--
+				T360. `EvidenceList` rather than an inline copy. `isDraft` is the *inverse* of
+				`isSubmitted` because the two answer opposite questions: the component uses it to decide
+				whether **removal** is offered (FR-058, pre-submission only), while `isSubmitted` is also
+				what gates the upload button above. Passing the raw `isSubmitted` here would have been
+				inverted and would have offered removal on a submitted transaction.
+
+				Download deliberately ignores `isDraft` — see the `evidenceItems` docblock on FR-060.
+			-->
+			<EvidenceList :evidence="evidenceItems" :is-draft="!isSubmitted" />
 		</NcNoteCard>
 
 		<NcDialog
@@ -542,54 +565,13 @@ watch(transactionId, () => { loadData() })
 	margin: 0;
 }
 
-.evidence-list {
-	display: flex;
-	flex-direction: column;
-	gap: 0.5rem;
-}
-
-.evidence-item {
-	display: flex;
-	justify-content: space-between;
-	align-items: center;
-	padding: 0.75rem;
-	background-color: var(--nc-color-surface-container-low, #fafafa);
-	border-radius: 4px;
-	flex-wrap: wrap;
-	gap: 0.5rem;
-}
-
-.evidence-info {
-	display: flex;
-	align-items: center;
-	gap: 0.75rem;
-	flex: 1;
-}
-
-.evidence-icon {
-	color: var(--nc-color-on-surface-variant, #616161);
-}
-
-.evidence-details {
-	display: flex;
-	flex-direction: column;
-	gap: 0.125rem;
-}
-
-.evidence-name {
-	font-weight: 500;
-}
-
-.evidence-meta {
-	font-size: var(--font-size-floor);
-	color: var(--nc-color-on-surface-variant, #616161);
-}
-
-.evidence-actions {
-	display: flex;
-	align-items: center;
-	gap: 0.5rem;
-}
+/*
+ * The `.evidence-*` rules that styled this view's own inline evidence rows were removed with the
+ * markup (T360). They are **not** replaced: `EvidenceList.vue` carries its own scoped presentation,
+ * and keeping a second copy here would be a second definition of how a row looks that nothing renders.
+ * `.evidence-list` itself also went — it is the same class name the component's root element uses, and
+ * `scoped` styles would not have reached it anyway.
+ */
 
 .alert {
 	display: flex;

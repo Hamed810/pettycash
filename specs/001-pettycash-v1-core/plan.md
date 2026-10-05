@@ -68,11 +68,18 @@ Chrome 120+, Edge 120+, Firefox 115+ (ESR); responsive desktop and mobile-sized 
 OCS JSON contracts, and an embedded Vue single-page interface
 
 **Performance Goals**: At the V1 dataset of up to 100 active users and 10,000 annual expense
-transactions, at least 95% of routine list, detail, history, and evidence views become usable within
-3 seconds (p95 <3s), error rate <0.1%, and zero data loss; all list/report queries are
-server-paginated and indexed
+transactions, the design target is at least 95% of routine list, detail, history, and evidence views
+usable within 3 seconds (p95 <3s), with error rate <0.1% and zero data loss; all list/report queries
+are server-paginated and indexed. The three bounds are reported separately and are not
+interchangeable (FR-073, clarified 2026-10-02): **p95** is a design target whose measurement is deferred
+to post-V1; **error rate** is 5xx responses over all acceptance-suite HTTP requests — 4xx, 409 and 422
+excluded — recorded as a V1 release-readiness figure by T135; **zero data loss** is a correctness
+invariant established by the atomicity and failure-injection suites. **Verification of the p95 bound is deferred to post-V1** (SC-008,
+clarified 2026-10-02): the target governs how queries are built, but the measurement at the stated
+scale is not a V1 acceptance gate, V1 release readiness records SC-008 as *not measured* with that
+reason, and any V1 latency run is informational rather than evidence of the criterion
 
-**Constraints**: Persian RTL V1 UI with all listed elements (sheet status, transaction status, current stage, prior decisions, history, evidence) visible without horizontal scroll at 390px viewport, status color/icon meeting WCAG AA contrast, text ≥12pt Persian font; server-authoritative authorization with explicit multi-role decision matrix: self-review permitted when user holds required review role + scope + stage permission, ownership grants purchaser rights only; append-only business audit with minimum 7-year retention; immutable prior revisions; no destructive migration of historical data; atomic workflow and ledger changes; shared finance queue; no automatic escalation or mutation retry; no independent authentication, logging, backup, or file system; evidence file size limit 100 MB per file (host file service limit, no separate PettyCash limit); zero-active-account purchasers get default rial account auto-created on first sheet creation (idempotent provisioning per FR-020); public evidence links have configurable TTL (default 30 days, max 1 year) with per-access audit logging in configuration audit per FR-031; reporting periods for group exports are **Jalali in-progress periods** (current month, quarter and year), resolved at query time to inclusive Gregorian date ranges in the requesting account's time zone, and are mutually exclusive with an explicit custom date range, per FR-068 as designed under **Jalali Reporting Periods (FR-068)**
+**Constraints**: Persian RTL V1 UI with all listed elements (sheet status, transaction status, current stage, prior decisions, history, evidence) visible without horizontal scroll at 390px viewport, status color/icon meeting WCAG AA contrast, text ≥12pt Persian font; server-authoritative authorization with explicit multi-role decision matrix: self-review permitted when user holds required review role + scope + stage permission, ownership grants purchaser rights only; append-only business audit with minimum 7-year retention; immutable prior revisions; no destructive migration of historical data; atomic workflow and ledger changes; shared finance queue; no automatic escalation or mutation retry; no independent authentication, logging, backup, or file system; evidence file size capped at 100 MB per file by a ceiling PettyCash enforces itself, refusing anything larger regardless of the host file service limit, with a host limit below 100 MB still rejecting first and reported separately as a host-limit failure (FR-074, clarified 2026-10-02); zero-active-account purchasers get default rial account auto-created on first sheet creation (idempotent provisioning per FR-020); public evidence links have configurable TTL (default 30 days, max 1 year) with per-access audit logging in configuration audit per FR-031; reporting periods for group exports are **Jalali in-progress periods** (current month, quarter and year), resolved at query time to inclusive Gregorian date ranges in the requesting account's time zone, and are mutually exclusive with an explicit custom date range, per FR-068 as designed under **Jalali Reporting Periods (FR-068)**
 
 **Scale/Scope**: Eight user journeys, **84** functional requirements, five business roles, three review
 stages, **15** persistent entity families, a role-aware dashboard, reports, and Excel,
@@ -153,7 +160,10 @@ Phase 1 artifacts remain compliant. The data model preserves historical records 
 audit retention per FR-057, contracts expose only role-scoped resources with configuration audit
 visibility per FR-055/FR-056, evidence uses Nextcloud private storage with 100 MB/file size limit
 per FR-074, UI meets measurable Persian RTL criteria (390px viewport, WCAG AA, ≥12pt font),
-performance targets include error rate <0.1% and zero data loss, browser targets are Chrome 120+,
+performance targets include error rate <0.1% and zero data loss, with the p95 bound a design target
+whose verification is deferred to post-V1 per SC-008 (a V1 latency run is informational, not
+acceptance evidence), and with error rate defined as 5xx over acceptance-suite requests and owned by
+T135 per FR-073, browser targets are Chrome 120+,
 Edge 120+, Firefox 115+ (ESR) per FR-072, advanced evidence restrictions (classification, redaction,
 watermarking, extended logging, time-limited access, type-specific permissions) deferred to V2 per
 FR-030, public evidence links have configurable TTL (default 30 days, max 1 year) with per-access
@@ -371,8 +381,12 @@ finance officers see configuration audit for accounts they charge; cost center a
 see configuration audit for their assigned cost centers. This scope is enforced in
 `AuditQueryService` and reflected in exports.
 
-**Evidence Handling (FR-030, FR-074)**: Evidence files limited to 100 MB per file per host file
-service limit (FR-074). Advanced evidence-specific restrictions (document classification levels,
+**Evidence Handling (FR-030, FR-074)**: Evidence files are capped at **100 MB per file by a ceiling
+PettyCash enforces itself**, refusing anything larger regardless of what the host file service allows
+and naming the limit in the refusal. Where the host file service imposes a *lower* limit than 100 MB
+the host rejects first, and that rejection is reported as a host-limit failure rather than as the
+100 MB refusal, so a test or support report can tell which ceiling stopped the upload
+(FR-074, clarified 2026-10-02). Advanced evidence-specific restrictions (document classification levels,
 redaction rules, watermarking, access logging beyond audit, time-limited evidence access,
 evidence-type-specific permissions) explicitly deferred to V2 per FR-030. V1 permits all authorized
 viewers of a transaction to access all its evidence without additional restrictions.

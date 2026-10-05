@@ -7,6 +7,7 @@ namespace OCA\PettyCash\Controller;
 use OCA\PettyCash\Application\Port\AdministratorCheck;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Application\Port\UserDirectory;
+use OCA\PettyCash\Domain\Configuration\Repository\CostCenterRepository;
 use OCA\PettyCash\Domain\Configuration\Repository\RoleAssignmentRepository;
 use OCA\PettyCash\Domain\Shared\Clock;
 use OCA\PettyCash\Domain\Shared\Enum\Role;
@@ -36,6 +37,7 @@ class SessionController extends OCSController
         private UserDirectory $userDirectory,
         private AdministratorCheck $administratorCheck,
         private RoleAssignmentRepository $roleAssignmentRepository,
+        private CostCenterRepository $costCenterRepository,
         private Clock $clock,
         private OcsErrorMapper $ocsErrorMapper
     ) {
@@ -60,10 +62,65 @@ class SessionController extends OCSController
                     : $uid,
                 'roles' => $roles,
                 'capabilities' => $this->capabilities($roles),
+                'costCenterCodes' => $this->costCenterCodes($uid),
             ]);
         } catch (\Throwable $e) {
             return $this->ocsErrorMapper->map($e);
         }
+    }
+
+    /**
+     * The cost centres this caller is assigned to review, as codes.
+     *
+     * FR-004 and FR-005 scope a manager's transactions and reports to assigned cost centres, and the
+     * client needs that scope to present anything at all: `src/stores/auth.ts` read
+     * `capabilities.costCenterCodes`, which the server has never sent, so `costCenterCodes` was
+     * permanently `[]` and both `hasCostCenterScope()` and `canReview()` were permanently `false` for
+     * the two management stages (T336).
+     *
+     * **Codes, not public ids, and the reason is that this is the vocabulary the server already
+     * authorizes with.** `ManagementReviewService::getManagedCostCenterCodes()` resolves a manager's
+     * scope to codes, and a transaction row carries `costCenter.code`. Emitting the same strings the
+     * decision path compares is what keeps a client gate and the rule behind it from disagreeing
+     * about what identifies a cost centre.
+     *
+     * Read from the **same** repository and the same effective-date rule as `resolveRoles()`, so the
+     * scope and the roles cannot come from two different points in time. An administrator with no
+     * manager assignment gets an empty list on purpose: FR-007 grants visibility, not decision
+     * authority, and this list is scope rather than a grant.
+     *
+     * An assignment pointing at a cost centre that is no longer there contributes nothing rather than
+     * a null, for the reason `ReportScope::forActor()` gives — dropping a null is the difference
+     * between "no results" and "all results", and only the first is safe.
+     *
+     * @return list<string>
+     */
+    private function costCenterCodes(string $uid): array
+    {
+        $scopedRoles = [Role::CostCenterManager, Role::SeniorManager];
+        $codes = [];
+
+        foreach ($this->roleAssignmentRepository->findActiveByUserUid($uid, $this->clock->now()) as $assignment) {
+            if (!$assignment->isValidOn($this->clock->now()) || !in_array($assignment->role, $scopedRoles, true)) {
+                continue;
+            }
+            if ($assignment->costCenterId === null) {
+                continue;
+            }
+
+            $code = $this->costCenterRepository->findById($assignment->costCenterId)?->code();
+            if ($code !== null && $code !== '') {
+                $codes[] = $code;
+            }
+        }
+
+        $unique = array_values(array_unique($codes));
+
+        // Sorted so the answer does not depend on the order the assignments came back in: this is a
+        // set, and a client comparing it should not be sensitive to row order.
+        sort($unique);
+
+        return $unique;
     }
 
     /**

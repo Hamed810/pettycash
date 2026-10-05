@@ -9,7 +9,7 @@ import {
 	type DashboardRole,
 	type RoleScopedDashboard,
 } from '@/types/dashboard'
-import { dashboardMetrics, isRecord } from '@/utils/dashboard'
+import { dashboardMetrics, dashboardNotes, isRecord } from '@/utils/dashboard'
 
 /**
  * FR-061: the role-aware dashboard, and FR-075: a failed read is reported and retried only when the
@@ -48,10 +48,20 @@ export const useDashboardStore = defineStore('dashboard', () => {
 		return DASHBOARD_ROLES.filter((role) => {
 			if (!isRecord(buckets.value[role])) return false
 			return allowed.size === 0 || allowed.has(role)
-		}).map((role) => ({ role, metrics: dashboardMetrics(buckets.value[role]) }))
+		}).map((role) => ({
+			role,
+			metrics: dashboardMetrics(buckets.value[role]),
+			notes: dashboardNotes(buckets.value[role])
+		}))
 	})
 
-	/** A card whose bucket the projection sent but which carries no metric renders as "nothing to do". */
+	/**
+	 * A card whose bucket the projection sent but which carries no figure renders as "nothing to do".
+	 *
+	 * Figures only. The envelope every bucket arrives in — `userId`, the read-window bound, the
+	 * truncation flag — is stated on the card as a note, so counting it as content would make this
+	 * true for every bucket the server ever sends and put the empty state out of reach.
+	 */
 	const hasMetrics = computed(() => cards.value.some((card) => card.metrics.length > 0))
 
 	const isEmpty = computed(() => !loading.value && error.value === null && cards.value.length === 0)

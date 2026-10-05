@@ -8,13 +8,11 @@ use Exception;
 use InvalidArgumentException;
 use LogicException;
 use OCA\PettyCash\Application\Expense\TransactionService;
-use OCA\PettyCash\Application\Workflow\ManagementReviewService;
 use OCA\PettyCash\Application\Expense\CreateCorrectionDraft;
 use OCA\PettyCash\Application\Workflow\ResubmitCorrection;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Domain\Expense\Repository\TransactionRevisionRepository;
 use OCA\PettyCash\Domain\Audit\Repository\AuditEventRepository;
-use OCA\PettyCash\Domain\Workflow\Decision;
 use OCA\PettyCash\Domain\Workflow\WorkflowStage;
 use OCA\PettyCash\Domain\Shared\Uuid;
 use OCA\PettyCash\Domain\Shared\CurrencyCode;
@@ -33,7 +31,6 @@ class TransactionController extends OCSController
     public function __construct(
         \OCP\IRequest $request,
         private TransactionService $transactionService,
-        private ManagementReviewService $managementReviewService,
         private CreateCorrectionDraft $createCorrectionDraft,
         private ResubmitCorrection $resubmitCorrection,
         private TransactionRevisionRepository $revisionRepository,
@@ -181,62 +178,6 @@ class TransactionController extends OCSController
         try {
             $this->transactionService->deleteTransaction($transactionId, $expectedVersion);
             return new DataResponse(null, 204);
-        } catch (\Throwable $e) {
-            return $this->ocsErrorMapper->map($e, $commandId);
-        }
-    }
-
-    /**
-     * @param string $transactionId
-     * @param string $decision
-     * @param string $explanation
-     * @param int $expectedVersion
-     * @return DataResponse
-     */
-    #[NoAdminRequired]
-    public function decide(
-        string $transactionId,
-        ?string $decision = null,
-        ?string $explanation = null,
-        ?int $expectedVersion = null
-    ): DataResponse {
-        $fieldErrors = [];
-        if ($decision === null || trim($decision) === '') {
-            $fieldErrors['decision'] = ['decision is required'];
-        }
-        if ($expectedVersion === null) {
-            $fieldErrors['expectedVersion'] = ['expectedVersion is required'];
-        }
-        if ($fieldErrors !== []) {
-            return $this->ocsErrorMapper->validation(
-                'Required fields are missing',
-                $this->request->getHeader('X-PettyCash-Command-ID'),
-                $fieldErrors
-            );
-        }
-
-        try {
-            $workflowDecision = Decision::from($decision);
-            $commandId = $this->request->getHeader('X-PettyCash-Command-ID') ?? (string)Uuid::random();
-            
-            // Determine the current stage of the transaction
-            $transaction = $this->managementReviewService->getTransactionForDecision($transactionId);
-            if ($transaction === null) {
-                return $this->ocsErrorMapper->notFound('Transaction not found', $commandId);
-            }
-            
-            $stage = $transaction->stage;
-            
-            $outcome = $this->managementReviewService->recordDecision(
-                $transactionId,
-                $stage,
-                $workflowDecision,
-                $explanation,
-                $commandId,
-                $expectedVersion
-            );
-            
-            return new DataResponse($this->formatTransaction($outcome->transaction), 201);
         } catch (\Throwable $e) {
             return $this->ocsErrorMapper->map($e, $commandId);
         }

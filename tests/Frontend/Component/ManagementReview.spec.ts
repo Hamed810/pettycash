@@ -10,6 +10,7 @@ import FinanceQueueView from '@/views/reviews/FinanceQueueView.vue'
 import TransactionReviewDetailView from '@/views/reviews/TransactionReviewDetailView.vue'
 import DecisionForm from '@/components/review/DecisionForm.vue'
 import PriorDecisionHistory from '@/components/review/PriorDecisionHistory.vue'
+import { ALLOWED_ACTION_KEYS } from '@/types/api'
 import { useReviewsStore } from '@/stores/reviews'
 import { useAuthStore } from '@/stores/auth'
 import { routes } from '@/router'
@@ -418,32 +419,130 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
       }
     })
 
-    it('should render an inline preview for image evidence and mark deactivated evidence', async () => {
-      const image = await mountReview(reviewedTransaction({
-        evidence: [{
-          id: 'ev-img', transactionId: 'tx-1', revisionId: 'rev-1', name: 'receipt.png',
-          mediaType: 'image/png', sizeBytes: 2048, active: true, uploadedBy: 'user1',
-          uploadedAt: '2026-09-20T10:00:00Z'
-        }]
-      }))
-      const preview = image.find('[data-testid="evidence-preview"]')
-      expect(preview.exists(), 'image evidence previews inline').toBe(true)
-      // And the alternative carries a real `alt`, so it is not announced as an unlabelled image.
-      expect(preview.attributes('alt')).toBe('receipt.png')
+    /**
+     * T361. **This test changed shape, and the reason is the fix rather than a weakened assertion.**
+     *
+     * The preview used to be `<img :src="generateOcsUrl(…)">`, so the element existed synchronously
+     * and this assertion passed. That request carried no `OCS-APIRequest` header and was answered
+     * **`412 CSRF check failed` for every user** — the element was present, the image was never
+     * displayed, and nothing said so. The card now fetches the bytes and binds an object URL, so the
+     * `<img>` appears **once the bytes arrive**. Asserting its presence without awaiting the fetch
+     * would be asserting the pre-fix behaviour.
+     *
+     * The requirement is still asserted, and additionally: the request must carry the header (the
+     * whole defect), and both intermediate states must be visible rather than blank.
+     */
+    it('should fetch image evidence with the OCS header and render it inline', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        blob: () => Promise.resolve(new Blob(['png-bytes'], { type: 'image/png' }))
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      const createObjectURL = vi.fn(() => 'blob:preview')
+      vi.stubGlobal('URL', { ...URL, createObjectURL, revokeObjectURL: vi.fn() })
 
-      // FR-060 asks for the active state to be visible, and an inactive item is history rather than
-      // something to open — so it is marked and loses the preview affordance but keeps its download.
-      const deactivated = await mountReview(reviewedTransaction({
-        evidence: [{
-          id: 'ev-off', transactionId: 'tx-1', revisionId: 'rev-1', name: 'withdrawn.pdf',
-          mediaType: 'application/pdf', sizeBytes: 1024, active: false, uploadedBy: 'user1',
-          uploadedAt: '2026-09-20T10:00:00Z', deactivatedAt: '2026-09-21T10:00:00Z'
-        }]
-      }))
-      expect(deactivated.find('[data-testid="deactivated-badge"]').exists()).toBe(true)
-      expect(deactivated.find('[data-testid="evidence-preview-btn"]').exists()).toBe(false)
-      // Still listed: FR-059 makes deactivation a mark, not a deletion.
-      expect(deactivated.find('[data-testid="evidence-list"]').text()).toContain('withdrawn.pdf')
+      try {
+        const image = await mountReview(reviewedTransaction({
+          evidence: [{
+            id: 'ev-img', transactionId: 'tx-1', revisionId: 'rev-1', name: 'receipt.png',
+            mediaType: 'image/png', sizeBytes: 2048, active: true, uploadedBy: 'user1',
+            uploadedAt: '2026-09-20T10:00:00Z'
+          }]
+        }))
+        await flushPromises()
+
+        // **The header is the defect.** A navigation cannot set it, which is why the request was a
+        // navigation in the first place.
+        expect(fetchMock).toHaveBeenCalled()
+        const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+        expect(String(url)).toContain('/evidence/ev-img/content')
+        expect((init.headers as Record<string, string>)['OCS-APIRequest']).toBe('true')
+
+        const preview = image.find('[data-testid="evidence-preview"]')
+        expect(preview.exists(), 'image evidence previews inline once the bytes arrive').toBe(true)
+        expect(preview.attributes('src')).toBe('blob:preview')
+        // And the alternative carries a real `alt`, so it is not announced as an unlabelled image.
+        expect(preview.attributes('alt')).toBe('receipt.png')
+      } finally {
+        vi.unstubAllGlobals()
+      }
+    })
+
+    it('should say so when an inline preview cannot be loaded', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, blob: () => Promise.resolve(new Blob()) }))
+      vi.stubGlobal('URL', { ...URL, createObjectURL: vi.fn(), revokeObjectURL: vi.fn() })
+
+      try {
+        const wrapper = await mountReview(reviewedTransaction({
+          evidence: [{
+            id: 'ev-bad', transactionId: 'tx-1', revisionId: 'rev-1', name: 'broken.png',
+            mediaType: 'image/png', sizeBytes: 2048, active: true, uploadedBy: 'user1',
+            uploadedAt: '2026-09-20T10:00:00Z'
+          }]
+        }))
+        await flushPromises()
+
+        // A failed `<img src>` renders an empty box, which reads as "this receipt is blank" rather
+        // than "we could not load it". FR-060 makes preview something a reviewer relies on to approve.
+        expect(wrapper.find('[data-testid="evidence-error"]').exists()).toBe(true)
+        expect(wrapper.find('[data-testid="evidence-error"]').attributes('role')).toBe('alert')
+        expect(wrapper.find('[data-testid="evidence-preview"]').exists()).toBe(false)
+      } finally {
+        vi.unstubAllGlobals()
+      }
+    })
+
+    it('should issue a header-carrying request when the download button is pressed', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        blob: () => Promise.resolve(new Blob(['pdf-bytes'], { type: 'application/pdf' }))
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      vi.stubGlobal('URL', { ...URL, createObjectURL: vi.fn(() => 'blob:download'), revokeObjectURL: vi.fn() })
+
+      try {
+        const wrapper = await mountReview(reviewedTransaction())
+        await flushPromises()
+        fetchMock.mockClear()
+
+        await wrapper.find('[data-testid="evidence-download-btn"]').trigger('click')
+        await flushPromises()
+
+        const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+        expect(String(url)).toContain('/content')
+        // `attachment` is what makes it a save rather than an inline render, and it is a **query
+        // parameter** on the same endpoint — the disposition moved off the URL and into the request,
+        // so losing it would silently turn every download into a preview.
+        expect(String(url)).toContain('disposition=attachment')
+        expect((init.headers as Record<string, string>)['OCS-APIRequest']).toBe('true')
+      } finally {
+        vi.unstubAllGlobals()
+      }
+    })
+
+    it('should mark deactivated evidence without offering a preview', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, blob: () => Promise.resolve(new Blob()) }))
+      vi.stubGlobal('URL', { ...URL, createObjectURL: vi.fn(), revokeObjectURL: vi.fn() })
+
+      try {
+        // FR-060 asks for the active state to be visible, and an inactive item is history rather than
+        // something to open — so it is marked and loses the preview affordance but keeps its download.
+        const deactivated = await mountReview(reviewedTransaction({
+          evidence: [{
+            id: 'ev-off', transactionId: 'tx-1', revisionId: 'rev-1', name: 'withdrawn.pdf',
+            mediaType: 'application/pdf', sizeBytes: 1024, active: false, uploadedBy: 'user1',
+            uploadedAt: '2026-09-20T10:00:00Z', deactivatedAt: '2026-09-21T10:00:00Z'
+          }]
+        }))
+        await flushPromises()
+
+        expect(deactivated.find('[data-testid="deactivated-badge"]').exists()).toBe(true)
+        expect(deactivated.find('[data-testid="evidence-preview-btn"]').exists()).toBe(false)
+        // Still listed: FR-059 makes deactivation a mark, not a deletion.
+        expect(deactivated.find('[data-testid="evidence-list"]').text()).toContain('withdrawn.pdf')
+      } finally {
+        vi.unstubAllGlobals()
+      }
     })
   })
 
@@ -488,6 +587,117 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
       const ids = (control.attributes('aria-describedby') ?? '').split(/\s+/).filter(Boolean)
       return ids.map((id) => wrapper.find(`#${id}`).text()).join(' ').trim()
     }
+
+    /**
+     * The options the decision control is actually offering, read from the component rather than
+     * from the DOM.
+     *
+     * `NcSelect` is deep-imported, so the real control renders and its dropdown opens only on a real
+     * focus, which jsdom does not produce — the option list exists as a prop and nowhere in the
+     * markup. `findComponent` is typed as `WrapperLike` because the selector is a string, so the cast
+     * is what gives back `props`.
+     */
+    function decisionOptions(wrapper: VueWrapper): Array<{ value: string }> {
+      const select = wrapper.findComponent('[data-testid="decision-select"]') as VueWrapper
+      const vm = select.vm as unknown as { options: Array<{ value: string }> }
+
+      return vm.options
+    }
+
+    /**
+     * FR-039: a finance officer on a `SENIOR_REJECTED` transaction may reject or return, and must not
+     * be offered Approve — which `FinanceDecisionPolicy` refuses and the command path answers 409 on.
+     *
+     * **The fixture is server-shaped, and that is the whole point of the test.** `allowedActions` used
+     * to be built by hand in every spec in this repository, and the filter looked it up as
+     * `item.value.toLowerCase()` — `approve`, `reject`, `return` — while
+     * `TransactionPayloadFormatter::allowedActions()` emits `canApprove`, `canReject`, `canReturn`.
+     * Every hand-written fixture therefore agreed with the broken client, and the option list could
+     * not shrink. The values below are the six keys that method emits, always, for every transaction.
+     */
+    it('should offer only the decisions the server granted for a senior-rejected transaction', async () => {
+      const wrapper = await mountView(DecisionForm, '/', {
+        stage: 'FINANCE',
+        transactionId: 'tx-1',
+        allowIndependentDecision: false,
+        // What the server emits for a finance officer on `SENIOR_REJECTED`: `canFinanceApprove()`
+        // is false there, while reject and return are granted.
+        allowedActions: {
+          canApprove: false,
+          canReject: true,
+          canReturn: true,
+          canEdit: false,
+          canDelete: false,
+          canCorrect: false
+        }
+      })
+
+      const values = decisionOptions(wrapper).map((option) => option.value)
+
+      expect(values).toEqual(['REJECT', 'RETURN'])
+      expect(values).not.toContain('APPROVE')
+    })
+
+    it('should offer every decision the server granted for a finance-review transaction', async () => {
+      const wrapper = await mountView(DecisionForm, '/', {
+        stage: 'FINANCE',
+        transactionId: 'tx-1',
+        allowIndependentDecision: false,
+        allowedActions: {
+          canApprove: true,
+          canReject: true,
+          canReturn: true,
+          canEdit: false,
+          canDelete: false,
+          canCorrect: false
+        }
+      })
+
+      // The counterpart to the case above: a filter that removed everything would satisfy that one
+      // too, so both directions are asserted.
+      expect(decisionOptions(wrapper).map((option) => option.value)).toEqual(['APPROVE', 'REJECT', 'RETURN'])
+    })
+
+    it('should offer nothing when the server granted no decision', async () => {
+      const wrapper = await mountView(DecisionForm, '/', {
+        stage: 'FINANCE',
+        transactionId: 'tx-1',
+        allowIndependentDecision: false,
+        allowedActions: {
+          canApprove: false,
+          canReject: false,
+          canReturn: false,
+          canEdit: false,
+          canDelete: false,
+          canCorrect: false
+        }
+      })
+
+      expect(decisionOptions(wrapper)).toEqual([])
+      // And the form cannot be submitted into a decision the server would refuse.
+      await submitForm(wrapper)
+      expect(wrapper.emitted('submit-decision')).toBeFalsy()
+    })
+
+    /**
+     * The client's key set is asserted against the **producer**, not against a copy of it, so a
+     * rename in `TransactionPayloadFormatter::allowedActions()` fails here instead of silently
+     * restoring the "no option is ever removed" behaviour. This file already reads source text for
+     * the route table, so it is the same technique applied to the capability names.
+     */
+    it('should look up exactly the capability names the payload formatter emits', () => {
+      const formatter = readFileSync(
+        join(process.cwd(), 'lib/Infrastructure/Http/TransactionPayloadFormatter.php'),
+        'utf-8'
+      )
+      const emitted = [...formatter.matchAll(/'(can[A-Z]\w+)'\s*=>/g)].map((match) => match[1])
+
+      expect(emitted.length).toBeGreaterThan(0)
+      expect(new Set(emitted)).toEqual(new Set(ALLOWED_ACTION_KEYS))
+      expect(emitted).toContain('canApprove')
+      expect(emitted).toContain('canReject')
+      expect(emitted).toContain('canReturn')
+    })
 
     // FR-033 / FR-035: rejection and return MUST require an explanation.
     it('should validate mandatory explanation for REJECT', async () => {
@@ -700,6 +910,128 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
 
       expect(wrapper.find('[data-testid="finance-queue"]').exists()).toBe(true)
       expect(wrapper.find('[data-testid="decision-button"]').exists()).toBe(false)
+    })
+  })
+
+  /**
+   * T336: the scope gates, tested against a **server-shaped** session response.
+   *
+   * **Why this block exists, given the two cases above.** Those two *replace*
+   * `authStore.canReview` with a stub, so whatever the real implementation answered was never
+   * consulted. That is how `canReview` stayed permanently `false` for both management stages: it read
+   * `capabilities.costCenterCodes`, which `SessionController` never emitted, so the list was always
+   * `[]` and every scope comparison failed — with a green suite, because the tests that would have
+   * noticed had stubbed the function out.
+   */
+  describe('auth store scope gates (FR-004, FR-005)', () => {
+    /** A session response in the shape `GET /me` answers with, scope included. */
+    function sessionResponse(overrides: { roles?: string[]; codes?: string[] } = {}) {
+      return {
+        status: 200,
+        data: {
+          ocs: {
+            meta: { status: 'ok', statuscode: 200 },
+            data: {
+              userId: 'manager-1',
+              displayName: 'Manager One',
+              roles: overrides.roles ?? ['PURCHASER', 'COST_CENTER_MANAGER'],
+              capabilities: {
+                canPurchase: true,
+                canReviewCostCenter: true,
+                canReviewSenior: false,
+                canDecideFinance: false,
+                canAdminister: false
+              },
+              costCenterCodes: overrides.codes ?? ['CC-100']
+            }
+          }
+        }
+      }
+    }
+
+    async function loadSessionWith(response: unknown): Promise<void> {
+      ocsRequest.mockImplementation((config: { url?: string }) =>
+        Promise.resolve((config?.url ?? '').includes('/me') ? response : emptyOcsResponse(config))
+      )
+      await useAuthStore().loadSession()
+    }
+
+    it('reads the managed cost centres out of the session response', async () => {
+      await loadSessionWith(sessionResponse({ codes: ['CC-100', 'CC-200'] }))
+
+      const authStore = useAuthStore()
+      expect(authStore.managedCostCenterCodes).toEqual(['CC-100', 'CC-200'])
+      expect(authStore.hasCostCenterScope('CC-100')).toBe(true)
+      expect(authStore.hasCostCenterScope('CC-999')).toBe(false)
+    })
+
+    it('opens the cost-centre gate for an assigned manager and shuts it for an unassigned one', async () => {
+      await loadSessionWith(sessionResponse({ codes: ['CC-100'] }))
+      const authStore = useAuthStore()
+
+      expect(authStore.canReview('COST_CENTER', 'CC-100'), 'the centre the caller is assigned').toBe(true)
+      expect(authStore.canReview('COST_CENTER', 'CC-200'), 'a centre they hold no assignment for').toBe(false)
+    })
+
+    it('opens the senior gate only for a senior manager within scope', async () => {
+      await loadSessionWith(sessionResponse({ roles: ['PURCHASER', 'SENIOR_MANAGER'], codes: ['CC-100'] }))
+      const authStore = useAuthStore()
+
+      expect(authStore.canReview('SENIOR', 'CC-100')).toBe(true)
+      expect(authStore.canReview('SENIOR', 'CC-200')).toBe(false)
+      // The same caller holds no cost-centre-manager role, so that stage stays shut.
+      expect(authStore.canReview('COST_CENTER', 'CC-100')).toBe(false)
+    })
+
+    /**
+     * The dangerous direction. A manager whose scope list is empty manages **nothing** — reading an
+     * empty scope as "no restriction" would open the gate for every cost centre in the installation,
+     * which is the same reason `ReportScope::forActor()` drops null cost-centre ids rather than
+     * passing them on to every query.
+     */
+    it('treats an empty scope as no scope rather than as no restriction', async () => {
+      await loadSessionWith(sessionResponse({ codes: [] }))
+      const authStore = useAuthStore()
+
+      expect(authStore.canReview('COST_CENTER', 'CC-100')).toBe(false)
+      expect(authStore.canReview('COST_CENTER', '')).toBe(false)
+    })
+
+    /**
+     * FR-006: every finance officer shares one V1 queue, so the finance stage is a role check with no
+     * scope branch — and an administrator must not pass it, because FR-007 forbids administrator
+     * status from conferring decision authority.
+     */
+    it('checks the finance stage by role alone and never by scope', async () => {
+      await loadSessionWith(sessionResponse({ roles: ['PURCHASER', 'FINANCE'], codes: [] }))
+      expect(useAuthStore().canReview('FINANCE', 'CC-100')).toBe(true)
+
+      await loadSessionWith(sessionResponse({ roles: ['PURCHASER', 'ADMINISTRATOR'], codes: [] }))
+      expect(useAuthStore().canReview('FINANCE', 'CC-100')).toBe(false)
+    })
+
+    it('refuses every stage to an unauthenticated caller', () => {
+      const authStore = useAuthStore()
+      authStore.setUser(null)
+      authStore.managedCostCenterCodes = ['CC-100']
+
+      expect(authStore.canReview('COST_CENTER', 'CC-100')).toBe(false)
+      expect(authStore.canReview('FINANCE', 'CC-100')).toBe(false)
+    })
+
+    /**
+     * The scope belongs to the session, so it goes with it. Leaving it behind would let the next
+     * session on this browser pass a scope gate with the previous caller's cost centres.
+     */
+    it('forgets the scope on logout', async () => {
+      await loadSessionWith(sessionResponse({ codes: ['CC-100'] }))
+      const authStore = useAuthStore()
+      expect(authStore.canReview('COST_CENTER', 'CC-100')).toBe(true)
+
+      authStore.logout()
+
+      expect(authStore.managedCostCenterCodes).toEqual([])
+      expect(authStore.canReview('COST_CENTER', 'CC-100')).toBe(false)
     })
   })
 })

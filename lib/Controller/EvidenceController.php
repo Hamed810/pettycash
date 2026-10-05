@@ -7,11 +7,13 @@ namespace OCA\PettyCash\Controller;
 use Exception;
 use InvalidArgumentException;
 use OCA\PettyCash\Application\Evidence\EvidenceService;
+use OCA\PettyCash\Application\Evidence\EvidenceVisibility;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Application\Expense\TransactionService;
 use OCA\PettyCash\Domain\Expense\Repository\ExpenseTransactionRepository;
 use OCA\PettyCash\Domain\Expense\Repository\ExpenseSheetRepository;
 use OCA\PettyCash\Domain\Evidence\Repository\EvidenceRepository;
+use OCA\PettyCash\Infrastructure\Http\TransactionPayloadFormatter;
 use OCA\PettyCash\Domain\Workflow\TransactionStatus;
 use OCA\PettyCash\Domain\Workflow\SheetStatus;
 use OCA\PettyCash\Infrastructure\Http\OcsErrorMapper;
@@ -32,8 +34,10 @@ class EvidenceController extends OCSController
         private TransactionService $transactionService,
         private ExpenseTransactionRepository $transactionRepository,
         private ExpenseSheetRepository $sheetRepository,
+        private TransactionPayloadFormatter $payloadFormatter,
         private CurrentUser $currentUser,
-        private OcsErrorMapper $ocsErrorMapper
+        private OcsErrorMapper $ocsErrorMapper,
+        private EvidenceVisibility $evidenceVisibility
     ) {
         parent::__construct('pettycash', $request);
     }
@@ -314,10 +318,38 @@ public function destroy(string $evidenceId): DataResponse
         $disposition = $disposition ?? 'inline';
 
         try {
-            $ownerUid = $this->currentUser->uid();
+            $actorUid = $this->currentUser->uid();
             $evidence = $this->evidenceRepository->findByPublicId($evidenceId);
 
-            if ($evidence === null || $evidence->uploadedBy !== $ownerUid) {
+            if ($evidence === null) {
+                return $this->ocsErrorMapper->notFound('Evidence not found');
+            }
+
+            // FR-060 / Constitution IV: document access follows **transaction visibility**, not
+            // uploader identity.
+            //
+            // This compared `$evidence->uploadedBy` to the caller, which no reviewer can satisfy — the
+            // receipt was uploaded by the purchaser and the cost-centre manager, senior manager and
+            // finance officer who must rely on it are three different accounts. Every reviewer got
+            // `404 Evidence not found` for every receipt on every transaction they were asked to
+            // approve (T362).
+            //
+            // `404` is kept for an out-of-scope caller so the endpoint cannot be used to confirm the
+            // existence of a record the caller may not see (FR-003) — the same treatment
+            // `AccountController` gives a foreign ledger. What changed is *which* question is asked,
+            // not the shape of the answer.
+            $transaction = $this->transactionRepository->findById($evidence->transactionId);
+            if ($transaction === null) {
+                // An evidence row whose transaction does not resolve is a data fault, not a
+                // not-found: the caller may well be entitled to read it, and answering 404 would tell
+                // a legitimate reader the file had vanished — the Phase 33 "header, no data" shape.
+                return $this->ocsErrorMapper->validation(
+                    'This evidence cannot be read because its transaction could not be resolved. '
+                    . 'This is a stored-data fault, not a permissions or filter result.'
+                );
+            }
+
+            if (!$this->evidenceVisibility->mayRead($actorUid, $transaction)) {
                 return $this->ocsErrorMapper->notFound('Evidence not found');
             }
 
@@ -375,23 +407,17 @@ public function destroy(string $evidenceId): DataResponse
     /**
      * Format evidence for API response
      *
+     * Delegates to the one emitter of the `Evidence` schema rather than keeping a second mapping here.
+     * This copy was the drift `AccountPayloadFormatter`'s docblock warns about, and it was wrong twice:
+     * it emitted a `deactivationReason` the contract does not declare (and `src/types/api.ts` does not
+     * carry), and it published the integer join keys in two fields the contract declares as uuids. A
+     * client cannot tell which endpoint it called and get a shape that holds for both (T339).
+     *
      * @param \OCA\PettyCash\Domain\Evidence\Evidence $evidence
      * @return array
      */
     private function formatEvidence(\OCA\PettyCash\Domain\Evidence\Evidence $evidence): array
     {
-        return [
-            'id' => $evidence->id,
-            'transactionId' => $evidence->transactionId,
-            'revisionId' => $evidence->originRevisionId,
-            'name' => $evidence->originalName,
-            'mediaType' => $evidence->mediaType,
-            'sizeBytes' => $evidence->sizeBytes,
-            'active' => $evidence->active,
-            'uploadedBy' => $evidence->uploadedBy,
-            'uploadedAt' => $evidence->uploadedAt?->format(\DateTimeInterface::ATOM),
-            'deactivatedAt' => $evidence->deactivatedAt?->format(\DateTimeInterface::ATOM),
-            'deactivationReason' => $evidence->deactivationReason,
-        ];
+        return $this->payloadFormatter->evidence($evidence);
     }
 }

@@ -9,6 +9,23 @@ use OCA\PettyCash\Domain\Workflow\WorkflowStage;
 
 final class AuthorizationService
 {
+    /**
+     * Whether the actor may *see* the record this context describes.
+     *
+     * ## Warning: the third clause is permissive, and this method has no production caller
+     *
+     * `$context->roles !== []` means **"holds any role at all"**, so this returns `true` for any
+     * authenticated user who has any assignment — including a purchaser holding only `PURCHASER`. It
+     * is therefore **not** a safe rule for anything scoped, and it must not be used for evidence or
+     * document access: doing so would fix a reviewer's 404 while disclosing every transaction's
+     * receipt to every purchaser in the instance (T362). Evidence access uses
+     * `Application\Evidence\EvidenceVisibility`, which requires ownership, administration, or
+     * `canReview()` at the record's own stage.
+     *
+     * The clause is left as-is rather than tightened because narrowing it would change a method that
+     * only its own tests exercise, and that change is a reviewable decision about what "any role may
+     * see" was ever meant to mean — not something to slip into an evidence-authorization fix.
+     */
     public function canView(AuthorizationContext $context): bool
     {
         return $context->actorUid === $context->ownerUid || $context->administrator || $context->roles !== [];

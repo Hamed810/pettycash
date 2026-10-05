@@ -467,6 +467,140 @@ final class ReportAndExportControllerTest extends TestCase
         }
     }
 
+    // ===== T329: the facets combine, and reach the server under one name and one vocabulary =====
+
+    /**
+     * Two facets in **one** request, which is the shape a filter bar actually produces.
+     *
+     * T306's coverage exercised the facets one at a time, which is a large part of why the client-side
+     * encoding defect survived: nothing asserted what a request carrying more than one filter does.
+     *
+     * The assertion is an **exact set equality against a locally computed intersection**, and that is
+     * the part carrying the weight. A server that read only the first key it recognised, or that
+     * dropped the second, would return one of the single-facet sets and fail here -- provided the
+     * intersection is genuinely smaller than both, which is why the test first asserts that each facet
+     * on its own strictly narrows the unfiltered report. Without that, "both facets applied" and "one
+     * facet applied" produce identical output and the test measures nothing.
+     *
+     * The status and the window are both **derived from the rows** rather than hardcoded. The report is
+     * built from whatever the fixture and the preceding tests have left behind, so a fixed status name
+     * or a fixed date would make this test a statement about fixture history rather than about the
+     * endpoint.
+     */
+    public function testAStatusAndADateRangeInOneRequestReturnOnlyRowsSatisfyingBoth(): void
+    {
+        $all = $this->get('/reports/transactions?pageSize=100')['data']['rows'];
+        $this->assertGreaterThanOrEqual(3, count($all), 'the fixture must leave enough rows for two facets to combine');
+
+        // A status that is neither the whole report nor a single row, so the facet demonstrably narrows.
+        $byStatusCount = [];
+        foreach ($all as $row) {
+            $byStatusCount[$row['status']] = ($byStatusCount[$row['status']] ?? 0) + 1;
+        }
+        $status = null;
+        foreach ($byStatusCount as $candidate => $count) {
+            if ($count > 1 && $count < count($all)) {
+                $status = $candidate;
+                break;
+            }
+        }
+        $this->assertNotNull(
+            $status,
+            'no status is held by more than one row and fewer than all of them, so this test cannot '
+            . 'distinguish "both facets applied" from "one facet applied"'
+        );
+
+        // The window spanning the two earliest rows. Wider than one row so the date facet excludes
+        // something, and narrow enough to be a real bound rather than the whole report.
+        $stamps = array_map(
+            static fn (array $row): int => (new \DateTimeImmutable($row['createdAt']))->getTimestamp(),
+            $all
+        );
+        sort($stamps);
+        $this->assertGreaterThanOrEqual(
+            2,
+            count(array_unique($stamps)),
+            'the rows must carry at least two distinct timestamps for a date range to mean anything'
+        );
+        $from = (new \DateTimeImmutable('@' . $stamps[0]))->format(DATE_ATOM);
+        $to = (new \DateTimeImmutable('@' . $stamps[1]))->format(DATE_ATOM);
+
+        $expectedStatus = array_values(array_filter($all, static fn (array $r): bool => $r['status'] === $status));
+        $expectedWindow = array_values(array_filter($all, static function (array $r) use ($from, $to): bool {
+            $at = (new \DateTimeImmutable($r['createdAt']))->getTimestamp();
+            return $at >= (new \DateTimeImmutable($from))->getTimestamp()
+                && $at <= (new \DateTimeImmutable($to))->getTimestamp();
+        }));
+        $this->assertGreaterThan(1, count($expectedWindow), 'the window must admit more than one row');
+        $this->assertLessThan(count($all), count($expectedWindow), 'the window must exclude at least one row');
+
+        $expectedBoth = array_values(array_filter(
+            $expectedWindow,
+            static fn (array $r): bool => $r['status'] === $status
+        ));
+        $this->assertNotEmpty($expectedBoth, 'the two facets must overlap, or the conjunction proves nothing');
+
+        $byStatus = $this->filterRows('/reports/transactions', ['statuses' => [$status]]);
+        $byDate = $this->filterRows('/reports/transactions', ['from' => $from, 'to' => $to]);
+        $combined = $this->filterRows('/reports/transactions', ['statuses' => [$status], 'from' => $from, 'to' => $to]);
+
+        $ids = static fn (array $rows): array => array_column($rows, 'id');
+        $this->assertSame($ids($expectedStatus), $ids($byStatus), 'the status facet must return exactly that status');
+        $this->assertSame($ids($expectedWindow), $ids($byDate), 'the date facet must return exactly that window');
+        $this->assertSame(
+            $ids($expectedBoth),
+            $ids($combined),
+            'one request carrying both facets must return their intersection and not either set'
+        );
+    }
+
+    /**
+     * The public-id spelling reaches the same rows as the surrogate-key spelling, over HTTP.
+     *
+     * This is the assertion that makes the id-space decision testable rather than a claim in a
+     * docblock: `data-model.md` keeps numeric ids internal, so the public spelling is the one a client
+     * must be able to use, and the only proof is that it narrows the live endpoint identically.
+     */
+    public function testACostCentreCanBeFilteredByItsPublicIdOverHttp(): void
+    {
+        $byPublicId = $this->filterRows('/reports/transactions', ['costCenterIds' => [ContractFixtures::costCenterId()]]);
+        $byDbId = $this->filterRows('/reports/transactions', ['costCenterDbIds' => [1]]);
+
+        $this->assertNotEmpty($byPublicId, 'the fixture transaction belongs to the fixture cost centre');
+        $this->assertSame(
+            array_column($byDbId, 'id'),
+            array_column($byPublicId, 'id'),
+            'both id spellings must select the same rows'
+        );
+        foreach ($byPublicId as $row) {
+            $this->assertSame(1, $row['costCenterDbId']);
+        }
+    }
+
+    public function testAnExpenseTypeCanBeFilteredByItsPublicIdOverHttp(): void
+    {
+        $byPublicId = $this->filterRows('/reports/transactions', ['expenseTypeIds' => [ContractFixtures::expenseTypeId()]]);
+
+        $this->assertNotEmpty($byPublicId, 'the fixture transaction carries the fixture expense type');
+        foreach ($byPublicId as $row) {
+            $this->assertSame(1, $row['expenseTypeDbId']);
+        }
+    }
+
+    /**
+     * Over HTTP rather than only in the unit test, because the failure this guards is a **500**: an
+     * unresolvable id has to reach the client's error surface as the 422 the vocabulary promises.
+     */
+    public function testACostCentrePublicIdThatNamesNothingIsRefusedOverHttp(): void
+    {
+        $response = $this->get(
+            '/reports/transactions?filters=' . rawurlencode('{"costCenterIds":["deadbeef-1111-4111-8111-111111111111"]}')
+        );
+
+        $this->assertEquals(422, $response['status']);
+        $this->assertStringContainsString('costCenterIds', $response['message']);
+    }
+
     /**
      * A filter no row in the report can answer is refused, naming the field and what the rows do carry.
      * A 200 with `total: 0` here would be indistinguishable from a true negative.
@@ -733,7 +867,41 @@ final class ReportAndExportControllerTest extends TestCase
         $this->assertStringContainsString('sheet', $response['message'], 'the reason should name what does work');
     }
 
-    public function testANonStringIdIsRefused(): void
+    /**
+     * T342: a resource with no row projection is refused, not answered with an empty artifact.
+     *
+     * `rowsForSelection()` used to `return [[], []]` for `report`, `audit` and `evidence` under the
+     * comment "an empty artifact, which is at least an honest answer". It was not one: the response
+     * carried `rowCount: 0` and a real `byteSize` for a real file with a header row, so the emptiness
+     * read as **measured** — a user who exported the cost-centre report got a document that said it
+     * contained no rows, and nothing said the report had no exporter at all.
+     *
+     * The refusal is the same one a selection already gets, and the two are deliberately different: an
+     * export of `sheets` that matches nothing is a measured zero and stays a `200`.
+     */
+    public function testAResourceWithNoRowSourceIsRefusedRatherThanAnsweredWithAnEmptyArtifact(): void
+    {
+        foreach (['report', 'audit', 'evidence'] as $resource) {
+            $response = $this->post('/exports', [
+                'resource' => $resource,
+                'fileFormat' => 'csv',
+            ], $this->commandId());
+
+            $this->assertEquals(422, $response['status'], "resource '{$resource}' must be refused");
+            $this->assertStringContainsString('not supported yet', $response['message']);
+            $this->assertStringContainsString(
+                'No artifact is produced',
+                $response['message'],
+                'the reason says why no file comes back, because an empty one reads as a measured result'
+            );
+            // The load-bearing assertion: there is no `ExportResult` at all, so nothing can be saved and
+            // nothing can report a row count of zero as though it were measured.
+            $this->assertArrayNotHasKey('rowCount', $response['data'] ?? []);
+            $this->assertArrayNotHasKey('data', $response['data'] ?? []);
+        }
+    }
+
+public function testANonStringIdIsRefused(): void
     {
         $response = $this->post('/exports', [
             'resource' => 'sheets',

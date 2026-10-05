@@ -27,6 +27,17 @@ final class TransactionRevision
         public ?string $costCenterCode = null,
         public ?string $costCenterName = null,
         public ?int $expenseTypeDbId = null,
+        /**
+         * The expense type's **public UUID**, paired with `$expenseTypeDbId` exactly as
+         * `$costCenterId` is paired with `$costCenterDbId`.
+         *
+         * Optional and derived because the public id is recoverable from the db id, whereas the db id
+         * is not recoverable from the public id without a lookup. It is stored on the aggregate rather
+         * than resolved at format time so that `Revision.expenseType.id` is a value the payload can
+         * carry and the correction form can send back — which it could not while the formatter emitted
+         * the title into that field.
+         */
+        public ?string $expenseTypeId = null,
         public ?int $managerDbId = null,
         public ?string $managerUid = null,
         public ?int $seniorManagerDbId = null,
@@ -61,7 +72,8 @@ final class TransactionRevision
         int $costCenterDbId,
         string $expenseTypeTitle,
         int $expenseTypeDbId,
-        bool $hasEvidence
+        bool $hasEvidence,
+        ?string $expenseTypeId = null
     ): void {
         if ($this->active) {
             throw new LogicException('Submitted revisions are immutable');
@@ -76,6 +88,7 @@ final class TransactionRevision
         $this->costCenterDbId = $costCenterDbId;
         $this->expenseTypeTitle = $expenseTypeTitle;
         $this->expenseTypeDbId = $expenseTypeDbId;
+        $this->expenseTypeId = $expenseTypeId;
         $this->evidence = $hasEvidence;
     }
 
@@ -144,6 +157,7 @@ final class TransactionRevision
         $copy->costCenterCode = $this->costCenterCode;
         $copy->costCenterName = $this->costCenterName;
         $copy->expenseTypeDbId = $this->expenseTypeDbId;
+        $copy->expenseTypeId = $this->expenseTypeId;
         return $copy;
     }
 
@@ -196,6 +210,19 @@ final class TransactionRevision
     public function expenseTypeTitle(): ?string
     {
         return $this->expenseTypeTitle;
+    }
+
+    /**
+     * The expense type's public UUID, or null when the revision predates T330 or names no expense type.
+     *
+     * Null is a real possibility and not a failure to be papered over: a draft that has never been
+     * completed carries no expense type at all. A formatter that substituted a placeholder here would
+     * emit an `EntitySnapshot.id` that no write path can resolve, which is the defect this accessor
+     * exists to end.
+     */
+    public function expenseTypeId(): ?string
+    {
+        return $this->expenseTypeId;
     }
 
     public function hasEvidence(): bool

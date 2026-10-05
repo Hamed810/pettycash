@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import { createRouter, createWebHashHistory } from 'vue-router'
+import { createRouter, createWebHashHistory, type Router } from 'vue-router'
 
 // The account picker is driven by the caller's real accounts from the OCS accounts endpoint, so the
 // store is stubbed here. Mocking the store (rather than the service) is required because the store
@@ -74,10 +74,17 @@ const configurationFixture = vi.hoisted(() => ({
 	expenseTypes: [] as unknown[]
 }))
 
-const COST_CENTER_ENGINEERING = 'cc-eng-0001'
-const COST_CENTER_MARKETING = 'cc-mkt-0002'
-const EXPENSE_TYPE_SUPPLIES = 'et-sup-0001'
-const EXPENSE_TYPE_TRAVEL = 'et-trv-0002'
+// Real UUIDs, not readable placeholders.
+//
+// These were `cc-eng-0001` / `et-sup-0001`, which is the trap Phase 55 named for T327: a frontend
+// fixture shaped to agree with the client rather than with the server. It hid T330 completely --
+// `EntitySnapshot.id` is `format: uuid` and `Revision.expenseType.id` carried the expense type's
+// *title*, so every fixture built here was simultaneously wrong about the contract and unable to say
+// so. A readable id is comfortable in a fixture and impossible on the wire.
+const COST_CENTER_ENGINEERING = '11111111-1111-4111-8111-111111111111'
+const COST_CENTER_MARKETING = '22222222-2222-4222-8222-222222222222'
+const EXPENSE_TYPE_SUPPLIES = '33333333-3333-4333-8333-333333333333'
+const EXPENSE_TYPE_TRAVEL = '44444444-4444-4444-8444-444444444444'
 
 function defaultCostCenters(): unknown[] {
 	return [
@@ -106,16 +113,11 @@ function setExpenseTypes(expenseTypes: unknown[]): void {
 // and the "evidence list" test below all failed while the view was, in two of the cases, already
 // correct. `detail` stays `null` by default so the groups that do not care are unaffected.
 const transactionFixtures = vi.hoisted(() => ({
-	list: [] as unknown[],
 	detail: null as unknown,
 	revisions: [] as unknown[],
 	sheet: null as unknown,
 	sheetList: [] as unknown[]
 }))
-
-function setTransactionList(items: unknown[]): void {
-	transactionFixtures.list = items
-}
 
 function setTransactionDetail(detail: unknown): void {
 	transactionFixtures.detail = detail
@@ -148,10 +150,9 @@ function emptyPayloadFor(url: string): unknown {
 	if (/\/revisions(\?|$)/.test(url)) return transactionFixtures.revisions
 	if (/\/configuration\/cost-centers(\?|$)/.test(url)) return { ...EMPTY_PAGE, items: configurationFixture.costCenters, total: configurationFixture.costCenters.length }
 	if (/\/configuration\/expense-types(\?|$)/.test(url)) return { ...EMPTY_PAGE, items: configurationFixture.expenseTypes, total: configurationFixture.expenseTypes.length }
-	// Before the single-transaction route, because `/sheets/{id}/transactions` also ends in it.
-	if (/\/sheets\/[^/?]+\/transactions(\?|$)/.test(url)) {
-		return { ...EMPTY_PAGE, items: transactionFixtures.list, total: transactionFixtures.list.length }
-	}
+	// Deliberately no branch for `/sheets/{id}/transactions`: no route serves a GET on it, so a client
+	// that addressed it again would fall through to `null` here and fail loudly rather than pass
+	// against a fixture. The transactions now arrive on `SheetDetail.transactions`, matched below.
 	// The collection route, matched on the query's `?` because `/sheets/{id}` has no trailing slash
 	// to hang a `(\?|$)` on and the two must not be confused.
 	if (/\/sheets\?/.test(url)) {
@@ -288,6 +289,7 @@ import * as evidenceApi from '@/services/evidenceApi'
 import { useSheetStore } from '@/stores/sheets'
 import { useTransactionStore } from '@/stores/transactions'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
+import { routes } from '@/router'
 import type {
 	Decision,
 	Evidence,
@@ -303,24 +305,33 @@ import type {
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, relative, extname } from 'node:path'
 
-function createTestRouter() {
+function createTestRouter(): Router {
+	// The application's **own** route table, for its names and parameters, with the components
+	// replaced by inert placeholders: the views under test are mounted directly, so resolving a route
+	// would only re-import every real view through a dynamic import and add ~30s to this file.
+	//
+	// This file used to declare its own ten routes, copied from `src/router/index.ts`, and that copy
+	// is what let T359 ship: `TransactionDetailView`'s correction button pushed a route named
+	// `transaction-correction-create`, which no route in the application declares either, so
+	// `vue-router` threw `MATCHER_NOT_FOUND` synchronously and the purchaser's only correction
+	// affordance did nothing. Five assertions in this file checked that the button *exists*. None
+	// pressed it, and the copied table meant none of them could have failed — the copy made every
+	// route name resolvable whether or not the application declared it.
+	//
+	// Deriving the table from `@/router` is what makes that class of defect fail here instead: a view
+	// that links to a name the application does not declare now fails to mount.
 	return createRouter({
 		history: createWebHashHistory(),
-		routes: [
-			{ path: '/', name: 'dashboard', component: { template: '<div>Dashboard</div>' } },
-			{ path: '/sheets', name: 'sheets', component: { template: '<div>Sheets</div>' } },
-			{ path: '/sheets/create', name: 'sheet-create', component: { template: '<div>Create Sheet</div>' } },
-			{ path: '/sheets/:id', name: 'sheet-detail', component: { template: '<div>Sheet Detail</div>' } },
-			{ path: '/sheets/:id/edit', name: 'sheet-edit', component: { template: '<div>Edit Sheet</div>' } },
-			{ path: '/sheets/:sheetId/transactions', name: 'transactions', component: { template: '<div>Transactions</div>' } },
-			{ path: '/sheets/:sheetId/transactions/create', name: 'transaction-create', component: { template: '<div>Create Transaction</div>' } },
-			{ path: '/transactions/:id', name: 'transaction-detail', component: { template: '<div>Transaction Detail</div>' } },
-			{ path: '/transactions/:id/edit', name: 'transaction-edit', component: { template: '<div>Edit Transaction</div>' } }
-		]
+		routes: routes.map(({ path, name, props }) => ({
+			path,
+			name,
+			props,
+			component: { template: '<div />' }
+		}))
 	})
 }
 
-function mountOptions(pinia: ReturnType<typeof createPinia>, router: ReturnType<typeof createTestRouter>, options: any) {
+function mountOptions(pinia: ReturnType<typeof createPinia>, router: Router, options: any) {
 	return {
 		global: {
 			plugins: [pinia, router],
@@ -365,6 +376,26 @@ async function createWrapperAtRoute(component: any, path: string, options: any =
 	const wrapper = mount(component, mountOptions(pinia, router, options))
 	await flushPromises()
 	return wrapper
+}
+
+/**
+ * The same mount, but hands the router back so a test can assert on where a control **navigated**.
+ *
+ * `createWrapperAtRoute` returns only the wrapper, which is the right shape for "does this render" and
+ * the wrong one for "does this button work" — a `router.push` that throws inside a click handler
+ * produces no DOM change and no rejection, so a wrapper-only assertion sees a healthy page. T359.
+ */
+async function createWrapperWithRouter(component: any, path: string, options: any = {}) {
+	const pinia = createPinia()
+	const router = createTestRouter()
+
+	setActivePinia(pinia)
+	await router.push(path)
+	await router.isReady()
+
+	const wrapper = mount(component, mountOptions(pinia, router, options))
+	await flushPromises()
+	return { wrapper, router }
 }
 
 /** A `SheetDetail` in the shape the sheet store holds, for the fields a form reads. */
@@ -573,7 +604,6 @@ describe('Purchaser Flow - Vue Component Tests', () => {
     setAccounts([{ ...RIAL_ACCOUNT }, { ...USD_ACCOUNT }])
     setCostCenters(defaultCostCenters())
     setExpenseTypes(defaultExpenseTypes())
-    setTransactionList([])
     setTransactionDetail(null)
     setRevisions([])
     setSheetDetail(null)
@@ -749,7 +779,25 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 	})
 
 	describe('Sheet Detail View', () => {
-		it('should display sheet header with title, currency, status, and totals', () => {
+		/**
+		 * T343: there is no sheet audit card, because there was no sheet audit.
+		 *
+		 * The card rendered a five-column table whose only body row was `<tr v-if="false">` — a literal,
+		 * so even its "no events" row could never render — and no loader was bound in the view. The only
+		 * audit route is `GET /transactions/{id}/audit`; there is no sheet-scoped one, so the card had no
+		 * data source and never will without either an N-request client-side assembly or a new endpoint.
+		 *
+		 * Asserted as an **absence**, because an absence is what "removed rather than bound" means: a
+		 * test that asserted the card *renders* an empty state would be asserting the defect.
+		 */
+		it('should not render an audit card with no data source', () => {
+			const wrapper = createWrapper(SheetDetailView)
+
+			expect(wrapper.find('[data-test="audit-tab"]').exists()).toBe(false)
+			expect(wrapper.find('[data-test="audit-table"]').exists()).toBe(false)
+		})
+
+		it('should render sheet header with title, currency, status, and totals', () => {
 			const wrapper = createWrapper(SheetDetailView)
 			expect(wrapper.find('[data-test="sheet-title"]').exists()).toBe(true)
 			expect(wrapper.find('[data-test="sheet-currency"]').exists()).toBe(true)
@@ -760,6 +808,31 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 		it('should show transaction list with key information', () => {
 			const wrapper = createWrapper(SheetDetailView)
 			expect(wrapper.find('[data-test="transaction-list"]').exists()).toBe(true)
+		})
+
+		/**
+		 * T340: the Owner row renders a name.
+		 *
+		 * `ownerDisplayName` was the literal `''` in `SheetPayloadFormatter::summary()`, so this row was
+		 * blank for every sheet in the application and no assertion could see it — the field is printed
+		 * from the store and the row had no `data-testid` to find it by. Both halves are fixed here: the
+		 * row has a hook, and the value it renders is checked.
+		 *
+		 * **The payload is the store's, and the store's payload is asserted to be server-shaped.** The
+		 * component cannot detect the server's half — it prints whatever it is given — so the load-bearing
+		 * assertion for the defect is `SheetOwnerDisplayNameTest` over HTTP. This case exists to catch the
+		 * view substituting or dropping the value on the way to the screen, which is the half a
+		 * component test *can* see.
+		 */
+		it('should render the owner name the payload carries', async () => {
+			const wrapper = createWrapper(SheetDetailView)
+			const sheetStore = useSheetStore()
+			sheetStore.currentSheet = sheetFixture('IRR', { ownerDisplayName: 'Employee One' })
+			await wrapper.vm.$nextTick()
+
+			const owner = wrapper.find('[data-testid="sheet-owner"]')
+			expect(owner.exists(), 'the Owner row has a hook, so its value can be asserted').toBe(true)
+			expect(owner.text().trim()).toBe('Employee One')
 		})
 
 		// The original version mounted the view with an empty store and asserted that the error region
@@ -847,6 +920,15 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 			const call = ocsRequest.mock.calls.find((args: unknown[]) => {
 				const config = args[0] as { url?: string; method?: string; data?: unknown } | undefined
 				return config?.method === 'POST' && /\/transactions$/.test(config?.url ?? '')
+			})
+			return (call?.[0] as { data?: Record<string, unknown> } | undefined)?.data
+		}
+
+		/** The body of the single `PATCH /transactions/{id}` the form issued, if any. */
+		function updatedTransactionBody(): Record<string, unknown> | undefined {
+			const call = ocsRequest.mock.calls.find((args: unknown[]) => {
+				const config = args[0] as { url?: string; method?: string; data?: unknown } | undefined
+				return config?.method === 'PATCH' && /\/transactions\//.test(config?.url ?? '')
 			})
 			return (call?.[0] as { data?: Record<string, unknown> } | undefined)?.data
 		}
@@ -1055,6 +1137,40 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 			const wrapper = createWrapper(TransactionFormView)
 			expect(wrapper.find('[data-test="evidence-upload-area"]').exists()).toBe(true)
 		})
+
+		/**
+		 * T330: the edit form must submit the expense type's **public id**, taken from the payload.
+		 *
+		 * This is the client half of the contract test's round trip. `loadTransactionForEdit()` copies
+		 * `activeRevision.expenseType.id` into the draft and the save sends that draft to
+		 * `PATCH /transactions/{id}`, which resolves it with `findByPublicId()`. While the formatter put
+		 * the title in that field, this form submitted "Office Supplies" as an identifier and every edit
+		 * was refused with a 422 -- so FR-025's "edit" was unreachable from the UI.
+		 *
+		 * Asserted against a **server-shaped** payload: the fixture's ids are real UUIDs (see the note
+		 * on the constants above), because a fixture with a readable id in a uuid field would satisfy
+		 * "the form submitted what the payload carried" while proving nothing about the contract.
+		 */
+		it('should submit the expense type public id from the payload when editing', async () => {
+			// Seeded on the **transport**, not assigned to the store after mounting. The view reads the
+			// transaction during mount, so a store populated afterwards leaves the draft empty, the form
+			// fails its own validation, and no request is issued -- which is how a test can look like it
+			// exercised the edit path while having exercised nothing.
+			setTransactionDetail(transactionFixture())
+			const wrapper = await createWrapperAtRoute(TransactionFormView, '/transactions/tx-1/edit')
+
+			await wrapper.find('[data-test="description-input"]').setValue('Taxi to the depot')
+			await submitTransactionForm(wrapper)
+			await flushPromises()
+
+			const body = updatedTransactionBody()
+			expect(body, 'the edit must reach PATCH /transactions/{id}').toBeDefined()
+			expect(body?.expenseTypeId).toBe(EXPENSE_TYPE_SUPPLIES)
+			// The name must not travel in the id field. This is the specific value the server used to be
+			// handed, and `findByPublicId('Office Supplies')` returns null.
+			expect(body?.expenseTypeId).not.toBe('Office Supplies')
+			expect(body?.costCenterId).toBe(COST_CENTER_ENGINEERING)
+		})
 	})
 
 	describe('Transaction List View', () => {
@@ -1064,7 +1180,13 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 		// which is also what makes them able to distinguish "a badge exists" from "the right badge is
 		// on the right row".
 		async function mountList(items: TransactionSummary[]) {
-			setTransactionList(items)
+			// The rows are seeded on the **sheet payload**, which is where they arrive now.
+			// `contracts/ocs-api.yaml:1125` puts `transactions` on `SheetDetail`, and the view used to
+			// issue a second request for the same rows against a path no route serves — a request that
+			// answered `405` in every browser while these tests passed, because they stubbed the HTTP
+			// layer and answered it anyway. Seeding the payload the server really sends is what makes
+			// this group able to fail again.
+			setSheetDetail(sheetFixture('IRR', { id: 'sh-1', transactions: items, transactionCount: items.length }))
 			return createWrapperAtRoute(TransactionListView, '/sheets/sh-1/transactions')
 		}
 
@@ -1139,6 +1261,13 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 			setTransactionDetail(detail)
 			setRevisions(revisions)
 			return createWrapperAtRoute(TransactionDetailView, `/transactions/${detail.id}`)
+		}
+
+		/** For the tests that assert on navigation rather than on markup (T359). */
+		async function mountDetailWithRouter(detail: TransactionDetail, revisions: Revision[] = []) {
+			setTransactionDetail(detail)
+			setRevisions(revisions)
+			return createWrapperWithRouter(TransactionDetailView, `/transactions/${detail.id}`)
 		}
 
 		it('should display transaction details with revision history', async () => {
@@ -1237,6 +1366,138 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 			const returned = await mountDetail(transactionFixture({ status: 'AWAITING_PURCHASER_CORRECTION', stage: 'CORRECTION' }))
 			expect(returned.find('[data-test="create-correction-btn"]').exists()).toBe(true)
 			expect(returned.find('[data-test="read-only-indicator"]').exists()).toBe(false)
+		})
+
+		/**
+		 * T359. **This is the assertion whose absence let the defect ship.**
+		 *
+		 * Every other correction test in this file asserts the button *exists*; none pressed it. The
+		 * handler pushed `{ name: 'transaction-correction-create' }`, a route the application does not
+		 * declare, and `vue-router` throws `MATCHER_NOT_FOUND` synchronously from `router.push` — not a
+		 * rejected promise — so the click aborted with nothing caught and the purchaser's only
+		 * correction affordance did nothing at all.
+		 *
+		 * Asserting `exists()` is not a weaker version of this test; it is a different question. The
+		 * button can be present, correctly scoped to a returned transaction, correctly labelled, and
+		 * still navigate nowhere, and every existence assertion in the file was satisfied by exactly
+		 * that broken control.
+		 */
+		it('should navigate to an editable form when the correction button is pressed', async () => {
+			const returned = transactionFixture({
+				status: 'AWAITING_PURCHASER_CORRECTION',
+				stage: 'CORRECTION'
+			})
+			const { wrapper, router } = await mountDetailWithRouter(returned)
+
+			const button = wrapper.find('[data-test="create-correction-btn"]')
+			expect(button.exists()).toBe(true)
+
+			await button.trigger('click')
+			await flushPromises()
+
+			// `router.currentRoute` is the application's own route table, so this fails with the
+			// thrown MATCHER_NOT_FOUND rather than a silent no-op if the name is ever wrong again.
+			expect(router.currentRoute.value.name).toBe('transaction-edit')
+			expect(router.currentRoute.value.params.id).toBe(returned.id)
+
+			// And the destination is one a returned transaction may actually be edited in: FR-026
+			// carves out exactly this state, and `TransactionFormView`'s `editable` computed names
+			// `AWAITING_PURCHASER_CORRECTION` explicitly. Asserting the route name alone would pass for
+			// a push into a form that refuses the edit.
+			expect(router.resolve({ name: 'transaction-edit', params: { id: returned.id } }).name)
+				.toBe('transaction-edit')
+		})
+
+		/**
+		 * T360. **These press the buttons, which is the whole point and what no test here had ever
+		 * done.** `grep -rn "download-evidence\|remove-evidence" tests/Frontend/` returned nothing
+		 * before this change, so the two controls shipped as `// TODO: Implement …` bodies: present,
+		 * correctly scoped, correctly rendered, and inert.
+		 *
+		 * They go **through the view**, not through `EvidenceList` in isolation. The five existing
+		 * evidence assertions in this file mount the component directly, which is how the tested
+		 * surface and the shipped surface came to be two different files — the view had its own inline
+		 * copy with the two empty handlers, and every test agreed with the unused component.
+		 */
+		it('should issue the content request when the evidence download button is pressed', async () => {
+			const blob = new Blob(['receipt'], { type: 'application/pdf' })
+			const contentSpy = vi.spyOn(evidenceApi, 'getEvidenceContent').mockResolvedValue(blob)
+			// jsdom implements neither of these, and both are what the component uses to hand the file
+			// to the browser. Stubbed rather than asserted, because neither is this test's subject.
+			const createObjectURL = vi.fn(() => 'blob:mock')
+			const revokeObjectURL = vi.fn()
+			vi.stubGlobal('URL', { ...URL, createObjectURL, revokeObjectURL })
+
+			try {
+				const wrapper = await mountDetail(
+					transactionFixture({ evidence: [evidenceFixture({ id: 'ev-1' })], evidenceCount: 1 })
+				)
+
+				const button = wrapper.find('[data-test="download-evidence-btn"]')
+				expect(button.exists()).toBe(true)
+				await button.trigger('click')
+				await flushPromises()
+
+				// The *request* is the assertion. Asserting the button's presence is what every other
+				// test did, and it is satisfied by a button whose handler is an empty function.
+				expect(contentSpy).toHaveBeenCalledWith('ev-1')
+			} finally {
+				contentSpy.mockRestore()
+				vi.unstubAllGlobals()
+			}
+		})
+
+		/**
+		 * FR-058. Removal is the purchaser's and is offered only before submission, so this asserts
+		 * both the request **and** the gate — a test that pressed the button on a submitted
+		 * transaction would pass against an implementation offering removal at the wrong time.
+		 */
+		it('should issue the delete request when evidence removal is confirmed, and only before submission', async () => {
+			const deleteSpy = vi.spyOn(evidenceApi, 'deleteEvidence').mockResolvedValue(
+				evidenceFixture({ id: 'ev-1', active: false })
+			)
+			// `confirm` is the component's guard against a mis-click destroying a receipt. jsdom's
+			// returns `false`, which would make the removal path untestable and would make this test
+			// pass for the wrong reason if the guard were removed.
+			const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+			try {
+				const draft = await mountDetail(
+					transactionFixture({ evidence: [evidenceFixture({ id: 'ev-1' })], evidenceCount: 1 })
+				)
+				await draft.find('[data-test="delete-evidence-btn"]').trigger('click')
+				await flushPromises()
+
+				expect(confirmSpy).toHaveBeenCalled()
+				expect(deleteSpy).toHaveBeenCalledWith('ev-1')
+
+				// A declined confirmation must not delete. The guard is the reason this is worth
+				// asserting separately from the happy path.
+				deleteSpy.mockClear()
+				confirmSpy.mockReturnValue(false)
+				const declined = await mountDetail(
+					transactionFixture({ evidence: [evidenceFixture({ id: 'ev-2' })], evidenceCount: 1 })
+				)
+				await declined.find('[data-test="delete-evidence-btn"]').trigger('click')
+				await flushPromises()
+				expect(deleteSpy).not.toHaveBeenCalled()
+
+				// FR-058's gate: submitted, so no removal control at all.
+				const submitted = await mountDetail(
+					transactionFixture({
+						status: 'AWAITING_COST_CENTER_REVIEW',
+						stage: 'COST_CENTER',
+						evidence: [evidenceFixture({ id: 'ev-3' })],
+						evidenceCount: 1
+					})
+				)
+				expect(submitted.find('[data-test="delete-evidence-btn"]').exists()).toBe(false)
+				// FR-060 still offers download to a reviewer — the asymmetry is the requirement.
+				expect(submitted.find('[data-test="download-evidence-btn"]').exists()).toBe(true)
+			} finally {
+				deleteSpy.mockRestore()
+				confirmSpy.mockRestore()
+			}
 		})
 
 		it('should display revision selector for corrected transactions', async () => {
@@ -1486,6 +1747,45 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 			expect(wrapper.find('[data-test="submit-sheet-button"]').exists()).toBe(false)
 		})
 
+		/**
+		 * T327: `canSubmit` is derived from a payload key, and the assertion has to be on **both**
+		 * sides of it.
+		 *
+		 * `src/stores/sheets.ts` computes `canSubmit` as `status === 'OPEN' && transactions.length > 0`,
+		 * and `transactions` was absent from every response the server could produce — so `?? 0` made
+		 * the computed permanently `false` and this button was never in the DOM. The defect was
+		 * invisible because the only test touching this button asserted its *absence* on a submitted
+		 * sheet, which a permanently-false computed satisfies perfectly.
+		 *
+		 * So both directions are asserted: absent for an open sheet that has no transaction (FR-024),
+		 * and **present** for one the API reports as holding a transaction. The second is the assertion
+		 * whose absence let this ship.
+		 */
+		it('should withhold submission from an open sheet that has no transaction', async () => {
+			setSheetDetail(sheetFixture('IRR', { status: 'OPEN', transactions: [], transactionCount: 0 }))
+			const wrapper = await createWrapperAtRoute(SheetDetailView, '/sheets/sh-1')
+
+			expect(
+				wrapper.find('[data-test="submit-sheet-button"]').exists(),
+				'FR-024 requires at least one transaction before submission, so the control must be absent'
+			).toBe(false)
+		})
+
+		it('should offer submission for an open sheet the API reports as holding a transaction', async () => {
+			setSheetDetail(sheetFixture('IRR', {
+				status: 'OPEN',
+				transactions: [transactionSummaryFixture({ id: 'tx-1' })],
+				transactionCount: 1
+			}))
+			const wrapper = await createWrapperAtRoute(SheetDetailView, '/sheets/sh-1')
+
+			expect(
+				wrapper.find('[data-test="submit-sheet-button"]').exists(),
+				'a purchaser who has added a draft transaction must be able to submit the sheet; this '
+				+ 'button was permanently absent because the payload key it reads was never sent'
+			).toBe(true)
+		})
+
 		it('should keep an open sheet editable', async () => {
 			const wrapper = await mountSheet('OPEN')
 			expect(wrapper.find('[data-test="read-only-badge"]').exists()).toBe(false)
@@ -1599,12 +1899,17 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 		// The original asserted `[data-test="sheet-transactions"]` exists, which says nothing about
 		// separation — a list showing every transaction in the instance would satisfy it. Isolation is
 		// asserted instead: two sheets' transactions are seeded and only the opened sheet's appear.
+		// The seed is on the sheet payload, which is the only place the server puts them.
 		it('should maintain separate transaction lists per sheet', async () => {
-			setTransactionList([
-				transactionSummaryFixture({ id: 'tx-a' }),
-				transactionSummaryFixture({ id: 'tx-b' })
-			])
-			setSheetDetail(sheetFixture('IRR', { id: 'sh-1', title: 'March travel' }))
+			setSheetDetail(sheetFixture('IRR', {
+				id: 'sh-1',
+				title: 'March travel',
+				transactions: [
+					transactionSummaryFixture({ id: 'tx-a' }),
+					transactionSummaryFixture({ id: 'tx-b' })
+				],
+				transactionCount: 2
+			}))
 			const wrapper = await createWrapperAtRoute(SheetDetailView, '/sheets/sh-1')
 
 			const rows = wrapper.findAll('[data-test="sheet-transaction-row"]')

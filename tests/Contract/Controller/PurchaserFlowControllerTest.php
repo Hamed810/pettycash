@@ -7,6 +7,7 @@ namespace OCA\PettyCash\Tests\Contract\Controller;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\ClientException;
 use OCA\PettyCash\Tests\Contract\Fixture\ContractFixtures;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -202,6 +203,157 @@ final class PurchaserFlowControllerTest extends TestCase
     }
 
     // ===== SHEETS =====
+
+    /**
+     * T327: `GET /sheets/{sheetId}` must carry `transactions` and `allowedActions` by name.
+     *
+     * `contracts/ocs-api.yaml:1125` defines `SheetDetail` as `SheetSummary` plus exactly these two
+     * members, and the endpoint emitted neither. The consequence was not cosmetic: the frontend store
+     * derives `canSubmit` from `transactions.length`, so `?? 0` made it permanently `false` and the
+     * Submit button was never rendered — a purchaser could create a sheet, add a draft transaction,
+     * save it, and have no way to submit it.
+     *
+     * Each property is asserted **by name** rather than through a shape check, because a shape check
+     * is exactly what let this ship: the payload satisfied every structural assertion anyone made,
+     * because the missing keys were missing from the assertion as well.
+     *
+     * The content is asserted too, and against the count in the same payload — `transactions` being
+     * present but empty while `transactionCount` says otherwise would satisfy the first half of this
+     * test and still leave the table blank.
+     */
+    public function testSheetDetailCarriesTransactionsAndAllowedActionsByName(): void
+    {
+        ContractFixtures::prepare('draft');
+
+        $response = $this->client->request('GET', '/ocs/v2.php/apps/pettycash/api/v1/sheets/' . ContractFixtures::sheetId());
+        $this->assertEquals(200, $response->getStatusCode());
+        $data = json_decode((string) $response->getBody(), true)['ocs']['data'] ?? [];
+
+        $this->assertArrayHasKey('transactions', $data, 'SheetDetail requires transactions');
+        $this->assertArrayHasKey('allowedActions', $data, 'SheetDetail requires allowedActions');
+
+        $this->assertIsArray($data['transactions']);
+        $this->assertIsArray($data['allowedActions']);
+
+        // `CapabilitySet` is `additionalProperties: {type: boolean}`; a non-boolean fails the contract
+        // on a live response, which is a much worse place to learn it.
+        foreach ($data['allowedActions'] as $capability => $value) {
+            $this->assertIsBool($value, "capability {$capability} must be a boolean");
+        }
+
+        // The rows and the count come from the same read, so they must agree. A `transactions` array
+        // that was present but empty is precisely the defect, and `transactionCount` is what proves it.
+        $this->assertCount(
+            $data['transactionCount'] ?? -1,
+            $data['transactions'],
+            'transactions must carry every row transactionCount reports, or the sheet table renders blank '
+            . 'for a sheet that plainly has transactions'
+        );
+
+        // And the fixture's own transaction is among them, identified by the public id the client uses.
+        $ids = array_column($data['transactions'], 'id');
+        $this->assertContains(
+            ContractFixtures::transactionId(),
+            $ids,
+            "the fixture's seeded transaction must appear in the sheet's own transaction list"
+        );
+    }
+
+    /**
+     * T327: the capability set must reflect what the command path would actually do.
+     *
+     * The `draft` fixture is an open sheet holding one transaction, so every capability is true for
+     * its owner — including `canSubmit`, which is the one that was permanently false. This is the
+     * "a caller who may act" half asserted over real HTTP; the denial half is unreachable from here
+     * (the endpoint is owner-scoped and the suite has one set of credentials) and is covered by
+     * `tests/Unit/Domain/Expense/SheetCapabilitiesTest.php`.
+     */
+    public function testSheetDetailReportsCapabilitiesForACallerWhoMayAct(): void
+    {
+        ContractFixtures::prepare('draft');
+
+        $response = $this->client->request('GET', '/ocs/v2.php/apps/pettycash/api/v1/sheets/' . ContractFixtures::sheetId());
+        $actions = json_decode((string) $response->getBody(), true)['ocs']['data']['allowedActions'] ?? [];
+
+        $this->assertTrue(
+            $actions['canSubmit'] ?? null,
+            'the owner of an open sheet holding a transaction may submit it, and the capability must say so'
+        );
+        $this->assertTrue($actions['canUpdate'] ?? null, 'the owner of an open sheet may retitle it');
+        $this->assertTrue($actions['canAddTransaction'] ?? null, 'the owner of an open sheet may draft a transaction');
+    }
+
+    /**
+     * T327: a submitted sheet must offer nothing, so the interface stops offering FR-026's forbidden
+     * actions after submission.
+     */
+    public function testSubmittedSheetReportsNoCapabilities(): void
+    {
+        ContractFixtures::prepare('submitted');
+
+        $response = $this->client->request('GET', '/ocs/v2.php/apps/pettycash/api/v1/sheets/' . ContractFixtures::sheetId());
+        $this->assertEquals(200, $response->getStatusCode());
+        $data = json_decode((string) $response->getBody(), true)['ocs']['data'] ?? [];
+
+        $this->assertArrayHasKey('allowedActions', $data, 'SheetDetail requires allowedActions on every response, not only on open sheets');
+
+        foreach (['canUpdate', 'canAddTransaction', 'canSubmit'] as $capability) {
+            $this->assertFalse(
+                $data['allowedActions'][$capability] ?? null,
+                "FR-026 forbids this after submission, so {$capability} must be false rather than absent"
+            );
+        }
+    }
+
+    /**
+     * T326/T327: the contract declares `SheetDetail` — not `SheetSummary` — for all four
+     * single-sheet responses (`:368` create, `:381` detail, `:405` patch, `:424` submit), so
+     * returning the summary from any of them is the same violation in each.
+     *
+     * **Two of the four are asserted here and two are not, deliberately.** `PATCH /sheets/{id}` and
+     * `POST /sheets/{id}/submit` both mutate the shared fixture sheet, and this suite re-seeds from
+     * `seed-contract-fixtures.php` for that reason — a test that left the sheet submitted would make
+     * every later assertion in the file order-dependent. Asserting the shape on the two read-shaped
+     * endpoints is what keeps the guard honest without making the file order-dependent; the two
+     * mutating endpoints return the value of the same `formatSheetDetail()` call, which is what the
+     * first two prove.
+     *
+     */
+    #[DataProvider('singleSheetEndpoints')]
+    public function testEverySingleSheetResponseCarriesTheSheetDetailShape(string $method, string $path, array $body): void
+    {
+        ContractFixtures::prepare('draft');
+
+        $response = $this->client->request($method, $path, [
+            'headers' => ['X-PettyCash-Command-ID' => ContractFixtures::commandId()],
+            'json' => $body,
+        ]);
+
+        $this->assertContains(
+            $response->getStatusCode(),
+            [200, 201],
+            "{$method} {$path} must answer a success status carrying the sheet"
+        );
+
+        $data = json_decode((string) $response->getBody(), true)['ocs']['data'] ?? [];
+        $this->assertArrayHasKey('transactions', $data, "{$method} {$path} returns SheetDetail, which requires transactions");
+        $this->assertArrayHasKey('allowedActions', $data, "{$method} {$path} returns SheetDetail, which requires allowedActions");
+    }
+
+    /**
+     * @return array<string, array{0: string, 1: string, 2: array<string, mixed>}>
+     */
+    public static function singleSheetEndpoints(): array
+    {
+        return [
+            'GET detail' => ['GET', '/ocs/v2.php/apps/pettycash/api/v1/sheets/' . ContractFixtures::sheetId(), []],
+            'POST create' => ['POST', '/ocs/v2.php/apps/pettycash/api/v1/sheets', [
+                'title' => 'Shape probe sheet',
+                'accountId' => ContractFixtures::accountId(),
+            ]],
+        ];
+    }
+
 
     public function testCreateSheetReturns201WithSheetDetail(): void
     {

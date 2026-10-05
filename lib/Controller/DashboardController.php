@@ -9,6 +9,7 @@ use OCA\PettyCash\Application\Reporting\DashboardQuery;
 use OCA\PettyCash\Application\Reporting\ReportScope;
 use OCA\PettyCash\Domain\Expense\Repository\ExpenseSheetRepository;
 use OCA\PettyCash\Domain\Expense\Repository\ExpenseTransactionRepository;
+use OCA\PettyCash\Domain\Expense\SheetListFilter;
 use OCA\PettyCash\Domain\Shared\Enum\Role;
 use OCA\PettyCash\Domain\Workflow\SheetStatus;
 use OCA\PettyCash\Domain\Workflow\TransactionStatus;
@@ -180,7 +181,7 @@ class DashboardController extends OCSController
         // would report only the sheets they personally opened.
         $openSheets = $scope->administrator
             ? $this->sheets->findByStatus(SheetStatus::Open, 0, self::BOUND)
-            : $this->sheets->findByOwnerUid($uid, SheetStatus::Open, 0, self::BOUND);
+            : $this->sheets->findByOwnerUid($uid, new SheetListFilter(SheetStatus::Open), 0, self::BOUND);
         $openSheetsInScope = array_values(array_filter(
             $openSheets,
             static fn ($sheet): bool => $scope->coversOwned($sheet->ownerUid)

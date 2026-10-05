@@ -5,10 +5,16 @@ declare(strict_types=1);
 namespace OCA\PettyCash\Tests\Unit\Reporting;
 
 use InvalidArgumentException;
+use OCA\PettyCash\Application\Reporting\FilterIdentityResolver;
 use OCA\PettyCash\Application\Reporting\ReportFilter;
 use OCA\PettyCash\Application\Reporting\ReportFilterFactory;
 use OCA\PettyCash\Application\Reporting\ReportQuery;
 use OCA\PettyCash\Application\Reporting\UnsupportedFilterField;
+use OCA\PettyCash\Domain\Configuration\CostCenter;
+use OCA\PettyCash\Domain\Configuration\ExpenseType;
+use OCA\PettyCash\Tests\TestDoubles\InMemoryCostCenterRepository;
+use OCA\PettyCash\Tests\TestDoubles\InMemoryExpenseTypeRepository;
+use DateTimeImmutable;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
@@ -37,9 +43,33 @@ final class ReportFilterFactoryTest extends TestCase
 {
     private ReportFilterFactory $factory;
 
+    private InMemoryCostCenterRepository $costCenters;
+
+    private InMemoryExpenseTypeRepository $expenseTypes;
+
+    /** The public id `setUp` saves a cost centre under, so the resolver has something to resolve. */
+    private const COST_CENTER_PUBLIC_ID = '11111111-1111-4111-8111-111111111111';
+
+    private const EXPENSE_TYPE_PUBLIC_ID = '22222222-2222-4222-8222-222222222222';
+
     protected function setUp(): void
     {
-        $this->factory = new ReportFilterFactory();
+        $this->costCenters = new InMemoryCostCenterRepository();
+        $this->expenseTypes = new InMemoryExpenseTypeRepository();
+
+        $costCenter = CostCenter::create('CC900', 'Ninth floor', null, new DateTimeImmutable('2026-01-01'), null);
+        $costCenter->id = 900;
+        $costCenter->publicId = self::COST_CENTER_PUBLIC_ID;
+        $this->costCenters->save($costCenter);
+
+        $expenseType = ExpenseType::create('Calibration', null, false);
+        $expenseType->id = 42;
+        $expenseType->publicId = self::EXPENSE_TYPE_PUBLIC_ID;
+        $this->expenseTypes->save($expenseType);
+
+        $this->factory = new ReportFilterFactory(
+            new FilterIdentityResolver($this->costCenters, $this->expenseTypes)
+        );
     }
 
     // ===== The vocabulary is closed, and the list is the contract =====
@@ -54,10 +84,12 @@ final class ReportFilterFactoryTest extends TestCase
             ['to', ['to' => '2026-12-31T23:59:59+00:00']],
             ['statuses', ['statuses' => ['OPEN', 'COST_CENTER']]],
             ['currencyCodes', ['currencyCodes' => ['IRR', 'USD']]],
+            ['costCenterIds', ['costCenterIds' => ['11111111-1111-4111-8111-111111111111']]],
             ['costCenterDbIds', ['costCenterDbIds' => [1, 2]]],
             ['actorUids', ['actorUids' => ['employee1']]],
             ['eventTypes', ['eventTypes' => ['SHEET_SUBMITTED']]],
             ['createdBy', ['createdBy' => 'employee1']],
+            ['expenseTypeIds', ['expenseTypeIds' => ['22222222-2222-4222-8222-222222222222']]],
             ['expenseTypeDbIds', ['expenseTypeDbIds' => [7]]],
             ['stages', ['stages' => ['FINANCE']]],
             ['amountMinMinor', ['amountMinMinor' => 100]],
@@ -88,11 +120,88 @@ final class ReportFilterFactoryTest extends TestCase
     {
         self::assertSame(
             [
-                'from', 'to', 'statuses', 'currencyCodes', 'costCenterDbIds', 'actorUids', 'eventTypes',
-                'createdBy', 'expenseTypeDbIds', 'stages', 'amountMinMinor', 'amountMaxMinor',
+                'from', 'to', 'statuses', 'currencyCodes', 'costCenterIds', 'costCenterDbIds', 'actorUids',
+                'eventTypes', 'createdBy', 'expenseTypeIds', 'expenseTypeDbIds', 'stages', 'amountMinMinor',
+                'amountMaxMinor',
             ],
             ReportFilterFactory::ACCEPTED_FILTERS
         );
+    }
+
+    // ===== T329: a client is never asked for a surrogate key =====
+
+    /**
+     * The public-id spelling resolves to the same field the internal spelling names.
+     *
+     * `data-model.md` requires public UUIDs on the wire and keeps numeric ids as internal join keys, so
+     * this is the direction a client must be able to travel. Asserted as a resolved `dbId` rather than
+     * as "it did not throw", because a resolver that silently returned nothing would pass the weaker
+     * assertion and reintroduce the unfiltered answer this task exists to remove.
+     */
+    public function testACostCentreCanBeFilteredByItsPublicId(): void
+    {
+        $filter = $this->factory->fromArray(['costCenterIds' => [self::COST_CENTER_PUBLIC_ID]]);
+
+        self::assertSame([900], $filter->costCenterDbIds);
+    }
+
+    public function testAnExpenseTypeCanBeFilteredByItsPublicId(): void
+    {
+        $filter = $this->factory->fromArray(['expenseTypeIds' => [self::EXPENSE_TYPE_PUBLIC_ID]]);
+
+        self::assertSame([42], $filter->expenseTypeDbIds);
+    }
+
+    /**
+     * Both spellings name members of one facet, so a request naming both means the union — not a
+     * precedence rule that would silently drop whichever space the caller spelled differently.
+     */
+    public function testTheTwoIdSpacesAreUnionedRatherThanOneWinning(): void
+    {
+        $filter = $this->factory->fromArray([
+            'costCenterIds' => [self::COST_CENTER_PUBLIC_ID],
+            'costCenterDbIds' => [7],
+        ]);
+
+        self::assertSame([7, 900], $filter->costCenterDbIds);
+    }
+
+    /**
+     * The damaging case. An id that resolves to nothing must be refused, because dropping it widens the
+     * result set to everything while the caller believes the filter was applied — the exact failure
+     * `ReportFilterFactory`'s closed vocabulary was built to prevent, reached through the new name.
+     */
+    public function testACostCentrePublicIdThatNamesNothingIsRefusedRatherThanDropped(): void
+    {
+        try {
+            $this->factory->fromArray(['costCenterIds' => ['33333333-3333-4333-8333-333333333333']]);
+            self::fail('an unresolvable cost centre id must be refused, not dropped');
+        } catch (InvalidArgumentException $e) {
+            self::assertStringContainsString('costCenterIds', $e->getMessage());
+            self::assertStringContainsString('33333333-3333-4333-8333-333333333333', $e->getMessage());
+            self::assertStringContainsString('public UUID', $e->getMessage(), 'the refusal should say which id space is expected');
+        }
+    }
+
+    public function testAnExpenseTypePublicIdThatNamesNothingIsRefused(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('expenseTypeIds');
+
+        $this->factory->fromArray(['expenseTypeIds' => ['44444444-4444-4444-8444-444444444444']]);
+    }
+
+    /**
+     * An empty list is no filter, not an error: an unfilled cost-centre field must not narrow anything,
+     * and must not be reported as a caller mistake either.
+     */
+    public function testAnEmptyPublicIdListIsNoFilterRatherThanARefusal(): void
+    {
+        $filter = $this->factory->fromArray(['costCenterIds' => [], 'expenseTypeIds' => []]);
+
+        self::assertSame([], $filter->costCenterDbIds);
+        self::assertSame([], $filter->expenseTypeDbIds);
+        self::assertFalse($filter->hasFieldFilters());
     }
 
     public function testAnUnrecognisedFilterIsRefusedNamingTheAcceptedSet(): void
@@ -179,9 +288,51 @@ final class ReportFilterFactoryTest extends TestCase
         // second must still recognise the refusal. Asserting the first name only would let the second
         // regress into an unrecognisable word.
         self::assertSame(
-            ['amountRange' => ['amountMinMinor', 'amountMaxMinor'], 'dateRange' => ['from', 'to']],
-            (new \ReflectionClass(ReportQuery::class))->getConstant('RULE_REQUEST_NAMES')
+            ['amountMinMinor', 'amountMaxMinor'],
+            (new \ReflectionClass(ReportQuery::class))->getConstant('RULE_REQUEST_NAMES')['amountRange']
         );
+        self::assertSame(
+            ['from', 'to'],
+            (new \ReflectionClass(ReportQuery::class))->getConstant('RULE_REQUEST_NAMES')['dateRange']
+        );
+    }
+
+    /**
+     * The guard `ReportQuery::RULE_REQUEST_NAMES` claims to have in its docblock but did not have.
+     *
+     * The consequence of a name missing here is specific and bad: the application **accepts** the filter
+     * — it is in `ACCEPTED_FILTERS`, so it survives the closed-vocabulary check — and then refuses it
+     * later, in `ReportQuery`, naming a different word. The caller is shown an accepted-filter list
+     * containing a name, sends it, and is refused by a name that is not in that list.
+     *
+     * T329 found this by adding `costCenterIds` to the vocabulary: `testEveryAcceptedNameIsRefusedByTheNameTheCallerSent`
+     * failed for the two new names because the rules they resolve into named only the surrogate-key
+     * spelling. This test is what stops the next name from arriving the same way.
+     */
+    public function testEveryRequestNameIsAnsweredByARuleThatNamesIt(): void
+    {
+        $rules = (new \ReflectionClass(ReportQuery::class))->getConstant('RULE_REQUEST_NAMES');
+        self::assertIsArray($rules);
+
+        $named = [];
+        foreach ($rules as $requestNames) {
+            self::assertIsArray($requestNames);
+            foreach ($requestNames as $requestName) {
+                $named[] = $requestName;
+            }
+        }
+        // Rule names that are not request names answer for themselves.
+        $fieldKeys = (new \ReflectionClass(ReportQuery::class))->getConstant('FILTER_FIELD_KEYS');
+        self::assertIsArray($fieldKeys);
+        $named = array_merge($named, array_keys($fieldKeys));
+
+        foreach (ReportFilterFactory::ACCEPTED_FILTERS as $accepted) {
+            self::assertContains(
+                $accepted,
+                $named,
+                "'{$accepted}' is accepted, so a rule must be able to refuse it by the name the caller sent"
+            );
+        }
     }
 
     // ===== Coercion, which is where a wrong value becomes a wrong answer =====

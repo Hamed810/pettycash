@@ -69,13 +69,12 @@ import NcSelect from '@nextcloud/vue/components/NcSelect'
 import NcTextArea from '@nextcloud/vue/components/NcTextArea'
 import { useReviewsStore } from '@/stores/reviews'
 import { selectOptionKey, selectOptionValue } from '@/utils/selectOption'
-
-type Decision = 'APPROVE' | 'REJECT' | 'RETURN'
+import { DECISION_CAPABILITY, type AllowedActions, type DecisionValue } from '@/types/api'
 
 interface Props {
 	stage: string
 	transactionId: string
-	allowedActions: Record<string, boolean>
+	allowedActions: AllowedActions
 	allowIndependentDecision?: boolean
 	expectedVersion?: number
 }
@@ -88,15 +87,32 @@ const emit = defineEmits<{
 
 const reviewsStore = useReviewsStore()
 
-const selectedDecision = ref<Decision | ''>('')
+const selectedDecision = ref<DecisionValue | ''>('')
 const explanation = ref('')
 const submitting = ref(false)
 
+/**
+ * FR-039: only the decisions the server granted are offered.
+ *
+ * **The lookup is the fix, and it used to be `item.value.toLowerCase()`.** The keys the server emits
+ * are `canApprove` / `canReject` / `canReturn` (`TransactionPayloadFormatter::allowedActions()`), so
+ * `allowedActions['approve']` is `undefined`, `undefined !== false` is `true`, and all three options
+ * survived unconditionally — while `FinanceReviewView` read the correctly cased `canApprove` and told
+ * the same officer, in the same screen, that Approve was unavailable.
+ *
+ * Two changes, because either alone would leave the next recurrence possible. The names come from
+ * `DECISION_CAPABILITY` in `@/types/api` rather than from a string transform of the decision value,
+ * so `APPROVE` cannot be mapped to a key the server does not emit; and the test is for an explicit
+ * `true` rather than "not false", because "the server did not grant it" and "the server said no" are
+ * different answers and only the second is a refusal. That is the refuse-don't-ignore rule the report
+ * filter vocabulary already states: an ignored filter returns the unfiltered answer and the caller
+ * cannot tell the difference.
+ */
 const decisionItems = computed(() => ([
-	{ label: t('pettycash', 'reviews.decision.approve'), value: 'APPROVE' as Decision },
-	{ label: t('pettycash', 'reviews.decision.reject'), value: 'REJECT' as Decision },
-	{ label: t('pettycash', 'reviews.decision.return'), value: 'RETURN' as Decision },
-].filter(item => props.allowedActions?.[item.value.toLowerCase()] !== false)))
+	{ label: t('pettycash', 'reviews.decision.approve'), value: 'APPROVE' as DecisionValue },
+	{ label: t('pettycash', 'reviews.decision.reject'), value: 'REJECT' as DecisionValue },
+	{ label: t('pettycash', 'reviews.decision.return'), value: 'RETURN' as DecisionValue },
+].filter(item => props.allowedActions?.[DECISION_CAPABILITY[item.value]] === true)))
 
 const requiresExplanation = computed(() => selectedDecision.value === 'REJECT' || selectedDecision.value === 'RETURN')
 

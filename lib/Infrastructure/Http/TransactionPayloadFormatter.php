@@ -8,6 +8,7 @@ use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Domain\Configuration\Repository\CostCenterRepository;
 use OCA\PettyCash\Domain\Configuration\Repository\CurrencyRepository;
 use OCA\PettyCash\Domain\Configuration\Repository\RoleAssignmentRepository;
+use OCA\PettyCash\Domain\Expense\Repository\ExpenseSheetRepository;
 use OCA\PettyCash\Domain\Expense\TransactionRevision;
 use OCA\PettyCash\Domain\Evidence\Evidence;
 use OCA\PettyCash\Domain\Shared\Enum\Role;
@@ -40,6 +41,7 @@ final readonly class TransactionPayloadFormatter
         private CostCenterRepository $costCenterRepository,
         private CurrencyRepository $currencyRepository,
         private RoleAssignmentRepository $roleAssignmentRepository,
+        private ExpenseSheetRepository $sheetRepository,
         private CurrentUser $currentUser
     ) {}
 
@@ -59,7 +61,20 @@ final readonly class TransactionPayloadFormatter
 
         return [
             'id' => $transaction->publicId ?? $transaction->id,
-            'sheetId' => $transaction->sheetId,
+            // The owning sheet's **public** uuid, which `contracts/ocs-api.yaml:1154` declares
+            // (`format: uuid`) and lists among `TransactionSummary`'s required members.
+            //
+            // This used to emit `$transaction->sheetId` — the surrogate key — while line above emits
+            // the transaction's own id as a uuid, so the omission was an inconsistency rather than a
+            // convention. It was visible: `TransactionHeader.vue:22` and the three queue views render
+            // this value in a "Sheet" column, so reviewers read integers such as `41`, and the value
+            // is unusable as the `{sheetId}` path parameter the contract declares.
+            //
+            // An unresolvable sheet reference yields `''` rather than the integer, for the reason
+            // `expenseTypeSnapshot()` gives beside it: an absent identifier is visibly absent, while a
+            // database id in a uuid field looks like data. Turning that into the 422 FR-083 requires
+            // is T313/T314's decision and their tests; this task fixes the id space.
+            'sheetId' => $this->sheetPublicId($transaction),
             'activeRevision' => $this->revisionFrom($transaction),
             'stage' => $transaction->stage->value,
             'status' => $transaction->status->value,
@@ -90,6 +105,30 @@ final readonly class TransactionPayloadFormatter
             'decisions' => array_map([$this, 'decision'], $decisions),
             'evidence' => array_map([$this, 'evidence'], $evidence),
         ]);
+    }
+
+    /**
+     * The owning sheet's public uuid, or `''` when there is none to resolve.
+     *
+     * Read through the sheet repository rather than carried on the transaction aggregate for the same
+     * reason `costCenterSnapshot()` resolves its public id: `pettycash_transactions` stores `sheet_id`
+     * as a surrogate key, and a wire field must not publish one.
+     *
+     * A stored transaction whose `sheet_id` matches no row answers `''` as well, and **not** the
+     * integer. Turning that into the 422 FR-083 requires is T313/T314's decision and their tests;
+     * this task fixes the id space and says which direction the unresolvable case points.
+     */
+    private function sheetPublicId(ExpenseTransaction $transaction): string
+    {
+        if ($transaction->sheetId === null) {
+            // An aggregate built in memory and not yet saved has no sheet at all, which is a
+            // different state from a stored transaction pointing at a sheet that is gone. Both answer
+            // `''` because the contract declares the member required and not nullable, and inventing
+            // a placeholder uuid would be worse than an empty field.
+            return '';
+        }
+
+        return $this->sheetRepository->findById($transaction->sheetId)?->publicId ?? '';
     }
 
     /**
@@ -125,10 +164,7 @@ final readonly class TransactionPayloadFormatter
             ],
             'description' => $revision->description(),
             'costCenter' => $this->costCenterSnapshot($revision),
-            'expenseType' => [
-                'id' => $revision->expenseTypeTitle() ?? '',
-                'name' => $revision->expenseTypeTitle() ?? '',
-            ],
+            'expenseType' => $this->expenseTypeSnapshot($revision),
             'createdBy' => $revision->createdBy ?? '',
             'createdAt' => $revision->createdAt?->format(\DateTimeInterface::ATOM),
             'active' => $revision->isActive(),
@@ -168,6 +204,33 @@ final readonly class TransactionPayloadFormatter
         }
 
         return ['id' => $id, 'name' => ''];
+    }
+
+    /**
+     * The revision's expense type as an `EntitySnapshot`.
+     *
+     * Shaped like `costCenterSnapshot()` beside it, and for the same reason: `EntitySnapshot.id` is
+     * `format: uuid`, and this one used to carry the **title** in both `id` and `name`. That is not a
+     * cosmetic mismatch — `TransactionFormView` copies `activeRevision.expenseType.id` into the draft
+     * and `TransactionService::updateTransaction()` resolves it with `findByPublicId()`, so every edit
+     * of an existing draft was refused with `422 Expense type not found: <title>` and FR-025's "edit"
+     * was unreachable.
+     *
+     * The stored title is used for `name` rather than a fresh lookup, so a historical revision keeps
+     * the name it was submitted with — the same reason `costCenterSnapshot()` prefers its snapshot
+     * columns. The id comes from the aggregate, which persistence resolves from the stored join key.
+     *
+     * A revision that names no resolvable expense type yields an empty `id` rather than the title: an
+     * unresolvable identifier is visibly absent, whereas a title in an id field looks like data.
+     *
+     * @return array{id: string, name: string}
+     */
+    private function expenseTypeSnapshot(TransactionRevision $revision): array
+    {
+        return [
+            'id' => $revision->expenseTypeId() ?? '',
+            'name' => $revision->expenseTypeTitle() ?? '',
+        ];
     }
 
     /**
@@ -353,12 +416,28 @@ final readonly class TransactionPayloadFormatter
     /**
      * @return array<string, mixed>
      */
-    private function evidence(Evidence $evidence): array
+    /**
+     * `Evidence` — the contract's schema, emitted for **both** endpoints that publish it.
+     *
+     * **Public, and used by `EvidenceController`, because there were two emitters of one schema and
+     * they disagreed.** `EvidenceController::formatEvidence()` added a `deactivationReason` the contract
+     * does not declare and wrote `id` as `$evidence->id` where this method writes
+     * `$evidence->publicId ?? $evidence->id` — equivalent today only because
+     * `DbEvidenceRepository::save()` mirrors one onto the other. `AccountPayloadFormatter`'s own
+     * docblock warns about precisely this drift; a client cannot tell which endpoint it is talking to
+     * and get an answer that holds for both (T339).
+     *
+     * **The public uuids, not the join keys.** `contracts/ocs-api.yaml` declares `transactionId` and
+     * `revisionId` as `format: uuid` and lists both among `Evidence`'s required members, while the
+     * aggregate carried `(int) $row['transaction_id']` — so both emitters published surrogate keys in
+     * uuid fields, silently, in front of a `src/types/api.ts` that declared both `string`.
+     */
+    public function evidence(Evidence $evidence): array
     {
         return [
             'id' => $evidence->publicId ?? $evidence->id,
-            'transactionId' => $evidence->transactionId,
-            'revisionId' => $evidence->originRevisionId,
+            'transactionId' => $evidence->transactionPublicId ?? '',
+            'revisionId' => $evidence->originRevisionPublicId ?? '',
             'name' => $evidence->originalName,
             'mediaType' => $evidence->mediaType,
             'sizeBytes' => $evidence->sizeBytes,
@@ -366,6 +445,11 @@ final readonly class TransactionPayloadFormatter
             'uploadedBy' => $evidence->uploadedBy ?? '',
             'uploadedAt' => $evidence->uploadedAt?->format(\DateTimeInterface::ATOM),
             'deactivatedAt' => $evidence->deactivatedAt?->format(\DateTimeInterface::ATOM),
+            // Declared by this task rather than dropped: it is the only observable of which removal path
+            // ran (FR-058 keeps submitted evidence and marks it inactive), and removing it broke
+            // `EvidenceLifecycleControllerTest::testTheRecordedReasonShowsWhichRemovalActuallyHappened`
+            // — which is the evidence that the key was load-bearing rather than drift after all.
+            'deactivationReason' => $evidence->deactivationReason,
         ];
     }
 }

@@ -5,7 +5,7 @@ import NcButton from '@nextcloud/vue/components/NcButton'
 import NcSelect from '@nextcloud/vue/components/NcSelect'
 import NcTextField from '@nextcloud/vue/components/NcTextField'
 import {
-	REPORT_PERIOD_PRESETS,
+	REPORT_OFFERABLE_PERIODS,
 	type ReportFilters,
 	type ReportPeriodPreset,
 	type ReportType,
@@ -25,6 +25,16 @@ const emit = defineEmits<{
 
 const draft = ref<ReportFilters>({ ...props.filters })
 
+/**
+ * The period preset is UI state, not filter state.
+ *
+ * It is deliberately **not** part of `ReportFilters`: `period` is not in the server's accepted
+ * vocabulary, so a draft that carried it would either be pruned away silently or sent and refused.
+ * Keeping it here means the control exists without the request ever claiming a filter the server
+ * cannot answer, and T312's change is to add the vocabulary member and move this into `ReportFilters`.
+ */
+const period = ref<ReportPeriodPreset>('custom')
+
 watch(
 	() => [props.filters, props.reportType] as const,
 	() => { draft.value = { ...props.filters } },
@@ -32,21 +42,25 @@ watch(
 )
 
 const periodOptions = computed(() =>
-	REPORT_PERIOD_PRESETS.map((preset) => ({
+	REPORT_OFFERABLE_PERIODS.map((preset) => ({
 		label: t('pettycash', `reports.period.${preset}`),
 		value: preset,
 	}))
 )
 
 const selectedPeriod = computed<ReportPeriodPreset>({
-	get: () => draft.value.period ?? 'custom',
-	set: (value: ReportPeriodPreset) => { draft.value.period = value },
+	get: () => period.value,
+	set: (value: ReportPeriodPreset) => { period.value = value },
 })
 
 /**
  * A period preset is a calendar window the server resolves, so `custom` is the only preset that
  * needs an explicit range. The date fields therefore follow the preset rather than sending a range
  * the user cannot see.
+ *
+ * `REPORT_OFFERABLE_PERIODS` currently holds only `custom`, because the Jalali presets are T312's
+ * and `period` is not in the server's accepted filter vocabulary yet. Until it is, offering them
+ * would offer a filter that silently returns everything — see `ReportPeriodPreset`.
  */
 const usesCustomRange = computed(() => selectedPeriod.value === 'custom')
 
@@ -56,22 +70,60 @@ function optionalNumber(raw: string): number | undefined {
 	return Number.isFinite(parsed) ? parsed : undefined
 }
 
-/** Emits only the filters the user actually filled in, so no empty value can narrow a result set. */
+/**
+ * The cost centre the user typed, as the **public UUID** the vocabulary accepts.
+ *
+ * The field is a free-text box rather than a picker because this is V1 and the configuration picker
+ * (T088) is not built; either way it sends the public id, because a numeric database id is an
+ * internal join key and the server refuses to be asked for one.
+ */
+function publicIdOrUndefined(raw: string | undefined): string | undefined {
+	const trimmed = raw?.trim()
+	return trimmed ? trimmed : undefined
+}
+
+/**
+ * `NcTextField` emits `string | number` for `update:model-value`, and the list-valued facets are
+ * `string[]`. Coerced here rather than at each call site so the four fields cannot disagree about it.
+ */
+function singleValue(raw: string | number | undefined): string[] {
+	return raw === undefined || raw === null ? [] : [String(raw)]
+}
+
+/**
+ * Emits only the filters the user actually filled in, under the names the server accepts.
+ *
+ * Single-value facets become **one-element lists** because `ReportFilterFactory` refuses a non-array
+ * for every list-valued name. Sending a bare string would be a 422 on a filter the user filled in
+ * correctly, which is the same class of defect T329 was opened for.
+ */
 function collect(): ReportFilters {
-	const collected: ReportFilters = { period: selectedPeriod.value }
-	if (draft.value.status?.trim()) collected.status = draft.value.status.trim()
-	if (draft.value.costCenterId?.trim()) collected.costCenterId = draft.value.costCenterId.trim()
-	if (draft.value.ownerId?.trim()) collected.ownerId = draft.value.ownerId.trim()
-	if (draft.value.stage?.trim()) collected.stage = draft.value.stage.trim()
-	if (draft.value.eventType?.trim()) collected.eventType = draft.value.eventType.trim()
+	const collected: ReportFilters = {}
+
+	const status = publicIdOrUndefined(draft.value.statuses?.[0])
+	if (status) collected.statuses = [status]
+
+	const costCenterId = publicIdOrUndefined(draft.value.costCenterIds?.[0])
+	if (costCenterId) collected.costCenterIds = [costCenterId]
+
+	const stage = publicIdOrUndefined(draft.value.stages?.[0])
+	if (stage) collected.stages = [stage]
+
+	const eventType = publicIdOrUndefined(draft.value.eventTypes?.[0])
+	if (eventType) collected.eventTypes = [eventType]
+
 	if (usesCustomRange.value) {
-		if (draft.value.dateFrom) collected.dateFrom = draft.value.dateFrom
-		if (draft.value.dateTo) collected.dateTo = draft.value.dateTo
+		const from = publicIdOrUndefined(draft.value.from)
+		if (from) collected.from = from
+		const to = publicIdOrUndefined(draft.value.to)
+		if (to) collected.to = to
 	}
-	const amountMin = optionalNumber(draft.value.amountMin === undefined ? '' : String(draft.value.amountMin))
-	const amountMax = optionalNumber(draft.value.amountMax === undefined ? '' : String(draft.value.amountMax))
-	if (amountMin !== undefined) collected.amountMin = amountMin
-	if (amountMax !== undefined) collected.amountMax = amountMax
+
+	const amountMinMinor = optionalNumber(draft.value.amountMinMinor === undefined ? '' : String(draft.value.amountMinMinor))
+	const amountMaxMinor = optionalNumber(draft.value.amountMaxMinor === undefined ? '' : String(draft.value.amountMaxMinor))
+	if (amountMinMinor !== undefined) collected.amountMinMinor = amountMinMinor
+	if (amountMaxMinor !== undefined) collected.amountMaxMinor = amountMaxMinor
+
 	return collected
 }
 
@@ -104,60 +156,68 @@ function reset(): void {
 				data-testid="report-filter-period"
 			/>
 			<NcTextField
-				v-model="draft.status"
+				:model-value="draft.statuses?.[0] ?? ''"
 				:label="t('pettycash', 'reports.filter.status')"
 				:disabled="disabled"
 				data-testid="report-filter-status"
+				@update:model-value="draft.statuses = singleValue($event)"
 			/>
 			<NcTextField
-				v-model="draft.costCenterId"
+				:model-value="draft.costCenterIds?.[0] ?? ''"
 				:label="t('pettycash', 'reports.filter.costCenterId')"
 				:disabled="disabled"
 				data-testid="report-filter-cost-center"
+				@update:model-value="draft.costCenterIds = singleValue($event)"
 			/>
 			<label v-if="usesCustomRange" class="report-filter-bar__field">
 				<span class="report-filter-bar__label">{{ t('pettycash', 'reports.filter.dateFrom') }}</span>
 				<input
-					v-model="draft.dateFrom"
-					type="date"
+					:model-value="draft.from ?? ''"
 					:disabled="disabled"
+					type="date"
 					data-testid="report-filter-date-from"
+					@input="draft.from = ($event.target as HTMLInputElement).value"
 				>
 			</label>
 			<label v-if="usesCustomRange" class="report-filter-bar__field">
 				<span class="report-filter-bar__label">{{ t('pettycash', 'reports.filter.dateTo') }}</span>
 				<input
-					v-model="draft.dateTo"
-					type="date"
+					:model-value="draft.to ?? ''"
 					:disabled="disabled"
+					type="date"
 					data-testid="report-filter-date-to"
+					@input="draft.to = ($event.target as HTMLInputElement).value"
 				>
 			</label>
 			<NcTextField
-				v-model="draft.amountMin"
+				:model-value="draft.amountMinMinor"
 				type="number"
 				:label="t('pettycash', 'reports.filter.amountMin')"
 				:disabled="disabled"
 				data-testid="report-filter-amount-min"
+				@update:model-value="draft.amountMinMinor = $event === '' ? undefined : Number($event)"
 			/>
 			<NcTextField
-				v-model="draft.amountMax"
+				:model-value="draft.amountMaxMinor"
 				type="number"
 				:label="t('pettycash', 'reports.filter.amountMax')"
 				:disabled="disabled"
 				data-testid="report-filter-amount-max"
+				@update:model-value="draft.amountMaxMinor = $event === '' ? undefined : Number($event)"
 			/>
 			<NcTextField
-				v-model="draft.stage"
+				:model-value="draft.stages?.[0] ?? ''"
 				:label="t('pettycash', 'reports.filter.stage')"
 				:disabled="disabled"
 				data-testid="report-filter-stage"
+				@update:model-value="draft.stages = singleValue($event)"
 			/>
 			<NcTextField
-				v-model="draft.eventType"
+				:model-value="draft.eventTypes?.[0] ?? ''"
 				:label="t('pettycash', 'reports.filter.eventType')"
 				:disabled="disabled"
 				data-testid="report-filter-event-type"
+				@update:model-value="draft.eventTypes = singleValue($event)"
 			/>
 		</div>
 

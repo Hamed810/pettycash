@@ -52,6 +52,120 @@ final readonly class SheetSummaryQuery
     }
 
     /**
+     * The earliest and latest `expense_date` across each sheet's **active** revisions.
+     *
+     * `contracts/ocs-api.yaml` declares `SheetSummary.firstExpenseDate` and `lastExpenseDate`, and
+     * nothing in `lib/` emitted either of them: `SheetPayloadFormatter::summary()` is a complete array
+     * literal with one nested call, and neither property appeared in it or in `totals()`. So two
+     * declared fields had no producer at all, and the only reader in the repository was a frontend
+     * **fixture** — the trap T327 documented (T337).
+     *
+     * **Active revisions only, for the same reason the totals query reads only active revisions.** A
+     * superseded revision keeps its `expense_date` as history — FR-050 requires it to — and a range
+     * that included it would describe a transaction's past rather than the sheet's current contents.
+     *
+     * **Batched, because the caller is a list endpoint.** `GET /sheets` formats up to `pageSize`
+     * sheets, and a per-sheet aggregate would make that N+1 — the trade T332 already recorded for
+     * `countByOwnerUid()`. One grouped query answers the whole page, and `detail()` passes a
+     * single-element list.
+     *
+     * **An aggregate, deliberately, unlike `totalsForSheet()`.** The totals reduction rules live in
+     * `SheetTotals` and must not be restated in SQL, but "earliest and latest date" *is* the
+     * aggregate: restating it in the domain would mean loading every active revision to compute two
+     * numbers the database can return. `MIN`/`MAX`/`GROUP BY` are in the portable catalogue
+     * `scripts/portability-check.js` enforces (FR-077), and `sheet_id` leads
+     * `pettycash_transactions_sheet_state_idx`, so the join is index-served.
+     *
+     * A sheet with no dated active revision is **absent from the map** rather than present with
+     * nulls. "No range" and "a range whose endpoints are unknown" are the same answer, and leaving
+     * the key out means a caller cannot invent a distinction the query did not make.
+     *
+     * @param list<int> $sheetDbIds
+     * @return array<int, array{first: string, last: string}> keyed by sheet database id
+     */
+    public function expenseDateRanges(array $sheetDbIds): array
+    {
+        $sheetDbIds = array_values(array_unique(array_filter(
+            $sheetDbIds,
+            static fn (?int $id): bool => $id !== null
+        )));
+
+        if ($sheetDbIds === []) {
+            return [];
+        }
+
+        $qb = $this->connection->getQueryBuilder();
+        $qb->select('t.sheet_id')
+            ->selectAlias($qb->createFunction('MIN(r.expense_date)'), 'first_expense_date')
+            ->selectAlias($qb->createFunction('MAX(r.expense_date)'), 'last_expense_date')
+            ->from('pettycash_transactions', 't')
+            ->join('t', 'pettycash_transaction_revisions', 'r', $qb->expr()->eq('r.id', 't.active_revision_id'))
+            ->where($qb->expr()->in('t.sheet_id', $qb->createNamedParameter($sheetDbIds, IQueryBuilder::PARAM_INT_ARRAY)))
+            // A revision with no date contributes to neither endpoint, and `MIN`/`MAX` ignore nulls
+            // already — stated here because the reason the range is never wrong about a missing date
+            // is the reader having to know that.
+            ->andWhere($qb->expr()->isNotNull('r.expense_date'))
+            ->groupBy('t.sheet_id');
+
+        $ranges = [];
+        foreach ($qb->executeQuery()->fetchAllAssociative() as $row) {
+            $first = $this->toDate($row['first_expense_date'] ?? null);
+            $last = $this->toDate($row['last_expense_date'] ?? null);
+
+            if ($first === null || $last === null) {
+                // `MIN` and `MAX` are read from the same non-null rows, so both are present or
+                // neither is. Skipping rather than emitting a half-answer keeps a caller from
+                // rendering a start date with no end.
+                continue;
+            }
+
+            $ranges[(int) $row['sheet_id']] = ['first' => $first, 'last' => $last];
+        }
+
+        return $ranges;
+    }
+
+    /**
+     * The same range for one sheet, as the two nullable members `SheetSummary` declares.
+     *
+     * `null` for a sheet with no dated active revision, which is what `format: date, nullable: true`
+     * means — and the honest answer for a sheet with nothing in it, rather than today's date.
+     *
+     * @return array{first: ?string, last: ?string}
+     */
+    public function expenseDateRangeForSheet(?int $sheetDbId): array
+    {
+        if ($sheetDbId === null) {
+            return ['first' => null, 'last' => null];
+        }
+
+        return $this->expenseDateRanges([$sheetDbId])[$sheetDbId] ?? ['first' => null, 'last' => null];
+    }
+
+    /**
+     * A `DATE_IMMUTABLE` column as `YYYY-MM-DD`, which is what `format: date` declares.
+     *
+     * Read through the connection's own type conversion rather than reformatted by hand, because the
+     * three declared backends return a date column in three different PHP types and the contract asks
+     * for one string. A value that cannot be read as a date is `null` rather than an empty string: an
+     * absent date and a date that rendered as nothing are different claims.
+     */
+    private function toDate(mixed $value): ?string
+    {
+        if ($value instanceof \DateTimeInterface) {
+            return $value->format('Y-m-d');
+        }
+
+        if (!is_string($value) || trim($value) === '') {
+            return null;
+        }
+
+        $date = \DateTimeImmutable::createFromFormat('Y-m-d', substr($value, 0, 10));
+
+        return $date === false ? null : $date->format('Y-m-d');
+    }
+
+    /**
      * One entry per active revision, in the shape `SheetTotals::fromRows` consumes.
      *
      * @return list<array{amount: int, latest: ?Decision, manager: ?Decision, senior: ?Decision, finance: ?Decision}>

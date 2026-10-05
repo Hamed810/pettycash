@@ -54,7 +54,12 @@ final class DbExpenseTransactionRepository implements ExpenseTransactionReposito
         $qb->select('*')
             ->from('pettycash_transactions')
             ->where($qb->expr()->eq('sheet_id', $qb->createNamedParameter($sheetId)))
-            ->orderBy('created_at', 'ASC');
+            // `id` is the tiebreaker, not decoration: `created_at` has second precision, so two
+            // transactions drafted in the same second came back in whatever order the storage engine
+            // produced. A purchaser's transaction table that reorders itself between two reloads of
+            // the same unchanged sheet reads as an edit nobody made.
+            ->orderBy('created_at', 'ASC')
+            ->addOrderBy('id', 'ASC');
         $rows = $qb->executeQuery()->fetchAllAssociative();
         return array_map([$this, 'mapRow'], $rows);
     }

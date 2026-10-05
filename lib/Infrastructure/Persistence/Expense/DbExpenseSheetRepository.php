@@ -11,6 +11,7 @@ use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Application\Port\UserDirectory;
 use OCA\PettyCash\Domain\Expense\ExpenseSheet;
 use OCA\PettyCash\Domain\Expense\Repository\ExpenseSheetRepository;
+use OCA\PettyCash\Domain\Expense\SheetListFilter;
 use OCA\PettyCash\Domain\Workflow\SheetStatus;
 use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\IDBConnection;
@@ -46,20 +47,88 @@ final class DbExpenseSheetRepository implements ExpenseSheetRepository
     }
 
     /** @return list<ExpenseSheet> */
-    public function findByOwnerUid(string $ownerUid, ?SheetStatus $status = null, int $offset = 0, int $limit = 100): array
+    public function findByOwnerUid(string $ownerUid, ?SheetListFilter $filter = null, int $offset = 0, int $limit = 100): array
     {
         $qb = $this->connection->getQueryBuilder();
-        $qb->select('*')
-            ->from('pettycash_sheets')
-            ->where($qb->expr()->eq('owner_uid', $qb->createNamedParameter($ownerUid)));
-        if ($status) {
-            $qb->andWhere($qb->expr()->eq('status', $qb->createNamedParameter($status->value)));
-        }
-        $qb->orderBy('created_at', 'DESC')
+        $qb->select('s.*')
+            ->from('pettycash_sheets', 's');
+        $this->applyListScope($qb, $ownerUid, $filter);
+        $qb->orderBy('s.created_at', 'DESC')
             ->setFirstResult($offset)
             ->setMaxResults($limit);
         $rows = $qb->executeQuery()->fetchAllAssociative();
         return array_map([$this, 'mapRow'], $rows);
+    }
+
+    /**
+     * T332: the owner's sheet count, from a `COUNT` rather than from the length of a page.
+     *
+     * T333 widened the predicate rather than the number: the count answers the *filtered* question, so
+     * a caller asking for the open sheets is told how many open sheets there are and not how many sheets
+     * they own. Filter-then-count is the only order that makes `total` describe the rows printed next to
+     * it, and it is why both methods build their predicate from {@see self::applyListScope()} -- the same
+     * method -- so a count that is subtly wider or narrower than its read is not expressible.
+     *
+     * `fetchOne()` returns the aggregate as the driver gives it -- `COUNT(*)` is `BIGINT`, which arrives
+     * as a string on some drivers and an int on others -- so it is cast rather than trusted.
+     */
+    public function countByOwnerUid(string $ownerUid, ?SheetListFilter $filter = null): int
+    {
+        $qb = $this->connection->getQueryBuilder();
+        $qb->select($qb->func()->count('s.id', 'pettycash_sheet_count'))
+            ->from('pettycash_sheets', 's');
+        $this->applyListScope($qb, $ownerUid, $filter);
+
+        return (int) $qb->executeQuery()->fetchOne();
+    }
+
+    /**
+     * The owner scope and the FR-064 facets both `findByOwnerUid()` and `countByOwnerUid()` filter by.
+     *
+     * Extracted so the two cannot drift; there is deliberately no second copy of the `status`,
+     * date-range or currency comparison anywhere in this class.
+     *
+     * ## Why the currency facet is a join and not a resolved surrogate key
+     *
+     * `T329` resolved a public id to a surrogate key in the application layer, because the key was
+     * already named on the request and resolving it needed a lookup anyway. A currency *code* is a value,
+     * not an identifier, and resolving it here would mean a second query inside a query builder -- which
+     * is why the sheet list joins `pettycash_currencies` and compares `c.code`. The join is added only
+     * when the facet is set, so the unfiltered read keeps the single-table plan the index serves.
+     *
+     * The alias is `s`, not `*`, because a joined `SELECT *` is ambiguous on every backend and the query
+     * builder's own `selectAlias()` cannot disambiguate a bare star.
+     */
+    private function applyListScope(IQueryBuilder $qb, string $ownerUid, ?SheetListFilter $filter): void
+    {
+        $qb->where($qb->expr()->eq('s.owner_uid', $qb->createNamedParameter($ownerUid)));
+
+        if ($filter === null) {
+            return;
+        }
+
+        if ($filter->status !== null) {
+            $qb->andWhere($qb->expr()->eq('s.status', $qb->createNamedParameter($filter->status->value)));
+        }
+
+        if ($filter->currency !== null) {
+            $qb->join('s', 'pettycash_currencies', 'c', $qb->expr()->eq('s.currency_id', 'c.id'))
+                ->andWhere($qb->expr()->eq('c.code', $qb->createNamedParameter((string) $filter->currency)));
+        }
+
+        if ($filter->from !== null) {
+            $qb->andWhere($qb->expr()->gte(
+                's.created_at',
+                $qb->createNamedParameter($filter->from, IQueryBuilder::PARAM_DATETIME_IMMUTABLE)
+            ));
+        }
+
+        if ($filter->to !== null) {
+            $qb->andWhere($qb->expr()->lte(
+                's.created_at',
+                $qb->createNamedParameter($filter->to, IQueryBuilder::PARAM_DATETIME_IMMUTABLE)
+            ));
+        }
     }
 
     /** @return list<ExpenseSheet> */

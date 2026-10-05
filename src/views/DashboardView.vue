@@ -53,6 +53,7 @@ onMounted(onLoad)
 				<DashboardCard
 					:role="card.role"
 					:metrics="card.metrics"
+					:notes="card.notes"
 				/>
 			</li>
 		</ul>

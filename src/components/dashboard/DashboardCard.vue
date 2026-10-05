@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { t } from '@nextcloud/l10n'
-import type { DashboardMetric, DashboardRole } from '@/types/dashboard'
+import type { DashboardMetric, DashboardNote, DashboardRole } from '@/types/dashboard'
 
 withDefaults(defineProps<{
 	role: DashboardRole
 	metrics: DashboardMetric[]
+	notes?: DashboardNote[]
 	loading?: boolean
-}>(), { loading: false })
+}>(), { notes: () => [], loading: false })
 
 /**
  * The card heading is the role, named by the catalog. A role the Persian catalog does not name yet
@@ -25,6 +26,18 @@ function roleLabel(role: DashboardRole): string {
  */
 function metricLabel(key: string): string {
 	const translationKey = `dashboard.metric.${key}`
+	const label = t('pettycash', translationKey)
+	return label === translationKey ? key : label
+}
+
+/**
+ * The label of a note is its own key under `dashboard.note.`, kept separate from
+ * `dashboard.metric.` so a caveat can be named in the catalog as something other than a figure — the
+ * bound on the figures is not one of the figures. Both fall back to the canonical key, which is what
+ * T119's catalog will replace.
+ */
+function noteLabel(key: string): string {
+	const translationKey = `dashboard.note.${key}`
 	const label = t('pettycash', translationKey)
 	return label === translationKey ? key : label
 }
@@ -77,6 +90,23 @@ function metricText(metric: DashboardMetric): string {
 				</dd>
 			</div>
 		</dl>
+
+		<!--
+			The envelope, kept out of the figure list above. `figuresBoundedBy` is 100 on every card, and
+			as a figure it was the largest number on a card whose real figures were single digits. A
+			bound is a caveat about the figures, so it is stated under them at text weight.
+		-->
+		<footer v-if="notes.length" class="dashboard-card__notes" data-testid="dashboard-notes">
+			<span
+				v-for="note in notes"
+				:key="note.key"
+				class="dashboard-card__note"
+				:data-testid="`dashboard-note-${note.key}`"
+			>
+				<span class="dashboard-card__note-label">{{ noteLabel(note.key) }}</span>
+				<span class="dashboard-card__note-value">{{ metricText(note) }}</span>
+			</span>
+		</footer>
 	</article>
 </template>
 
@@ -137,5 +167,35 @@ function metricText(metric: DashboardMetric): string {
 	font-weight: 400;
 	font-size: var(--font-size-floor);
 	font-family: monospace;
+}
+
+/*
+ * FR-071: the envelope sits below the figures at the floor size and normal weight, so it reads as a
+ * qualification of them. Nothing here declares a width, and the row wraps, so the card still fits a
+ * 390px viewport without horizontal scroll.
+ */
+.dashboard-card__notes {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.25rem 0.75rem;
+	margin-block-start: auto;
+	padding-block-start: 0.5rem;
+	border-block-start: 1px solid var(--nc-color-border, #dbdbdb);
+}
+
+.dashboard-card__note {
+	display: inline-flex;
+	flex-wrap: wrap;
+	gap: 0.25rem;
+	font-size: var(--font-size-floor);
+}
+
+.dashboard-card__note-label {
+	color: var(--nc-color-text-maxcontrast, #6b6b6b);
+}
+
+.dashboard-card__note-value {
+	color: var(--nc-color-text-maxcontrast, #6b6b6b);
+	overflow-wrap: anywhere;
 }
 </style>

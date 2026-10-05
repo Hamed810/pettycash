@@ -815,31 +815,36 @@ components:
       schema: { type: string, format: uuid }
 
   responses:
+    # Every response below carries `ocs.data.error` — the `ErrorEnvelope` wrapper, not `Error`
+    # itself. The wrapper is what makes an OCS-200-that-carries-a-failure distinguishable from a
+    # success payload: the OCS protocol permits a failure to arrive with HTTP 200, and a body of
+    # `{code, message}` in `ocs.data` is a shape a success payload could also take, whereas a
+    # present `error` key is a declared one. T334.
     Unauthorized:
       description: Authentication required
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/Error' }
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
     Forbidden:
       description: The caller lacks role, ownership, scope, stage, or state authority
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/Error' }
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
     NotFound:
       description: Resource does not exist or is intentionally hidden from the caller
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/Error' }
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
     Conflict:
       description: Stale version, duplicate/conflicting command, invalid state, or concurrency conflict
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/Error' }
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
     ValidationError:
       description: Business validation failed
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/Error' }
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
     CurrencyPage:
       description: Paged currencies
       content:
@@ -946,6 +951,13 @@ components:
             type: array
             items: { type: string }
         commandId: { type: string, format: uuid, nullable: true }
+    ErrorEnvelope:
+      # The value every error response carries in `ocs.data`: the `Error` schema under an `error`
+      # key. `OcsErrorMapper::respond()` is the single producer, so there is one nesting to keep.
+      type: object
+      required: [error]
+      properties:
+        error: { $ref: '#/components/schemas/Error' }
     Money:
       type: object
       required: [amountMinor, currency, minorUnit]
@@ -958,7 +970,7 @@ components:
       additionalProperties: { type: boolean }
     SessionContext:
       type: object
-      required: [userId, displayName, roles, capabilities]
+      required: [userId, displayName, roles, capabilities, costCenterCodes]
       properties:
         userId: { type: string }
         displayName: { type: string }
@@ -966,6 +978,21 @@ components:
           type: array
           items: { type: string, enum: [PURCHASER, COST_CENTER_MANAGER, SENIOR_MANAGER, FINANCE, ADMINISTRATOR] }
         capabilities: { $ref: '#/components/schemas/CapabilitySet' }
+        # The cost centres whose transactions and reports this caller is assigned to review
+        # (FR-004, FR-005) — the union of their cost-centre-manager and senior-manager assignments
+        # that are active on the date of the request. Empty for anybody with no such assignment,
+        # **including an administrator**: FR-007 gives an administrator visibility without decision
+        # authority, and visibility is a server-side rule, so this is a scope, not a grant.
+        #
+        # A member of `SessionContext`, not of `capabilities`, because `CapabilitySet` is
+        # `additionalProperties: {type: boolean}` and a list of strings would violate it. Codes
+        # rather than public ids because this is the vocabulary the server's own authorization
+        # uses (`ManagementReviewService::getManagedCostCenterCodes()`) and the one the transaction
+        # rows carry as `EntitySnapshot.code`, so the client and the server cannot disagree about
+        # what identifies a cost centre (T336).
+        costCenterCodes:
+          type: array
+          items: { type: string }
     Dashboard:
       type: object
       properties:
@@ -1232,6 +1259,16 @@ components:
         uploadedBy: { type: string }
         uploadedAt: { type: string, format: date-time }
         deactivatedAt: { type: string, format: date-time, nullable: true }
+        # Why the evidence was deactivated, when it was.
+        #
+        # Declared by T339 rather than removed from the response. `EvidenceController` emitted it and
+        # this schema did not describe it, so a reader could tell the two removal paths apart on one
+        # endpoint and not the other — and it is not cosmetic. FR-058 requires submitted evidence to be
+        # "marked inactive rather than physically removed", and the reason is the only observable of
+        # *which* path ran: the row is deactivated either way, and `GET /evidence/{id}/content` answers
+        # 403 once inactive. `EvidenceLifecycleControllerTest::
+        # testTheRecordedReasonShowsWhichRemovalActuallyHappened` is the pin that says so.
+        deactivationReason: { type: string, nullable: true }
     EvidenceLink:
       type: object
       required: [id, evidenceId, active, createdAt]

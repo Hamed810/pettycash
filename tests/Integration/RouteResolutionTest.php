@@ -54,32 +54,22 @@ final class RouteResolutionTest extends TestCase
      * which is the defect.
      *
      * Ownership, from the task list:
-     * - the eleven `configuration#*` routes are T087's (configuration/account OCS routes and
-     *   controllers, which creates `ConfigurationController`);
      * - `evidence#links` and `evidence#deactivateLink` are T096's (evidence and public-link routes,
      *   which adds both actions to the existing `EvidenceController`);
      * - `report#show` and `export#create` were T112's and were deleted from this list when T112
      *   completed, in the same change that marked it done. They created `ReportController` and
      *   `ExportController`.
      *
-     * Convergence Phase 38 re-verified all fifteen mechanically; the count has not moved since.
+     * The eleven `configuration#*` entries were removed on 2026-10-04 when T087 delivered
+     * `ConfigurationController`, in the same change, as `testTheKnownExpectedFailureListHasNoStaleEntries()`
+     * requires. Convergence Phase 38 re-verified all fifteen mechanically before that; the count has
+     * moved twice since, and the list is now two entries rather than thirteen.
      *
      * @var array<string, string>
      */
     private const KNOWN_UNRESOLVED = [
         'evidence#links' => 'T096',
         'evidence#deactivateLink' => 'T096',
-        'configuration#currenciesIndex' => 'T087',
-        'configuration#currencyCreate' => 'T087',
-        'configuration#currencyUpdate' => 'T087',
-        'configuration#costCentersIndex' => 'T087',
-        'configuration#costCenterCreate' => 'T087',
-        'configuration#costCenterUpdate' => 'T087',
-        'configuration#expenseTypesIndex' => 'T087',
-        'configuration#expenseTypeCreate' => 'T087',
-        'configuration#expenseTypeUpdate' => 'T087',
-        'configuration#financeAssignmentsIndex' => 'T087',
-        'configuration#financeAssignmentCreate' => 'T087',
     ];
 
     // ===== The guard =====
@@ -276,10 +266,9 @@ final class RouteResolutionTest extends TestCase
 
     public function testTheControllerDirectoryHoldsNoUnroutedDuplicate(): void
     {
-        // T235's subject, asserted from the structural side: a controller nothing routes to is
-        // unrequested code holding a second copy of logic a routed controller already has. This does
-        // not decide T235 — remove or route — but it names the files so the decision is made against
-        // a list rather than by memory.
+        // A controller nothing routes to is unrequested code holding a second copy of logic a routed
+        // controller already has. T235 named the two that existed and T344 removed them; this asserts
+        // that none can appear again, so the decision does not have to be re-made from memory.
         $routed = array_map(
             static fn (string $name): string => strtolower(explode('#', $name)[0]),
             array_merge(
@@ -299,11 +288,12 @@ final class RouteResolutionTest extends TestCase
         sort($unrouted);
 
         self::assertSame(
-            ['QueueController', 'ReturnsController'],
+            [],
             $unrouted,
-            'Controllers that no route references. T235 owns the decision to remove or route them; if '
-            . 'they are routed, this list shrinks, and if they are removed, it empties. Either way the '
-            . 'list should change in the same change as the decision.'
+            'Controllers that no route references. T344 removed `QueueController` and `ReturnsController` '
+            . '— each an unrouted duplicate of a routed `ReviewController` method — so this list is empty. '
+            . 'A controller appearing here means a class exists that no route can reach, which is how two '
+            . 'divergent implementations of one queue came to coexist.'
         );
     }
 

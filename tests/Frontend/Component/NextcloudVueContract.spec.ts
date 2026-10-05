@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createWebHashHistory } from 'vue-router'
+import { routes } from '@/router'
 
 /**
  * The app's own contract with `@nextcloud/vue`, asserted against the **real** library.
@@ -164,22 +165,26 @@ beforeEach(() => {
 })
 
 async function mountView(component: unknown, name: string, params: Record<string, string> = {}) {
+	// The application's own route table, components replaced with inert placeholders (T359).
+	//
+	// This file used to carry a hand-maintained copy of ten routes, with a comment explaining that a
+	// name missing from the copy would fail the mount with `No match for {"name":"transactions"}`.
+	// That comment described the copy as a hazard and then kept the copy. A copied table makes every
+	// route name resolvable whether or not the application declares it, which is how
+	// `TransactionDetailView` came to push a `transaction-correction-create` route that exists
+	// nowhere in `src/router/index.ts` — a purchaser's only correction affordance, doing nothing,
+	// with this file and `PurchaserFlow.spec.ts` both green because they resolved against copies.
+	//
+	// Deriving the table from `@/router` removes the class: a view that links to a name the
+	// application does not declare now fails loudly here.
 	const router = createRouter({
 		history: createWebHashHistory(),
-		routes: [
-			{ path: '/', name: 'dashboard', component: { template: '<div />' } },
-			{ path: '/sheets', name: 'sheets', component: { template: '<div />' } },
-			{ path: '/sheets/create', name: 'sheet-create', component: { template: '<div />' } },
-			{ path: '/sheets/:id', name: 'sheet-detail', component: { template: '<div />' } },
-			{ path: '/sheets/:id/edit', name: 'sheet-edit', component: { template: '<div />' } },
-			// Both names exist in `src/router/index.ts` and the transaction form links by `transactions`,
-			// so both are declared here; a route table missing either one fails the mount with a
-			// `No match for {"name":"transactions"}` rather than anything to do with this file.
-			{ path: '/sheets/:sheetId/transactions', name: 'transactions', component: { template: '<div />' } },
-			{ path: '/sheets/:sheetId/transactions/create', name: 'transaction-create', component: { template: '<div />' } },
-			{ path: '/transactions/:id', name: 'transaction-detail', component: { template: '<div />' } },
-			{ path: '/transactions/:id/edit', name: 'transaction-edit', component: { template: '<div />' } }
-		]
+		routes: routes.map(({ path, name, props }) => ({
+			path,
+			name,
+			props,
+			component: { template: '<div />' }
+		}))
 	})
 	await router.push({ name, params })
 	await router.isReady()
@@ -199,10 +204,14 @@ describe('NcNoteCard header contract', () => {
 	 * table all appeared. The three buttons that make the workflow possible did not. No test asked for
 	 * them by name, so nothing noticed.
 	 *
-	 * `submit-sheet-button` is deliberately **not** asserted here. It is `v-if="canSubmit"`, and
-	 * `canSubmit` requires `currentSheet.transactions.length > 0` — and `GET /sheets/{id}` returns no
-	 * `transactions` array, so it is permanently false. That is a separate, larger defect, owned by
-	 * T326, and asserting it here would fail for a reason this file is not about.
+	 * `submit-sheet-button` is **not** asserted here, and the reason has changed: it is
+	 * `v-if="canSubmit"`, which requires `currentSheet.transactions.length > 0`, and this file mounts
+	 * the view without a sheet payload at all — so asserting it would fail for a reason this file is
+	 * not about. That is no longer a deferral of a known defect. `GET /sheets/{id}` now returns
+	 * `transactions`, the button renders for a sheet that has one, and both directions of the
+	 * assertion live where the payload fixture is: `PurchaserFlow.spec.ts`, "withhold submission from
+	 * an open sheet that has no transaction" and "offer submission for an open sheet the API reports
+	 * as holding a transaction".
 	 */
 	it('renders the sheet action bar that the purchaser journey depends on', { timeout: 30_000 }, async () => {
 		const SheetDetailView = (await import('@/views/sheets/SheetDetailView.vue')).default

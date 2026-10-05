@@ -96,17 +96,24 @@ class ExportController extends OCSController
         // bound, so they are read from the request params here.
         try {
             $params = $this->request->getParams();
+            // `Error.fieldErrors` is a map of field name to a **list** of messages
+            // (`contracts/ocs-api.yaml`), and every other controller in the app builds it that way.
+            // These three were bare strings, so this endpoint emitted
+            // `fieldErrors.fileFormat: "required"` where the contract and `src/types/api.ts` both
+            // promise `["required"]` — a value the client's typed loop cannot iterate. Found by
+            // `ErrorEnvelopeContractTest`, which asserts the declared shape rather than only the
+            // status.
             $fieldErrors = [];
             if ($commandId === '') {
-                $fieldErrors['commandId'] = 'required';
+                $fieldErrors['commandId'] = ['commandId is required'];
             }
             if ($resource === '') {
-                $fieldErrors['resource'] = 'required';
+                $fieldErrors['resource'] = ['resource is required'];
             }
             if ($fileFormat === '') {
                 // Reported under the contract's new name, not the old one: a client that was told
                 // `format` is required would look for a field that no longer exists.
-                $fieldErrors['fileFormat'] = 'required';
+                $fieldErrors['fileFormat'] = ['fileFormat is required'];
             }
 
             if ($fieldErrors !== []) {
@@ -263,10 +270,26 @@ class ExportController extends OCSController
             );
         }
 
-        // No selection and no row source for this resource: an empty artifact, which is at least an
-        // honest answer to "export everything you support for this resource" rather than a filtered
-        // one pretending to be complete.
-        return [[], []];
+        // **No selection, and no row source either — so this is refused rather than answered with an
+        // empty artifact.** The code this replaces returned `[[], []]` under the comment "an empty
+        // artifact, which is at least an honest answer", and it was not one: `ExportResult` then carried
+        // `rowCount: 0` and `byteSize` for a real file, so the emptiness read as **measured**. A user
+        // who exported the cost-centre report got a well-formed CSV with a header row and no rows, and
+        // nothing anywhere said the report had no exporter (T342).
+        //
+        // The distinction this draws is the one that matters: an export of `sheets`/`transactions` that
+        // matches nothing is a *measured* zero and is answered `200` with `rowCount: 0` — asserted by
+        // `testAnEmptyResultStillNamesItsColumns`. An export of a resource with no row projection is not
+        // a measurement at all, and the only honest answer is the same refusal a selection gets.
+        throw new UnsupportedSelection(
+            "Exporting resource '{$resource}' is not supported yet; rows are resolved for 'sheet', "
+            . "'sheets' and 'transactions'. No artifact is produced for a resource with no row source, "
+            . 'because an empty file with a row count of zero reads as a measured result.'
+        );
+
+        // The refusal above is the only exit for a resource with no row source: every path that reaches
+        // here has already answered, or has refused on its own terms.
+        throw new \LogicException('Unreachable: every resource without a row projection is refused above.');
     }
 
     /**

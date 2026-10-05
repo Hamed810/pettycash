@@ -15,6 +15,13 @@ use OCP\IDBConnection;
 
 final class DbEvidenceRepository implements EvidenceRepository
 {
+    /**
+     * Public uuids resolved from surrogate keys, memoised for the life of this instance.
+     *
+     * @var array<string, array<int, string|null>>
+     */
+    private array $publicIds = [];
+
     public function __construct(
         private readonly IDBConnection $connection,
         private readonly UserDirectory $userDirectory,
@@ -133,15 +140,24 @@ final class DbEvidenceRepository implements EvidenceRepository
             // had written. `mapRow()` sets the mirror on the way back in; this sets it on the way
             // out. Found by T236's real-database round trip.
             $evidence->publicId = $evidence->id;
+            // The two reference ids the same way, and for the same reason: a freshly created aggregate
+            // is what `POST /transactions/{id}/evidence` answers with, so leaving them null would make
+            // the upload response the one evidence payload in the application still carrying no uuids,
+            // while every later read of the same row carried them (T339).
+            $evidence->transactionPublicId ??= $this->publicIdOf('pettycash_transactions', $evidence->transactionId);
+            $evidence->originRevisionPublicId ??= $this->publicIdOf('pettycash_transaction_revisions', $evidence->originRevisionId);
         }
     }
 
     private function mapRow(array $row): Evidence
     {
+        $transactionDbId = (int) $row['transaction_id'];
+        $revisionDbId = (int) $row['origin_revision_id'];
+
         return new Evidence(
             $row['public_id'],
-            (int) $row['transaction_id'],
-            (int) $row['origin_revision_id'],
+            $transactionDbId,
+            $revisionDbId,
             $row['appdata_key'],
             $row['original_name'],
             $row['media_type'],
@@ -154,7 +170,48 @@ final class DbEvidenceRepository implements EvidenceRepository
             $row['deactivated_at'] ? new DateTimeImmutable($row['deactivated_at']) : null,
             $row['deactivation_reason'] ?? null,
             (int) $row['id'],
-            $row['public_id']
+            $row['public_id'],
+            // The public uuids the `Evidence` schema declares, resolved from the join keys stored here.
+            // `contracts/ocs-api.yaml` types both as `format: uuid` and both are required, so emitting
+            // the integers is a contract violation on every evidence payload the application has ever
+            // produced (T339).
+            $this->publicIdOf('pettycash_transactions', $transactionDbId),
+            $this->publicIdOf('pettycash_transaction_revisions', $revisionDbId)
         );
+    }
+
+    /**
+     * The public uuid of a row, or `null` when the reference dangles.
+     *
+     * **Memoised per repository instance, and the memo is safe because the container builds one
+     * repository per request.** `findByTransactionId()` maps every row of the page, and without this a
+     * transaction carrying twenty evidence files would issue forty extra single-row reads — for two ids
+     * that repeat on every one of those rows. A long-running process would have to drop the memo; the
+     * alternative (a batched second query per page) costs a query even when the page holds one row.
+     *
+     * `null` for a dangling reference is the honest answer and is emitted as an empty string, because
+     * `Evidence.transactionId` is declared required and not nullable — a number there would be a value a
+     * client tries to use, and the uuid space is what the contract promises.
+     *
+     * @param 'pettycash_transactions'|'pettycash_transaction_revisions' $table
+     */
+    private function publicIdOf(string $table, int $dbId): ?string
+    {
+        if (isset($this->publicIds[$table][$dbId])) {
+            return $this->publicIds[$table][$dbId];
+        }
+
+        $qb = $this->connection->getQueryBuilder();
+        $qb->select('public_id')
+            ->from($table)
+            ->where($qb->expr()->eq('id', $qb->createNamedParameter($dbId)))
+            ->setMaxResults(1);
+        $found = $qb->executeQuery()->fetchOne();
+
+        // `fetchOne()` answers `false` for no row, which is cached as `null` so the second row of the
+        // same dangling reference does not repeat the query.
+        $value = is_string($found) && $found !== '' ? $found : null;
+
+        return $this->publicIds[$table][$dbId] = $value;
     }
 }

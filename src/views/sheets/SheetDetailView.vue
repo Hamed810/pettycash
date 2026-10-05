@@ -2,7 +2,6 @@
 import { onMounted, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useSheetStore } from '@/stores/sheets'
-import { useTransactionStore } from '@/stores/transactions'
 import type { SheetStatus } from '@/types/api'
 import { NcBreadcrumbs, NcNoteCard, NcButton, NcChip, NcIconSvgWrapper } from '@nextcloud/vue'
 import { mdiPencil, mdiPlus, mdiSend, mdiEye, mdiLock } from '@mdi/js'
@@ -12,7 +11,6 @@ import { formatMoney } from '@/utils/money'
 const route = useRoute()
 const router = useRouter()
 const sheetStore = useSheetStore()
-const transactionStore = useTransactionStore()
 
 const sheetId = computed(() => route.params.id as string)
 
@@ -27,34 +25,48 @@ const statusLabels: Record<SheetStatus, string> = {
 
 const isSubmitted = computed(() => sheetStore.currentSheet?.status !== 'OPEN')
 
+/**
+ * The sheet's transactions, from the payload the contract defines for exactly this.
+ *
+ * `contracts/ocs-api.yaml:1125` makes `transactions` a member of `SheetDetail`, and `canSubmit`
+ * below is derived from it, so this array is the single source for both the table and the Submit
+ * button. Reading it as `?? []` keeps a sheet that has not loaded yet rendering as an empty table
+ * rather than throwing.
+ */
+const sheetTransactions = computed(() => sheetStore.currentSheet?.transactions ?? [])
+
 function goToEdit() { router.push({ name: 'sheet-edit', params: { id: sheetId.value } }) }
 function goToCreateTransaction() { router.push({ name: 'transaction-create', params: { sheetId: sheetId.value } }) }
 function goToTransaction(transactionId: string) { router.push({ name: 'transaction-detail', params: { id: transactionId } }) }
 
 async function handleSubmit() {
 	if (!sheetStore.currentSheet) return
+	// The submission response is itself a `SheetDetail`, so it carries the routed transactions and a
+	// fresh `allowedActions`; there is no second request to make and no separate list to reload.
 	await sheetStore.submitCurrentSheet(sheetId.value, sheetStore.currentSheet.version)
-	await transactionStore.loadTransactions(sheetId.value)
 }
 
 /**
- * Loads the sheet, then its transactions.
+ * Loads the sheet, which carries its transactions with it.
  *
- * The stores record a failure in their own `error` ref, which this view renders in its alert. These
+ * `contracts/ocs-api.yaml` defines `SheetDetail` as `SheetSummary` plus `transactions` and
+ * `allowedActions`, and this view previously issued a second request for the same rows against
+ * `GET /sheets/{sheetId}/transactions` — a path no route serves, so it answered `405` with an empty
+ * body and the table below rendered no rows even after a transaction had been saved. One request now
+ * fills both.
+ *
+ * The store records a failure in its own `error` ref, which this view renders in its alert. These
  * loads are fired from `onMounted` and from a `watch`, neither of which has a caller to react to a
  * rejection, so it is absorbed here rather than surfacing as an unhandled promise rejection in the
  * user's console.
  */
-function loadSheetAndTransactions(id: string) {
-	sheetStore.loadSheet(id).then(sheet => {
-		if (sheet) return transactionStore.loadTransactions(id)
-		return undefined
-	}).catch(() => undefined)
+function loadSheet(id: string) {
+	sheetStore.loadSheet(id).catch(() => undefined)
 }
 
-onMounted(() => { loadSheetAndTransactions(sheetId.value) })
+onMounted(() => { loadSheet(sheetId.value) })
 
-watch(sheetId, (newId) => { loadSheetAndTransactions(newId) })
+watch(sheetId, (newId) => { loadSheet(newId) })
 
 const transactionHeaders = [
 	{ key: 'expenseDate', label: 'pettycash.transactions.expenseDate', sortable: true },
@@ -138,7 +150,13 @@ const transactionHeaders = [
 				</div>
 				<div class="detail-item">
 					<strong>{{ t('pettycash', 'sheets.owner') }}</strong>
-					<div>{{ sheetStore.currentSheet?.ownerDisplayName }}</div>
+					<!--
+						`data-testid` because this row had none, and a rendered value with no hook is a
+						value nothing can assert: the Owner row rendered blank for every sheet in the
+						application while `ownerDisplayName` was a literal `''`, and a shape check passed on
+						`''` (T340).
+					-->
+					<div data-testid="sheet-owner">{{ sheetStore.currentSheet?.ownerDisplayName }}</div>
 				</div>
 			</div>
 		</NcNoteCard>
@@ -187,7 +205,7 @@ const transactionHeaders = [
 			</div>
 		</NcNoteCard>
 
-		<NcNoteCard :heading="`${t('pettycash', 'transactions.list')} (${transactionStore.pagination.total})`" data-test="transaction-list">
+		<NcNoteCard :heading="`${t('pettycash', 'transactions.list')} (${sheetTransactions.length})`" data-test="transaction-list">
 			<div class="table-container">
 				<table class="nc-table" data-test="transaction-table">
 					<thead>
@@ -195,10 +213,10 @@ const transactionHeaders = [
 							<th v-for="header in transactionHeaders" :key="header.key" scope="col">{{ t('pettycash', header.label) }}</th>
 						</tr>
 					</thead>
-					<tbody v-if="!transactionStore.loading">
-						<!-- Only this sheet's transactions: the store is loaded from the sheet in the
-						     route, so a row here belongs to the sheet the purchaser opened. -->
-						<tr v-for="item in transactionStore.transactions" :key="item.id" data-test="sheet-transaction-row">
+					<tbody v-if="!sheetStore.loading">
+						<!-- Only this sheet's transactions: they arrive on the sheet payload for the
+						     route's own sheet, so a row here belongs to the sheet the purchaser opened. -->
+						<tr v-for="item in sheetTransactions" :key="item.id" data-test="sheet-transaction-row">
 							<td>{{ new Date(item.activeRevision.expenseDate).toLocaleDateString('fa-IR') }}</td>
 							<td>{{ formatMoney(item.activeRevision.amount) }}</td>
 							<td>{{ item.activeRevision.costCenter.name }}</td>
@@ -232,26 +250,23 @@ const transactionHeaders = [
 			</div>
 		</NcNoteCard>
 
-		<NcNoteCard :heading="t('pettycash', 'audit.title')" data-test="audit-tab">
-			<div class="table-container">
-				<table class="nc-table" data-test="audit-table">
-					<thead>
-						<tr>
-							<th>{{ t('pettycash', 'audit.eventType') }}</th>
-							<th>{{ t('pettycash', 'audit.actor') }}</th>
-							<th>{{ t('pettycash', 'audit.stage') }}</th>
-							<th>{{ t('pettycash', 'audit.decision') }}</th>
-							<th>{{ t('pettycash', 'audit.occurredAt') }}</th>
-						</tr>
-					</thead>
-					<tbody>
-						<tr v-if="false">
-							<td colspan="5" class="text-center py-8">{{ t('pettycash', 'audit.noEvents') }}</td>
-						</tr>
-					</tbody>
-				</table>
-			</div>
-		</NcNoteCard>
+		<!--
+	The sheet's audit card used to live here, and it was removed by T343 rather than bound.
+
+	Its body row was `<tr v-if="false">` — a literal, so the "no events" message could never render
+	either — and no audit loader was bound in this view, so it had **no data source at all**. The
+	endpoints are per-transaction (`GET /transactions/{id}/audit`, the only audit route in
+	`appinfo/routes.php`); there is no sheet-scoped one, so binding this table would have meant either
+	N per-transaction requests to assemble a sheet history client-side, or a new endpoint and a contract
+	amendment. Both are Phase 50's subject, which owns the audit page's shape and pagination.
+
+	**A header with a permanently empty body is worse than no card**, because it is indistinguishable
+	from a sheet with no history: a reviewer looking at an empty table concludes nothing was recorded,
+	when in fact nothing was ever fetched. Nothing asserted this card's presence, so no test changed
+	with it.
+
+	Phase 50 owns putting one audit surface back, once the shape is settled.
+-->
 
 		<!-- A refused submission is reported here. `role="alert"` plus `aria-live` makes it announced
 		     rather than only shown, so a purchaser who has scrolled past the totals still learns why

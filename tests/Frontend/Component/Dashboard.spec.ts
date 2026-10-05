@@ -45,7 +45,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useDashboardStore } from '@/stores/dashboard'
 import type { Role } from '@/types/api'
 import type { DashboardMetric } from '@/types/dashboard'
-import { dashboardMetrics, isMoney } from '@/utils/dashboard'
+import { dashboardMetrics, dashboardNotes, isMoney } from '@/utils/dashboard'
 
 const requestMock = vi.mocked(axios.request)
 
@@ -59,12 +59,52 @@ const SOURCES = [
 	'src/types/dashboard.ts'
 ].map((file) => ({ file, source: readFileSync(join(process.cwd(), file), 'utf8') }))
 
+/**
+ * The projection as `DashboardController::card()` actually builds it, and not as a convenient guess.
+ *
+ * The previous fixture was hand-written flat — `{ openSheets: 2, returnedTransactions: 1 }` — while
+ * `card()` has always answered `{ userId, figures: {...}, figuresBoundedBy, figuresTruncated }`
+ * (`lib/Controller/DashboardController.php:152-164`). A flat fixture is the reason fourteen of
+ * Phase 55's seventeen wire-level gaps were invisible to this suite: the test hands the client the
+ * shape it wishes the server sent, so the client is never exercised against the shape it receives.
+ *
+ * These keys and values are the ones the server emits, read off the controller and pinned by
+ * `tests/Contract/Controller/DashboardControllerTest.php` (`figures` present, `figuresBoundedBy`
+ * exactly 100, `figuresTruncated` a bool, every figure an int). Where a hand-written key such as
+ * `queueItems` or `balance` appeared before, the server's own key appears now — `awaitingReview` for
+ * the three review queues, and `DashboardQuery::administrativeSummary()`'s three counts for admin.
+ */
 const PROJECTION = {
-	purchaser: { openSheets: 2, returnedTransactions: 1 },
-	costCenter: { queueItems: 7, decisions: 3 },
-	senior: { queueItems: 4 },
-	finance: { queueItems: 9, balance: { amountMinor: 1250000, currency: 'IRR', minorUnit: 0 } },
-	admin: { activeUsers: 12 }
+	purchaser: {
+		userId: 'u-1',
+		figures: { openSheets: 2, returnedToMe: 1 },
+		figuresBoundedBy: 100,
+		figuresTruncated: false
+	},
+	costCenter: {
+		userId: 'u-1',
+		figures: { awaitingReview: 7 },
+		figuresBoundedBy: 100,
+		figuresTruncated: false
+	},
+	senior: {
+		userId: 'u-1',
+		figures: { awaitingReview: 4 },
+		figuresBoundedBy: 100,
+		figuresTruncated: false
+	},
+	finance: {
+		userId: 'u-1',
+		figures: { awaitingReview: 9 },
+		figuresBoundedBy: 100,
+		figuresTruncated: true
+	},
+	admin: {
+		userId: 'u-1',
+		figures: { totalSheets: 12, totalTransactions: 34, totalAccounts: 2 },
+		figuresBoundedBy: 100,
+		figuresTruncated: false
+	}
 }
 
 function ocsResponse(data: unknown) {
@@ -286,6 +326,202 @@ describe('US7 Role-aware Dashboard — Vue Component Tests', () => {
 		})
 	})
 
+	/**
+	 * T331: the bucket the server actually sends, end to end.
+	 *
+	 * Everything above this block feeds the client a shape of its own choosing. This block feeds it
+	 * `DashboardController::card()`'s, so the assertions below are about what a real instance answers.
+	 *
+	 * The defect being pinned: `dashboardMetrics()` walked only the *top level* of a bucket, so
+	 * `figures` — where every FR-061 figure lives — fell through to the `kind: 'raw'` branch and was
+	 * printed as a monospace JSON blob. Each role card then showed four rows: the `userId`, a JSON
+	 * object labelled *figures*, the read-window bound `100` dressed as a headline count, and
+	 * `figuresTruncated` as yes/no. Not one FR-061 figure was reachable, and the bound was the
+	 * largest number on the card.
+	 */
+	describe('T331 the server-shaped bucket', () => {
+		describe('figures are metrics, not a JSON blob', () => {
+			it('reads one figure out of `figures` as the count it is', () => {
+				const metrics = dashboardMetrics(PROJECTION.purchaser)
+
+				expect(metrics.map((entry) => entry.key)).toEqual(['openSheets', 'returnedToMe'])
+				expect(metric(metrics, 'openSheets')).toEqual({
+					key: 'openSheets',
+					kind: 'count',
+					text: '۲'
+				})
+				expect(metric(metrics, 'returnedToMe').text).toBe('۱')
+			})
+
+			it('produces no `raw` metric for any bucket the server builds', () => {
+				// `raw` is the "the client has no renderer for this" branch. A single occurrence on a
+				// server-shaped bucket means an FR-061 figure is being shown as a blob again.
+				for (const [role, bucket] of Object.entries(PROJECTION)) {
+					expect(
+						dashboardMetrics(bucket).filter((entry) => entry.kind === 'raw'),
+						`the ${role} card fell through to a raw metric`
+					).toEqual([])
+				}
+			})
+
+			it('covers every FR-061 figure the server sends for every role', () => {
+				for (const [role, bucket] of Object.entries(PROJECTION)) {
+					const figures = bucket.figures as Record<string, number>
+					expect(dashboardMetrics(bucket).map((entry) => entry.key), role).toEqual(Object.keys(figures))
+				}
+			})
+
+			it('keeps a value nested inside `figures` renderable rather than flattening blindly', () => {
+				// The server sends integers under `figures` (pinned by `testFiguresAreIntegers`), so a
+				// money value there is not something it does today. It is asserted anyway because
+				// "flatten one level" must not mean "coerce whatever is one level down into a count":
+				// an amount that lost its currency would print 100 times too small.
+				const metrics = dashboardMetrics({ figures: { balance: { amountMinor: 1250000, currency: 'IRR', minorUnit: 0 } } })
+				expect(metric(metrics, 'balance').kind).toBe('money')
+			})
+
+			it('does not treat `figures` as a figure when it is not a record', () => {
+				// A bucket whose `figures` is a scalar is not a shape this server emits; it must not
+				// silently become an empty list of metrics either, so the value stays visible.
+				expect(metric(dashboardMetrics({ figures: 3 }), 'figures').kind).toBe('count')
+			})
+		})
+
+		describe('the envelope is stated, and is not a figure', () => {
+			it('keeps the bound and the truncation flag out of the headline figures', () => {
+				// "A bound is a caveat, not a figure, and it must not be the largest number on the
+				// card." `figuresBoundedBy` is 100 on every card; as a `count` it outranked every real
+				// figure a user could have.
+				const keys = dashboardMetrics(PROJECTION.senior).map((entry) => entry.key)
+				expect(keys).toEqual(['awaitingReview'])
+				expect(keys).not.toContain('figuresBoundedBy')
+				expect(keys).not.toContain('figuresTruncated')
+				expect(keys).not.toContain('userId')
+			})
+
+			it('states the identity and the bound as notes', () => {
+				expect(dashboardNotes(PROJECTION.purchaser).map((note) => note.key))
+					.toEqual(['userId', 'figuresBoundedBy', 'figuresTruncated'])
+			})
+
+			it('resolves the truncation flag through the catalog instead of printing true or false', () => {
+				expect(metric(dashboardNotes(PROJECTION.finance), 'figuresTruncated')).toEqual({
+					key: 'figuresTruncated',
+					kind: 'boolean',
+					text: '',
+					boolean: true
+				})
+			})
+
+			it('formats the bound as a number but presents it as a caveat', () => {
+				expect(metric(dashboardNotes(PROJECTION.purchaser), 'figuresBoundedBy')).toEqual({
+					key: 'figuresBoundedBy',
+					kind: 'count',
+					text: '۱۰۰'
+				})
+			})
+
+			it('reads a bucket with no envelope at all as having no notes', () => {
+				expect(dashboardNotes({ openSheets: 2 })).toEqual([])
+				expect(dashboardNotes(undefined)).toEqual([])
+			})
+		})
+
+		describe('DashboardCard renders the server shape', () => {
+			function mountCard(bucket: unknown) {
+				return mount(DashboardCard, {
+					props: {
+						role: 'purchaser',
+						metrics: dashboardMetrics(bucket as Record<string, unknown>),
+						notes: dashboardNotes(bucket as Record<string, unknown>)
+					}
+				})
+			}
+
+			it('draws one labelled, translated row per FR-061 figure', () => {
+				vi.mocked(t).mockImplementation((_app, key) => {
+					const catalog: Record<string, string> = {
+						'dashboard.role.purchaser': 'کارهای خریدار',
+						'dashboard.metric.openSheets': 'برگه‌های باز',
+						'dashboard.metric.returnedToMe': 'بازگشتی به من'
+					}
+					return catalog[key] ?? key
+				})
+
+				const wrapper = mountCard(PROJECTION.purchaser)
+
+				expect(wrapper.find('h3').text()).toBe('کارهای خریدار')
+				expect(wrapper.findAll('dt').map((label) => label.text())).toEqual(['برگه‌های باز', 'بازگشتی به من'])
+				expect(wrapper.find('[data-testid="dashboard-value-openSheets"]').text()).toBe('۲')
+				expect(wrapper.find('[data-testid="dashboard-value-returnedToMe"]').text()).toBe('۱')
+			})
+
+			it('draws no raw row and no `figures` row, whatever the catalog says', () => {
+				const wrapper = mountCard(PROJECTION.admin)
+
+				expect(wrapper.find('[data-metric-kind="raw"]').exists()).toBe(false)
+				expect(wrapper.find('[data-testid="dashboard-metric-figures"]').exists()).toBe(false)
+				expect(wrapper.findAll('dt').map((label) => label.text()))
+					.toEqual(['totalSheets', 'totalTransactions', 'totalAccounts'])
+			})
+
+			it('renders the envelope apart from the figures, so the bound is not a headline number', () => {
+				const wrapper = mountCard(PROJECTION.senior)
+
+				// The bound is 100 and the only figure is 4. If both sat in the same list the bound
+				// would be the largest number on the card, which is what the requirement forbids.
+				expect(wrapper.find('[data-testid="dashboard-notes"]').exists()).toBe(true)
+				expect(wrapper.findAll('[data-testid^="dashboard-note-"]').map((note) => note.attributes('data-testid')))
+					.toEqual(['dashboard-note-userId', 'dashboard-note-figuresBoundedBy', 'dashboard-note-figuresTruncated'])
+				expect(wrapper.find('[data-testid="dashboard-note-figuresBoundedBy"]').text()).toContain('۱۰۰')
+				expect(wrapper.find('[data-testid="dashboard-metric-figuresBoundedBy"]').exists()).toBe(false)
+			})
+
+			it('states that a role has nothing to do once the envelope stops counting as content', () => {
+				// The empty state was unreachable: `userId` alone satisfied `metrics.length > 0` on
+				// every card the server ever sends, so a role with no figure could never say so.
+				const wrapper = mountCard({
+					userId: 'u-1',
+					figures: {},
+					figuresBoundedBy: 100,
+					figuresTruncated: false
+				})
+
+				expect(wrapper.find('[data-testid="dashboard-card-empty"]').text()).toBe('dashboard.empty')
+				expect(wrapper.find('dl.dashboard-card__metrics').exists()).toBe(false)
+			})
+		})
+
+		describe('the store carries both halves', () => {
+			it('separates figures from notes for every bucket the projection sent', async () => {
+				setSessionRoles('PURCHASER', 'ADMINISTRATOR')
+				const store = useDashboardStore()
+				await store.loadDashboard()
+
+				expect(store.cards.map((card) => [card.role, card.metrics.map((e) => e.key)])).toEqual([
+					['purchaser', ['openSheets', 'returnedToMe']],
+					['admin', ['totalSheets', 'totalTransactions', 'totalAccounts']]
+				])
+				expect(store.cards.every((card) => card.notes.length === 3)).toBe(true)
+			})
+
+			it('reports a role whose figures are empty as having nothing to show', async () => {
+				requestMock.mockResolvedValue(ocsResponse({
+					senior: { userId: 'u-1', figures: {}, figuresBoundedBy: 100, figuresTruncated: false }
+				}))
+				setSessionRoles('SENIOR_MANAGER')
+				const store = useDashboardStore()
+				await store.loadDashboard()
+
+				// The card is still rendered — the role is held — but it carries no figure, so the
+				// empty state is reachable and `hasMetrics` stops being satisfied by the `userId` row.
+				expect(store.cards.map((card) => card.role)).toEqual(['senior'])
+				expect(store.hasMetrics).toBe(false)
+				expect(store.isEmpty).toBe(false)
+			})
+		})
+	})
+
 	describe('DashboardView', () => {
 		function mountView() {
 			const pinia = createPinia()
@@ -308,20 +544,20 @@ describe('US7 Role-aware Dashboard — Vue Component Tests', () => {
 			expect(wrapper.find('[data-testid="dashboard-card-purchaser"]').exists()).toBe(true)
 		})
 
-		it('renders one card per bucket the projection sent', async () => {
-			const wrapper = mountView()
-			await flushPromises()
-			expect(requestedUrl()).toContain('/dashboard')
-			const cards = wrapper.findAll('[data-testid^="dashboard-card-"]')
-			expect(cards.map((card) => card.attributes('data-testid'))).toEqual([
-				'dashboard-card-purchaser',
-				'dashboard-card-costCenter',
-				'dashboard-card-senior',
-				'dashboard-card-finance',
-				'dashboard-card-admin'
-			])
-			expect(wrapper.find('[data-testid="dashboard-value-queueItems"]').text()).toBe('۷')
-		})
+it('renders one card per bucket the projection sent', async () => {
+		const wrapper = mountView()
+		await flushPromises()
+		expect(requestedUrl()).toContain('/dashboard')
+		const cards = wrapper.findAll('[data-testid^="dashboard-card-"]')
+		expect(cards.map((card) => card.attributes('data-testid'))).toEqual([
+			'dashboard-card-purchaser',
+			'dashboard-card-costCenter',
+			'dashboard-card-senior',
+			'dashboard-card-finance',
+			'dashboard-card-admin'
+		])
+		expect(wrapper.find('[data-testid="dashboard-value-awaitingReview"]').text()).toBe('۷')
+	})
 
 		it('presents the empty state when the projection carries no bucket', async () => {
 			requestMock.mockResolvedValue(ocsResponse({}))

@@ -171,6 +171,25 @@ final class DbTransactionRevisionRepository implements TransactionRevisionReposi
     }
 
     /**
+     * The expense type's public UUID for a stored `expense_type_id`.
+     *
+     * The mirror of `getCostCenterPublicId()`, and null for the same reason it returns null: a join key
+     * with no matching row must not be reported as an identifier. The caller treats null as "this
+     * revision names no resolvable expense type" rather than substituting the title, because the title
+     * is exactly what `EntitySnapshot.id` must not carry.
+     */
+    private function getExpenseTypePublicId(int $dbId): ?string
+    {
+        $qb = $this->connection->getQueryBuilder();
+        $qb->select('public_id')
+            ->from('pettycash_expense_types')
+            ->where($qb->expr()->eq('id', $qb->createNamedParameter($dbId)))
+            ->setMaxResults(1);
+        $row = $qb->executeQuery()->fetchAssociative();
+        return $row === false ? null : (string) $row['public_id'];
+    }
+
+    /**
      * Whether the revision has at least one active evidence item.
      *
      * `data-model.md:248` states the rule: "Required evidence is validated against active evidence
@@ -275,6 +294,13 @@ final class DbTransactionRevisionRepository implements TransactionRevisionReposi
         $revision->costCenterCode = $row['cost_center_code'] ?? null;
         $revision->costCenterName = $row['cost_center_name'] ?? null;
         $revision->expenseTypeDbId = $row['expense_type_id'] ? (int) $row['expense_type_id'] : null;
+        // T330. Resolved here, beside `getCostCenterPublicId()` above, because that is where the cost
+        // centre's public id is already resolved from its join key -- the two are the same fact about
+        // two entities, and resolving only one of them is what left `Revision.expenseType.id` carrying a
+        // title while `costCenter.id` carried a uuid.
+        $revision->expenseTypeId = $revision->expenseTypeDbId !== null
+            ? $this->getExpenseTypePublicId($revision->expenseTypeDbId)
+            : null;
         $revision->managerUid = $row['manager_uid'] ?? null;
         $revision->seniorManagerUid = $row['senior_manager_uid'] ?? null;
         $revision->activatedAt = $activatedAt;

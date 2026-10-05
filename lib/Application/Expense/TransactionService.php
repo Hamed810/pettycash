@@ -314,9 +314,15 @@ final readonly class TransactionService
 
             $expenseTypeTitle = $expenseType->title;
             $expenseTypeDbId = $expenseType->id ?? 0;
+            // T330. Carried alongside the title and the join key, mirroring how `$costCenterPublicId`
+            // is carried alongside `$costCenterCode`. Without it the revision had no public id at all,
+            // so `Revision.expenseType.id` had to be filled with the title -- and the correction form
+            // sends that field straight back here, where it resolves to nothing.
+            $expenseTypePublicId = $expenseType->publicId;
         } else {
             $expenseTypeTitle = $current->expenseTypeTitle();
             $expenseTypeDbId = $current->expenseTypeDbId ?? 0;
+            $expenseTypePublicId = $current->expenseTypeId();
         }
 
         $revision->complete(
@@ -327,7 +333,8 @@ final readonly class TransactionService
             $costCenterDbId,
             $expenseTypeTitle,
             $expenseTypeDbId,
-            $current->hasEvidence()
+            $current->hasEvidence(),
+            $expenseTypePublicId
         );
 
         // A transaction being corrected must NOT be activated by an edit.

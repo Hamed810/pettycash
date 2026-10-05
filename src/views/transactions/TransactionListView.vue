@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useTransactionStore } from '@/stores/transactions'
+import { useSheetStore } from '@/stores/sheets'
 import NcButton from '@nextcloud/vue/components/NcButton'
 import NcChip from '@nextcloud/vue/components/NcChip'
 import NcIconSvgWrapper from '@nextcloud/vue/components/NcIconSvgWrapper'
@@ -13,9 +13,20 @@ import { formatMoney } from '@/utils/money'
 
 const route = useRoute()
 const router = useRouter()
-const transactionStore = useTransactionStore()
+const sheetStore = useSheetStore()
 
 const sheetId = computed(() => route.params.sheetId as string)
+
+/**
+ * The sheet's transactions, from `SheetDetail.transactions`.
+ *
+ * This view used to call `GET /sheets/{sheetId}/transactions`, which no route serves: the request
+ * answered `405` with an empty body, so the table below rendered its header and no rows and the
+ * sheet's transactions were unreachable from either screen that lists them. The contract carries the
+ * same rows on the sheet payload, so this view loads the sheet and reads them from there — one
+ * request, one source, and no path in the client that the server does not serve.
+ */
+const transactions = computed(() => sheetStore.currentSheet?.transactions ?? [])
 
 function goToCreate() { router.push({ name: 'transaction-create', params: { sheetId: sheetId.value } }) }
 function goToDetail(transactionId: string) { router.push({ name: 'transaction-detail', params: { id: transactionId } }) }
@@ -24,7 +35,7 @@ onMounted(() => {
 	// The store records the failure in `error`, which this view renders in its alert. A mount-time
 	// load has no caller to react to the rejection, so it is absorbed here rather than surfacing as
 	// an unhandled promise rejection in the user's console.
-	transactionStore.loadTransactions(sheetId.value).catch(() => undefined)
+	sheetStore.loadSheet(sheetId.value).catch(() => undefined)
 })
 </script>
 
@@ -67,8 +78,8 @@ onMounted(() => {
 							<th scope="col">{{ t('pettycash', 'transactions.actions') }}</th>
 						</tr>
 					</thead>
-					<tbody v-if="!transactionStore.loading">
-						<tr v-for="item in transactionStore.transactions" :key="item.id" data-test="transaction-row">
+					<tbody v-if="!sheetStore.loading">
+						<tr v-for="item in transactions" :key="item.id" data-test="transaction-row">
 							<td>{{ new Date(item.activeRevision.expenseDate).toLocaleDateString('fa-IR') }}</td>
 							<td>{{ formatMoney(item.activeRevision.amount) }}</td>
 							<td>{{ item.activeRevision.costCenter.name }}</td>
@@ -119,9 +130,9 @@ onMounted(() => {
 			</div>
 		</NcNoteCard>
 
-		<div v-if="transactionStore.error" class="alert alert--error" role="alert">
-			<span>{{ transactionStore.error }}</span>
-			<button type="button" @click="transactionStore.clearError" aria-label="Dismiss">×</button>
+		<div v-if="sheetStore.error" class="alert alert--error" role="alert">
+			<span>{{ sheetStore.error }}</span>
+			<button type="button" @click="sheetStore.clearError" aria-label="Dismiss">×</button>
 		</div>
 	</div>
 </template>

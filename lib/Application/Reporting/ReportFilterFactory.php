@@ -43,11 +43,20 @@ final class ReportFilterFactory
      * Public and asserted as data, because it is a contract fact rather than an implementation detail:
      * a client reads it out of a refusal message and a test iterates it. Two copies of this list would
      * be exactly the drift this class exists to prevent.
+     *
+     * `costCenterIds`/`expenseTypeIds` take **public** UUIDs and are what a client is expected to send;
+     * `costCenterDbIds`/`expenseTypeDbIds` take the surrogate keys the rows are filtered on and remain
+     * accepted because T306/T309 pinned them in the contract. `FilterIdentityResolver` resolves the
+     * former into the latter, so `ReportQuery` sees one field either way. See that class for why the
+     * internal spelling is additive rather than a replacement.
      */
     public const ACCEPTED_FILTERS = [
-        'from', 'to', 'statuses', 'currencyCodes', 'costCenterDbIds', 'actorUids', 'eventTypes',
-        'createdBy', 'expenseTypeDbIds', 'stages', 'amountMinMinor', 'amountMaxMinor',
+        'from', 'to', 'statuses', 'currencyCodes', 'costCenterIds', 'costCenterDbIds', 'actorUids',
+        'eventTypes', 'createdBy', 'expenseTypeIds', 'expenseTypeDbIds', 'stages', 'amountMinMinor',
+        'amountMaxMinor',
     ];
+
+    public function __construct(private FilterIdentityResolver $identities) {}
 
     /**
      * Build a filter from an already-decoded filter object.
@@ -102,11 +111,11 @@ final class ReportFilterFactory
             $this->date($decoded, 'to'),
             $this->strings($decoded, 'statuses'),
             $this->strings($decoded, 'currencyCodes'),
-            $this->ints($decoded, 'costCenterDbIds'),
+            $this->costCenterDbIds($decoded),
             $this->strings($decoded, 'actorUids'),
             $this->strings($decoded, 'eventTypes'),
             isset($decoded['createdBy']) ? (string) $decoded['createdBy'] : null,
-            $this->ints($decoded, 'expenseTypeDbIds'),
+            $this->expenseTypeDbIds($decoded),
             $this->strings($decoded, 'stages'),
             $this->bound($decoded, 'amountMinMinor'),
             $this->bound($decoded, 'amountMaxMinor')
@@ -139,6 +148,36 @@ final class ReportFilterFactory
         }
 
         return array_values(array_map(static fn ($value): string => (string) $value, $decoded[$key]));
+    }
+
+    /**
+     * The cost centres to filter on, from either id space.
+     *
+     * Union rather than precedence: both spellings name members of one facet, so a request naming both
+     * means the union of the two sets. Choosing one would silently discard whichever the caller
+     * happened to spell differently, which is the drop-a-filter failure this class exists to prevent.
+     *
+     * @return list<int>
+     */
+    private function costCenterDbIds(array $decoded): array
+    {
+        return array_values(array_unique(array_merge(
+            $this->ints($decoded, 'costCenterDbIds'),
+            $this->identities->costCenterDbIds($this->strings($decoded, 'costCenterIds'))
+        )));
+    }
+
+    /**
+     * The expense types to filter on, from either id space. See `costCenterDbIds()`.
+     *
+     * @return list<int>
+     */
+    private function expenseTypeDbIds(array $decoded): array
+    {
+        return array_values(array_unique(array_merge(
+            $this->ints($decoded, 'expenseTypeDbIds'),
+            $this->identities->expenseTypeDbIds($this->strings($decoded, 'expenseTypeIds'))
+        )));
     }
 
     /**

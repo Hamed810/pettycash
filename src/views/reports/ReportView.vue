@@ -103,6 +103,7 @@ onMounted(onLoad)
 			:available-formats="reports.availableFormats"
 			:exporting="reports.exporting"
 			:error="reports.exportError"
+			:field-errors="reports.exportFieldErrors"
 			@export="onExport"
 			@dismiss="reports.clearExportError()"
 		/>

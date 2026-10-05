@@ -24,20 +24,19 @@
 import { t } from '@nextcloud/l10n'
 import NcEmptyContent from '@nextcloud/vue/components/NcEmptyContent'
 import EvidenceCard from './EvidenceCard.vue'
+import type { Evidence } from '@/types/api'
 
 interface Props {
-	evidence: Array<{
-		id: string
-		transactionId: string
-		revisionId: string
-		name: string
-		mediaType: string
-		sizeBytes: number
-		active: boolean
-		uploadedBy: string
-		uploadedAt: string
-		deactivatedAt?: string
-	}>
+	/**
+	 * The shared `Evidence` type, not a copy of it.
+	 *
+	 * This prop declared its own eleven-member shape, which is a second copy of a contract schema in a
+	 * component: it was already behind the server (no `deactivationReason`, and `deactivatedAt` typed
+	 * as `string | undefined` where the contract declares `nullable: true`), and `npm run typecheck`
+	 * could not say so because the two views that pass `TransactionDetail.evidence` into it compared
+	 * two unrelated declarations (T339).
+	 */
+	evidence: Evidence[]
 }
 
 defineProps<Props>()

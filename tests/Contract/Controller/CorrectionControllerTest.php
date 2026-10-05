@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OCA\PettyCash\Tests\Contract\Controller;
 
 use GuzzleHttp\Client;
+use OCA\PettyCash\Domain\Shared\Uuid;
 use OCA\PettyCash\Tests\Contract\Fixture\ContractFixtures;
 use PHPUnit\Framework\TestCase;
 
@@ -679,6 +680,105 @@ final class CorrectionControllerTest extends TestCase
             self::assertArrayHasKey('amountMinor', $revision['amount'] ?? [], 'Money requires amountMinor');
             self::assertArrayHasKey('currency', $revision['amount'] ?? [], 'Money requires currency');
         }
+    }
+
+    // ===== T330: the expense type is identified, not merely named =====
+
+    /**
+     * `EntitySnapshot.id` is `format: uuid`, and `expenseType.id` was carrying the expense type's
+     * **title**.
+     *
+     * That is not a cosmetic mismatch. `TransactionService::updateTransaction()` resolves this value
+     * with `findByPublicId()`, so an edit submitted straight from a server-shaped payload sends
+     * "Office Supplies" where a uuid is required and is refused with a 422 — every update of an
+     * existing draft fails, which takes FR-025's "edit" and US4's whole correction path with it.
+     *
+     * Asserted on the **revisions** endpoint as well as the transaction, because both answer from the
+     * same formatter and a fix that covered only one of them would leave the other emitting a title in
+     * a uuid field.
+     */
+    public function testTheExpenseTypeSnapshotCarriesItsPublicIdRatherThanItsTitle(): void
+    {
+        ContractFixtures::prepare('correction');
+
+        $detail = $this->ocsData(
+            $this->client,
+            'GET',
+            '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId()
+        );
+        $expenseType = $detail['activeRevision']['expenseType'] ?? null;
+
+        self::assertIsArray($expenseType, 'TransactionDetail.activeRevision.expenseType is an EntitySnapshot');
+        self::assertArrayHasKey('id', $expenseType);
+        self::assertArrayHasKey('name', $expenseType);
+
+        $id = (string) $expenseType['id'];
+        self::assertMatchesRegularExpression(
+            '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i',
+            $id,
+            "Revision.expenseType.id must be a uuid; it carried \"{$id}\", which is the expense type's "
+            . 'title. EntitySnapshot.id is `format: uuid` and the correction form submits this value '
+            . 'back to PATCH /transactions/{id}, which resolves it with findByPublicId()'
+        );
+        self::assertNotSame(
+            $expenseType['name'],
+            $id,
+            'id and name must not be the same value: the snapshot identifies an entity and names it'
+        );
+
+        foreach ($this->revisions() as $revision) {
+            self::assertMatchesRegularExpression(
+                '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i',
+                (string) ($revision['expenseType']['id'] ?? ''),
+                'every revision in the history must identify its expense type by public id'
+            );
+        }
+    }
+
+    /**
+     * The value the payload carries is the value the write path accepts.
+     *
+     * This is the assertion that makes the previous one mean something. A uuid-shaped string that no
+     * expense type carries would satisfy a format check and still fail every edit, so the id is read
+     * off the wire and sent straight back to `PATCH /transactions/{id}` — the round trip a correction
+     * actually performs.
+     */
+    public function testTheExpenseTypeIdFromThePayloadIsAcceptedBackByAnUpdate(): void
+    {
+        ContractFixtures::prepare('correction');
+
+        $detail = $this->ocsData(
+            $this->client,
+            'GET',
+            '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId()
+        );
+        $revision = $detail['activeRevision'] ?? [];
+        $expenseTypeId = (string) ($revision['expenseType']['id'] ?? '');
+
+        $update = $this->client->request(
+            'PATCH',
+            '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId(),
+            [
+                'headers' => ['X-PettyCash-Command-ID' => (string) Uuid::random()],
+                'json' => [
+                    'expenseDate' => $revision['expenseDate'] ?? '2026-09-27',
+                    'amountMinor' => $revision['amount']['amountMinor'] ?? 1000,
+                    'description' => $revision['description'] ?? 'Office supplies',
+                    'costCenterId' => $revision['costCenter']['id'] ?? null,
+                    'expenseTypeId' => $expenseTypeId,
+                    'expectedVersion' => (int) ($detail['version'] ?? 0),
+                ],
+            ]
+        );
+
+        // Asserted on the **status**, not on the shape of `data`: a 422 answers a JSON envelope too,
+        // so a shape assertion passes against exactly the refusal this test exists to catch.
+        self::assertSame(
+            200,
+            $update->getStatusCode(),
+            'the expense type id the payload carries must be one the server can resolve. Answered '
+            . "instead: {$expenseTypeId} -> " . (string) $update->getBody()
+        );
     }
 
     // ===== SMALL HELPERS =====

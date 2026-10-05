@@ -49,7 +49,7 @@ specifications from them. Do not implement anything. Only create specs."
 - Q: Whose accounts and balances may the `accounts` report show for each role? (FR-065, FR-055, FR-015) → A: A user sees their own accounts; a finance officer additionally sees every account they have charged; an administrator sees all.
 - Q: When a finance approval consumes an account's balance, which audit stream records that the officer charged that account? (FR-055, T294) → A: Settlement also writes a configuration audit event naming the charged account, so a charge appears in both streams and the derivation is not left empty.
 - Q: What counts as a view being "usable" within three seconds, so that SC-008 can actually be measured? (SC-008) → A: The view finishes loading and shows the rows the user is entitled to see, with no error state, measured end to end as a user sees it.
-- Q: Should SC-008's three-second usability target be verified during V1, or is that verification deferred to a later milestone? (SC-008) → A: Verified during V1, not deferred; the measurement is performed and its result recorded, so the criterion is reported as met or not met rather than assumed.
+- Q: Should SC-008's three-second usability target be verified during V1, or is that verification deferred to a later milestone? (SC-008) → A: **Superseded 2026-10-02 — verification is deferred to post-V1.** See the Session 2026-10-02 answer. (Original 2026-09-28 answer, retained for history: Verified during V1, not deferred; the measurement is performed and its result recorded, so the criterion is reported as met or not met rather than assumed.)
 
 ### Session 2026-09-30
 
@@ -59,11 +59,19 @@ specifications from them. Do not implement anything. Only create specs."
 - Q: Is producing a PDF export part of V1, or is it deferred to a later release? (FR-066) → A: Part of V1. An OFL-licensed Persian font is vendored into the repository under an app-owned path with its licence text, so `pdf` is supported unconditionally and never depends on a host- or container-installed font.
 - Q: Does SC-010's moderated usability test have to be run before V1 can be released? (SC-010) → A: It is measured and its result recorded, but it does not block release. When representative users or a facilitator are unavailable it is recorded explicitly as not measured, with the reason, and is never reported as met by default.
 - Q: When someone picks the "month" or "quarter" export preset, which calendar defines that period's boundaries? (FR-068) → A: Jalali (Solar Hijri), matching the calendar every date in the interface is already rendered in. A period spans Farvardin to Esfand and a quarter begins at Farvardin; it resolves to a Gregorian from/to pair for querying without altering any stored expense date, and is never identified by a Gregorian year number.
+
 - Q: When someone picks the "month" export preset, which Jalali month does it select? (FR-068) → A: The current Jalali period, running from its first day through its last, not the previous completed period and not a trailing window. Because a period in progress is incomplete, every response that resolved a predefined period states the exact date range it resolved; a previous or trailing period is requested with the explicit custom date range instead.
 - Q: Which time zone decides where a Jalali month begins and ends? (FR-068) → A: The time zone of the account making the request, from that user's own account settings, falling back to the instance's configured default when the account states none; no zone is hardcoded. The resolved range is therefore relative to the requesting user, and the response states both the range and the zone it was resolved in.
 - Q: When a period's boundary lands on a day, does that day count as inside the period or outside it? (FR-068) → A: Inclusive at both ends. A period covers every expense date from its first day through its last day, so a predefined period and the equivalent explicit date range select exactly the same records. A Jalali year is 365 or 366 days and is never treated as a fixed length.
 - Q: If a request supplies both a predefined period and an explicit date range, which one decides the records? (FR-068) → A: They are mutually exclusive within one request. Supplying both is refused with a `422` naming the conflict and stating which of the two to remove; the application never honours one while discarding the other, and never intersects them.
 - Q: When someone filters by a period such as "this month", is that a filter in its own right or simply another way of expressing a date range? (FR-064) → A: A filter in its own right. It joins FR-064's accepted list explicitly, scoped to the export and report endpoints that already accept a date range, and because FR-068 makes the two mutually exclusive it is refused alongside a date range rather than merged into or silently narrowing one.
+
+### Session 2026-10-02
+
+- Q: When a purchaser attaches an evidence file larger than 100 MB, what should happen if the server's own upload limit would allow it? (FR-074) → A: Reject anything above 100 MB regardless of the host limit — 100 MB is PettyCash's own hard ceiling, enforced by PettyCash and stated to the user. Where the host limit is *lower* than 100 MB the host rejects first, and that rejection is reported as a host-limit failure rather than as the 100 MB refusal, so the two ceilings are never conflated. The earlier "MUST follow the host file service rather than introduce a separate PettyCash limit" clause is withdrawn as superseded; the 100 MB figure the 2026-09-22 session settled on is retained.
+- Q: Is the 3-second performance target (SC-008) verified during V1, or explicitly deferred to after V1? (SC-008, FR-073) → A: Deferred explicitly. The 3-second target remains the V1 design target governing how queries are built, but the measurement at the stated scale is not a V1 acceptance gate: V1 release readiness MUST record SC-008 as **not measured**, naming post-V1 verification as the reason, on the same principle SC-010 already uses. Any V1 latency run (T128's optimisation pass) is **informational** and MUST NOT be presented as satisfying SC-008, because a run below the stated scale or without the acceptance procedure is not the measurement the criterion describes. The 2026-09-28 answer that verification happens during V1 is superseded.
+- Q: When a sheet has one transaction returned for correction and another already at the finance stage, which rule defines the sheet's status? (FR-037, FR-028) → A: Derivation stands and `CORRECTION` is a real sheet status. Each transaction enters and leaves its queue on its own decision, no transaction blocks another, and the sheet's status is the earliest stage still outstanding over the ranking `Draft 0, CostCenter 1, Correction 2, Senior 3, Finance 4, Final 5`. Because `CORRECTION` outranks `SENIOR` and `FINANCE`, such a sheet displays `CORRECTION` even while another transaction is at finance; that is FR-028's intended reading and not a defect. FR-037 is given the gate sentence — the transactions required for the sheet-stage transition are those whose active nonterminal revisions all carry a senior decision, a senior rejection counting as a senior decision — and FR-043's completion rule is the only true gate. `data-model.md`'s derivation section is corrected: its `AWAITING_*` names were `TransactionStatus` values, not `SheetStatus` values, and `CORRECTION` was missing. Verified before asking: the code (`ExpenseSheet::recalculateStatusFrom`, `lib/Domain/Expense/ExpenseSheet.php:111-179`), three passing tests, and `DbExpenseTransactionRepository::findForFinanceQueue()` filtering per transaction rather than on sheet status.
+- Q: What counts as the "error rate <0.1%" that FR-073 requires the product to hold? (FR-073) → A: Define it precisely and own it. Error rate means **5xx responses as a share of all HTTP requests issued during V1 acceptance**, counted across the automated functional, contract and end-to-end suites rather than over a dedicated load run, and recorded as a **V1 release-readiness figure** by T135. A client-side 4xx is not an error for this purpose, because a request the application correctly refused is not a defect; the 4xx, 409 and 422 responses that contract tests deliberately provoke are excluded from both numerator and denominator. The result must be recorded whether or not it passes. This is deliberately not deferred the way the p95 bound is: it needs no dedicated load run, since it is a byproduct of the suite that "zero data loss" already requires, and it is a real defect threshold rather than a performance benchmark. Zero data loss remains a correctness invariant owned by the atomicity and failure-injection suites, and all three bounds must be reported separately rather than as one performance claim. Verified before asking: "error rate <0.1%" appears at `spec.md` (this requirement and the 2026-09-22 clarification) and `plan.md` with no denominator or window, and T128 measures latency only — no task measured error rate.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -459,8 +467,24 @@ of all primary workflow actions.
   correction and MAY decide independently of the cost center manager's opinion.
 - **FR-036**: The senior manager decision MUST be the final management decision and MUST remain
   unchanged by finance.
-- **FR-037**: Transactions approved or rejected by the senior manager MUST proceed to finance after
-  all transactions required for that sheet-stage transition have been determined.
+- **FR-037**: Transactions approved or rejected by the senior manager MUST proceed to finance once
+  **every active nonterminal revision in the sheet carries a senior decision** — that set is what
+  "all transactions required for that sheet-stage transition" means. A senior approval and a senior
+  rejection each count as a senior decision, and each routes its transaction to finance, because
+  FR-039 forbids finance from approving a senior-rejected transaction, not from seeing it.
+  **The sheet's own status is a derivation, not a gate.** Each transaction enters and leaves its
+  queue on its own decision and no transaction blocks another; the sheet's status is the **earliest
+  stage still outstanding** across its active nonterminal revisions, over the ranking
+  `Draft 0, CostCenter 1, Correction 2, Senior 3, Finance 4, Final 5`. `CORRECTION` is therefore a
+  genuine sheet status and outranks `SENIOR` and `FINANCE`, so a sheet with one transaction awaiting
+  purchaser correction displays `CORRECTION` **even when another transaction is already at finance** —
+  the intended reading of FR-028's "derived from the collective transaction states", and not a defect.
+  FR-043's completion rule is the only true gate. (Clarified 2026-10-02: this requirement previously
+  left "all transactions required for that sheet-stage transition" undefined, while `data-model.md`
+  carried a derivation rule naming three states — `AWAITING_COST_CENTER_REVIEW`,
+  `AWAITING_SENIOR_REVIEW`, `AWAITING_FINANCE_REVIEW` — that are `TransactionStatus` values and not
+  `SheetStatus` values at all, and omitting `CORRECTION`, so the data model and the running code
+  disagreed about what a returned transaction does to the sheet. `data-model.md` is corrected.)
 - **FR-038**: Finance MUST be able to approve, reject, or return a senior-approved transaction.
 - **FR-039**: Finance MUST NOT approve a senior-rejected transaction but MAY reject it or return it
   for correction.
@@ -642,9 +666,32 @@ of all primary workflow actions.
 - **FR-072**: The primary workflow MUST be usable in Chrome 120+, Edge 120+, and Firefox 115+ (ESR).
 - **FR-073**: The product MUST support the documented V1 operating scale of up to 100 active users
   and 10,000 expense transactions per year without loss of correctness, with p95 latency <3s for
-  routine views (SC-008), error rate <0.1%, and zero data loss.
-- **FR-074**: Evidence size limits MUST follow the host file service rather than introduce a
-  separate PettyCash limit; V1 enforces a maximum evidence file size of 100 MB per file.
+  routine views, error rate <0.1%, and zero data loss. The three bounds are verified differently and
+  MUST NOT be reported interchangeably:
+  - **p95 latency <3s** is a V1 **design target** governing how queries are built. Its verification
+    at the stated scale is deferred to post-V1 per SC-008 and is **not** a V1 acceptance gate.
+  - **Error rate <0.1%** means **5xx responses as a share of all HTTP requests issued during V1
+    acceptance**, counted across the automated functional, contract and end-to-end suites rather
+    than over a dedicated load run, and recorded as a **V1 release-readiness figure** by T135. A
+    client-side 4xx is not an error for this purpose — a request the application correctly refused
+    is not a defect — and the 4xx, 409 and 422 responses that contract tests deliberately provoke are
+    excluded from both numerator and denominator. The result MUST be recorded whether or not it
+    passes.
+  - **Zero data loss** is a correctness invariant established by the atomicity and failure-injection
+    suites, not by the latency or error-rate measurement.
+
+  (Clarified 2026-10-02: this requirement previously stated "error rate <0.1%" with no denominator and
+  no measurement window, and no task measured it at all, so the bound was owned by nobody and could
+  not be claimed at release readiness.)
+- **FR-074**: V1 MUST enforce a maximum evidence file size of **100 MB per file as its own ceiling**,
+  and MUST refuse an upload above it with a message naming the limit, **regardless of what the host
+  file service allows**. The 100 MB figure is PettyCash's own limit and not a mirror of the host's
+  configuration; the earlier wording that limits "MUST follow the host file service rather than
+  introduce a separate PettyCash limit" is **withdrawn as superseded**, because a deployment whose host
+  limit exceeded 100 MB had no stated answer under it. The host file service may still impose a
+  *lower* limit of its own, in which case the host rejects first and that rejection MUST be reported
+  as a host-limit failure rather than as this requirement's 100 MB refusal, so a test or a support
+  report can tell which ceiling stopped the upload. (Clarified 2026-10-02.)
 - **FR-075**: Communication failures MUST show a clear error and require manual retry; V1 MUST NOT
   automatically resume interrupted operations.
 - **FR-076**: Independent application backup and restore, active multilingual UI, a standalone
@@ -793,11 +840,21 @@ of all primary workflow actions.
   records outside that role's access scope across the acceptance dataset.
 - **SC-008**: At the V1 operating scale of up to 100 active users and 10,000 annual transactions,
   at least 95% of routine list, detail, history, and evidence views become usable within 3 seconds
-  under normal operating conditions. This is measured during V1 rather than deferred: the measurement
-  is performed at the stated scale and its result recorded, so the criterion is reported as met or not
-  met instead of being read as covered because nothing ever checks it. A view counts as **usable** when
-  it has finished loading and is showing the rows that user is entitled to see, with no error or empty
-  state standing in for them; it is measured end to end as a user sees it, not as an internal timing.
+  under normal operating conditions. A view counts as **usable** when it has finished loading and is
+  showing the rows that user is entitled to see, with no error or empty state standing in for them; it
+  is measured end to end as a user sees it, not as an internal timing. **Verification of this
+  criterion is deferred to post-V1.** The 3-second target remains the V1 design target and governs
+  how queries are built, but the measurement at the stated scale is **not** a V1 acceptance gate and
+  V1 release readiness **MUST NOT report this criterion as met**. The criterion MUST be recorded at V1
+  release readiness as **not measured**, naming post-V1 verification as the reason, on the same
+  principle already applied to SC-010: a criterion that was never measured is neither satisfied nor
+  omitted. Where a V1 run does measure latency — for example the optimisation pass T128 performs —
+  its result is recorded as **informational** and MUST NOT be presented as satisfying this criterion,
+  because a run below the stated scale, or at the stated scale without the acceptance procedure, is
+  not the measurement this criterion describes. (Clarified 2026-10-02: the criterion previously stated
+  that the measurement "is performed during V1 rather than deferred" and "MUST be reported as met or not
+  met", while T304 offered deferral as an equal option, so the criterion and its own verification
+  contradicted each other and V1 release readiness had no settled answer to record.)
 - **SC-009**: All primary purchaser, manager, senior manager, finance, and administrator journeys
   can be completed in Persian RTL at desktop and mobile viewport sizes in each supported browser.
 - **SC-010**: In moderated acceptance testing, at least 90% of representative users complete their

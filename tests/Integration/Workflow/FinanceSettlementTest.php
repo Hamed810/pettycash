@@ -655,6 +655,7 @@ final class FinanceSettlementTest extends TestCase
             $this->container->query(CostCenterRepository::class),
             $this->container->query(CurrencyRepository::class),
             $this->container->query(RoleAssignmentRepository::class),
+            $this->container->query(ExpenseSheetRepository::class),
             $this->container->query(CurrentUser::class)
         );
 

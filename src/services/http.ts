@@ -1,11 +1,15 @@
 import axios from '@nextcloud/axios'
 import { generateOcsUrl } from '@nextcloud/router'
 import { isAxiosError, type AxiosRequestConfig } from 'axios'
-import { ApiError, type ApiErrorBody } from '../types/api'
+import { ApiError, type ApiErrorBody, type ApiErrorEnvelope } from '../types/api'
 
 export function commandId(): string { return crypto.randomUUID() }
 
-/** The only shape `contracts/ocs-api.yaml` describes: `ocs.data` carries the schema value. */
+/**
+ * The only shape `contracts/ocs-api.yaml` describes: `ocs.data` carries the schema value, and for
+ * an error response that value is the `ErrorEnvelope` wrapper — `{ error: Error }`, so the error
+ * lives at `ocs.data.error` and nowhere else (T334).
+ */
 interface OcsEnvelope<T> { ocs?: { data?: T } }
 
 /**
@@ -31,9 +35,11 @@ function unwrap<T>(body: unknown): { ok: true; data: T } | { ok: false; error: A
 	const data = ocs.data
 
 	// OCS permits a failure to arrive as HTTP 200 with the error inside the envelope. Surface it
-	// as a rejection so a caller cannot mistake a business failure for a successful payload.
+	// as a rejection so a caller cannot mistake a business failure for a successful payload. The
+	// `error` key is what makes that check possible at all, which is why the contract wraps `Error`
+	// rather than putting `code`/`message` straight into `ocs.data`.
 	if (typeof data === 'object' && data !== null && 'error' in data && (data as { error?: unknown }).error) {
-		return { ok: false, error: (data as { error: ApiErrorBody }).error }
+		return { ok: false, error: (data as ApiErrorEnvelope).error }
 	}
 
 	return { ok: true, data: data as T }
@@ -56,7 +62,7 @@ export async function ocs<T>(path: string, config: AxiosRequestConfig = {}): Pro
 	} catch (error: unknown) {
 		if (error instanceof ApiError) throw error
 		if (isAxiosError(error)) {
-			const data = error.response?.data as { ocs?: { data?: { error?: ApiErrorBody } } } | undefined
+			const data = error.response?.data as { ocs?: { data?: ApiErrorEnvelope } } | undefined
 			throw new ApiError(error.response?.status ?? 0, data?.ocs?.data?.error ?? { code: 'NETWORK_FAILURE', message: 'pettycash.error.network' })
 		}
 		throw error

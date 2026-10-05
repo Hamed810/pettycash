@@ -832,9 +832,77 @@ snapshots remain unchanged.
   route, not merely a method that returns.
 - [X] T083[P] [US5] Implement expense-type administration including `evidence_required` and inactive historical retention in `lib/Application/Configuration/ExpenseTypeService.php` **complete — delivered 2026-09-30.** `lib/Application/Configuration/ExpenseTypeService.php`. Creates an expense type with its `evidenceRequired` flag — the field FR-012 calls out and FR-023 turns into a submission precondition — and enforces **active-title uniqueness**, which is the one invariant in this batch that no database index backs: `pettycash_expense_types` declares **no** unique index on `title` (unlike `pettycash_currencies_code_uniq` and `pettycash_cost_centers_code_uniq`), so nothing below the application layer stops two active types sharing a title while FR-023 makes a caller choose between them with different evidence rules. Updates carry a required `expectedVersion` and **set the surrogate key before saving**, because `DbExpenseTypeRepository::save()` otherwise resolves the existing row by `findActiveByTitle()` — which matches on the title and only among active rows, so a rename would insert a second row and a re-create over a deactivated title would duplicate it. `deactivate()` is a separate, single-field operation: it touches `active` and nothing else, which is what FR-012's and US5/AC2's historical retention require. Reads are open to any authenticated caller — the purchaser transaction form is the consumer. **17 unit tests / 41 assertions**, plus real-MariaDB verification. **2 mutations**: the active-title check, and one that made `deactivate()` rewrite the description — **that one initially SURVIVED, exposing an aliasing bug in the test itself** (`InMemoryExpenseTypeRepository` stores the aggregate, not a copy, so a captured "before" object was the same object the service mutated and the assertion compared a rewritten value with itself); the test now snapshots scalars before the call and the mutation is killed. Report: this entry.
 - [X] T084 [P] [US5] Implement shared-queue finance-role assignment administration and host-user validation in `lib/Application/Configuration/FinanceAssignmentService.php`
-- [ ] T085 [US5] Implement idempotent default rial account provisioning, additional currency accounts, activation state, and finance account charging in `lib/Application/Account/AccountAdministrationService.php`
+- [X] T085 [US5] Implement idempotent default rial account provisioning, additional currency accounts,
+  activation state, and finance account charging in `lib/Application/Account/AccountAdministrationService.php`
+  **delivered 2026-10-04, and scoped down to the one clause of four that nothing else claimed.**
+
+  **Scope narrowed on evidence, and the narrowing is the substantive part of this entry.** The task text
+  names four things. Three already exist and were **not** reimplemented, because a second implementation is
+  a second set of rules rather than a second route to the same one:
+
+  | T085 phrase | Where it lives | Why not here |
+  |---|---|---|
+  | additional currency accounts | `AccountService::createFor()` | FR-013's write, delivered, covered by `AccountWriteControllerTest` (27 tests). Copying it would give the unique-index conflict two error paths. |
+  | finance account charging | `AccountService::charge()` | FR-015's write, with its `expectedVersion` guard and idempotent replay. `FinanceSettlementService` consumes the movements. |
+  | activation state | `PettyCashAccount::$active`, honoured by `AccountRepository::findActiveBy*` | FR-013 says "manage … accounts for users" and, **unlike** FR-010/FR-012, does not say "activate, and deactivate". `contracts/ocs-api.yaml` declares no account activation endpoint. There is no requirement to build against, so none was invented. |
+
+  What remained is the clause no other file owned: **FR-020's provisioning trigger**. Verified absent from
+  every layer before writing: `grep -rn "ensureDefaultRial\|provision" lib/` returned nothing, and the only
+  reference to T085 anywhere was `CurrencyService`'s docblock, which records that `defaultRial()` exists
+  "for FR-020's idempotent provisioning" — the lookup was built by T081 and had no caller.
+
+  **The path really was unreachable, in both halves.** `SheetService::createSheet($title, $accountId)`
+  resolves an account id the caller must already hold, and
+  `tests/Frontend/Component/PurchaserFlow.spec.ts:1746-1757` asserts that with an empty account list the
+  form shows a hint and **disables submission**. So a brand-new purchaser had no route to a first sheet:
+  the frontend would not let them attempt it, and the backend would have refused it if they had. FR-020's
+  "(idempotent provisioning)" was satisfied by nothing.
+
+  **Delivered** `AccountAdministrationService` with two methods and no third:
+  `ensureDefaultRialAccount(string $userUid): ?PettyCashAccount` — the primitive, provisioning only when
+  the caller has **zero active accounts** and returning `null` when the precondition does not hold; and
+  `resolveAccountForNewSheet(string $userUid): ?PettyCashAccount` — FR-020's three clauses read directly
+  (none → provision and return it; exactly one → return it; several → `null`, because "a purchaser with
+  multiple active accounts MUST choose" and choosing one server-side would make the server's pick the
+  sheet's currency).
+
+  **Idempotency falls out of the precondition rather than out of remembering the last account.** The
+  property that matters is that the second call *writes nothing*: a purchaser who opens the form twice must
+  not accumulate a second default and, with it, the very multi-account ambiguity FR-020 asks the UI to
+  resolve. Once the first call has provisioned, the caller *has* an active account, so the precondition is
+  false. Under real concurrency the unique index on (user, currency) decides and the loser **re-reads the
+  winner's row rather than reporting a conflict**, because provisioning is not a caller-visible write and a
+  409 there would be a spurious failure of an operation the caller cannot meaningfully retry.
+
+  **The scale is taken from configuration, never reconstructed.** The service depends on
+  `CurrencyService`, not `CurrencyRepository`, so a misconfigured `IRR` fails loudly with the
+  administrator's fix named. Both refusal cases are asserted: `IRR` absent, and `IRR` present at
+  `minor_unit = 2` — a factor of a hundred on every amount the account would ever hold.
+
+  **One decision recorded rather than acted on: no configuration audit event.** FR-017's list is
+  "assignments, expense types, currencies, access, and control settings" — sensitive *administrator*
+  changes — and this is a purchaser triggering onboarding by opening a form, with no human decision behind
+  it in the zero-account case. `ConfigurationAuditService::record()` also stamps
+  `actor_role = Administrator`, which would be false here. Recorded in the class docblock so the absence
+  is not later "fixed" by adding an event that misattributes the actor.
+
+  **14 unit tests / 39 assertions**, and **4 mutations, 4 killed**: the zero-active guard removed (2
+  failures), `resolveAccountForNewSheet` returning the first of several (1), the misconfigured-rial
+  refusal swallowed and provisioning continued anyway (2), and an inactive account treated as satisfying
+  the precondition (2).
+
+  **The trigger is NOT wired, and that is the residual gap, not an oversight.** FR-020 says provisioning
+  happens "on first sheet creation attempt", and `contracts/ocs-api.yaml:1090-1095` declares
+  `SheetCreate.required: [title, accountId]`. **Those two cannot both hold as written:** a purchaser with
+  zero accounts has no `accountId` to send, so the attempt never reaches a place provisioning could fire.
+  Wiring it means either making `accountId` conditionally optional — a **contract amendment**, which
+  `T275`/`T334` show is owned elsewhere and needs the contract owner's decision — or triggering
+  provisioning client-side from `GET /accounts`. Neither is a local fix, so neither was made. The service
+  is delivered and tested; **the sheet-creation and sheet-form wiring is unowned work and needs an
+  explicit owner.** `T146`/`T165` are `[x]` and cover only currency *resolution*, not provisioning.
+
 - [X] T086 [US5] Ensure every configuration/account mutation writes before/after configuration audit in the same database transaction in `lib/Application/Audit/ConfigurationAuditService.php`
-- [ ] T087 [US5] Add the configuration OCS routes and the `lib/Controller/ConfigurationController.php` transport layer for the eleven already-registered `configuration#*` route targets, delegating to the Phase-7 administration services and staying a thin adapter per `plan.md` (BLOCKED on **T085 only**; the previously stated "BLOCKED on T081-T086" was wrong — T081, T082, T083, T084 and T086 are all `[x]`, verified 2026-10-01. **Nothing currently sequences T085 as the unblock, and T085 is the sole remaining item**, so this is the chain's critical path: 11 `configuration#*` routes 500 without it, which is why the transaction form's cost-centre and expense-type dropdowns are empty and why T171's journeys 4–7 cannot select them. Scoped down 2026-09-30 after verification — see below)
+- [X] T087 [US5] Add the configuration OCS routes and the `lib/Controller/ConfigurationController.php` transport layer for the eleven already-registered `configuration#*` route targets, delegating to the Phase-7 administration services and staying a thin adapter per `plan.md` (BLOCKED on **T085 only**; the previously stated "BLOCKED on T081-T086" was wrong — T081, T082, T083, T084 and T086 are all `[x]`, verified 2026-10-01. **Nothing currently sequences T085 as the unblock, and T085 is the sole remaining item**, so this is the chain's critical path: 11 `configuration#*` routes 500 without it, which is why the transaction form's cost-centre and expense-type dropdowns are empty and why T171's journeys 4–7 cannot select them. Scoped down 2026-09-30 after verification — see below. **The block is now resolved: T085 was delivered 2026-10-04, and the prerequisite table further down already recorded it as "ordering only — no named action depends on it", which is why this task was implementable without it. The original scoping text is kept rather than rewritten so the reasoning that narrowed this task survives its completion.**
 
   **Scope narrowed to the transport/controller layer only, on verified evidence.**
 
@@ -898,14 +966,155 @@ snapshots remain unchanged.
   **Downstream, for ordering only:** T088 (configuration/account frontend stores and administrator views) and
   T089 (Playwright journeys) both sit after this task in Phase 7.
 
+  ---
+
+
+  **Delivered 2026-10-04. The eleven endpoints answer real data over real HTTP — measured, not inferred.**
+
+  | Endpoint | admin | non-admin | evidence |
+  |---|---|---|---|
+  | `GET /configuration/currencies` | **200** | 403 | live probe: `IRR`/`USD`/`EUR`/… with their configured `minorUnit` |
+  | `POST /configuration/currencies` | **201** | 403 | live probe; `T87` correctly refused 422 (`^[A-Z]{3}$`), `ZQP` created |
+  | `PATCH /configuration/currencies/{id}` | **200** | 403 | live probe; stale `expectedVersion` → **409** `CURRENCY_VERSION_CONFLICT` |
+  | `GET /configuration/cost-centers` | **200** | **200** | live probe: real rows with resolved `managerUserId`/`seniorManagerUserId` |
+  | `POST /configuration/cost-centers` | **201** | 403 | live probe; duplicate code → **409** `COST_CENTER_ALREADY_EXISTS` |
+  | `PATCH /configuration/cost-centers/{id}` | **200** | 403 | live probe; `version` advanced 0 → 1 |
+  | `GET /configuration/expense-types` | **200** | **200** | live probe: real rows with `evidenceRequired` |
+  | `POST /configuration/expense-types` | **201** | 403 | live probe |
+  | `PATCH /configuration/expense-types/{id}` | **200** | 403 | live probe; `evidenceRequired` false → true |
+  | `GET /configuration/finance-assignments` | **200** | 403 | live probe: bare array, not a `PageMeta` envelope |
+  | `POST /configuration/finance-assignments` | **201** | 403 | live probe |
+
+  **A real defect the probe found and this controller fixes: a missing body field answered HTTP 500.**
+  Nextcloud's `Dispatcher` calls an action with **named arguments** built from the request, so an omitted
+  field arrives as `null` — and `public function costCenterCreate(string $code, …)` threw a `TypeError` on
+  it *before any line of validation could run*. Measured: `POST /configuration/cost-centers` with no
+  `managerUserId` returned **`500 "Internal Server Error"`**, not the 422 the contract declares for a
+  malformed body. Every request-body parameter is now `?type = null` with presence checked explicitly, and
+  the same requests return **422 with the offending field named**. A `TypeError` names a PHP type; a
+  `fieldErrors` entry names the field, and only the second tells a caller what to fix. Path parameters stay
+  non-nullable — the router has substituted them before the action is called.
+  `AccountController::charge()` still has this shape and is **not** fixed here; it is T063's.
+
+  **The read/write authorization split is not uniform, and that is deliberate — recorded because a blanket
+  rule would have been wrong twice.** `GET /cost-centers` and `GET /expense-types` answer **200 to a
+  purchaser**, because FR-023 requires a *purchaser* to choose one active expense type and exactly one cost
+  centre at submission and `TransactionFormView.vue:150` loads both when the form opens; `T082`/`T083`
+  require authentication on their listings, not administration. `GET /currencies` answers 403 (T081's
+  documented decision — no purchaser-facing view calls it) and the six writes answer 403 (FR-010/012/013).
+  `GET /finance-assignments` is guarded **in this controller** rather than left to `T084`'s service, which
+  requires only authentication: that roster enumerates who can settle expenses, and the value of hiding it
+  from a purchaser is low while the value of the list is not.
+
+  **`ConfigurationPayloadFormatter` is a new file, and the reason is the drift this repository already
+  paid for once.** `SheetController` returned `SheetSummary` from all four of its single-sheet responses
+  because a private copy of a contract mapping inside a controller had nothing comparing it to the
+  contract. Seven of these eleven endpoints need the same four shapes, so inlining them would mean seven
+  copies.
+
+  **One contract disagreement found and left visible rather than papered over.**
+  `RoleAssignment` is `allOf[FinanceAssignmentWrite, {required: [id, role]}]`, and
+  `FinanceAssignmentWrite` lists `changeReason` as **required** — but `data-model.md` defines
+  `RoleAssignment` with no such column, because the explanation belongs to the configuration audit FR-017
+  actually asks for. The key is emitted as `null`: present, so `required` is satisfied, and honest, where
+  inventing a stored string would be worse than both. Its declared `type: string` is still violated.
+  **Fixing this properly means adding the column or amending the contract, and both are amendments this
+  task does not own.** Asserted in
+  `tests/Unit/Application/Configuration/ConfigurationPayloadFormatterTest.php::testChangeReasonIsPresentAndNullOnEveryReadProjection`
+  so that whoever resolves it finds the disagreement rather than rediscovering it.
+
+  **The shape is asserted without HTTP, and the reason is a missing credential.** No administrator
+  credential exists for the contract suite and inventing one would mean committing a secret, so
+  `ConfigurationControllerTest` asserts what the *contract* credential can see — that all eleven routes
+  answer a **defined** status and never 500 or 404, which is precisely the regression this task exists to
+  prevent, since a 500 is what an unimplemented route returned and a 500 through a DI failure is what
+  T087's own note refuses to accept as completion. The response *shape* is asserted in 12 formatter cases
+  that state each schema's key set literally from the contract. **25 contract tests / 83 assertions and 12
+  formatter tests / 35 assertions, green.** The eleven `KNOWN_UNRESOLVED` entries were removed in the same
+  change, as `testTheKnownExpectedFailureListHasNoStaleEntries()` requires; the list is now the two `T096`
+  evidence entries.
+
+  **Verification of the full suite after this change: 1173 tests / 4799 assertions, one failure** — the
+  pre-existing `PurchaserFlowControllerTest::testGetEvidenceContentReturns200WithStream` `octet-stream`
+  conflict that T275 owns, unchanged from the 1122/4645 baseline taken before this work began. No
+  regressions. Probe rows created in the shared database were removed afterwards; the configuration audit
+  rows they produced were deliberately **left in place**, because FR-053/FR-055 make that stream append-only
+  and a cleanup script that deletes history would contradict the property under test.
+
   **Live defect this task sits behind, recorded so it is not lost.** `src/services/configurationApi.ts` has
   called `GET /configuration/cost-centers` and `GET /configuration/expense-types` since 2026-09-26, and
   `src/views/transactions/TransactionFormView.vue:150` loads both on open. Both endpoints answer **HTTP 500**
   today, so the purchaser cannot select a cost centre or expense type — which FR-023 requires for submission and
   FR-032 needs for routing. **T081-T083, not this task, are the fix for that**, because the failure is the
   missing read services, not the missing controller.
+
+  **This paragraph's "answer HTTP 500 today" is now false, and both of its diagnoses were partly wrong.**
+  Measured after this task's delivery: `GET /configuration/cost-centers` and
+  `GET /configuration/expense-types` both answer **200 to a purchaser**, with real rows, the required
+  `managerUserId`/`seniorManagerUserId` resolved and `evidenceRequired` carried. So the block on FR-023's
+  submission precondition is **lifted at the API**, and what remains is `T088`'s — the administrator and
+  funding views this controller makes reachable.
+
+  **The second diagnosis was wrong in a way worth keeping.** It says the 500 was "the missing read services,
+  not the missing controller". Both were missing, and the controller was the one that produced the 500:
+  `CurrencyService`, `CostCenterService` and `ExpenseTypeService` all existed and were `[x]` (T081–T084),
+  so a controller that called them would have worked. **No read service was ever the cause**; the cause was
+  that no controller was routed to call the one that did exist. A fix aimed at the second diagnosis would
+  have added a second read path beside the working one and left the 500 in place.
+
 - [ ] T088 [P] [US5] Implement configuration/account API services, stores, and administrator/funding views in `src/services/configurationApi.ts`, `src/services/accountsApi.ts`, `src/stores/configuration.ts`, and `src/views/admin/` (all elements visible without horizontal scroll at 390px viewport; WCAG AA contrast; ≥12pt Persian font per FR-071)
+
+  **Its server half is now delivered and this is the next thing on the critical path.** T087 closed the
+  eleven endpoints on 2026-10-04, and both reads `src/services/configurationApi.ts` already calls answer
+  **200 to a purchaser with real rows** (measured). So `TransactionFormView.vue:150` now has data to load,
+  which it did not before: FR-023's "exactly one cost center, one active expense type" precondition is
+  reachable from the browser for the first time. **What is still missing on the client is the
+  administrator/funding surface** — `src/stores/configuration.ts` and `src/views/admin/` — which is why the
+  six write endpoints currently have no reachable UI.
+
 - [ ] T089 [US5] Add configuration, role-boundary, default-rial, funding, deactivation, and historical-preservation Playwright journeys in `tests/E2E/configuration-administration.spec.ts`
+
+- [ ] T358 [HIGH] Wire FR-020's provisioning **trigger**, because the service now exists and nothing calls it
+      (FR-020, FR-014, `lib/Application/Account/AccountAdministrationService.php`,
+      `lib/Application/Expense/SheetService.php`, `contracts/ocs-api.yaml`) (`contradicts`)
+
+  **Found while delivering T085, and left open deliberately rather than resolved unilaterally.**
+
+  T085 delivered `AccountAdministrationService::ensureDefaultRialAccount()` and
+  `resolveAccountForNewSheet()`, tested and mutation-verified. **No production code calls either**, and
+  the sheet-creation path is still unable to reach them, so FR-020's "(idempotent provisioning)" remains
+  unsatisfied in behaviour even though the mechanism now exists.
+
+  **The block is a genuine specification/contract conflict, not an oversight.** FR-020 says a
+  zero-account purchaser "has a default active rial account auto-created on **first sheet creation
+  attempt**". `contracts/ocs-api.yaml:1090-1095` declares `SheetCreate.required: [title, accountId]`. A
+  purchaser with zero accounts has **no `accountId` to send**, so the creation attempt can never reach a
+  point where provisioning could fire. Both statements are approved and they cannot both hold as written.
+
+  **And the frontend independently blocks the same attempt.** `SheetFormView.vue` disables submission when
+  the account list is empty, asserted by
+  `tests/Frontend/Component/PurchaserFlow.spec.ts:1746-1757` ("a purchaser with no active account gets a
+  rial account provisioned on the first creation attempt, so having none is a normal state and must not
+  remove the affordance"). **The test asserts the affordance is removed**, which is the opposite of what
+  its own comment says the requirement is — so this is a defect in a green test, not only in the view.
+
+  **Two resolutions, and the decision belongs to the contract owner rather than to this ledger:**
+
+  | Option | Change | Cost |
+  |---|---|---|
+  | A. Make `accountId` conditionally optional | `contracts/ocs-api.yaml` `SheetCreate.required`; `SheetController::create` stops refusing an absent `accountId`; `SheetFormView` enables submission with no account | A **contract amendment**. `T275` and `T334` both record that amendments here need the contract owner's decision. |
+  | B. Provision from the client | `configurationApi`/`accountsApi` trigger provisioning when `GET /accounts` returns empty | No contract change, but it moves a domain rule into the client and makes two browser tabs race. |
+
+  **A is the better answer** — B makes provisioning depend on a browser and gives the server two ways to
+  be told the same thing — but it is an amendment, so it is not made here.
+
+  **What stands regardless:** `ensureDefaultRialAccount()` is idempotent, is refused loudly on a missing or
+  mis-scaled `IRR`, and re-reads the winner's row under a concurrent insert. Whichever trigger is chosen,
+  none of that has to be rebuilt.
+
+  **Acceptance criteria.** A purchaser with no accounts creates a first sheet, and
+  `GET /accounts` afterwards reports exactly one active `IRR` account. Repeating the attempt provisions
+  nothing further. Cross-references: T085, T146, T165, T265.
 
 **Checkpoint**: Operational setup is fully manageable through authorized interfaces and every
 sensitive change is traceable.
@@ -6218,7 +6427,7 @@ The two are one defect seen from two ends. A sheet detail view needs its transac
 they arrive **inside** the sheet payload, and the frontend's store reads them from **there**
 (`src/stores/sheets.ts:14`). Nothing ever put them there, and nothing else supplies them either.
 
-- [ ] T326 [CRITICAL] Give a sheet's transactions a route, or put them in the payload the contract already
+- [x] T326 [CRITICAL] Give a sheet's transactions a route, or put them in the payload the contract already
       requires, because **a purchaser can open a sheet and its transaction list can never load** — the
       view's only source for them answers `405` and no alternative exists
       (T171, `SheetListView.vue`, `SheetDetailView.vue`, `contracts/ocs-api.yaml`)
@@ -6277,7 +6486,51 @@ they arrive **inside** the sheet payload, and the frontend's store reads them fr
       `GET /sheets/{id}`. A route-dispatch completeness check must fail while a frontend service method
       addresses a path no route serves. Cross-references: T171, T327, T054, T066, T076, T114, T124.
 
-- [ ] T327 [CRITICAL] Return `transactions` and `allowedActions` from `GET /sheets/{sheetId}`, because the
+      ---
+      **Delivered: option (a), honour the contract.** `GET /sheets/{sheetId}` now returns the sheet's
+      transactions inside the payload the approved contract already specifies, and the client's 405
+      call is gone rather than left beside it.
+      **The decision this task refused to make silently, made and recorded.** `SheetDetail.transactions`
+      is what `contracts/ocs-api.yaml:1125` already declares, so filling it needs no contract amendment
+      and no second request. Option (b) — adding `GET /sheets/{sheetId}/transactions` as a paged
+      role-scoped endpoint — remains defensible and is **not** rejected on merit: it keeps this payload
+      small and serves a list view directly. It was not taken because it is a contract amendment, and
+      this repository requires an amendment to be owned, ordered against T124's type regeneration, and
+      reconciled with `SheetDetail.transactions` rather than left in place beside it. That work is
+      recorded as follow-up, not silently dropped.
+      **What changed.** `SheetPayloadFormatter::detail()` composes `summary()` with `transactions` and
+      `allowedActions`; `SheetController` returns it from **all four** single-sheet responses, because
+      the contract declares `SheetDetail` — not `SheetSummary` — for create (`:368`), detail (`:381`),
+      patch (`:405`) and submit (`:424`), and `SheetSummary` appears only inside `SheetPage` (`:902`).
+      Four of the four were wrong in the same way; fixing one and leaving three would have been a
+      partial repair of a single defect.
+      **The array is not truncated, and that is deliberate.** `SheetDetail.transactions` has no
+      pagination parameters and no truncation flag, so any cap added here would silently hide a
+      transaction from the purchaser who must review the whole sheet before submitting it (FR-024) — an
+      undeclared truncation reads as a complete list. `transactionCount` states the true total in the
+      same payload, so a client can always detect the size.
+      **On the client, the dead path is deleted rather than left dormant.**
+      `transactionsApi.listTransactions`, `transactionsStore.loadTransactions`, the `pagination` and
+      `filters` refs that existed only to serve it, and a **duplicate `TransactionFilters` declaration**
+      in `transactionsApi.ts` are all gone. Both `SheetDetailView` and the routed `TransactionListView`
+      read `sheetStore.currentSheet.transactions`, so there is one request and one source instead of a
+      sheet fetch followed by a guaranteed 405.
+      **The check that would have caught this is written and mutation-verified.**
+      `tests/Unit/Architecture/RouteDispatchCompletenessTest.php` compares every path the client can
+      issue against the routes that answer, and it is proved able to fail: reintroducing the exact call
+      this task removed produces
+      `GET /sheets/${sheetId}/transactions (src/services/transactionsApi.ts)`. Writing it caught two
+      bugs in the check itself, which is the argument for having written it — `$this->APP_ROOT` on a
+      private constant resolves as a *property* in PHP 8.5 and was silently empty, and the first path
+      pattern kept one entry per verb and dropped the rest. Both were caught by the vacuity guard in its
+      second test, which is why that guard is there.
+      **One ordering defect fixed while reading the query.** `findBySheetId()` ordered only by
+      `created_at`, which has second precision, so two transactions drafted in the same second came back
+      in storage order — a purchaser's table reordering itself between two reloads of an unchanged
+      sheet. `id` is now the tiebreaker.
+      Cross-references: T171, T327, T054, T066, T076, T114, T124, T344.
+
+- [x] T327 [CRITICAL] Return `transactions` and `allowedActions` from `GET /sheets/{sheetId}`, because the
       contract requires both and the response contains neither, which makes **the Submit button impossible
       to render** (T171, `contracts/ocs-api.yaml`, `src/stores/sheets.ts`) (missing)
 
@@ -6332,6 +6585,52 @@ they arrive **inside** the sheet payload, and the frontend's store reads them fr
       from the same response and T326 decides where that content lives. Cross-references: T171, T326,
       T117, T118, T124.
 
+      ---
+      **Delivered: both properties are on the wire, asserted by name, for all four sheet responses.**
+      `SheetPayloadFormatter::detail()` returns `allowedActions` and `transactions`, and create, detail,
+      patch and submit all return it.
+      **The capability derivation moved out of the formatter and into the domain, and that was not
+      cosmetic.** It began as a private method on `SheetPayloadFormatter`, and the first test for it had
+      to construct the formatter — which needs `SheetSummaryQuery`, which needs `OCP\IDBConnection`,
+      which the PHPUnit process does not have, because `tests/bootstrap.php` deliberately does not
+      bootstrap Nextcloud. The denial half was untestable for a second, independent reason: the
+      contract suite has exactly one set of credentials and cannot authenticate as a second user, while
+      the endpoint is owner-scoped and answers `404` to anyone else. So the rules now live in
+      `lib/Domain/Expense/SheetCapabilities.php`, which is where Constitution IV says invariants belong
+      and which takes the actor's uid as a parameter. That makes the **whole** matrix assertable in
+      `tests/Unit/Domain/Expense/SheetCapabilitiesTest.php`: owner-may-act, empty-sheet
+      not-submittable, non-owner offered nothing, all four post-submission stages denying all three
+      capabilities, both completed states locked, and every value a boolean.
+      **Every capability key is always present, never omitted.** `CapabilitySet` is
+      `additionalProperties: {type: boolean}`, so a missing key arrives in the client as `undefined` —
+      which passes every `!== false` filter the frontend writes. That is not hypothetical: it is why
+      `DecisionForm`'s option filter was inert until its lookup was corrected (T335). The non-owner test
+      compares the whole map rather than one key, so a set that dropped `canSubmit` would fail.
+      **The contract-level half is asserted over real HTTP**, in four tests added to
+      `PurchaserFlowControllerTest`: both keys by name, `count(transactions) === transactionCount`, the
+      fixture's own transaction present by public id, `canSubmit` true for an open sheet holding one, and
+      all three capabilities false on a submitted sheet. Asserting the count against the rows is the part
+      that matters — `transactions` present but empty while `transactionCount` says otherwise satisfies
+      the first half of the test and still leaves the table blank.
+      **Two of the four endpoints are asserted for shape and two are not, deliberately.** `PATCH
+      /sheets/{id}` and `POST /sheets/{id}/submit` mutate the shared fixture sheet, and this file
+      re-seeds from `seed-contract-fixtures.php` for that reason; a test that left the sheet submitted
+      would make every later assertion in the file order-dependent. Both return the value of the same
+      `formatSheetDetail()` call that the two read-shaped endpoints prove, and the test says so rather
+      than leaving a silent gap.
+      **Both directions of `canSubmit` are now asserted in the frontend**, which is the assertion whose
+      absence let this ship: the only test that touched the Submit button asserted its *absence* on a
+      submitted sheet, which a permanently-false computed satisfies perfectly. There is now a test that
+      it is absent for an open sheet with no transaction (FR-024) **and** one that it is present for one
+      the API reports as holding a transaction. `NextcloudVueContract.spec.ts` carried a comment
+      deferring this assertion to T326; that deferral is now resolved and points at both tests.
+      **What this does not close.** `firstExpenseDate` and `lastExpenseDate` are declared by the
+      contract and typed non-optional by `src/types/api.ts`, and neither is emitted — that is T337. The
+      conformance check this task asked for on `SheetDetail` is **not** written here: T337 now carries
+      it, because a `SheetSummary`/`SheetDetail` property check is one implementation serving both, and
+      writing it twice would be the drift this ledger keeps recording.
+      Cross-references: T171, T326, T117, T118, T124, T337.
+
 ---
 
 ## Constitution Compliance Review
@@ -6370,3 +6669,2702 @@ defines — the same defect this range was widened twice for previously.
 owners (T128, T122/T123, T124, T239, and the `info.xml` floor) rather than waived, and one is recorded
 as blocking a success criterion (T239 → SC-013). An unrecorded exception would be invalid; none is
 recorded here.
+
+## Phase 55: Convergence (seventeen wire-level gaps between the contract, the server, and the client)
+
+Found by the 2026-10-03 convergence pass, after `npm run test:unit` reported 243/243 and
+`scripts/dev/phpunit` reported 1087 tests with one failure (that failure is T318's known
+`application/octet-stream` conflict, not a finding here). Every gap below was established by
+reading the code that builds or reads the value, not by a failed grep.
+
+**Why this pass found seventeen gaps the previous fifty-four did not.** Every earlier phase started
+from a task note, a failing test, or a business symptom. This one started from the three
+*mechanical* correspondences that have no symptom of their own — contract path vs route,
+contract schema vs emitted keys, client payload key vs server payload key — and enumerated all of
+them. Fourteen of the seventeen are invisible to the suites for the same reason T327 was: every
+frontend spec stubs `@nextcloud/axios` and hands the store a hand-written fixture that contains the
+key the server never sends. A green frontend suite is not evidence that a wire is connected.
+
+- [x] T328 [CRITICAL] Send the export format under the name the endpoint binds, because **every
+      export request is refused with 422** and no format works for any subject (FR-066,
+      `src/types/api.ts`, `src/stores/reports.ts`, `lib/Controller/ExportController.php`) (`contradicts`)
+
+      **Measured.** `src/types/api.ts:286` declares `format: 'csv' | 'xlsx' | 'pdf' | 'zip'` and
+      `src/stores/reports.ts:146-153` builds `{ resource, format, reportType, filters }`. The
+      endpoint binds `string $fileFormat = ''` (`lib/Controller/ExportController.php:84`) and answers
+      `$fieldErrors['fileFormat'] = 'required'` when it is empty (`:106-111`). `format` is never read,
+      so the bound parameter is **always** the empty string and **every** export is a 422.
+
+      **The contract already decided this and recorded the reason, which makes the client the odd one
+      out.** `contracts/ocs-api.yaml:1281` declares `required: [resource, fileFormat]`, and `:1287-1293`
+      explains the rename: Nextcloud's OCS layer reserves the request parameter `format` for envelope
+      selection, so a body field literally named `format` forces an XML answer no `Accept` header can
+      override. T302 (recorded at `tasks.md:4456-4461`) fixed the **server** half and warned that "a
+      client that sends `format` would produce a request that cannot succeed". That client is this one.
+      The same reservation also forces the XML envelope, so this one field breaks the response shape too.
+
+      **Acceptance criteria.** `npm run typecheck` still passes after the rename (it passes *now*
+      precisely because the declared TS type is the wrong name), a contract test asserts the `422`
+      field error is keyed `fileFormat`, and one end-to-end export per format returns `200`.
+      Cross-references: T302, T341, T142 (exports), T114.
+
+      ---
+      **Delivered: the client sends `fileFormat`, and the format union is derived from it.**
+      `ExportRequest.fileFormat` in `src/types/api.ts`, the request body built in `reports.ts`, and
+      `ExportFormat = ExportRequest['fileFormat']` in `src/types/reporting.ts`. That last one is the
+      part that stops the recurrence: the union used to be `ExportRequest['format']`, so it tracked a
+      field **the server never reads**. Deriving it from `fileFormat` means the store's format type and
+      the field the endpoint binds cannot drift apart again — and had they been derived from the wrong
+      field, this task's own fix would not have been caught by the compiler either, which is precisely
+      how it shipped.
+      **The server half was already correct and needed no change.** `ReportAndExportControllerTest`
+      asserts `fileFormat`, the JSON envelope, and the `ExportResult` keys at `:571-599`, so the wire
+      contract was pinned while the only client in the repository sent the wrong name. No PHP test was
+      added here, and that is a finding rather than an omission: the endpoint was never the problem.
+      **What the fix exposed immediately, and why it shipped with T341.** `requestExport` had been
+      asking for `responseType: 'blob'` on the reasoning that the endpoint "streams the artifact" —
+      which the controller's own comment contradicts. With `fileFormat` corrected, that would have turned
+      a clean `422` into a corrupt download, so T341 is fixed in the same change rather than after it.
+      **Acceptance criteria met.** `npm run typecheck` passes, the two new frontend assertions cover
+      the field name (`fileFormat` present, `format` absent) and the absence of `responseType: 'blob'`,
+      and the pre-existing contract tests confirm the endpoint accepts the request this now sends.
+      Cross-references: T341, T302, T342, T142, T114.
+
+- [x] T329 [CRITICAL] Make report filters reach the server under one name and one vocabulary, because
+      **FR-064/FR-065 filtering is inert and the user is shown the unfiltered report** (FR-064, FR-065,
+      `src/services/reportsApi.ts`, `src/types/reporting.ts`, `lib/Controller/ReportController.php`)
+      (`contradicts`)
+
+      **Two independent defects, and fixing only the first converts a silent wrong answer into a 422.**
+
+      **Axis 1 — encoding.** `reportQuery()` writes each populated filter as its own query parameter
+      (`src/services/reportsApi.ts:33-42`: `query.set(name, String(value))`). The endpoint reads
+      exactly one parameter and JSON-decodes it: `string $filters = ''`
+      (`lib/Controller/ReportController.php:100`), and `:180-191` returns an unfiltered
+      `new ReportFilter($page, $pageSize)` when it is empty. The client never sends `filters`, so
+      `$filters` is always `''` and **every filter is discarded before any rule runs**.
+
+      **Axis 2 — vocabulary.** `ReportFilters` (`src/types/reporting.ts:41-53`) declares `status`,
+      `ownerId`, `costCenterId`, `expenseTypeId`, `currency`, `actorId`, `stage`, `eventType`,
+      `period`, `dateFrom`, `dateTo`, `amountMin`, `amountMax`.
+      `ReportFilterFactory::ACCEPTED_FILTERS` (`lib/Application/Reporting/ReportFilterFactory.php:47-50`)
+      is `from`, `to`, `statuses`, `currencyCodes`, `costCenterDbIds`, `actorUids`, `eventTypes`,
+      `createdBy`, `expenseTypeDbIds`, `stages`, `amountMinMinor`, `amountMaxMinor`. **Zero name
+      overlap** — not even `dateFrom`/`dateTo` against `from`/`to`. So once axis 1 is fixed, every
+      filter the UI can produce is refused as an unknown key. `ReportFilterBar.vue:63` compounds it by
+      sending `costCenterId` as a single UUID string where the server's vocabulary wants
+      `costCenterDbIds` as an array of database ids.
+
+      **The server states the design intent that the client currently violates.**
+      `ReportFilterFactory.php:86-96`: "An unrecognised filter is refused rather than ignored, because
+      ignoring it returns the unfiltered answer and the caller cannot tell the difference." The client
+      produces exactly that outcome by never sending a recognised one. `ReportView.vue:56-58` calls
+      `applyFilters`, the request succeeds, and the unfiltered report is rendered with nothing dropped
+      on screen.
+
+      **Decide the id-space question explicitly.** `costCenterDbIds`/`expenseTypeDbIds` name *database*
+      ids, while the contract's identifier discipline is public uuids. Resolving public ids to database
+      ids is a server responsibility; a client must never be asked for a surrogate key.
+
+      **Acceptance criteria.** One contract test asserts that a report requested with a status and a
+      date range returns only matching rows, and one asserts that an unknown filter name is **refused**
+      (keeping T309's guarantee). `period` (FR-068, T312) must use the settled vocabulary rather than
+      introduce a fourth one. Cross-references: T309, T312, T275, T103, T104.
+
+      ---
+      **Delivered. The defect was entirely client-side; the server was already correct, and this task
+      found that by reading the server rather than by a failing test.**
+
+      **Axis 1 — the encoding.** `reportQuery()` wrote each populated filter as its own query parameter.
+      `ReportController::show()` binds one `string $filters = ''` and JSON-decodes it, so `$filters` was
+      always `''` and the controller returned a bare `new ReportFilter($page, $pageSize)`. The filters are
+      now serialised into **one** `filters` parameter. An empty filter object is omitted rather than sent
+      as `{}`, because `json_decode('{}', true)` is `[]` in PHP and `ReportFilterFactory` has to
+      special-case it.
+
+      **Axis 2 — the vocabulary.** `ReportFilters` is now **the server's vocabulary**, under the same
+      names and with the same shapes: `statuses`/`currencyCodes`/`stages`/`eventTypes`/`actorUids`/
+      `costCenterIds`/`expenseTypeIds` are **lists** (the factory refuses a non-array for every one of
+      them, so a single-select sends a one-element list), amounts are `amountMinMinor`/`amountMaxMinor` in
+      integer minor units, and the range is `from`/`to`. The mapping is the identity on purpose: a
+      client-side alias layer would recreate the two-vocabularies drift this task removes, and nothing
+      would say which is right when they disagree.
+
+      **The id-space question, decided as this task required.** `data-model.md` states the rule — "Every
+      externally addressable aggregate uses an immutable UUID `public_id`; numeric `id` values remain
+      internal join keys" — so a filter named `costCenterDbIds` publishes an internal join key across the
+      API boundary and asks the client for a surrogate key it cannot otherwise obtain. **`costCenterIds` and
+      `expenseTypeIds` (public UUIDs) were added to the vocabulary**, and the new
+      `lib/Application/Reporting/FilterIdentityResolver.php` resolves them to the surrogate keys
+      `ReportQuery` filters on, following the `ChargedAccountScope` pattern already in that namespace.
+      An id that resolves to nothing is **refused** with a 422 naming it, never dropped: dropping it
+      would return the superset while the caller believed the filter applied, which is the exact failure
+      the closed vocabulary was built to prevent.
+      **The `*DbIds` spellings were kept, not replaced.** T306 and T309 pinned them in
+      `ReportAndExportControllerTest` and `ExportController` accepts the same object, so removing them
+      would be a breaking contract change made as a side effect of fixing a client — no task authorises
+      it. Both spellings union into the same `ReportFilter` field, so a request naming either or both
+      means the members of that one facet.
+
+      **`period` was NOT given a fourth encoding, per this task's instruction.** It is not a member of the
+      accepted vocabulary, and T312 remains blocked on the open `/speckit.clarify` question about whether
+      `period` joins FR-064's set or stands in a declared relationship to a date range. The type
+      `ReportPeriodPreset` keeps the full V1 vocabulary and a **new** `REPORT_OFFERABLE_PERIODS` holds only
+      `custom`, which is what the filter bar offers. The preset is also no longer part of `ReportFilters`
+      at all — it is component state, so the request cannot claim a filter the server cannot answer.
+      **Offering the Jalali presets today would have re-created this task's own defect**: the user picks
+      "month", nothing is sent, and the unfiltered report is rendered.
+
+      **Two defects found while doing it, both now fixed.**
+      1. `ReportQuery::RULE_REQUEST_NAMES` did not know the new names, so a request that had *passed* the
+         closed-vocabulary check was then refused by `assertFilterIsEvaluable()` naming
+         `costCenterDbIds` — a word absent from the request and from the accepted-filter list shown to
+         the caller two lines earlier. Both spellings are now named for both rules.
+      2. `ReportQuery::RULE_REQUEST_NAMES`'s docblock claimed the guard
+         `ReportFilterFactoryTest::testEveryRequestNameIsAnsweredByARule` existed. **It did not.** It is
+         written now, and it iterates `ACCEPTED_FILTERS`, so the next name added to the vocabulary without
+         a rule able to refuse it by the caller's own name fails there instead of shipping.
+
+      **Verification.** `scripts/dev/phpunit` is **1116 tests / 4613 assertions / 1 failure**, that failure
+      being T318's known `application/octet-stream` conflict and not this task's.
+      `ReportAndExportControllerTest` is 61/61 (was 57) and `ReportFilterFactoryTest` is 48/48 (was 42);
+      `npm run typecheck`, `npm run lint` (0 errors), `npm run stylelint`, `npm run test:unit`
+      (**253/253**, was 247) and `npm run build` all pass.
+
+      **What the tests assert, and why the contract test carries the weight.** The frontend unit tests
+      pinned the broken encoding and passed, because they agreed with `reportQuery`; that is the same trap
+      Phase 55 recorded for T327, and no client-side test can catch a wire mismatch on its own. The new
+      `testAStatusAndADateRangeInOneRequestReturnOnlyRowsSatisfyingBoth` therefore asserts an **exact set
+      equality against a locally computed intersection** over real HTTP, and first asserts that each
+      facet on its own strictly narrows the unfiltered report — otherwise "both facets applied" and "one
+      facet applied" produce identical output and the test measures nothing. The public-id spelling is
+      asserted over HTTP to select **the same rows** as the surrogate-key spelling, which is what makes
+      the id-space decision testable rather than a claim in a docblock. The unresolvable-id case is
+      asserted over HTTP too, because what it guards is the answer being a 422 rather than a 500.
+
+      **Known limitation, deliberately left open.** The filter bar's cost-centre field is still free text
+      rather than a picker, so FR-064's cost-centre facet needs a user to paste a UUID. That is T088's
+      configuration UI, not this task, and it was not widened here.
+      Cross-references: T309, T312, T275, T306, T103, T104, T088, T318.
+
+- [x] T330 [CRITICAL] Emit the expense type's public id in `Revision.expenseType.id` instead of its
+      title, because **updating any existing transaction fails with 422** and the correction journey
+      cannot complete (FR-025, FR-048, US4, `lib/Infrastructure/Http/TransactionPayloadFormatter.php`)
+      (`contradicts`)
+
+      **Traced end to end.** `lib/Infrastructure/Http/TransactionPayloadFormatter.php:128-131`:
+
+      ```php
+      'expenseType' => [
+          'id' => $revision->expenseTypeTitle() ?? '',
+          'name' => $revision->expenseTypeTitle() ?? '',
+      ],
+      ```
+
+      Both members carry the **title**. The aggregate has no public-id accessor to use:
+      `lib/Domain/Expense/TransactionRevision.php:15-16,29` stores `costCenterId`, `expenseTypeTitle`
+      and a public `?int $expenseTypeDbId`, but no expense-type public id. `EntitySnapshot.id` is
+      `format: uuid` (`contracts/ocs-api.yaml:1184-1189`).
+
+      **The consumer makes it fatal.** `src/views/transactions/TransactionFormView.vue:175` writes
+      `draft.value.expenseTypeId = rev.expenseType.id`, and
+      `lib/Application/Expense/TransactionService.php:307` resolves it with
+      `$this->expenseTypeRepository->findByPublicId($expenseTypeId)` — so an edit submits the title
+      where a uuid is required and answers `InvalidArgumentException("Expense type not found: …")`
+      (`:309`) as a 422. Every update of an existing draft fails, and with it FR-025's "edit" and
+      US4's correction path.
+
+      **The neighbouring code shows the intended pattern, which is what makes this an inconsistency
+      rather than a convention.** `costCenterSnapshot()` (`TransactionPayloadFormatter.php:147-171`)
+      exists specifically to resolve a public id and to emit the optional `code`; `EntitySnapshot.code`
+      is likewise never emitted for `expenseType`. Use the same shape.
+
+      **Acceptance criteria.** A contract test asserts `activeRevision.expenseType.id` is a uuid and is
+      accepted back by `PATCH /transactions/{id}`; a component test loads a real server-shaped
+      transaction into the edit form and submits it. Cross-references: T075, T016, T072.
+
+      ---
+      **Delivered. The formatter had no public id to emit, because the aggregate did not carry one.**
+
+      `TransactionRevision` stored `expenseTypeDbId` and `expenseTypeTitle` and nothing else, so the only
+      string available for `expenseType.id` was the title. **The fix is therefore four layers deep, not
+      one:** formatter alone could only have swapped one wrong string for another.
+
+      1. **`TransactionRevision`** gains `public ?string $expenseTypeId` as a promoted constructor
+         property, paired with `$expenseTypeDbId` exactly as `$costCenterId` is paired with
+         `$costCenterDbId`. It is a **trailing optional** parameter on `complete()` and on the property,
+         so none of the ~25 existing `complete()` call sites in the integration suites had to change and
+         no unrelated test was disturbed. `hydrate()` is untouched: `expenseTypeDbId` was already set as a
+         public property immediately before `hydrate()` is called, so `expenseTypeId` is set the same way
+         rather than adding a parameter to a method whose docblock is about restoring business fields.
+         `correction()` copies it — without that, a correction draft would have lost the id and US4's
+         path would have stayed broken while the create path looked fixed.
+      2. **`DbTransactionRevisionRepository`** resolves it through a new `getExpenseTypePublicId()`,
+         placed directly beside the existing `getCostCenterPublicId()` and called from `mapRow()` in the
+         same place. **This is where the cost centre's public id was already being resolved**, so putting
+         the expense type's anywhere else would have recreated the inconsistency this task closed.
+      3. **`TransactionService::updateTransaction()`** carries `$expenseTypePublicId` through both
+         branches of its expense-type if/else, mirroring how `$costCenterPublicId` is carried beside
+         `$costCenterCode`, and passes it to `complete()`.
+      4. **`TransactionPayloadFormatter`** gains `expenseTypeSnapshot()` beside `costCenterSnapshot()`
+         and emits `id => $revision->expenseTypeId() ?? ''`, `name => $revision->expenseTypeTitle()`.
+         The **stored title** is used for `name`, not a fresh lookup, so a historical revision keeps the
+         name it was submitted with — the same reason `costCenterSnapshot()` prefers its snapshot columns.
+         An unresolvable id yields an **empty string rather than the title**: an absent identifier is
+         visibly absent, whereas a title in an id field looks like data.
+
+      **The production failure, reproduced before the fix.** The round-trip contract test failed with
+      exactly the live symptom: `422 {"error":{"code":"VALIDATION_FAILED","message":"Expense type not
+      found: Contract Fixture Expense Type"}}`. Every update of an existing draft was refused, so
+      FR-025's "edit" and US4's correction path were both unreachable from the UI.
+
+      **A fixture was hiding this, and fixing it was part of the task.** `PurchaserFlow.spec.ts` used
+      `COST_CENTER_ENGINEERING = 'cc-eng-0001'` and `EXPENSE_TYPE_SUPPLIES = 'et-sup-0001'` — readable
+      placeholders in fields the contract types as `format: uuid`. That is the trap Phase 55 named for
+      T327: a fixture shaped to agree with the client rather than with the server. It is simultaneously
+      wrong about the contract and unable to say so. **All four are real UUIDs now.** A readable id is
+      comfortable in a fixture and impossible on the wire.
+
+      **Two corrections to this task's own notes, made while working.**
+      - The note's line reference "`TransactionService.php:307`" and "`TransactionFormView.vue:175`" were
+        correct, but it described `PATCH /transactions/{id}` as the consumer of `expenseType.id`; the
+        *form* is the consumer, and it forwards the value to that endpoint. Both links are now asserted.
+      - **The acceptance criterion's "component test" cannot detect this defect on its own**, and it is
+        worth being explicit about why: the form copies whatever `expenseType.id` says, so a component
+        test passes identically against the broken server and the fixed one. Its value is that it pins
+        the client half — the form must submit the *id* and must never substitute the *name* — and it is
+        the component half of the loop that the contract test closes. The load-bearing assertions are the
+        two over HTTP.
+
+      **Verification.** `scripts/dev/phpunit` is **1118 tests / 4627 assertions / 1 failure**, that
+      failure being T318's known `application/octet-stream` conflict and present on the pre-change
+      baseline. `CorrectionControllerTest` is 14/14 with the two new tests; `npm run typecheck`,
+      `npm run lint` (0 errors), `npm run stylelint`, `npm run test:unit` (**254/254**, was 253) and
+      `npm run build` all pass.
+
+      **Why the round-trip test asserts on the status code.** Its first draft asserted that the PATCH
+      answer was not a refusal by inspecting the shape of `data`, and **that assertion passed against the
+      422** — a 422 answers a JSON OCS envelope too, so a shape check cannot distinguish success from the
+      exact refusal the test exists to catch. It asserts `getStatusCode() === 200` now, and the same trap
+      is worth remembering for the other OCS write tests.
+
+      **Known limitation, deliberately left open.** A revision whose stored `expense_type_id` matches no
+      expense-type row now emits `id: ''` where it previously emitted the title. That is the honest
+      reading — an unresolvable join key is not an identifier — but it means such a revision's expense
+      type cannot be edited until the dangling reference is repaired. Repairing dangling references is not
+      this task and no task owns it; recorded here rather than silently widened.
+      Cross-references: T075, T016, T072, T267.
+
+- [x] T331 [CRITICAL] Render the dashboard's nested `figures` as metrics, because **no FR-061 figure is
+      reachable and each card shows a JSON blob plus the read-window bound as its headline number**
+      (FR-061, `lib/Controller/DashboardController.php`, `src/utils/dashboard.ts`) (`partial`)
+
+      **Measured on both sides.** `DashboardController::card()` (`:152-164`) returns
+      `['userId' => …, 'figures' => $figures, 'figuresBoundedBy' => self::BOUND, 'figuresTruncated' => …]`
+      where `$figures` is `['openSheets' => …, 'returnedToMe' => …]` (`:88-95`), `['awaitingReview' => …]`
+      (`:99-114`), or the administrator summary (`:126-138`). `dashboardMetrics()`
+      (`src/utils/dashboard.ts:31-53`) maps over `Object.entries(bucket)` — **top level only** — and any
+      non-scalar falls through to `return { key, kind: 'raw', text: JSON.stringify(value) }` (`:52`).
+      `DashboardCard.vue:71-77` prints `metric.text` verbatim.
+
+      **The consequence is that each role card renders four rows**: `userId`, a monospace
+      `{"openSheets":2,"returnedToMe":0}` labelled *figures*, `figuresBoundedBy` formatted as the count
+      **100**, and `figuresTruncated` as yes/no. FR-061's figures — open sheets, returned transactions,
+      review queues, decision counts, balances, movements — appear as none of those. `hasMetrics`
+      (`dashboard.ts:55`) is satisfied by the `userId` row alone, so the "nothing to do" empty state at
+      `DashboardCard.vue:56` can never render either.
+
+      **Both sides may need a decision, and it is not the implementer's to make silently.** The
+      contract's `Dashboard` schema declares the role objects `additionalProperties: true` without
+      naming inner properties, so it neither endorses nor forbids the nesting. Flattening one level in
+      `dashboardMetrics` is the smaller change and leaves the wire shape alone; hoisting the figures in
+      `card()` is the smaller *consumer* change. Pick one and say so in the report. Whatever is chosen,
+      `userId`, `figuresBoundedBy` and `figuresTruncated` need a non-metric presentation — a bound is a
+      caveat, not a figure, and it must not be the largest number on the card.
+
+      **Acceptance criteria.** A frontend test asserts a card built from a **server-shaped** bucket
+      renders a labelled, translated row per FR-061 figure and no `kind: 'raw'` metric, and that the
+      empty state is reachable. Cross-references: T113, T115, T118.
+
+      ---
+      **Delivered, client-side only — and the decision is recorded because the task required it to be.**
+      **Chosen: flatten one level in `dashboardMetrics`; the wire shape is unchanged.** The server was
+      already correct and its nesting is deliberate. `figures`, `figuresBoundedBy` and
+      `figuresTruncated` exist *together* — the class docblock is titled "Figures are bounded, and say
+      so" — so hoisting the figures to the card's top level would leave the bound bounding nothing at
+      that level. The nested shape is additionally pinned by `DashboardControllerTest.php:142-178`
+      (`figures` present, `figuresBoundedBy === 100`, `figuresTruncated` a bool, figures are ints), so
+      hoisting breaks two of those four assertions and is not the smaller change. And the contract's
+      five role objects are `additionalProperties: true` with no inner properties named
+      (`ocs-api.yaml:969-976`), so nothing required a change on either side.
+
+      **`src/utils/dashboard.ts`** — `DASHBOARD_FIGURES_KEY` and
+      `DASHBOARD_NOTE_KEYS = ['userId','figuresBoundedBy','figuresTruncated']`, both read off the
+      controller. `dashboardMetrics()` unwraps `figures` **in place, one level**, classifying each
+      unwrapped value with the *same* private `metric()` the top level uses, so a money figure keeps its
+      currency instead of becoming a count that would print it 100x too small — asserted, because
+      "flatten one level" must not mean "coerce whatever is one level down". A `figures` that is not a
+      record is **not** unwrapped. New `dashboardNotes()` returns the envelope, as a **separate
+      function rather than a flag**: a caveat that is merely flagged can be reclassified later, one that
+      lives in a different list cannot drift back into the figures. `kind: 'raw'` is kept — it is the
+      honest "no renderer" branch and an existing test covers it.
+
+      **`src/types/dashboard.ts`** — `DashboardNote = DashboardMetric`; `DashboardCard.notes`. Notes carry
+      the same value-type discrimination (the bound is a number, the flag a boolean) but not the
+      headline treatment, so the distinction cannot be lost in the type.
+
+      **`DashboardCard.vue`** — optional `notes` rendered as a `<footer>` under the figures at the floor
+      size and normal weight; labels from `dashboard.note.<key>` rather than `dashboard.metric.<key>` so
+      T119 can name a caveat as something other than a figure. **`stores/dashboard.ts`** — cards carry
+      `notes`; `hasMetrics` reads `card.metrics`, which is now figures only, so the empty state is
+      reachable. **`DashboardView.vue`** — passes `:notes` through.
+
+      **A fixture was hiding this.** `Dashboard.spec.ts` fed the client a hand-written **flat** bucket
+      whose every key — `queueItems`, `decisions`, `returnedTransactions`, `activeUsers` — is a key the
+      server **never sends**. It is the server's shape now, with the controller lines and the contract
+      test that pins them named in the comment. One consequence worth recording: the swap broke the
+      pre-existing `'renders one card per bucket the projection sent'`, which asserted on `queueItems`.
+      That test was asserting on a key the server never sends; it asserts `awaitingReview` now. It was
+      part of this defect, not a regression.
+
+      **RED state was valid.** 16 failed / 33 passed, **0 skipped, 0 incomplete**, and the failures named
+      the defect literally (`- "openSheets" + "userId"`, `- "returnedToMe" + "figures"`). One of the 16
+      was green before the fix and is a deliberate guard — *"does not treat `figures` as a figure when it
+      is not a record"* — which a naive flatten would break.
+
+      **How "the bound is not the largest number" was asserted.** Structurally, not visually: the bound
+      is absent from `card.metrics` and present under `[data-testid="dashboard-note-…"]`. jsdom has no
+      layout engine, so *which list it is in* is the strongest available statement — the same substitute
+      T283/T286 adopted for FR-071.
+
+      **`npm run test:unit` reports 2 failures in `NextcloudVueContract.spec.ts`, and they are not this
+      task's.** Both are `Test timed out in 30000ms` on real-`@nextcloud/vue` mounts (8–30 s each).
+      Established three ways, the last decisive: green at session start (slowest 9 909 ms); 4/6 with this
+      task's `src/`+`tests/` **stashed**; **3/6 on pristine `HEAD` in a separate `git worktree`** with no
+      uncommitted work at all — strictly worse the cleaner the tree. Nothing T331 touches is imported by
+      that file. A 30 s timeout on a slow mount that moves with machine load; not fixed here, not
+      claimed as fixed, and no task owns it.
+
+      **Known limitations, deliberately not widened.** The bound is still 100 and the figures are still
+      window sizes — no domain repository has a count query, and this task made the card *say* so
+      honestly rather than making the figures exact. FR-061's balances and movements still do not appear:
+      `figures()` never reads an account balance or a movement, which is T106's projection content.
+      And `hasMetrics` is now reachable but still has no reader in `DashboardView.vue` (T113/T115/T118).
+
+      **Results.** `npm run typecheck` clean · `npx eslint` on the six changed files 0 problems ·
+      `npm run stylelint` clean · `Dashboard.spec.ts` 49/49 (was 33) · `npm run test:unit` 268/270 (the 2
+      above) · `npm run build` built in 9.43s · `scripts/dev/phpunit` 1118 tests / 4627 assertions /
+      1 failure, that failure being T318's known `application/octet-stream` conflict, present on the
+      baseline and untouched here. **T331 changed no PHP**; `DashboardControllerTest` was run *before*
+      the work, green at 9/9, to establish the wire shape this task's fixture now mirrors. Full record:
+      `docs/reports/T331.md`.
+
+- [x] T332 [HIGH] Return a real total from `SheetService::listSheets`, because **`total` is the page
+      size**, so any purchaser with more than 25 sheets is told they have one page (FR-063,
+      `lib/Application/Expense/SheetService.php`) (`partial`)
+
+      **The estimate is acknowledged in the code.** `lib/Application/Expense/SheetService.php:90-95`:
+
+      ```php
+      // For total count, we need to add a method to the repository
+      // For now, we'll estimate from the returned items
+      $total = count($sheets);
+      ```
+
+      `$sheets` is the **already-paged** result of `findByOwnerUid($ownerUid, null, $offset, $pageSize)`.
+      `SheetController::index` (`:63-72`) passes it straight into the response's `total`, which
+      `PageMeta` (`contracts/ocs-api.yaml:930-936`) and `src/types/api.ts` both treat as the record
+      count. With 40 sheets, page 1 reports `total: 25`.
+
+      **The consequence is that pagination is wrong, silently.** The frontend computes page count from
+      `total`, so the last 15 sheets are unreachable through the pager and the "N results" count
+      under-reports by construction. No test catches it, because a fixture with ≤25 sheets produces the
+      correct answer by accident.
+
+      **Acceptance criteria.** A repository-backed integration test creates more than one page of
+      sheets and asserts `total` equals the owner-scoped record count on every page, not the page size.
+      Cross-references: T060, T236.
+
+      ---
+      **Delivered, backend only. The frontend claim in this entry does not match the source and was not
+      acted on.** `ExpenseSheetRepository` gains `countByOwnerUid(string $ownerUid, ?SheetStatus $status
+      = null): int`; `DbExpenseSheetRepository` implements it as `COUNT(*)`, cast from `fetchOne()`
+      because `COUNT` is `BIGINT` and arrives as a string on some drivers, with the `owner_uid`/`status`
+      predicate extracted into a private `applyOwnerScope()` that **both** the read and the count call, so
+      the two cannot drift — the same reasoning `DbAuditEventRepository` records for `applyTransactionTimelineScope()`.
+      `InMemoryExpenseSheetRepository` got the identical treatment, so a double cannot pass the unit suite
+      a count its own read would contradict. `listSheets()` now reads the count from the repository and
+      nothing else about it changed. `$status` is taken for **predicate parity**, not because a caller
+      needs it: no endpoint binds a status filter, which is T333.
+
+      **`total` is compared against the table, not against the repository.** The `sheetlist` scenario in
+      `roundtrip-runner.php` writes 26 sheets for `PROBE_OWNER_UID = 't332-sheet-list-probe'` — a real
+      currency, a real account, the real `SheetService` over the real `DbExpenseSheetRepository` — and
+      reports pages 1, 2 and 3, a `COUNT(*)` issued as plain SQL, the status-scoped counts, and one
+      unbounded read of the same scope. Asserting "the service agrees with `countByOwnerUid()`" would be
+      satisfied by two halves of the same defect agreeing with each other, which is the shape
+      `count($sheets)` had. A **probe owner** rather than `$actorUid`, because `employee1` is the user
+      `ContractFixtures` seeds and an owner-scoped count over it would depend on which scenario ran first.
+
+      **RED state was valid.** With `count($sheets)` temporarily restored: 2 failed / 2 passed, **0 skipped,
+      0 incomplete**, and the failures are the defect as a number — `Failed asserting that 25 is identical
+      to 26` on page 1, `1 is identical to 25` on page 2. The fix was restored by exact-string edit and
+      `git diff` was read to confirm the file carries the intended change only, which is the check T320
+      got wrong. The 2 green tests are guards by design: pages reaching every owned sheet exactly once
+      (a property of the window, not of `total`) and the status counts partitioning the owner's sheets.
+
+      **Cleanup needs no new fingerprint.** The 26 sheets carry `LeakedRows::ROUND_TRIP_SHEET_TITLE`, so
+      the existing sweep removes them; every insert is also `$track()`ed, so no table was added and
+      `testEveryTableTheRunnerWritesHasAFingerprintThatCanRemoveIt` still holds unchanged. The runner
+      reported no `leftovers` key.
+
+      **The frontend rationale is unverified, and the current source contradicts it.** This entry says the
+      frontend "computes page count from `total`, so the last 15 sheets are unreachable through the pager".
+      **There is no pager on the sheet list.** `src/stores/sheets.ts:31` records `pagination.value.total`
+      and nothing in `src/` reads that field's value for anything; `src/views/sheets/SheetListView.vue`
+      calls `loadSheets()` with no arguments (`:20-25`) and renders `sheetStore.sheets` (`:118`), with no
+      `pagination` and no `pageCount` in the file. The four queue views do compute
+      `Math.ceil(total / pageSize)` and `AccountView.vue:158` paginates movements — **the sheet list is not
+      among them**. The narrower true consequence is that a purchaser with more than 25 sheets sees the
+      first 25 with no control to request page 2, which is a **missing pager** and is identical whether
+      `total` says 25 or 26. That is not this task's, and **no frontend file was changed or widened to make
+      the narrative true.**
+
+      **`SheetController` was deliberately left alone.** It still binds bare `int $page`/`int $pageSize`
+      and so does not use `PageBounds`; migrating it would change the endpoint's behaviour for requests
+      T332 does not concern. Not needed here.
+
+      **Results.** The four T332 tests 4/4 (16 assertions) · `scripts/dev/phpunit` **1122 tests, 4645
+      assertions, 1 failure** (baseline 1118, so exactly these four added) · `php -l` clean on all six
+      changed PHP files · Serena diagnostics clean at severity ≤ warning. The one failure is
+      `PurchaserFlowControllerTest::testGetEvidenceContentReturns200WithStream` — T318's known
+      `application/octet-stream` vs `application/pdf` conflict, recorded in T330's and T331's reports as
+      present on the baseline, and confirmed here against `HEAD`, where both the assertion (`:945`) and
+      the `.pdf` fixture filename that causes it (`:1320`) are committed. Nothing T332 touches is in that
+      path. **Known limitations:** `GET /sheets` still binds only `page`/`pageSize`, so `total` counts
+      everything the caller owns rather than a narrowed set — which is exactly the state T333's
+      filter-then-count ordering requires; and the count is a second query, the opposite trade from
+      `AccountService::listMovements()`'s deliberate read-once, which does not survive an owner with
+      thousands of sheets. Full record: `docs/reports/T332.md`.
+
+- [x] T333 [HIGH] Bind the five filters `contracts/ocs-api.yaml` declares on `GET /sheets`, because
+      **FR-064's status/date/currency/creator filtering has no implementation and no owner** (FR-064,
+      `lib/Controller/SheetController.php`, `contracts/ocs-api.yaml`) (`missing`)
+
+      **The contract declares them.** `contracts/ocs-api.yaml:332-346` gives `GET /sheets` the
+      parameters `status` (`SheetStatus`), `ownerId`, `currency` (3 chars), `from` (date) and `to`
+      (date), then `Page` and `PageSize`. The action binds only two of them:
+
+      ```php
+      public function index(int $page = 1, int $pageSize = 25): DataResponse   // :63
+      ```
+
+      and `SheetService::listSheets(int $page, int $pageSize)` filters by owner alone (`:85-96`).
+      **Neither `grep "listSheets"` nor any task ID appears anywhere in this task ledger** (verified:
+      0 occurrences), so this is unowned work rather than work in progress.
+
+      **`GET /accounts` has the same shape, smaller.** `contracts/ocs-api.yaml:266-268` declares an
+      `active` boolean that `AccountController::index` (`:38`) does not bind, and `listForUser`
+      returns active rows only — so a caller cannot ask for inactive accounts at all.
+
+      **Decide filter-then-count, not count-then-filter.** Fixing T332's total and this task's filters
+      together is the only order in which `total` means "matching records" rather than "records on this
+      page". Also apply the refuse-don't-ignore rule FR-064 already states for filters: an unknown
+      `status` or a malformed `from`/`to` is refused with `422`, never ignored.
+
+      **Acceptance criteria.** One contract test per declared filter that a narrowed request returns
+      only matching rows with a `total` that matches the narrowing, and one that an unrecognised filter
+      value is refused. Cross-references: T332, T309 (the accepted-vocabulary pattern to copy).
+
+      ---
+      **Delivered. The production half was already in the working tree, uncommitted, and fatally broken;
+      this entry is mostly the account of finishing it.**
+
+      **What was already present when this task was picked up.** `lib/Domain/Expense/SheetListFilter.php`,
+      `lib/Application/Expense/SheetListFilterFactory.php`, the five new `index()` parameters, and
+      `SheetListFilter` threaded through both `findByOwnerUid()` and `countByOwnerUid()`. So the
+      "(missing)" annotation above was stale the moment the session started, and T332's note that
+      `countByOwnerUid()`'s `$status` parameter existed "for predicate parity, not because a caller
+      needs it" was accurate: the caller existed, it simply had never been run.
+
+      **The baseline was RED with four errors, and the first one was not the defect this task describes.**
+      `scripts/dev/phpunit` reported `Undefined constant "T333_FILTER_PROBE_UID"` from the `sheetlist`
+      round trip. The constant *was* defined, at `roundtrip-runner.php:2547`. PHP executes a top-level
+      `const` as an ordinary statement **in file order**, and that runner dispatches its scenarios at
+      lines 137-489 — so a constant declared beside the scenario that reads it is still undefined when the
+      scenario runs, and it fails as `Undefined constant`, which reads like a missing import rather than
+      an ordering mistake. `PROBE_OWNER_UID` works only because it sits at line 135, above the dispatch.
+      Moved beside its sibling, with the reason recorded so the next constant is not put back below.
+
+      **Three further defects in the same in-flight block, each masking the next.**
+      `scenarioSheetList()` used `$now` at three places without ever declaring it a parameter, so
+      `$now->modify()` was a call on `null`; every other scenario takes `DateTimeImmutable $now` explicitly
+      and this one did not. The runner was missing `use OCA\PettyCash\Domain\Expense\SheetListFilter`.
+      And the `justYesterday` facet passed `(from, null, to)` **positionally** into a
+      `(status, currency, from, to)` constructor, so a date range was being built with a
+      `DateTimeImmutable` in the `?SheetStatus` slot. All four are recorded because all four were live.
+
+      **The one genuine production defect, and it was fatal rather than wrong.**
+      `DbExpenseSheetRepository::applyListScope()` bound both date bounds with
+      `IQueryBuilder::PARAM_DATETIME`, a constant that **does not exist** in Nextcloud 34 — so any
+      `GET /sheets` request carrying `from` or `to` died with
+      `Undefined constant OCP\DB\QueryBuilder\IQueryBuilder::PARAM_DATETIME` rather than returning rows.
+      Nextcloud's `IQueryBuilder` declares `PARAM_DATETIME_IMMUTABLE`, which is what the other sixteen
+      date bindings in `lib/` already use; corrected to match. The date facet could not have been
+      exercised by any test before this, which is the honest reason the defect survived an unimplemented
+      task: the half that was written had never been run.
+
+      **The acceptance criteria's half — the transport — did not exist and is new.**
+      `tests/Contract/Controller/SheetListFilterContractTest.php`, 20 tests / 1047 assertions, covering
+      all five declared filters: `status` (iterated over every `SheetStatus` case, not one hand-picked
+      value), `currency`, `from`, `to`, and `ownerId`, plus seven refusal cases asserting 422 and a
+      message that names the offending field and, for `status`, the accepted vocabulary.
+      The round-trip scenario's own docblock had already scoped itself out of this: it "does not bind the
+      query parameters through HTTP", so between them the two files now cover SQL and transport.
+
+      **Every assertion is relative to the endpoint's own unfiltered answer, and that is the load-bearing
+      decision.** `GET /sheets` is owner-scoped and this shared instance already holds 261 sheets for the
+      acting user across many days, so any absolute count would be a claim about the lab's history. Each
+      test captures the unfiltered page set first and asserts a **narrowing** against it — which is the
+      only comparison an ignored filter cannot satisfy, since a discarded filter returns the baseline
+      verbatim. The first test states the precondition explicitly (more than one sheet, more than one
+      status, more than one currency), because a facet measured against a one-valued baseline passes
+      against an endpoint that filters nothing. `usd` is the fixture state used wherever two currencies
+      are needed: against `draft` every sheet carries `IRR` and the facet is indistinguishable from one
+      that matched everything.
+
+      **The end-of-day reading is asserted as containment, not as a count.** `from=today` selects exactly
+      the sheets created today, so if `to=today` were read as midnight the two would be **disjoint**. The
+      assertion is therefore that `to=today` contains everything `from=today` contains — which is the
+      statement that distinguishes the last-second reading from the midnight one, and which an
+      "excludes yesterday" assertion passes against. An earlier draft of this test asserted
+      `from=today == baseline total` and failed with `18 is identical to 261`: 243 of those sheets were
+      created on earlier days, so the narrowing was correct and the assertion was not. The remaining date
+      assertions are stated as disjointness for the same reason — `SheetSummary` carries no creation date,
+      so "yesterday matches nothing" is not expressible without inventing one.
+
+      **RED state was mutation-verified, twice, because "20 green" is the weakest possible evidence here.**
+      Reintroducing the original defect (`fromQuery(null, null, null, null)`) fails **18 of 20**. Weakening
+      only the end-of-day reading (`$parsed->setTime(23, 59, 59)` → `$parsed`) fails **exactly 1** — the
+      containment assertion — which is the specific evidence that assertion is not passing incidentally.
+      Both mutations were reverted by exact-string edit and `grep -rn MUTATION lib/ tests/` returns nothing.
+
+      **Blast radius was established by reference analysis, not by a green suite.**
+      `ExpenseSheetRepository::findByOwnerUid()` has three production callers, and the two outside this
+      task both predate it: `DashboardController::figures()` (`:183`) passes
+      `new SheetListFilter(SheetStatus::Open)`, which is required — the figure *is* "open sheets", and an
+      unnarrowed read would count every sheet the caller owns. `ReportController::sheetsReport()` (`:227`)
+      passes `null`, and that is correct rather than a missed filter: `status` is a *column* in those rows
+      and the report narrows through `ReportFilterFactory`'s own vocabulary, so a sheet filter here would
+      have hidden rows the report exists to show. `SheetService::listSheets()` is the single production
+      caller of `countByOwnerUid()` and passes the same filter object the read used, which is what makes
+      filter-then-count structural instead of a convention each repository remembers. Verified with
+      Serena `find_referencing_symbols`; recorded because "the suite is green" is a weaker claim than
+      "every caller was inspected".
+
+      **Filter-then-count holds, and the transport test is what proves it.** `total` is asserted equal to
+      the number of the caller's sheets actually in the filtered facet, counted from the unfiltered
+      baseline — not to the page length, and not to the unfiltered estate. T332 left `total` counting
+      everything the caller owns "which is exactly the state T333's filter-then-count ordering requires";
+      that ordering is now exercised rather than assumed.
+
+      **`ownerId` is answered as scope, and that is a decision this task required rather than inherited.**
+      FR-064 resolves "creator" to the sheet's owner, which makes it the *scope* of a caller's list rather
+      than one of its predicates, so naming the caller is a no-op and naming anybody else is a **403** —
+      never a silent widening. A refused answer and an empty page are distinguishable; an ignored filter
+      is not, which is the whole reason the vocabulary is closed.
+
+      **Verification.** `scripts/dev/phpunit` **1193 tests / 5838 assertions / 1 failure** — baseline was
+      1173 with the same single failure, so exactly these 20 were added. The one failure is
+      `PurchaserFlowControllerTest::testGetEvidenceContentReturns200WithStream`
+      (`application/octet-stream` vs `application/pdf`), T318's known conflict, present on the baseline
+      before this task and untouched by it. `RepositoryRoundTripTest` 69/69 (was 65/69 erroring).
+      `npm run typecheck` clean · `npm run test:unit` **270/270** · `npm run lint` 0 errors (163
+      pre-existing `vue/attributes-order` warnings) · `npm run stylelint` clean · `php -l` clean on all six
+      PHP files · Serena diagnostics empty at severity ≤ warning. **T333 changed no frontend file.**
+
+      **Shared-environment hygiene, recorded because it is a change to state outside the repository.** An
+      earlier draft of the contract test created two probe sheets per test in `setUp()`, which on a shared
+      instance owned by the acting user added up to 42 rows across the run. Those 42 were identified by
+      their `T333 ` title prefix and deleted; the 261 sheets that remain pre-date this session and were
+      left alone. The delivered test creates nothing — it is read-only, and takes its two-sided data from
+      the `usd` fixture state — so a repeated run adds no rows. A throwaway purge script used for the
+      cleanup was deleted rather than committed.
+
+      **Known limitations, deliberately not widened.** The sheet list has **no filter UI and no pager**:
+      `SheetListView.vue` calls `loadSheets()` with no arguments and renders `sheetStore.sheets`, so
+      FR-064's four facets are reachable only by hand-editing the query string. T332 recorded the same
+      absence independently and it is not this task's deliverable — the task named
+      `lib/Controller/SheetController.php` and `contracts/ocs-api.yaml`. A purchaser's cost-centre filter
+      needs the configuration UI, which is T088. **`GET /accounts`' `active` parameter, named in this
+      entry, remains unbound** — it is a second endpoint's defect and closing it here would have widened
+      the task. And `countByOwnerUid()` is now a second query per list request, the opposite trade from
+      `AccountService::listMovements()`'s deliberate read-once; filter-then-count has no single-query
+      form that stays correct.
+      Cross-references: T332, T309, T088, T318, T337.
+
+- [x] T334 [HIGH] Reconcile the error envelope's nesting across the contract, the server, and the
+      client, because **all four declared `Error` properties are one level away from where the contract
+      puts them, and the client is written against the implementation** (`contracts/ocs-api.yaml`,
+      `lib/Infrastructure/Http/OcsErrorMapper.php`, `src/services/http.ts`) (`contradicts`)
+
+      **Three-way divergence, measured.** `OcsErrorMapper::respond()` (`:160-172`) builds
+      `['code' => …, 'message' => …]` (+ optional `commandId`, `fieldErrors`) and returns
+      `new DataResponse(['error' => $error], $status)` — so the keys land at **`ocs.data.error.*`**.
+      The contract's `Error` schema (`contracts/ocs-api.yaml:937-948`) is referenced directly as the
+      `data` value of all five error responses (`:822, :827, :832, :837, :842`), and the file states at
+      `:6-8` that "schemas below describe the value carried in `ocs.data`" — so the contract puts them
+      at **`ocs.data.*`**. The string `error` is not a property name anywhere in the contract file.
+
+      **This is not a one-line PHP fix, and that is the finding.** `src/services/http.ts:35` and `:59-60`
+      read `data.ocs.data.error.code` / `.error.message` — the client is written against the
+      implementation. Correcting only `OcsErrorMapper` would break every error path in the UI, and
+      correcting only the contract would silently bless a shape no requirement asked for. The decision
+      belongs to the contract owner: either the contract gains an `ErrorEnvelope` wrapper
+      (`{error: Error}`) with all five responses referencing it, or the mapper stops nesting and the
+      client is corrected in the same change.
+
+      **Why it matters beyond tidiness.** `fieldErrors` is the payload FR-064/FR-023 validation
+      messages are read from, and `ApiError` construction (`http.ts:54, :60`) depends on the exact
+      path. Every client-side validation surface is downstream of this shape.
+
+      **Acceptance criteria.** One contract test per error response asserting the shape at the agreed
+      nesting, and one frontend test asserting a 422's `fieldErrors` reaches the form. Do not change both
+      sides in separate commits. Cross-references: T030, T124, T275.
+
+      ---
+      **Delivered. The decision this entry required: the CONTRACT gains the wrapper, not the mapper
+      losing it.** `ErrorEnvelope` now declares the value `ocs.data` carries for an error, and all
+      five declared error responses reference it. `OcsErrorMapper` is byte-for-byte unchanged.
+
+      **Why that side, recorded so the next reader does not re-open it as a free choice.**
+      1. **The alternative breaks the client's one working defence.** `unwrap()` in
+         `src/services/http.ts` treats "OCS may deliver a failure with HTTP **200**" by looking for an
+         `error` key in `ocs.data`. With `Error` placed *directly* in `ocs.data`, a refusal body would
+         be `{code, message}` — indistinguishable from a success payload, so a business failure
+         arriving at HTTP 200 would be handed to the caller as a successful read. The wrapper is what
+         makes the key's presence a declaration. This is asserted now, in
+         `http.spec.ts::rejects a 200 that carries an error envelope`.
+      2. **The churn is entirely on the other side.** The deployed shape is what the mapper builds,
+         what `http.ts` reads, and what **nine** assertions in five PHP contract files already
+         pin (`ConfigurationControllerTest`, `DataIntegrityReportTest`,
+         `ReportAndExportControllerTest`, `AccountWriteControllerTest`,
+         `FinanceReviewControllerTest`). Removing the nesting would change every error response in
+         the application to fix a document.
+      3. **The contract's own convention still holds.** `:6-8` says "schemas below describe the value
+         carried in `ocs.data`"; the schema describing that value for an error is now
+         `ErrorEnvelope`, so the sentence is true rather than violated.
+
+      **The decision is recorded as a contract amendment with its owner: this task.** T124, which
+      owns validating the document and regenerating `src/generated/api.ts` from it, consumes this
+      shape; `src/types/api.ts` gains `ApiErrorEnvelope` so the third side is written against the
+      declared name instead of an inline `{ error?: ApiErrorBody }` — the same "client written
+      against the implementation" defect this task exists to close, so it is not reproduced in the
+      fix.
+
+      **Two further defects were found while asserting the shape, both on the same wire, and both
+      fixed here because they are what "the envelope reaches the form" turns out to require.**
+      - **`ExportController` emitted `fieldErrors` in the wrong shape** — `$fieldErrors['fileFormat']
+        = 'required'`, a bare string, where the contract declares
+        `additionalProperties: {type: array, items: {type: string}}` and **every other controller in
+        `lib/` builds it as a list**. So the export endpoint answered `fieldErrors.fileFormat:
+        "required"` while `src/types/api.ts` typed it `Record<string, string[]>` — a runtime
+        violation `npm run typecheck` cannot see, and a value a client's typed loop cannot iterate.
+        Found by `assertErrorEnvelope`'s shape assertion, not by a status code. Now
+        `['fileFormat is required']`, matching the wording the other controllers use.
+      - **`reportsApi.asApiError()` threw the server's envelope away.** It rebuilt every axios
+        failure as a synthetic `{code: 'EXPORT_FAILED', message: 'pettycash.error.export'}`, so a
+        `422` that named `fileFormat` reached the user as "export failed" and `fieldErrors` — the
+        payload FR-023/FR-064 validation messages are read from — was dropped between the wire and the
+        store. The server's body is now kept whenever the response carries an envelope, with the
+        synthetic body as the fallback for a response that carries none.
+
+      **`fieldErrors` therefore has a form to reach, which it did not have.** `useReportsStore` gains
+      `exportFieldErrors` beside `exportError`, cleared with it on `clearExportError()` and at the
+      start of every export. The split is deliberate and is the acceptance criterion's point:
+      `exportError` answers *why* the request was refused, `fieldErrors` answers *which of the fields
+      the caller sent* was unacceptable — and only the second can be placed next to an input.
+      `ExportControls.vue` renders one row per refused field, each labelled with the field name;
+      `ReportView.vue` passes it through.
+
+      **`Unauthorized` is not asserted to be this application's envelope, and the reason is a finding.**
+      Nothing in `lib/` produces a 401 — `grep -rn STATUS_UNAUTHORIZED lib/` returns nothing — because
+      an unauthenticated request is refused by Nextcloud's auth layer before a controller runs, and
+      that layer answers with its own body (`ocs.data` empty, the refusal described in `ocs.meta`).
+      So the contract's `Unauthorized` response describes a shape this application never emits. The
+      test asserts the status and documents the boundary; asserting our envelope there would be
+      asserting a shape Nextcloud owns.
+
+      **The new test is a conformance check, not five near-identical assertions.** One case per
+      declared response — `Forbidden`, `NotFound`, `Conflict`, `ValidationError` at both `422` and
+      `400` — and every case runs through the same `assertErrorEnvelope()`, which asserts that
+      `ocs.data` carries **exactly** the key `error`, that `ocs.meta.statuscode` agrees with the HTTP
+      status, that the two optional members are optional in *shape* rather than in presence, and that
+      no fifth property has appeared. `ocs.data` carrying only `error` is the load-bearing assertion:
+      it is what would fail if a controller ever hand-rolled a body instead of going through the
+      mapper, which is the one thing the mapper exists to prevent. **The `Conflict` case is on the
+      charge path, not the export path, and the reason is in its docblock:** the first charge moves
+      the account's optimistic-lock version, so the second request must quote the *new* one or it is
+      refused as `ACCOUNT_VERSION_CONFLICT` before the command id is compared — a 409 of a different
+      kind, which would have made the case assert a code it is not about.
+
+      **Results.** `scripts/dev/phpunit` **1199 tests / 5936 assertions / 1 failure** — baseline was
+      1193 with the same single failure, so exactly these six were added. The one failure is
+      `PurchaserFlowControllerTest::testGetEvidenceContentReturns200WithStream`
+      (`application/octet-stream` vs `application/pdf`), T318's known conflict, present on the
+      baseline. `ErrorEnvelopeContractTest` is 6/6 (94 assertions). `npm run typecheck` clean ·
+      `npm run test:unit` — `http.spec.ts` 17/17, `ReportingExport.spec.ts` 42/42 ·
+      `npx eslint` 0 problems on the seven changed files · `npm run stylelint` clean.
+      **T334's verification found two defects it does not own; both are recorded as Phase 56 tasks
+      (T345, T346) rather than fixed here.**
+
+- [x] T335 [HIGH] Look decision capabilities up under their real names, because **the capability filter
+      never removes an option, so a finance officer is offered Approve on a transaction the server will
+      refuse** (FR-039, `src/components/review/DecisionForm.vue`) (`contradicts`)
+
+      **The lookup key is lowercased; the server emits camelCase.** `src/components/review/DecisionForm.vue:99`:
+
+      ```ts
+      .filter(item => props.allowedActions?.[item.value.toLowerCase()] !== false)
+      ```
+
+      `item.value` is `'APPROVE' | 'REJECT' | 'RETURN'`, so the keys read are `canapprove`/`canreject`
+      — wait, precisely `approve`, `reject`, `return`. The server emits `canApprove`, `canReject`,
+      `canReturn`, `canEdit`, `canDelete`, `canCorrect`
+      (`lib/Infrastructure/Http/TransactionPayloadFormatter.php:203-208`). `allowedActions['approve']`
+      is `undefined`, and `undefined !== false` is `true`, so **all three options survive
+      unconditionally** for every transaction and every role.
+
+      **The UI contradicts itself as a result.** `src/views/reviews/FinanceReviewView.vue:155-160` reads
+      the correctly cased `allowedActions?.canApprove` and renders the "cannot approve a
+      senior-rejected transaction" explanation — so the officer is told Approve is unavailable while
+      the Approve option is still sitting in the dropdown. The server refuses the command, so this is a
+      misleading affordance rather than data corruption, but FR-039's restriction is not what the
+      interface communicates.
+
+      **The test that should have caught this asserts against a hand-written fixture.**
+      `grep -rn "toLowerCase" src/` finds one occurrence, this one. Any component test that builds
+      `allowedActions` by hand rather than from a server-shaped payload reproduces the bug's blind spot;
+      T327 recorded the same trap for the sheet payload.
+
+      **Acceptance criteria.** `DecisionForm` mounts with a **server-shaped** `allowedActions` fixture and
+      asserts the option list shrinks to exactly the permitted decisions for a finance officer on a
+      `SENIOR_REJECTED` transaction. Mutation-verified: reintroducing the lowercase lookup must fail
+      the test. Cross-references: T117, T118, T053.
+
+      ---
+      **Delivered. Two changes, because the lookup alone would leave the recurrence possible.**
+
+      1. **`DECISION_CAPABILITY`** in `src/types/api.ts` is the mapping from a decision value to the
+         capability that decides it — `APPROVE → canApprove`, `REJECT → canReject`, `RETURN →
+         canReturn` — written out rather than derived. Deriving it is what produced the bug: a
+         `toLowerCase()` transform of `'APPROVE'` cannot produce `canApprove`. As a `Record` over an
+         exhaustive decision union, a fourth decision added without its capability is now a compile
+         error rather than an option that silently survives the filter.
+      2. **`AllowedActions = Partial<Record<AllowedActionKey, boolean>>`**, with `ALLOWED_ACTION_KEYS`
+         naming the six keys `TransactionPayloadFormatter::allowedActions()` emits, and
+         `TransactionDetail.allowedActions` retyped from the free-form `CapabilitySet`. This is the
+         structural half of the fix and it is the part that actually prevents a recurrence:
+         `CapabilitySet` is `Record<string, boolean>`, so **the wrong key was not a type error** —
+         which is why the original lookup compiled at all.
+
+      **The comparison changed from "not false" to "is true", deliberately.** With the correct names,
+      `!== false` would work, but it treats "the server granted it" and "the server did not mention
+      it" as the same answer. `TransactionPayloadFormatter::allowedActions()` always emits all six
+      keys, so nothing is lost — and refuse-don't-ignore is already this repository's stated rule for
+      a closed vocabulary (`ReportFilterFactory.php:86-96`: "An unrecognised filter is refused rather
+      than ignored, because ignoring it returns the unfiltered answer and the caller cannot tell the
+      difference"). Here the unfiltered answer is a dropdown offering a decision the server refuses.
+
+      **The test reads the producer, not a copy of it.** The key-set assertion parses
+      `lib/Infrastructure/Http/TransactionPayloadFormatter.php` and compares the `'can*' =>` keys it
+      emits against `ALLOWED_ACTION_KEYS` — the same technique this file already uses for the route
+      table. A rename on either side now fails there instead of quietly restoring "no option is ever
+      removed". This matters because **the acceptance criterion's own fixture is the trap**: every
+      spec in this repository builds `allowedActions` by hand, and T327/Phase 55 recorded that a
+      fixture agreeing with a broken client is why fourteen wire gaps survived a green suite. A
+      hand-written fixture is what made this defect invisible, so the one test that has to be
+      trustworthy is the one that cannot be satisfied by a fixture.
+
+      **RED state was mutation-verified, as this task required.** Restoring
+      `item.value.toLowerCase() !== false` fails **2 of the 4** new tests — the senior-rejected case
+      (which sees `['APPROVE','REJECT','RETURN']` instead of `['REJECT','RETURN']`) and the
+      nothing-granted case (which sees three options instead of none, and then *can* submit a decision
+      the server would refuse). The two that stay green under the mutation are guards by design: the
+      all-granted case passes under a filter that removes nothing, and the producer-key-set assertion
+      never touches the filter. The mutation was reverted by exact-string edit and `grep` confirms no
+      `toLowerCase` lookup remains outside the comment that names it.
+
+      **Results.** `ManagementReview.spec.ts` **26/26** (was 22) · `npm run test:unit` **280/280**
+      (was 270; `NextcloudVueContract.spec.ts` 6/6 on this run, against T331's recorded flakiness on
+      its 30 s real-`@nextcloud/vue` mounts) · `npm run typecheck` clean · `npx eslint` **0 errors**;
+      the 4 `vue/html-closing-bracket-newline` warnings in `DecisionForm.vue` are pre-existing and were
+      verified present on the stashed pre-change file.
+
+      **Known limitation, deliberately not widened.** `FinanceReviewView.vue:157` reads
+      `transaction.allowedActions?.canApprove` for its explanation text and was always correctly
+      cased, so the *explanation* and the *option list* disagreed; the option list is now correct, so
+      the two agree. What is still unenforced is the reverse direction: nothing checks that the
+      capabilities the server derives are the ones the command path enforces, beyond
+      `TransactionPayloadFormatter::allowedActions()`'s own docblock claiming it — the same claim
+      T329 found to be unverified in `ReportQuery`. Asserting it against `FinanceDecisionPolicy`
+      directly is not this task.
+
+- [x] T336 [HIGH] Either emit the caller's managed cost-centre codes or delete the gates that read
+      them, because **`canReview` and `hasCostCenterScope` are permanently `false` for both management
+      stages** (FR-004, FR-005, `src/stores/auth.ts`, `lib/Controller/SessionController.php`) (`missing`)
+
+      **The client reads a capability the server never sends.** `src/stores/auth.ts:20` computes
+      `costCenterCodes` from `capabilities.value.costCenterCodes`, but
+      `SessionController::capabilities()` (`lib/Controller/SessionController.php:99-109`) returns a fixed
+      five-key boolean map — `canPurchase`, `canReviewCostCenter`, `canReviewSenior`, `canDecideFinance`,
+      `canAdminister`. `costCenterCodes` appears nowhere in `lib/`. `?? []` therefore makes
+      `costCenterCodes` **always empty**, so `hasCostCenterScope` (`:24`) and both scope branches of
+      `canReview` (`:44`, `:49`) are always `false`: `canReview` returns `false` for every `COST_CENTER`
+      and `SENIOR` call regardless of the caller's actual assignments. FR-004/FR-005 scope cannot be
+      expressed in the client at all.
+
+      **It is latent, and say so rather than overstating it.** `canReview`, `hasCostCenterScope` and
+      `costCenterCodes` appear **only inside `auth.ts`** — no view or component calls them today
+      (verified across `src/`). So nothing user-visible is broken yet; the defect is that the next
+      author to gate a queue view on `canReview` will build on a gate that can never open.
+
+      **Note the type contradiction the `as` cast papers over.** `CapabilitySet` is
+      `Record<string, boolean>` (`src/types/api.ts:273`), so `costCenterCodes` cannot legally hold a
+      `string[]`; `auth.ts:20`'s cast is what makes it compile. Emitting the codes requires widening the
+      declared capability shape on both sides, which is a contract change, not a local fix.
+
+      **Acceptance criteria.** Either a session contract test asserts `capabilities.costCenterCodes`
+      contains the caller's assigned cost-centre codes and a frontend test asserts `canReview` opens for
+      an assigned manager and stays shut for an unassigned one — or `costCenterCodes`,
+      `hasCostCenterScope` and `canReview` are deleted from the store so no permanently-false gate can
+      be built on them. Record which. Cross-references: T013, T026, T008 (FR-008 multi-role self-review).
+
+      ---
+      **Delivered: the scope is EMITTED. The gates were not deleted, and the criterion required the
+      choice to be recorded — so here is the reasoning.**
+
+      Deleting `canReview`/`hasCostCenterScope` would have removed the *only* client-side expression of
+      FR-004 and FR-005. T118's acceptance criterion is a shell with "capability-driven
+      presentation", T115's is "capability-driven navigation", and US7's dashboard cards are per-role;
+      all three need to know not merely *that* somebody is a manager but *where* they may act. Deleting
+      the gate deletes the requirement's expressiveness in the interface and leaves the next author to
+      re-derive the same thing — which is how the permanently-`false` version came to exist in the
+      first place. FR-009 also says hiding an action must not be the only restriction, so the gate is a
+      presentation aid over a server-enforced rule, not the rule itself — but a presentation aid that
+      can never open is worse than none.
+
+      **Where the scope lives, and why it is not in `capabilities`.** The task named
+      `capabilities.costCenterCodes`, and the criterion quotes it; the field is
+      `SessionContext.costCenterCodes` instead, because the contract declares `CapabilitySet` as
+      `additionalProperties: { type: boolean }` — **a list of strings inside `capabilities` would be a
+      contract violation**, and widening `CapabilitySet` to accept anything would throw away the boolean
+      guarantee for every other capability. A scope is not a capability: it is data about the caller.
+      The name is kept, so the criterion is satisfied in substance and the difference is recorded here.
+
+      **Codes, not public ids, because codes are what the server authorizes with.**
+      `ManagementReviewService::getManagedCostCenterCodes()` resolves a manager's scope to **codes** and
+      `TransactionController`'s decision path compares against them; a transaction row carries
+      `costCenter.code`. Emitting the same strings means a client gate and the rule behind it cannot
+      disagree about what identifies a cost centre. `SessionController::costCenterCodes()` reads the
+      **same repository and the same `Clock`** as `resolveRoles()`, so the roles and the scope cannot
+      come from two different points in time, and applies `isValidOn()` exactly as
+      `ReportScope::forActor()` does. An assignment carrying no cost centre contributes nothing rather
+      than a null, for the reason `ReportScope` gives: dropping a null is the difference between "no
+      results" and "all results", and only the first is safe.
+
+      **An administrator gets an empty scope, deliberately.** FR-007 grants visibility without decision
+      authority, and visibility is enforced per query server-side. Had the session reported "everything"
+      for an administrator, a gate built on it would present review authority FR-007 forbids — the same
+      trap T335's `FinanceReviewView` text fell into from the other direction.
+
+      **The client's dead branch was also dead code twice over.** `canReview()` computed the same
+      expression in two consecutive `if`s — an owner branch and a "normal review" branch — with
+      identical conditions and a comment claiming the first handled FR-008's self-review case. Ownership
+      was never consulted, so both branches returned the same thing. That is now one branch: role **and**
+      scope, with ownership deliberately not consulted (FR-002/FR-008 grant a multi-role user review of
+      their own transaction through role, scope and stage, never through ownership) and with a comment
+      saying so, so the removed branch cannot be re-added as if it did something.
+
+      **The two existing tests in this area were the reason nothing failed, and that is the finding.**
+      `ManagementReview.spec.ts`'s "Authorization & Self-Review" cases both do
+      `authStore.canReview = vi.fn().mockReturnValue(true|false)` — they **replace the function**, so the
+      implementation was never consulted and the permanently-`false` version passed. The new block
+      exercises the real store against a **server-shaped** `/me` response instead. That is the same
+      trap T327 and Phase 55 recorded for payload fixtures, one level up: a test that mocks the unit
+      under test is not evidence about it.
+
+      **Two assertions I wrote were wrong, and both are corrected in place rather than deleted.**
+      - "The scope is exactly `['CC-100']`" failed with `['CC-100', 'SVC5D2F31', 'SVCA7DA06',
+        'UPD6F3913X']` — the acting user really is assigned three further cost centres in this shared
+        instance. An absolute list is a claim about one instance's history, which is the trap T333
+        documented. **No assertion in the new file is absolute now**: they are containment, exclusion,
+        or shape.
+      - "Every reported code is a cost centre that exists" failed on `UPD6F3913X`, and **the
+        implementation was right and the assertion was wrong**: `GET /configuration/cost-centers` lists
+        cost centres *active today*, while the session reports cost centres the caller is *assigned* to,
+        and an assignment can outlive a cost centre's active window. Those answer different questions
+        and the second is the right one for a scope — it is what the decision path compares. Recorded
+        rather than papered over, because the difference is a real policy question somebody may want to
+        decide later.
+
+      **Results.** `SessionContractTest` **5/5** (34 assertions) · `scripts/dev/phpunit` **1204 tests /
+      5974 assertions / 1 failure** — baseline 1199 with the same single failure, so exactly these five
+      were added; the failure is T318's known `application/octet-stream` conflict ·
+      `ManagementReview.spec.ts` **33/33** (was 26) · `npm run test:unit` **287/287** (was 280) ·
+      `npm run typecheck` clean · `npx eslint` 0 problems on the changed files.
+
+      **Known limitations, deliberately not widened.** `canReview`, `hasCostCenterScope` and
+      `managedCostCenterCodes` are still **called by nothing in `src/`** — the gate is now openable but
+      nothing opens it, which is T118/T115's presentation work and was true before this task.
+      `costCenterCodes` is not filtered by whether the cost centre is still active, which is the policy
+      question the second corrected assertion describes. And the store keeps a `?? []` on a
+      contract-`required` field: that is the *empty* answer, the safe direction, and it must survive a
+      `setUser()` that carries no scope at all.
+
+- [x] T337 [HIGH] Emit or withdraw `SheetSummary.firstExpenseDate` and `lastExpenseDate`, because the
+      contract declares two sheet fields that no producer can satisfy and only a test fixture reads
+      (FR-063, `contracts/ocs-api.yaml`, `lib/Infrastructure/Http/SheetPayloadFormatter.php`) (`missing`)
+
+      **Declared.** `contracts/ocs-api.yaml:1122-1123` gives `SheetSummary` both properties, and
+      `src/types/api.ts:45-46` types them as **non-optional**. **Not emitted.**
+      `SheetPayloadFormatter::summary()` (`:41-59`) is a complete array literal with exactly one nested
+      call, `$this->totals($sheet)` (`:78-87`, also complete); neither mentions either property, and no
+      `array_merge`, constant or helper contributes them. `grep -rn "firstExpenseDate\|lastExpenseDate" lib/`
+      returns nothing. There is also no query support: `SheetSummaryQuery` exposes only
+      `totalsForSheet()` (`lib/Infrastructure/Persistence/Expense/SheetSummaryQuery.php:45`).
+
+      **Why nothing failed.** Neither property is in `SheetSummary.required` (`ocs-api.yaml:1109`), so a
+      strict validator accepts their absence, and the only reader in the repository is a frontend
+      **fixture** (`tests/Frontend/Component/PurchaserFlow.spec.ts:384-385`) — the same
+      fixture-satisfies-the-gap trap T327 documented.
+
+      **Emit or withdraw; do not leave it declared and dead.** They are derivable from the active
+      revisions and are genuinely useful for the FR-064 date filter, so emitting is the better answer
+      if the query is cheap. If they are withdrawn instead, the contract and the TS type must change in
+      the same commit, and that is a contract amendment requiring the usual ownership.
+
+      **Acceptance criteria.** A conformance check compares every `SheetSummary` property named in the
+      contract against the keys the formatter emits — the check T327 asked for on `SheetDetail`, applied
+      here — so a third payload cannot drift the same way. Cross-references: T327, T124, T275.
+
+      ---
+      **Delivered: EMITTED, not withdrawn — and the criterion's "if the query is cheap" is answered by
+      making it cheap rather than by asserting that it was.**
+
+      **`SheetSummaryQuery::expenseDateRanges()`** is one grouped aggregate —
+      `MIN`/`MAX(r.expense_date)` over revisions joined through `active_revision_id` — and it takes a
+      **list** of sheet ids. Two decisions in it are worth stating because both were the alternative:
+
+      - **Active revisions only**, for the same reason `totalsForSheet()` reads only active revisions. A
+        superseded revision keeps its `expense_date` as history (FR-050 requires it to), and a range
+        that included it would describe the transaction's past rather than the sheet's contents.
+      - **An aggregate, unlike the totals query.** This class's own docblock argues at length that the
+        totals reduction rules must stay in `SheetTotals` and not be restated in SQL. That argument does
+        not transfer here: "earliest and latest date" *is* the aggregate, and restating it in the domain
+        would mean loading every active revision to compute two numbers. `MIN`/`MAX`/`GROUP BY` are in
+        the portable catalogue, `scripts/portability-check.js` passes with the new query, and `sheet_id`
+        leads `pettycash_transactions_sheet_state_idx` so the join is index-served (FR-077).
+
+      **Batched, because the caller is a list endpoint — and the N+1 was the reason this could have
+      been the wrong answer.** `GET /sheets` formats up to `pageSize` sheets; a per-sheet aggregate
+      would have made it N+1, which is the trade T332 already recorded for `countByOwnerUid()`. So
+      `SheetPayloadFormatter::summaries()` prefetches the ranges for the whole page in one query and
+      `summary()` computes its own only when none is supplied — which is what `detail()` wants, since it
+      formats one sheet. **The mapping stayed in the formatter rather than moving into the controller**
+      for the reason `summary()` exists: a private copy of the contract shape in a controller is a
+      second place for the contract to drift, and that is how `SheetController` came to emit an
+      `accountId` the contract never described. The now-unused `SheetController::formatSheet()` was
+      deleted rather than left as a second entry point.
+
+      **The conformance check **parses** the contract rather than copying the key set**, and that is
+      the difference from the precedent. `ConfigurationPayloadFormatterTest` states its sets literally
+      and says why: "if the contract changes, these fail until someone re-reads it". That is a canary —
+      it fires when a human renames a property and does nothing when a property is **added**, which is
+      precisely this defect. `SheetSummaryConformanceTest` reads `components.schemas.SheetSummary.properties`
+      out of the document, so a fourth unproducible field fails immediately. The reader is deliberately
+      narrow — it understands exactly this document's shape and the test asserts it found a non-empty
+      set, so it cannot return nothing and pass.
+
+      **All four directions are asserted, and only one of them is the obvious one.** Every declared
+      property is present (list *and* detail, because they are now two code paths); nothing undeclared
+      is present; `SheetDetail` adds exactly `allowedActions` and `transactions` on top; and the two
+      dates equal the **extremes of the transactions the same response already carries**. That last
+      one is the load-bearing assertion: it ties the range to data the payload publishes, so a query
+      reading a created-at date, a superseded revision, or another sheet's range fails there.
+
+      **RED state was mutation-verified.** Deleting the two emitted keys fails **2 of the 5** — the
+      conformance case, naming the defect literally (*"SheetSummary declares 'firstExpenseDate' and
+      GET /sheets must emit it"*), and the range case (*"the range starts at the earliest expense
+      date"*, `null` vs `2026-10-04`). The file was restored from an exact copy and re-run green.
+      **Mutation-verification was the point for this task rather than a formality**: the whole defect is
+      two declared properties with no producer, so a conformance check that passed against the broken
+      producer would be worthless.
+
+      **Results.** `SheetSummaryConformanceTest` **5/5** (160 assertions) ·
+      `scripts/dev/phpunit` **1209 tests / 6138 assertions / 1 failure** — baseline 1204 with the same
+      single failure, so exactly these five were added; the failure remains T318's known
+      `application/octet-stream` conflict · `node scripts/portability-check.js` **OK** ·
+      `php -l` clean on all three changed PHP files.
+
+      **Known limitations, deliberately not widened.** A sheet whose active revisions carry **no**
+      `expense_date` emits `null` for both — the honest reading of `format: date, nullable: true`, and
+      not today's date — and is **absent from the batch map** rather than present with nulls, because
+      "no range" and "a range whose endpoints are unknown" are the same answer. Nothing in `src/` reads
+      the two fields yet, so emitting them fixes the contract gap without changing a screen; FR-064's
+      date filter still has no UI (T088's).
+
+- [x] T338 [MEDIUM] Emit the owning sheet's public id in `TransactionSummary.sheetId`, because the
+      contract types it `format: uuid` and the UI renders **raw database integers** (FR-032,
+      `lib/Infrastructure/Http/TransactionPayloadFormatter.php`) (`contradicts`)
+
+      **One line, and the same formatter gets it right elsewhere.**
+      `lib/Infrastructure/Http/TransactionPayloadFormatter.php:62` emits `'sheetId' => $transaction->sheetId`,
+      and `lib/Domain/Expense/ExpenseTransaction.php:25` declares `public ?int $sheetId = null` — the
+      surrogate key. Line 61, one line earlier, emits the transaction's own id as
+      `$transaction->publicId ?? $transaction->id`, so the omission is an inconsistency rather than a
+      convention. `contracts/ocs-api.yaml:1154` declares `sheetId` as `format: uuid`.
+
+      **The value is displayed and unusable as a link.** `src/components/transaction/TransactionHeader.vue:22`
+      and the queue views (`CostCenterQueueView.vue:57`, `SeniorQueueView.vue:58`) render it in a "Sheet"
+      column, so reviewers see integers such as `41`. It is also not usable as the `{sheetId}` path
+      parameter the contract declares, which matters the moment a queue row becomes a link — and
+      interacts directly with T326's undecided question of where a sheet's transactions come from.
+
+      **Fix it the way `costCenterSnapshot()` (`:147-171`) already resolves a public id**, with a
+      snapshot-name fallback so a deleted sheet still renders.
+
+      **Acceptance criteria.** A contract test asserts `sheetId` matches a uuid and equals the public id
+      of the owning sheet, including for a transaction whose sheet row has been removed.
+      Cross-references: T339, T326, T062.
+
+      ---
+      **Delivered. `TransactionSummary.sheetId` is now the owning sheet's public uuid, resolved through
+      the sheet repository exactly as `costCenterSnapshot()` resolves the cost centre's.**
+
+      `TransactionPayloadFormatter` gains an `ExpenseSheetRepository` and a private `sheetPublicId()`;
+      the Application wiring and `FinanceSettlementTest`'s manual construction were updated with it. The
+      resolution is a repository lookup rather than a new port method for a reason the repository already
+      records: `ReportScope::forActor()` states that "inventing a `findByIds()` port method to serve a
+      report's convenience would be speculative", and `ExpenseSheetRepository::findById()` is what
+      `TransactionService::updateTransaction()`, `deleteTransaction()` and `EvidenceController` already
+      call for exactly this hop. One extra small read per formatted transaction row is the same cost
+      those callers already pay.
+
+      **The unresolvable case answers `''`, and the three alternatives were each rejected for a stated
+      reason rather than by preference.**
+      - **Not the integer.** It is `format: uuid` and listed in `TransactionSummary.required`, and an
+        integer in that field is a value a client will *use* — as a link, as a lookup key — and this one
+        cannot be. That is the defect this task removes.
+      - **Not `null`.** The member is required and not nullable, so `null` trades one contract violation
+        for another.
+      - **Not a 422 here.** FR-083 requires a broken reference to be answered as a data fault, and it
+        names `GET /sheets`, `GET /sheets/{id}`, `GET /dashboard` and the report endpoints. **The
+        transaction route is not among them, and T313/T314 own extending the policy to it.** Pinning a
+        status here would make that improvement fail a test it did not break — the same mistake T311
+        avoided by not pinning the substituted currency.
+
+      **The "sheet row removed" half is asserted in-process, and not over HTTP on purpose.** Producing
+      that fault over HTTP means a second corrupt-record probe, and `CorruptRecordFixture`'s own docblock
+      is an argument against adding one casually: it carries one probe already, its `insert()` repairs
+      before it writes so a crashed run cannot accumulate faults, and a probe whose failure mode is
+      "leaves a landmine that breaks three reports" is what produced seven leaked sheets in this instance
+      once already. `TransactionPayloadFormatterSheetIdTest` covers all four states in-process with the
+      in-memory doubles — resolvable sheet, never the surrogate key, dangling reference, and a
+      transaction with no sheet yet — and the live `TransactionSheetIdConformanceTest` covers the routes
+      an HTTP test can be trusted on.
+
+      **The live test asserts every row of every queue, across three fixture states, rather than one
+      route.** Which queue holds rows depends on the fixture state (`senior` is empty in `submitted`,
+      `finance` is empty in `draft`), so asserting "this queue is non-empty" would be a claim about the
+      fixtures rather than about the server; the sweep therefore checks the shape of every row it finds
+      and asserts only that the sweep as a whole saw rows, so "no rows" cannot pass vacuously. The paths
+      are the routed `GET /queues/{stage}`, **not** `/reviews/*` — the first draft used the frontend's
+      hash route and every case failed with `404`, which is the reminder that a Vue route and an OCS
+      route are different things.
+
+      **Results.** `TransactionSheetIdConformanceTest` **3/3** (53 assertions) ·
+      `TransactionPayloadFormatterSheetIdTest` **4/4** ·
+      `scripts/dev/phpunit` **1216 tests / 6202 assertions / 1 failure** — baseline 1209 with the same
+      single failure, so exactly these seven were added · `php -l` clean on all four changed PHP files.
+
+      **Known limitations, deliberately not widened.** The dangling-reference case still answers `200`
+      with `sheetId: ''` where FR-083's wording ("a stored record whose reference does not resolve is a
+      fault to be reported, not one to paper over") reads as a 422 — recorded as T313/T314's decision
+      with the reasoning above, not silently widened here. And nothing in `src/` consumes `sheetId` as a
+      route parameter yet; the three queue views render it as text, which is now correct, and T326's
+      open question about where a sheet's transactions come from is unaffected.
+
+- [x] T339 [MEDIUM] Emit public uuids for `Evidence.transactionId` and `Evidence.revisionId`, because
+      **the aggregate types them `int` and the contract declares `format: uuid`** (FR-029,
+      `lib/Domain/Evidence/Evidence.php`) (`contradicts`)
+
+      **The violation is in the domain type, so both emitters inherit it.**
+      `lib/Domain/Evidence/Evidence.php:13-14` declares `public int $transactionId` and
+      `public int $originRevisionId`, populated from `(int) $row['transaction_id']` at
+      `lib/Infrastructure/Persistence/Evidence/DbEvidenceRepository.php:143-144`. Both emitters pass them
+      straight through: `lib/Controller/EvidenceController.php:385-386` and
+      `lib/Infrastructure/Http/TransactionPayloadFormatter.php:360-361`. The contract declares both
+      `required` with `format: uuid` (`contracts/ocs-api.yaml:1226-1227`); `src/types/api.ts:184-185`
+      types them `string`, so this is a silent runtime violation that `npm run typecheck` cannot see.
+
+      **Fix the aggregate, not the two formatters.** Changing only the emitters would leave the domain
+      lying about its own type. While here, note that the two emitters of the same schema disagree:
+      `EvidenceController.php:394` adds an undeclared `deactivationReason` that
+      `TransactionPayloadFormatter.php:356-370` omits, and `id` is written two different ways
+      (`$evidence->id` vs `$evidence->publicId ?? $evidence->id`) — equivalent today only because of the
+      mirror at `DbEvidenceRepository.php:135`. `AccountPayloadFormatter`'s own docblock
+      (`lib/Application/Account/AccountPayloadFormatter.php:22-30`) already warns about exactly this drift.
+
+      **Acceptance criteria.** One contract test per emitting endpoint asserts both ids are uuids, and a
+      schema-shape test asserts the two emitters produce identical key sets.
+      Cross-references: T338, T092, T096.
+
+      ---
+      **Delivered, and the "fix the aggregate, not the two formatters" instruction turned out to be the
+      smaller change than it looked — because there is now one formatter.**
+
+      1. **`Evidence` gains `transactionPublicId` / `originRevisionPublicId`** as trailing optional
+         properties, paired with the existing `int` join keys exactly as T330 paired
+         `TransactionRevision::$expenseTypeId` with `$expenseTypeDbId`. The join keys stay available to
+         the repository, so **no query was rewritten and no construction site changed** — the ~25 places
+         that build an `Evidence` are untouched.
+      2. **`DbEvidenceRepository` resolves both**, in `mapRow()` and — this is the part that was not
+         obvious — in `save()`. Without the second, `POST /transactions/{id}/evidence` would have answered
+         `transactionId: ''` while every later read of the same row carried a uuid: the **upload
+         response** is the one evidence payload produced from an aggregate that has never been through
+         `mapRow()`. Found by the test, which asserted the upload response and failed with `''`.
+      3. **The resolution is memoised per repository instance.** `findByTransactionId()` maps every row of
+         the page, and a transaction carrying twenty evidence files would otherwise issue forty extra
+         single-row reads for two ids that repeat on every one of those rows. The container builds one
+         repository per request, which is what makes an instance-level memo safe; a long-running process
+         would have to drop it, and the alternative (a batched second query per page) costs a query even
+         for a one-row page.
+      4. **`TransactionPayloadFormatter::evidence()` is now public and `EvidenceController` delegates to
+         it.** There were two emitters of one schema and they disagreed — that is the criterion's second
+         half, and it is now a property of the code rather than of two copies happening to agree today.
+
+      **The `deactivationReason` half of this task went the other way, and the reason is worth more than
+      the change.** The note records `EvidenceController.php:394` adding "an undeclared
+      `deactivationReason`", and the obvious reading was that the schema was missing a key the server
+      should stop sending. Deleting it **broke
+      `EvidenceLifecycleControllerTest::testTheRecordedReasonShowsWhichRemovalActuallyHappened`**, and that
+      test is the only observable of which removal path ran: FR-058 keeps submitted evidence and marks it
+      inactive, the row is deactivated either way, and `GET /evidence/{id}/content` answers 403 once
+      inactive — so the reason string is the sole signal. **The contract was what was missing**, so
+      `Evidence.deactivationReason` is now declared (`nullable: true`, with the reasoning in a comment at
+      the declaration) and `src/types/api.ts` carries it. Recorded as a contract amendment owned by this
+      task, in the same change as the emitter that publishes it.
+
+      **Two component prop types were a third copy of this schema, and that is how the typecheck gap
+      stayed invisible.** `EvidenceList.vue` and `EvidenceCard.vue` each declared their own eleven-member
+      `Evidence` shape inline. They were already behind the server — no `deactivationReason`, and
+      `deactivatedAt` typed `string | undefined` where the contract declares `nullable: true` — and
+      `npm run typecheck` could not say so, because the two views passing `TransactionDetail.evidence`
+      into them were comparing two unrelated declarations. Both now take `Evidence` from
+      `@/types/api`, which is what turned the drift into a compile error the moment the server's shape
+      moved. **Without this the `| null` addition would have been a type error rather than a fix.**
+
+      **One assertion I wrote was wrong and is corrected in place.** "The deactivate response equals the
+      upload response" failed on `active: true → false` — which is the correct behaviour of a
+      deactivation. It now compares the **schema** (the key list) and the two id fields explicitly, and
+      separately asserts that the row *is* reported inactive, so the case cannot pass on a no-op.
+
+      **The read-path cases upload their own evidence rather than relying on a fixture that has none.**
+      The `draft` fixture transaction ships without evidence, so "no rows" would have satisfied three of
+      the four cases vacuously; one upload in `setUp()` (not one per test) keeps it to a single row per
+      run rather than the per-test row creation T333 recorded as shared-instance debt.
+
+      **Results.** `EvidencePayloadConformanceTest` **4/4** (45 assertions), covering the transaction
+      detail, the upload response and the deactivate response ·
+      `EvidenceLifecycleControllerTest` **8/8** with the reason pin intact ·
+      `scripts/dev/phpunit` **1220 tests / 6256 assertions / 1 failure** — baseline 1216 with the same
+      single failure (T318's `application/octet-stream` conflict), so exactly these four were added ·
+      `npm run typecheck` clean · `npm run test:unit` **287/287** unchanged · `npx eslint` **0 errors**;
+      the 6 `vue/html-closing-bracket-newline` warnings in the two components are pre-existing.
+
+      **Known limitations, deliberately not widened.** A dangling `transaction_id`/`origin_revision_id`
+      emits `''` rather than a 422, on the same reasoning and with the same ownership as T338's
+      (T313/T314). `EvidenceService` still passes the surrogate keys to the appdata key derivation, which
+      is internal and correct — the uuid space is only a wire concern. And the contract amendment adds a
+      member, so T124's generated types must be regenerated against the amended document; that ordering
+      was already recorded for T275 and T312 and applies unchanged.
+
+- [x] T340 [MEDIUM] Resolve `SheetSummary.ownerDisplayName` instead of emitting a literal empty string,
+      because **the sheet's Owner row renders blank for every sheet** (FR-063,
+      `lib/Infrastructure/Http/SheetPayloadFormatter.php`) (`partial`)
+
+      **The key is present, which is why nothing failed.** `SheetPayloadFormatter.php:45` emits
+      `'ownerDisplayName' => '',` — a literal, with no lookup. The formatter's constructor (`:26-30`)
+      takes only `SheetSummaryQuery`, `ExpenseTransactionRepository` and `CurrencyRepository`; no
+      `UserDirectory` is injected, and `ExpenseSheet` carries only `ownerUid`
+      (`lib/Domain/Expense/ExpenseSheet.php:22`).
+
+      **It is rendered.** `src/views/sheets/SheetDetailView.vue:141` prints
+      `sheetStore.currentSheet?.ownerDisplayName`, so the Owner row is empty on screen. A shape check
+      passes, so only a rendered assertion catches this.
+
+      **`UserDirectory` is already bound in the app and already used this way** —
+      `lib/Controller/SessionController.php:58-60` resolves the caller's own display name through it, so
+      this is a wiring omission, not a new dependency.
+
+      **Acceptance criteria.** A contract test asserts `ownerDisplayName` equals the owner's current
+      display name for a sheet owned by another user, and a component test asserts the Owner row is
+      non-empty. Cross-references: T063, T063's owner-scope rules, T026.
+
+      ---
+      **Delivered. `SheetPayloadFormatter` injects the `UserDirectory` port `SessionController` already
+      resolves the caller's own name through, so this was a wiring omission rather than a new dependency.**
+
+      **A uid the directory does not know falls back to the uid — and an empty string from the directory
+      is treated as "no name" too.** The member is declared in the contract, so an Owner row reading
+      "u1234" is legible where one reading nothing is not, and an account deleted after its sheet was
+      written is exactly that case. This is `SessionController::me()`'s rule, kept identical so the two
+      endpoints cannot describe one person differently.
+
+      **The criterion's cross-user case is unreachable over HTTP, and that is a finding rather than a
+      gap in the work.** `SheetService::getSheet()` returns `null` for a sheet whose `ownerUid` is not the
+      caller, and every fixture sheet belongs to the acting user — so **no sheet owned by somebody else
+      can be read through this API at all**. The formatter is owner-agnostic, so the case would be
+      reachable in-process, but `SheetPayloadFormatter` cannot be constructed in the unit suite: it takes a
+      `SheetSummaryQuery`, which takes an `OCP\IDBConnection`, and the unit bootstrap loads no `OCP\*`
+      class (the reason `AccountWriteControllerTest` says its capability assertion "cannot be pinned by a
+      unit test"). Building it there would have meant registering a reflection-constructed
+      `SheetSummaryQuery` in the shared bootstrap so one test could run — a fixture hack the repository has
+      better reasons to avoid.
+
+      **So the live assertion is a cross-endpoint equality, which is stronger than an absolute string.**
+      `GET /me` resolves the caller's display name through the same port, so
+      `sheet.ownerDisplayName === me.displayName` is a statement that two endpoints agree about one
+      person — the exact defect class `ReportScope::forActor()`'s comment records having been found when
+      `/dashboard` and `/me` disagreed. A `''` fails it, and so does a *wrong* name. The list projection is
+      asserted separately because `summaries()` and `summary()` are different call paths — the same split
+      that let T337's `firstExpenseDate` exist on one and not the other.
+
+      **The Owner row had no `data-testid`, which is the second half of why nothing caught this.** A
+      rendered value with no hook is a value no assertion can reach, so the row now has
+      `data-testid="sheet-owner"` and a component case asserts it renders the name the payload carries.
+      **That case is explicitly not the load-bearing one** and says so: the view prints whatever the
+      store holds, so it cannot detect the server's half — it catches the view substituting or dropping the
+      value, which is the half a component test can see. `SheetOwnerDisplayNameTest` over HTTP is the
+      evidence for the defect itself.
+
+      **Results.** `SheetOwnerDisplayNameTest` **3/3** (64 assertions) · `PurchaserFlow.spec.ts` **89/89**
+      · `npm run test:unit` **288/288** (was 287) · `scripts/dev/phpunit` **1223 tests / 6324 assertions /
+      1 failure** — baseline 1220 with the same single failure (T318's `application/octet-stream`
+      conflict), so exactly these three were added · `npm run typecheck` clean · `npx eslint` **0 errors**;
+      the 6 `vue/html-closing-bracket-newline` warnings in `SheetDetailView.vue` are pre-existing.
+
+      **Known limitation, deliberately not widened.** `SheetDetailView`'s Owner row renders the payload
+      verbatim, so a **missing** field renders as an empty div with no user-visible explanation — the same
+      "blank reads as an answer" shape Phase 50 records for the audit card (T343 owns that one). Nothing
+      asserts that the client can distinguish "no owner name" from "no owner", because after this change
+      the server does not send the first.
+
+- [x] T341 [MEDIUM] Decode the base64 artifact out of the export envelope before saving it, because the
+      downloaded file **is** the JSON envelope rather than the CSV/XLSX/PDF/ZIP (FR-066,
+      `src/services/reportsApi.ts`, `lib/Controller/ExportController.php`) (`contradicts`)
+
+      **The server states the reason it cannot stream.** `lib/Controller/ExportController.php:161-173`
+      returns `['artifactName', 'mediaType', 'format', 'byteSize', 'rowCount', 'artifactRemoved',
+      'data' => base64_encode($bytes)]` with the comment: "Nextcloud's OCS layer wraps every body as
+      JSON, so the artifact cannot be the raw response body the contract's media types describe." The
+      contract agrees (`contracts/ocs-api.yaml:1266-1279`, `data: {type: string, format: byte}`). So the
+      wire shape is settled and deliberate.
+
+      **The client ignores it.** `src/services/reportsApi.ts:72-79` requests `responseType: 'blob'` and
+      returns `response.data` unchanged, and its docblock asserts the endpoint "streams the artifact, so
+      the OCS `data` envelope the JSON helper unwraps does not apply" — which the server's own comment
+      contradicts. `src/stores/reports.ts:154-159` and `ReportView.vue:24-33` then save those bytes as
+      `pettycash-sheets-<date>.csv`.
+
+      **This is currently masked by T328.** Every export 422s before a body is produced, so the wrong
+      bytes have never reached a disk. Fixing the field name without fixing this turns a refused request
+      into a corrupt download, which is worse than the bug it replaces — **do them in one change, and
+      re-verify the download byte-for-byte.**
+
+      **Acceptance criteria.** Decode `ocs.data.data` from base64 and wrap the bytes in a `Blob` typed by
+      `ocs.data.mediaType` before returning; a test asserts the saved blob's first bytes are the real
+      artifact and not `{`.
+
+      ---
+      **Delivered in the same change as T328, deliberately — not after it.** `requestExport` now reads
+      the `ExportResult` out of `ocs.data` and returns it; `exportArtifactBlob()` decodes `data` from
+      base64 and wraps the bytes in a `Blob` typed by the server's own `mediaType`. The store calls it,
+      so `DownloadableExport.blob` is the artifact and not the envelope that carries it.
+      **The UTF-8 trap is the reason this is a function and not one line.** `atob` returns a binary
+      string — one character per byte — and handing that to `Blob` encodes each character's code point
+      as UTF-8, which round-trips only below `0x80`. A Persian CSV is above it on every line, so the
+      naive version would produce a file that opens as mojibake while every structural assertion still
+      passed. The bytes are therefore converted explicitly, and a test asserts the round trip with
+      `0xD8 0xA7 0xD8 0xB3` — bytes a code-point encoding would change.
+      **The old assertion was `expect(payload.blob).toBeInstanceOf(Blob)`, and it is worth naming what
+      that missed:** a `Blob` wrapping `{"ocs":{"data":{…,"data":"<base64>"}}}` satisfies it perfectly.
+      The two new tests read the bytes back and compare them with what the exporter wrote.
+      **The test environment forced one accommodation, recorded so it is not mistaken for a workaround.**
+      `Blob.prototype.text()` and `arrayBuffer()` **do not exist in jsdom** — its `Blob` exposes only
+      `slice`, `size` and `type` — so the obvious assertions throw `is not a function` and a byte-level
+      check cannot be written at all. `FileReader` is the API jsdom does implement, so `blobBytes()` uses
+      it. Verified by probing the environment rather than by assuming.
+      **`responseType: 'blob'` is gone from the request**, and a test asserts it stays gone: asking for
+      a blob would hand the client the envelope's bytes already typed as the artifact's media type,
+      which is a quieter version of the same defect.
+      Cross-references: T328, T342, T113.
+
+- [x] T342 [MEDIUM] Stop offering export for the three subjects the server answers with an empty
+      artifact, because a **well-formed file with zero rows is downloaded and reported as measured**
+      (FR-065, `src/types/reporting.ts`, `lib/Controller/ExportController.php`) (`contradicts`)
+
+      **The client offers three formats for subjects that cannot be produced.**
+      `src/types/reporting.ts:95-103` maps `cost-centers`, `accounts` and `process` to the generic
+      `resource: 'report'` and gives each three formats; `ExportControls.vue:37` enables the button
+      whenever `availableFormats.length > 0`.
+
+      **The server has no row source and says so only in a comment.**
+      `lib/Controller/ExportController.php:255-264` refuses a *selection* of `report`/`audit`/`evidence`
+      with `UnsupportedSelection`, then falls through to `:269` `return [[], []];` under the comment
+      "an empty artifact, which is at least an honest answer". For these three subjects the request
+      therefore succeeds, and `rowCount`/`byteSize` make the emptiness look measured.
+
+      **The honest answers are available; neither is chosen here.** Refuse the three mappings on the
+      client (the smallest correct change, and it matches the server's own "not supported yet" wording),
+      or implement selection resolution for `report` in `ExportController`. Refusing is preferable: FR-065
+      asks for these reports to exist, not for them to export as empty files, and an export button that
+      silently produces nothing is the failure mode FR-064/FR-082 exist to prevent.
+
+      **Acceptance criteria.** The export control is disabled with an explanatory message for those three
+      subjects, or the export returns the same refusal it already returns for a selection. A test asserts
+      no artifact is produced with `rowCount === 0` for a subject that has rows.
+      Cross-references: T328, T341, T309.
+
+      ---
+      **Delivered: BOTH halves, because they answer different halves of the criterion.** The server no
+      longer produces the artifact (the load-bearing fix — nothing can be downloaded that reads as
+      measured), and the client no longer offers the formats, with a stated reason.
+
+      **The server now refuses a resource with no row source.** `rowsForSelection()` returned `[[], []]`
+      under the comment "an empty artifact, which is at least an honest answer", and it was not one:
+      `ExportResult` then carried `rowCount: 0` **and** a real `byteSize` for a real file with a real
+      header row, so the emptiness read as a measurement. It now throws the same `UnsupportedSelection`
+      a selection gets — a 422 whose reason says no artifact is produced and why. **The distinction drawn
+      is the one that matters**, and it is asserted in both directions: an export of `sheets` that matches
+      nothing is a *measured* zero and stays `200` with `rowCount: 0`
+      (`testAnEmptyResultStillNamesItsColumns`), while an export of a resource with no row projection is
+      not a measurement and is refused. The unreachable fall-through became a `LogicException` rather than
+      a silent `return [[], []]`, so a future resource added without a branch fails loudly instead of
+      resuming the defect.
+
+      **The three subjects offer no format, and `audit`/`evidence` deliberately keep theirs — the
+      difference is who is asking, and it is worth stating because it looks arbitrary.**
+      - `cost-centers`, `accounts` and `process` all map onto the generic **`report`** resource, which the
+        client itself invents. There is no per-subject server capability for them to correspond to, so
+        offering an export for them is not honest about anything, and they now offer `[]`.
+      - `audit` and `evidence` have **their own contract resources**, are required V1 exports (FR-066's
+        audit export, FR-074/FR-082's grouped evidence ZIP), and are refused only because their row
+        projections are outstanding work. A refusal the server *explains on click* — "not supported yet",
+        naming the resources that do work — tells a user something a silently greyed-out control does not,
+        so their formats stay and the server's message is what they meet. Removing `zip` from the evidence
+        report would have deleted the only place that V1 capability appears in the interface, on the
+        grounds that a test asserted it.
+      - A separate case asserts the evidence formats are still offered, because a blanket
+        "nothing is exportable" would satisfy the first test as well.
+
+      **The disabled control explains itself**, which is the same failure one level up: a grey button
+      with no message tells the user nothing, and that is FR-064/FR-082's own failure mode.
+      `ExportControls.vue` renders `reports.export.unsupportedSubject` in a `role="note"` region when a
+      subject offers nothing — `note` rather than `alert` because this is a standing property of the
+      subject, not a failure that just happened. Two guards keep it from competing with better
+      information: it is hidden while an export is in flight, and it is suppressed whenever a server
+      refusal is already displayed, because that refusal names the resource and what does work.
+      The key has no catalogue entry yet because none exists in the repository — `src/l10n.ts` and
+      `l10n/fa.js` are T119's — and every other key in this component is in the same position.
+
+      **The criterion's `rowCount === 0` assertion is asserted as the *absence of the whole result*, which
+      is stronger.** The test walks `report`, `audit` and `evidence` and asserts both that each is
+      refused with a reason naming the supported resources and that the body carries **no** `rowCount` and
+      no `data` at all — because a test asserting `rowCount !== 0` would still pass against an artifact
+      with one invented row.
+
+      **Results.** `ReportAndExportControllerTest` **62/62** (was 61; the new case iterates three
+      resources) · `ReportingExport.spec.ts` **47/47** (was 42) · `npm run test:unit` **293/293** (was
+      288) · `scripts/dev/phpunit` **1224 tests / 6349 assertions / 1 failure** — baseline 1223 with the
+      same single failure (T318's `application/octet-stream` conflict) · `npm run typecheck` clean ·
+      `npm run stylelint` clean · `npx eslint` 0 problems on the three changed frontend files.
+
+      **Known limitations, deliberately not widened.** `audit` and `evidence` row projections remain
+      unimplemented, so those two subjects still produce a refused export rather than a file — that is
+      T302's/T309's subject, and this task made the refusal honest rather than adding the projections.
+      And the client cannot know *which* resources the server supports without asking, so the client's
+      format list and the server's row sources are two facts that must be kept in agreement by
+      convention; the new test asserts the agreement for the three subjects rather than deriving it.
+
+- [x] T343 [MEDIUM] Give the sheet-detail audit card a data source or remove it, because it currently
+      renders a header and a **permanently blank body** that reads as "no history" (US6, FR-057,
+      `src/views/sheets/SheetDetailView.vue`) (`missing`)
+
+      **The body row is disabled by a literal.** `src/views/sheets/SheetDetailView.vue:248`:
+
+      ```html
+      <tr v-if="false">
+      ```
+
+      This is the only row in the five-column audit table (`:235-254`), so the "no events" message can
+      never render either. There is no audit loader bound in this view — no `loadAudit` call at all —
+      so the card has no data source. Contrast `TransactionDetailView.vue:98`, which *does* call
+      `loadAudit` and then discards the result (`transactions.ts:86-94` returns the page and nothing binds
+      it), which is a second, separate instance of the same gap.
+
+      **Why it is worse than an unfinished feature.** A header with an empty body is indistinguishable
+      from a sheet with no audit history, so it actively misinforms: a reviewer sees an empty table and
+      concludes nothing was recorded.
+
+      **Acceptance criteria.** Either bind a role-scoped audit page to the table (with the empty state
+      actually reachable), or remove the card. If bound, also fix `TransactionDetailView`'s discarded
+      result in the same change — one audit surface, not two half-wired ones. Cross-references: T098,
+      T326, Phase 50 (the `GET /transactions/{id}/audit` shape and pagination gap).
+
+      ---
+      **Delivered: REMOVED, in both places — and the "if bound, also fix `TransactionDetailView`" clause
+      is why the second removal happened in the same change.**
+
+      **There is no sheet-scoped audit endpoint, so the card had no data source to be bound to.**
+      `appinfo/routes.php` declares exactly one audit route, `GET /transactions/{id}/audit`. Binding the
+      card would have meant either N per-transaction requests assembled client-side into a sheet history,
+      or a new endpoint and a contract amendment — and **Phase 50 already owns the audit page's shape and
+      pagination**, so inventing a sheet-scoped surface here would have pre-empted it in a worse shape
+      than the one it is about to decide.
+
+      **The dead row was a literal, and that is why the empty state was unreachable too.**
+      `<tr v-if="false">` was the only row in a five-column `<tbody>`, so the "no events" message could
+      never render either. The view bound no loader at all, which means the empty body was not a
+      *measured* absence — it was the absence of a request.
+
+      **`TransactionDetailView`'s discarded result is the same defect, so it went too.** It called
+      `transactionStore.loadAudit(...)` on mount, and `loadAudit` **returns the page and stores
+      nothing**, so the request bought a network round trip and rendered nothing. The criterion asked for
+      one audit surface rather than two half-wired ones; the strictest reading of "one" here is zero
+      half-wired ones plus a named owner, and Phase 50 is that owner. The endpoint itself is untouched —
+      `GET /transactions/{id}/audit` still serves, and Phase 50 binds it once the shape is settled.
+
+      **Both removals are asserted as absences, deliberately.** A test asserting the card renders an empty
+      state would be asserting the defect; what is asserted is that a card with no data source is not on
+      the screen. Nothing asserted the card's presence — `grep` for `audit-tab`/`audit-table` in
+      `tests/Frontend/` returned nothing — so no existing test changed with it, and the removal is not
+      visible as a regression anywhere.
+
+      **Results.** `PurchaserFlow.spec.ts` **90/90** (was 89) · `npm run test:unit` **294/294** (was 293)
+      · `npm run typecheck` clean · `npx eslint` **0 errors**; the 15 `vue/html-closing-bracket-newline`
+      warnings across the two views are pre-existing.
+
+      **Known limitations, deliberately not widened.** US6/FR-057's sheet-level history is **not
+      delivered by this task** — it is deferred to Phase 50 with the endpoint, the shape and the
+      pagination, and nothing on the sheet detail page presents audit information now. A reviewer who
+      needs a transaction's history opens the transaction, where the endpoint exists but is likewise not
+      yet bound; before this change they were told "no history" on both pages, and now they are told
+      nothing, which is the smaller of the two misinformations but is still not the feature.
+
+- [x] T344 [LOW] Delete or correct the three unrouted controller actions, because one of them returns a
+      **different schema from the live route serving the same URL** and would regress a fixed endpoint if
+      it were ever wired in (unrequested, regression trap)
+
+      **T235 already owns two of the three.** `lib/Controller/QueueController.php:30` and
+      `lib/Controller/ReturnsController.php:30` are the unrouted duplicates T235 records. The third is
+      not in that task: `lib/Controller/TransactionController.php:197-243` `decide()` is unrouted while
+      `appinfo/routes.php:41` serves `POST /api/v1/transactions/{transactionId}/decisions` from
+      `review#decide`.
+
+      **The trap is the payload, not the duplication.** `TransactionController::decide()` returns
+      `new DataResponse($this->formatTransaction($outcome->transaction), 201)` (`:239`) — a bare
+      `TransactionDetail` — where the contract requires
+      `DecisionResult {decision, transaction, accountMutation?}`
+      (`contracts/ocs-api.yaml:1207-1213`). The routed twin returns it correctly
+      (`lib/Controller/ReviewController.php:258-273`). Wiring `transaction#decide` in as part of a cleanup
+      would therefore **silently remove `decision` and `accountMutation` from a working endpoint**.
+
+      **The client was written against the dead shape.** `transactionsApi.submitTransactionDecision` is
+      typed to that response, and `transactionsStore.submitDecision` (`transactions.ts:148-164`) is
+      exported with **no consumer in `src/`** — `DecisionForm.vue:121` calls `reviewsStore.recordDecision`
+      instead. So the store-mutation half is latent, not live, and it is a loaded gun for the next author.
+
+      **`QueueController` carries a second landmine.** `QueueController.php:33` would raise
+      `ValueError` on the kebab-case stage slug the client sends (`WorkflowStage::from('cost-center')`),
+      producing the `400` at `:38`, if its route were ever restored.
+
+      **Acceptance criteria.** All three unrouted actions are deleted (the smaller, safer choice), or
+      `transaction#decide` is retyped `Promise<DecisionResult>` and the store can no longer write a
+      `TransactionDetail` into `transactions.value` / `currentTransaction.value`. Add the
+      route-dispatch completeness check T326 asks for so a fourth cannot appear: a frontend service
+      method addressing a path no route serves, or a controller action no route reaches, is a failure.
+      Cross-references: T235, T326, T030.
+
+      ---
+      **Delivered: all three deleted AND the client's type corrected — because the dead PHP action and the
+      client's wrong type were the same mistake, and deleting only the PHP would have left the client's
+      shape unchallenged.**
+
+      `TransactionController::decide()`, `QueueController.php` and `ReturnsController.php` are gone, with
+      `Decision`, `ManagementReviewService` and their unused constructor parameters removed from
+      `TransactionController` rather than left behind as dead injections.
+
+      **`RouteResolutionTest`'s unrouted-controller assertion now expects an empty list**, with its
+      message rewritten from "T235 owns the decision to remove or route them" to "T344 removed them, and a
+      controller appearing here means a class no route can reach exists". The list is asserted `[]` rather
+      than a named pair, so a **fourth** unrouted controller fails it — which is the point of the
+      criterion, and what the previous `['QueueController', 'ReturnsController']` expectation could not do.
+
+      **The new check is the other direction of the one T326 shipped, and it is the one that would have
+      caught all three.** `RouteDispatchCompletenessTest::testEveryControllerActionIsReachableFromARoute`
+      compares every public controller method against the `controller#action` names
+      `appinfo/routes.php` dispatches. Unlike the client-side direction, **this one must be empty and is
+      asserted empty**, and the asymmetry is deliberate and stated in the docblock: an action with no route
+      is unreachable by *anything*, whereas a routed action no client calls yet
+      (`ConfigurationController` under T087, `EvidenceController::links`/`deactivateLink` under T096) is
+      work in progress. Asserting symmetry in that second case would fail on correct work — the mistake
+      the existing file already documents.
+
+      **The check has its own self-check, because the failure mode of a regex scan is passing vacuously.**
+      `testTheScanActuallyFindsControllerActions` asserts the action scan found `sheet#index` and that the
+      route table yielded `review#decide`, so a refactor that changes how either side is spelled fails
+      there instead of leaving the comparison `everything` vs `nothing` and therefore satisfied. This is
+      the third instance of the same guard in this repository after `LayerBoundaryTest` and T326's own
+      `testTheScanActuallyFindsClientPaths`.
+
+      **The client's type was wrong in exactly the way the dead action was wrong, which is the finding.**
+      `submitTransactionDecision` was typed `Promise<TransactionDetail>` — the schema the *unrouted*
+      `transaction#decide()` returned — while `review#decide`, the route that serves this path, answers the
+      contract's `DecisionResult {decision, transaction, accountMutation?}`. So the client was written
+      against a duplicate of an endpoint no route reached, and reading `decision` or `accountMutation` off
+      the result was **a compile error** while `transaction` alone type-checked. It is now
+      `Promise<DecisionResult>`, and `submitDecision` writes `result.transaction` into
+      `transactions.value` / `currentTransaction.value` and returns `result` — so there is no bare
+      transaction in scope to write and the store cannot repeat the mistake. `accountMutation`'s **omission**
+      is the contract's shape (FR-040 records a consumption only for a final finance approval, so an empty
+      mutation would claim money moved when none did) and is asserted as undefined, not as `{}`.
+
+      **`submitDecision` still has no consumer in `src/`**, and that is recorded rather than hidden:
+      `DecisionForm.vue` calls `reviewsStore.recordDecision`. It was latent before this task too. The
+      export exists so the decision path has one owner, and the route-dispatch check now proves the
+      endpoint it addresses is the one the server serves.
+
+      **Results.** `RouteDispatchCompletenessTest` **4/4** (was 2; the two new cases are the check and
+      its self-check) · `RouteResolutionTest` green with the empty-list expectation ·
+      `http.spec.ts` **19/19** (was 17) · `npm run test:unit` **296/296** (was 294) ·
+      `scripts/dev/phpunit` **1226 tests / 6357 assertions / 1 failure** — baseline 1224 with the same
+      single failure (T318's `application/octet-stream` conflict), so exactly the two new cases were added
+      · `npm run typecheck` clean · `npx eslint` 0 problems on the three changed frontend files ·
+      `php -l` clean on `TransactionController.php`.
+
+      **Known limitations, deliberately not widened.** The reverse check is a structural fact about text,
+      so a controller action invoked from PHP rather than a route would be flagged as unrouted — there is
+      no such action today, and if one is ever legitimate the check needs the exception mechanism
+      `ConfigurationController` would also need. And the criterion's alternative (retype rather than
+      delete) was **not** taken for `transaction#decide`: with the action deleted, there is nothing left to
+      disagree with `review#decide`, so there is no second implementation to keep consistent.
+
+---
+
+**What this pass did not find, and why that is worth recording.** The route layer is otherwise
+**complete**: all 40 contract path+verb pairs have a route, and every route except the 13 owned by
+T087 (`ConfigurationController`, absent by design) and T096 (`EvidenceController::links` /
+`deactivateLink`) resolves to a real method. Twelve further response schemas were checked key-by-key
+against their emitters — `SessionContext`, `CapabilitySet`, `Money`, `PageMeta`, `Account`,
+`Movement`, `AccountMutationResult`, `SheetTotals`, `TransactionSummary`, `TransactionDetail`,
+`Decision`, `ActorSnapshot`, `AuditEvent`, `ReportPage`, `ExportResult` — and are **complete**. The
+PHP suite's single failure is T318's, already owned. Nothing here contradicts a constitution principle,
+so no CRITICAL finding is a compliance violation; the four CRITICAL items are P1 journey blockers.
+
+**The generalisable lesson, recorded so the next pass starts here rather than from a symptom.** Three
+correspondences have no symptom and can only be found by enumeration: contract path ↔ route, contract
+schema ↔ emitted keys, client payload key ↔ server payload key. Phase 30 audited route integrity and
+found nothing, because every gap in these lists is an **absence**, not a route pointing at a method
+that does not exist. Fourteen of the seventeen findings above are invisible to the suites because the
+frontend specs stub the HTTP layer with fixtures that contain the keys the server never sends. A green
+`npm run test:unit` and a green `scripts/dev/phpunit` are therefore not evidence that a wire is
+connected, and this repository has now demonstrated that twice (T327, and this phase).
+
+## Phase 56: Convergence (two findings T334's verification produced)
+
+Neither finding was looked for. Both were produced by T334's own acceptance criterion — "one contract
+test per error response asserting the shape" — reaching an export request and reading the server log
+to explain a 500 that was not the one the test was about. They are recorded here rather than fixed
+inside T334 because both change app-level wiring or an endpoint T334 does not own, and widening a task
+to fix an unrelated live defect is how a task stops being reviewable.
+
+- [x] T345 [HIGH] Make the application's Composer dependencies autoloadable in the deployed app,
+      because **every XLSX export answers HTTP 500** with `Class "PhpOffice\PhpSpreadsheet\Spreadsheet"
+      not found` (FR-066, `composer.json`, `composer/autoload.php`, `lib/Infrastructure/Export/XlsxExporter.php`)
+      (delivered)
+
+      **Measured, not inferred.** `POST /exports` with `resource: sheets, fileFormat: xlsx` answers
+      `500`; `nextcloud.log` records the exception at `XlsxExporter.php:243` via
+      `ExportService::generateXlsx()`. The class is present on disk
+      (`vendor/phpoffice/phpspreadsheet/src/PhpSpreadsheet/Spreadsheet.php`) and loadable — the same
+      file answers `class_exists(...) === true` in the container's CLI SAPI.
+
+      **The mechanism, from Nextcloud's own source rather than from a guess.**
+      `OC_App::registerAutoloading()` (`lib/private/legacy/OC_App.php:104-126`) registers an app's
+      Composer autoloader **only** from `$appPath . '/composer/autoload.php'`. This repository had no
+      `composer/` directory, so under Apache the app's `vendor/autoload.php`
+      was never registered: `OCA\PettyCash\*` still resolves through Nextcloud's PSR-4 fallback
+      (`addPsr4($appNamespace, $path . '/lib')`), and **no third-party Composer class resolved at
+      all**. `tests/bootstrap.php:5` requires `vendor/autoload.php` explicitly, which is precisely why
+      the entire test suite could not see this.
+
+      **Blast radius is small and was enumerated rather than guessed.** Every non-`OC*`/`Psr\Log`
+      namespace used by `lib/` is `PhpOffice\PhpSpreadsheet` (6 `use` statements, all in
+      `XlsxExporter`); `Psr\Log` comes from Nextcloud's own `3rdparty`. So the single user-visible
+      consequence is that one of the three formats FR-066 names is a 500 for every request — and the
+      client offers XLSX for every report subject.
+
+      ---
+
+      **Both originally-offered fixes are unusable, and one of them was never more than a no-op. Recorded
+      because the rejected options are the finding.**
+
+      **Option (a), `appinfo/app.php`, cannot work on Nextcloud 34 at all.** `grep -rn "app\.php"` over
+      `/var/www/html/lib/` and `/var/www/html/core/` returns **two** hits, and neither is an `include`:
+
+      ```php
+      // lib/private/App/AppManager.php:490
+      if (is_file($appPath . '/appinfo/app.php')) {
+          $this->logger->error('/appinfo/app.php is not supported anymore, use \OCP\AppFramework\Bootstrap\IBootstrap on the application class instead.', ['app' => $app]);
+      }
+      $coordinator = Server::get(Coordinator::class);
+      $coordinator->bootApp($app);
+      ```
+
+      The file is checked for existence solely to **log an error about it**, and the app is then
+      bootstrapped without ever reading it. A shim there would be inert, would log an error on every app
+      load, and would leave the 500 in place while appearing to fix it. This task's own option list was
+      written from the pre-34 idiom, and it is the reason the defect survived as long as it did: the
+      remedy reads as correct and does nothing.
+
+      **Option (b), `config.vendor-dir`, is the real convention and was not taken.** Every NC 34 core app
+      ships `composer/autoload.php` — 21 of them, including `apps/files/composer/` with
+      `"config": {"vendor-dir": "."}` and Composer's project living inside `composer/`. So (b) is
+      correct. It was rejected on scope, not on merit: it relocates 105 locked packages and rewrites
+      `composer.json`, `tests/bootstrap.php:5`, `scripts/dev/composer`, `scripts/dev/phpunit`,
+      `phpunit.xml`, `psalm.xml:2,6`, `eslint.config.js:8` and
+      `tests/Integration/Persistence/roundtrip-runner.php:60`. `docs/development/composer-ownership-migration.md`
+      §5B had already rejected the same operation as unsafe, on a registry outage that has since cleared
+      (it answers `200` again) but with the Composer download cache still holding **0** archives — so
+      (b) remains a real option and is now a **smaller** one than it was, if a later pass wants the
+      canonical layout.
+
+      **What was delivered instead: option (c), a tracked `composer/autoload.php` that requires the
+      existing `vendor/` tree.** `registerAutoloading()` needs one file at one path; it does not care
+      which layout produced it. So `composer/autoload.php` satisfies the server's `file_exists` and hands
+      back the `vendor/autoload.php` that Composer already generates, with `return require` rather than
+      `require_once` so the loader is the file's value the way a generated `autoload.php` behaves.
+      Nothing moved: no dependency was relocated, re-fetched or re-resolved, and `composer.json`,
+      `composer.lock`, `tests/bootstrap.php`, `scripts/dev/*`, `phpunit.xml`, `psalm.xml` and
+      `eslint.config.js` are untouched. `composer/` is not gitignored, so the shim is tracked — which
+      matters, because `vendor/` is ignored and the deployed app is exactly the case where nothing
+      required it by hand.
+
+      **Verified against the deployed app, which is the only place the defect was visible.** Authenticated
+      `POST /ocs/v2.php/apps/pettycash/api/v1/exports` as the test user, before and after:
+
+      | Request | Before | After |
+      |---|---|---|
+      | `resource=sheets`, `fileFormat=csv` | `200`, 172 bytes | `200`, 172 bytes (unchanged) |
+      | `resource=sheets`, `fileFormat=xlsx` | **`500` `UNEXPECTED_FAILURE`** | **`200`**, 6286 bytes |
+
+      `nextcloud.log` carried the exact exception before the change and carries none after:
+      `Class "PhpOffice\PhpSpreadsheet\Spreadsheet" not found at
+      lib/Application/Reporting/ExportService.php:268 → XlsxExporter::build`. The artifact was then read
+      back rather than trusted from its status code: base64-decoded, `zipfile.testzip()` clean, `PK\x03\x04`
+      magic, and the eleven expected OOXML members present including `xl/worksheets/sheet1.xml` — a
+      genuine workbook, not an empty one.
+
+      **The required check now exists, and it is deliberately not a contract test.** The task's own
+      reasoning holds and is worth keeping: *"a contract test would not catch it either, because the CLI
+      loads the autoloader the test bootstrap asks for, and that is the whole reason this survived a
+      green suite."* `DeployedAutoloadReachabilityTest` therefore asserts against the
+      `ClassLoader` that `composer/autoload.php` **returns**, using `findFile()` — which consults only
+      that loader's own classmap and PSR-4 prefixes and never falls through to the ambient autoloader.
+      `class_exists()` is exactly the assertion that passed for the whole life of this defect.
+
+      It asserts three things: the entry point exists at the path `registerAutoloading()` probes; it is
+      not a Composer-generated file (the marker `@generated by Composer` is absent — its presence means
+      someone set `vendor-dir` to `composer/` and Composer overwrote the shim, the one collision the
+      shim's own comment warns about); and every third-party class `lib/` imports resolves through it.
+      `OC\`, `OCP\`, `OCA\` and `Psr\` are excluded with reasons, since those come from the server and the
+      PSR-4 fallback. A fourth test is the non-vacuity self-check the other two architecture tests carry,
+      and it asserts `PhpOffice\PhpSpreadsheet\Spreadsheet` specifically, so a change to the exclusion
+      list or the pattern fails loudly instead of shrinking the set to nothing.
+
+      **Mutation-verified in the direction that matters: with `composer/autoload.php` moved aside, the
+      file is RED** — `testTheDeployedAutoloadEntryPointExists` fails naming the defect, and the
+      reachability test errors on the missing require. It is not a test that passes either way.
+
+      **One adjacent false statement removed, because it is the sentence that caused the miss.**
+      `tests/Integration/Persistence/roundtrip-runner.php:55` asserted that *"Nextcloud core loads
+      `<app>/vendor/autoload.php` for every enabled app (OC_App::registerAutoloading), which is why the
+      app can use PhpSpreadsheet under Apache."* That is the same false premise as option (a), in a
+      comment that would have led the next reader to the same wrong conclusion, and it inverted the real
+      asymmetry: the runner and PHPUnit both load the autoloader **by hand**, while a real request does
+      not. Corrected in place.
+
+      **Not done, and recorded rather than left implied.** T346 (the `X-PettyCash-Command-ID` replay
+      path) was blocked on this task because its contract test could not arrange a scenario against an
+      endpoint answering 500; that endpoint now answers, so T346 is unblocked and untouched. T366/T367
+      (Phase 58) gain nothing here — their acceptance criteria read the produced artifact back over
+      HTTP, which they can now actually do, but their defects are absences of callers and projections and
+      this task supplied neither. The full NC-app `composer/` layout remains option (b), deliberately
+      un-taken and now cheaper to revisit.
+      Cross-references: T109, T113, T001–T010, T328, T341, T346, T366, T367.
+
+- [ ] T346 [LOW] Either run `POST /exports` through the command-id replay path or record that exports
+      are outside FR-084, because **the endpoint requires `X-PettyCash-Command-ID` and never reads it
+      for anything** (FR-084, FR-066, `lib/Controller/ExportController.php`) (`contradicts`)
+
+      **Measured.** `ExportController::create()` reads the header at `:90` and uses it twice: to report
+      `fieldErrors.commandId` when it is absent, and to stamp the refusal's `commandId`. There is no
+      `IdempotencyService` in the class. So a retried export under the same command id regenerates the
+      artifact instead of answering the stored result, which is what every other mutating endpoint
+      does.
+
+      **How it was found.** T334's `Conflict` case was first written against this endpoint, on the
+      reasoning that a replay under a changed payload is the deterministic way to produce a 409. It
+      answered `500` — T345's missing class — and, once that was explained, the replay case could not
+      be arranged here at all. That is the evidence for the finding: the endpoint cannot produce the
+      conflict FR-084 describes.
+
+      **Whether this is a gap or an intentional exclusion is not this task's call and should not be
+      made silently.** An export is a read that produces a file, so a replay is harmless in effect
+      while still costing a regeneration; but the contract marks the header `required` on every
+      mutating operation, and refusing the header without honouring it is the worse of the two
+      readings — it advertises a guarantee that is not there. Decide, then either implement the replay
+      or amend the contract to say the header is required for correlation only.
+      Cross-references: T027, T166, T317, T318, T084, T328.
+
+**What this pair says about the pass that found them.** Both were one HTTP request away from a task
+whose subject was a different file, and both are invisible to the suite for the same reason Phase 55
+recorded: the test bootstrap loads a dependency graph the deployed app does not have. The generalised
+lesson extends Phase 55's — the correspondences worth enumerating are not only contract ↔ code, but
+also *how the code is loaded*, which no suite in this repository asserts at all.
+
+## Phase 57: Convergence (the correction route, two dead evidence controls, and an OCS navigation that cannot authenticate)
+
+Found by the 2026-10-05 convergence pass. F1, F3 and F4 were reproduced rather than inferred: F1 against the
+installed `vue-router@4.6.3`, F3 and F4 as live HTTP requests against the running container. F5 was settled
+from the `info.xsd` Nextcloud itself serves. None of the four is visible to a green suite, for the reason
+Phase 55 recorded and this phase re-confirms: the frontend specs stub the HTTP layer and assert that a
+control *exists*, never that pressing it reaches the server, and the contract client sends
+`OCS-APIRequest: true` on every request so it can never observe F3.
+
+- [x] T359 [CRITICAL] Register the correction route the correction button already navigates to, because
+      **the purchaser cannot start a correction at all** — pressing the only affordance throws
+
+      ---
+
+      **Delivered by pointing the push at `transaction-edit`, not by adding a route — and the second
+      option in this task's own acceptance criteria is recorded as a deliberate rejection rather than
+      as an oversight.** `TransactionFormView`'s `editable` computed (`:71`) already names
+      `AWAITING_PURCHASER_CORRECTION` explicitly, which is the only state in which this button renders
+      (`canCreateCorrection` reads that same status), and its `persist()` (`:181-192`) calls
+      `updateExistingTransaction` — whose `PATCH` the server **already admits for exactly this state**:
+      `TransactionService.php:245` gates on `$isCorrection`, which it derives from
+      `TransactionStatus::AwaitingPurchaserCorrection`, and the comment above it (`:230-244`) records
+      that this was a deliberate widening of FR-026's single carve-out. That PATCH builds
+      `$transaction->revision()->number() + 1` (`:259-260`), so **FR-048's new revision is created on
+      this path too.** Registering `transaction-correction-create` would have produced a second URL for
+      one behaviour with nothing to tell them apart, and `TransactionFormView` would then need to know
+      which of the two names it had been entered under.
+
+      **The root cause was the copied route table, not the missing route, so the copies are gone.**
+      Three spec files each carried their **own** re-declaration of the application's routes:
+      `PurchaserFlow.spec.ts` (ten routes), `NextcloudVueContract.spec.ts` (ten), and
+      `ReportingExport.spec.ts` (one synthetic `dashboard`). All three now derive the table from
+      `@/router` with the components replaced by inert placeholders — the pattern
+      `FinanceReview.spec.ts` and `ManagementReview.spec.ts` already used, and which
+      `TransactionCorrection.spec.ts` already imported outright. **A copied table makes every route
+      name resolvable whether or not the application declares it**, which is precisely why this
+      shipped: no test *could* have failed on the missing name. `NextcloudVueContract.spec.ts` carried
+      a comment describing exactly this hazard — "a route table missing either one fails the mount with
+      a `No match for`" — and then kept the copy. Six spec files now share one source of route names;
+      **zero** re-declare them.
+
+      **The assertion whose absence let it ship, added: a test that clicks the button.** Five existing
+      assertions checked the button *exists* (`:1320,1327,1330,1657,1661`); none pressed it. That is
+      not a weaker version of the missing test, it is a **different question** — a `router.push` that
+      throws synchronously produces no DOM change and no rejection, so an existence assertion sees a
+      healthy page. `should navigate to an editable form when the correction button is pressed` mounts
+      a returned transaction, triggers the click, and asserts `router.currentRoute.value.name` is
+      `transaction-edit` with the transaction id as the `:id` param. It needs a new
+      `createWrapperWithRouter()` helper (`:381-401`) because `createWrapperAtRoute` returns only the
+      wrapper, which is the right shape for "does this render" and the wrong one for "does this
+      control work".
+
+      **And the check T326 asked for in the other direction, which the copies alone would not have
+      covered: `tests/Frontend/routeNameIntegrity.spec.ts`** (new, 3 tests) scans every `.vue`/`.ts`
+      under `src/` for a literally-written `name: '…'` and asserts it exists in the real table. The
+      derived test routers catch a bad name **in a view that has a component test**; this catches one
+      in a view that has none, where no mount happens and nothing else in the suite would look. Its
+      two companion tests are the usual guards: `declares a non-empty route table` (so the comparison
+      cannot pass by comparing nothing) and `finds names in the source it claims to scan` (so a
+      refactor to a different call shape cannot silently stop the scan). **This is the fourth such
+      self-check in this repository**, after `LayerBoundaryTest`,
+      `RouteDispatchCompletenessTest::testTheScanActuallyFindsControllerActions` and
+      `RouteDispatchCompletenessTest::testTheScanActuallyFindsClientPaths`.
+
+      **Stated limitation, not hidden:** template-literal names are not matched, because
+      `{ name: \`review-queue-${stage}\` }` — how the review queues are addressed — is not knowable
+      without rendering. Those queue links are covered by the derived test routers instead, so the gap
+      is narrow and bounded rather than open.
+
+      **Mutation-verified twice, against the two different checks, because they fail for different
+      reasons and only one passing would have been evidence of nothing.** Reverting the push to
+      `transaction-correction-create` fails the **click test** with vue-router's own
+      `Error: No match for` — the exact error this task's report recorded — and fails the **scan**
+      with `Unknown: transaction-correction-create (src/views/transactions/TransactionDetailView.vue)`.
+      Each mutation was verified by restoring the file from an exact copy afterwards.
+
+      **Results.** `PurchaserFlow.spec.ts` **91/91** (was 90) · `npm run test` **300/300** (was 296:
+      +1 click test, +3 scan tests) · `npm run typecheck` clean · `npx eslint` **0 errors** on the four
+      changed/added frontend files (9 warnings, all pre-existing `vue/attributes-order` on untouched
+      lines). **No PHP changed**, so `scripts/dev/phpunit` was not re-run for this task and its result
+      stands from the session baseline (1226 tests, 1 failure — T275's, not this task's).
+
+      **A flake worth recording, because it is not this task's regression and was not absorbed silently.**
+      One full-suite run failed `NextcloudVueContract.spec.ts > renders the sheet action bar` at exactly
+      **30022 ms** — vitest's 30 s per-test timeout. That test ran **13948 ms** on the session baseline
+      and **14623 ms** in isolation after this change, so it was already consuming ~48% of its budget
+      before the change; under ten parallel files it tipped over. Three consecutive full runs then
+      passed 297/297, followed by 300/300. **The honest reading is that the test is slow for reasons
+      unrelated to this task, and that a 30 s per-test timeout leaves it too little margin** — raising
+      it, or finding why a real-`@nextcloud/vue` sheet-detail render costs ~14 s, is real work that
+      belongs to whoever owns that file's performance, and it is **not** silently absorbed into a
+      CRITICAL fix that is about a route name.
+      Cross-references: T075 (correction form, open), T117 (route table, open), T203, T326.
+
+      ---
+
+      **Original task text, preserved:**
+
+      **the purchaser cannot start a correction at all** — pressing the only affordance throws
+      (US4/AC2, FR-026, `src/router/index.ts`, `src/views/transactions/TransactionDetailView.vue`)
+      (`contradicts`)
+
+      **`src/views/transactions/TransactionDetailView.vue:62`:**
+
+      ```ts
+      function goToCreateCorrection() { router.push({ name: 'transaction-correction-create', params: { id: transactionId.value } }) }
+      ```
+
+      **No route of that name exists.** `src/router/index.ts:43-73` declares `transaction-create`,
+      `transaction-detail` and `transaction-edit`; a grep for `correction` across the whole route table
+      returns nothing. Reproduced against the repository's own `vue-router@4.6.3` with a three-route table
+      copied from `src/router/index.ts`:
+
+      ```
+      THREW: Error | No match for
+       {"name":"transaction-correction-create","params":{"id":"tx-1"}}
+      ```
+
+      That is `router.resolve()`'s `MATCHER_NOT_FOUND` throw (`node_modules/vue-router/dist/vue-router.mjs`,
+      `if (!matcher) throw createRouterError(ErrorTypes.MATCHER_NOT_FOUND, ...)`) — **synchronous, not a
+      rejected navigation**, so the `@click` handler aborts and nothing is caught.
+
+      **Why every layer stayed green.** The button is asserted to *exist* and to be correctly scoped, four
+      times over, and never pressed: `tests/Frontend/Component/PurchaserFlow.spec.ts:1320,1327,1330,1657,1661`
+      are all `expect(...find('[data-test="create-correction-btn"]').exists()).toBe(...)`. The test router in
+      that file (`:308-320`) declares the same ten routes the application does, so it could not have caught
+      the missing name even if a test had pushed it.
+
+      **What this blocks.** US4/AC1 ("the transaction appears as awaiting purchaser correction") is reachable —
+      `isReturned` reads the status — but US4/AC2 ("the purchaser changes its business information and
+      resubmits it") has no entry point, and FR-026's single carve-out for editing a submitted transaction is
+      the route this button is trying to take. P1 user story, baseline functionality: **CRITICAL**.
+
+      **Acceptance criteria.** Either register a `transaction-correction-create` route (the form already
+      handles `AWAITING_PURCHASER_CORRECTION` — `TransactionFormView.vue:70` keeps such a transaction
+      `editable`), or change the push to the existing `transaction-edit` route, which is what the
+      `editable` computation was written for. Add a component test that **clicks** the button and asserts the
+      resolved route name, so the assertion is about navigation rather than about markup. Add the check T326
+      asks for in the other direction: a `router.push({ name })` naming a route the table does not declare is
+      a build-time failure. Cross-references: T075 (correction form, open), T117 (route table, open), T203.
+
+- [x] T360 [CRITICAL] Wire the transaction detail page's evidence download and removal buttons, because
+      **both render and do nothing**, and the working implementation already exists one directory away
+
+      ---
+
+      **Delivered by deleting the view's inline copy and rendering `EvidenceList.vue` — the first of
+      this task's two options, chosen because the component is not merely complete but is *more*
+      correct than the markup it replaces, and adopting it fixes three requirement clauses the inline
+      version got wrong.**
+
+      | Clause | The inline markup | `EvidenceList.vue` |
+      |---|---|---|
+      | **FR-060** download | `v-if="ev.active && !isSubmitted"` — a **reviewer could not download a submitted transaction's evidence at all** | offered whenever `ev.active` |
+      | **FR-058** removal | `v-if="ev.active && !isSubmitted"` | `v-if="ev.active && props.isDraft"` — same rule, stated as the question it answers |
+      | **FR-059** history | row said only "inactive" | renders `deactivation-info`: when withdrawn, or that the time is unknown |
+
+      It also carries a `confirm()` before removal, a `deleting` guard so a double press cannot issue
+      two DELETEs, a `role="alert"` error region, and `aria-label`s naming the file each button acts
+      on. **The FR-060 row is the substantive one:** a cost-centre manager reviewing a submitted
+      transaction — the entire purpose of the review stage — was shown no way to open the receipt they
+      were being asked to approve. Wiring the two handlers instead would have preserved that.
+
+      **`isDraft` is passed as `!isSubmitted`, and the inversion is load-bearing.** The component uses
+      the prop to decide whether *removal* is offered; `isSubmitted` is also what gates the upload
+      button in the card header. Passing the raw `isSubmitted` would have offered removal on a
+      submitted transaction. Recorded in the template because the two names invite the mistake and
+      nothing at the call site would fail loudly.
+
+      **The dead CSS went with the markup.** Eight `.evidence-*` rules styled only the deleted rows.
+      They were **not** ported: `EvidenceList.vue` carries its own `scoped` presentation, and keeping a
+      second copy would be a second definition of how a row looks that nothing renders. `.evidence-list`
+      went as well — same class name as the component's root element, which `scoped` styles could not
+      have reached anyway. `grep -rn "TODO: Implement" src/` is now **0** in code; the one remaining
+      occurrence is the docblock recording what was removed and why.
+
+      **Two tests that press the buttons, through the view rather than the component.** This is the
+      part that matters, and the distinction is not pedantry: five existing evidence assertions in this
+      file mount `EvidenceList` **directly**, which is exactly how the tested surface and the shipped
+      surface came to be two different files. `grep -rn "download-evidence\|remove-evidence"
+      tests/Frontend/` returned nothing before this change, so nothing ever pressed the inert controls.
+      - `should issue the content request when the evidence download button is pressed` — spies
+        `evidenceApi.getEvidenceContent`, clicks through `TransactionDetailView`, asserts it was called
+        with the file's public id. **`URL.createObjectURL`/`revokeObjectURL` are stubbed rather than
+        asserted**, and the reason is that jsdom implements neither: asserting them would pin the
+        blob-handoff mechanism rather than the requirement.
+      - `should issue the delete request when evidence removal is confirmed, and only before
+        submission` — asserts **three** things, and each is a different failure mode: the request is
+        issued; a **declined** `confirm()` issues nothing (the guard is why this is worth more than the
+        happy path — and jsdom's `confirm` returns `false`, so without the stub the removal path would
+        be untestable *and* the test would pass for the wrong reason); and a submitted transaction
+        offers **no** removal control **while still offering download** — the FR-058/FR-060 asymmetry
+        asserted as one pair.
+
+      **The check T360 asked for — "a component no view imports cannot be the one the tests certify" —
+      is `component reachability` in `tests/Frontend/routeNameIntegrity.spec.ts`, and writing it found
+      something on its first run.** `EvidenceCard.vue` was reported as an orphan; it is not, because
+      `src/components/review/EvidenceList.vue:15,26` renders it. **So the check was wrong and was
+      corrected, not the finding suppressed** — reachability is a breadth-first walk from every view
+      following component → component edges, because a card rendered by a list that a view renders *is*
+      rendered. Stopping at one hop would have produced a false positive and, worse, an incentive to
+      inline a component rather than compose one. It resolves both import spellings the codebase uses
+      (`@/components/…` and `./X.vue`) and tests the resolved path for containment, so a same-named
+      file outside `src/components` cannot pass for a component edge.
+
+      **Mutation-verified three times, and one attempt did not fail, which is the useful part.**
+      Reintroducing the two `// TODO: Implement` handlers and the inline markup fails **both** press
+      tests (download: `expected false to be true` — the control is gone; delete: the same). Removing
+      only `TransactionReviewDetailView`'s `EvidenceList` import **did not fail the reachability
+      check**, and that was correct rather than a hole: `FinanceReviewView.vue:122` also renders it.
+      Removing **both** fails with `Unreachable from every view: review/EvidenceCard.vue,
+      review/EvidenceList.vue` — naming both the component and its own child, which is the transitive
+      edge holding. Every mutation restored from an exact copy; `git diff --stat src/views/reviews/`
+      is empty afterwards.
+
+      **Results.** `PurchaserFlow.spec.ts` **93/93** (was 91) · `npm run test` **304/304** (was 300:
+      +2 press tests, +2 reachability tests) · `npm run typecheck` clean · `npm run stylelint` clean ·
+      `npx eslint src/ tests/Frontend` **0 errors** (161 warnings, all pre-existing across the tree;
+      the 7 on the changed file are `vue/attributes-order` on untouched lines). **No PHP changed**, so
+      `scripts/dev/phpunit` was not re-run and its result stands from the session baseline (1226
+      tests, 1 failure — T275's).
+
+      **What this task does not close, and why it is not absorbed here.** `getEvidenceContent` reaches
+      `GET /evidence/{id}/content` through the OCS client, and that endpoint's **authorization** is
+      T362's subject (it currently admits by uploader rather than by transaction visibility) while the
+      **`OCS-APIRequest` header** on the fetch is T361's. This task made the buttons issue requests; it
+      did not make the server's answer correct. Widening a CRITICAL fix to settle both would be how the
+      task stops being reviewable.
+      Cross-references: T361, T362, T094, T170, T342, T359.
+
+      ---
+
+      **Original task text, preserved:**
+
+      **both render and do nothing**, and the working implementation already exists one directory away
+      (FR-058, FR-060, US1, `src/views/transactions/TransactionDetailView.vue`) (`contradicts`)
+
+      **`src/views/transactions/TransactionDetailView.vue:110-116`:**
+
+      ```ts
+      async function downloadEvidence(_evidenceId: string) {
+          // TODO: Implement download
+      }
+
+      async function removeEvidence(_evidenceId: string) {
+          // TODO: Implement remove
+      }
+      ```
+
+      **Two empty functions, and `:363` / `:366` bind them to `data-test="download-evidence"` and
+      `data-test="remove-evidence"`** whenever `ev.active && !isSubmitted`. So every purchaser with a draft
+      carrying a receipt is shown a download button and a delete button that do absolutely nothing, with no
+      error and no state change. These are the only `TODO`s left anywhere in `src/` or `lib/`.
+
+      **The working code is not missing — it is unused.** `src/components/evidence/EvidenceList.vue` renders
+      the same list with the same affordances and calls `getEvidenceContent(ev.id)` (`:44`) and
+      `deleteEvidence(ev.id)` (`:64`), with a confirm, a `deleting` guard and an error region.
+      `grep -rn "from '@/components/evidence" src/` returns **only** `EvidenceUploader` — the list component
+      is imported by `tests/Frontend/Component/PurchaserFlow.spec.ts:287` and by **no view**. The
+      review-side `src/components/review/EvidenceList.vue` is a different component that only renders cards.
+
+      **Why the suite is green.** `PurchaserFlow.spec.ts:1483-1505` asserts `download-evidence-btn` and
+      `delete-evidence-btn` against the *unused* component, so the tested surface and the shipped surface are
+      different files. Nothing presses `download-evidence` or `remove-evidence` — grep for those selectors in
+      `tests/Frontend/` returns nothing.
+
+      **FR-058 and FR-060 are both P1-usable behaviour with a button on screen that is inert.**
+      **Acceptance criteria.** Delete the inline list and render `src/components/evidence/EvidenceList.vue`,
+      or wire the two handlers to the two service functions. Either way, assert that **pressing** the button
+      issues the request (`getEvidenceContent` / `DELETE /evidence/{id}`), and add the check that a component
+      no view imports cannot be the one the tests certify. Cross-references: T094 (evidence query service,
+      open), T170, T342, Phase 55's generalisation note.
+
+- [x] T361 [HIGH] Fetch evidence content with the `OCS-APIRequest` header instead of navigating to it, because
+      **evidence preview and download in both review views answer `412 CSRF check failed` for every user**
+
+      ---
+
+      **Delivered: `EvidenceCard.vue` now fetches the bytes through `getEvidenceContent()` and hands
+      the browser a `Blob` URL, for all three of its former navigation paths.** `generateOcsUrl` is no
+      longer imported by the file. This is the second option in this task's acceptance criteria, and it
+      is the one the purchaser's `EvidenceList.vue` already used — which is the reason half the
+      application worked and half did not.
+
+      | Former | Now |
+      |---|---|
+      | `<img :src="generateOcsUrl(…content)">` (eager) | `fetch` → `Blob` → object URL, `v-if` on the URL being **present** |
+      | `preview()` → `window.open(url, '_blank')` | `window.open()` on a **`blob:`** URL, tab opened synchronously |
+      | `download()` → `window.location.href = url?disposition=attachment` | `fetch` → `Blob` → `<a download>` → click → revoke |
+
+      **The inline `<img>` stayed eager, and that is a deliberate answer to "does this add a request?**
+      It does not. **The browser was already issuing exactly one request per image** for
+      `<img :src="…">` — it was simply receiving `412`. Fetching the blob instead is the same single
+      request, now one that succeeds, so FR-060's inline preview is preserved without adding traffic.
+
+      **Two states the old markup could not express, both now visible.** A card shows
+      `data-testid="preview-loading"` until the bytes arrive, and a failed load renders a
+      `role="alert"` `data-testid="evidence-error"` naming the reason. **Without the error state a failed
+      preview looks exactly like a blank receipt**, and FR-060 makes preview something a reviewer
+      relies on to approve an expense — "this receipt is empty" and "we could not load this receipt" are
+      different facts and only one of them is true.
+
+      **`preview()` opens its tab *before* awaiting, and the comment says why.** Awaiting first loses
+      the user-gesture context, popup blockers then refuse `window.open`, and the preview becomes a
+      silent no-op — the exact failure mode this task exists to remove, reappearing one layer down. If
+      the fetch fails, the empty tab is closed rather than left blank. `disposition` moved from a query
+      parameter written into a navigation to an **argument of the request**, which is why the download
+      test asserts `disposition=attachment` on the URL: losing it would silently turn every download
+      into a preview.
+
+      **Object URLs are revoked** in `onBeforeUnmount` and after each download, because the card sits
+      inside a `v-for` and an object URL is a leak until revoked.
+
+      **One existing test changed shape, and the reason is the fix rather than a weakened assertion.**
+      `should render an inline preview for image evidence and mark deactivated evidence` asserted
+      `evidence-preview` existed synchronously — true only of the `<img :src>` form, whose image never
+      once displayed. It is now split into four tests: the fetch carries `OCS-APIRequest` and the
+      `src` is the object URL; a failed preview renders the alert; a pressed download carries the header
+      **and** `disposition=attachment`; and deactivated evidence is marked without a preview affordance.
+      **The requirement is asserted more strictly than before, not less** — the old test could not have
+      distinguished a working preview from a `412`.
+
+      **The check T361 asked for is `never reaches an OCS URL by navigation`, and its first version was
+      wrong in a way worth recording.** It banned *every* navigation sink, and failed on T361's own
+      fix — because `window.open()` with a **`blob:`** URL is precisely how preview works once the bytes
+      are in hand. A blanket ban would have forbidden the correct behaviour. **The corrected invariant is
+      the one that actually distinguishes them: `generateOcsUrl` exists to hand a URL to `fetch`/axios,
+      and using it in a navigation sink is always wrong**; a second clause catches a literal `/ocs/`
+      path. Its self-check asserts the sink scan found at least one sink, so a scan matching nothing
+      cannot pass. Docblock prose and commented-out code are skipped, because this very file's comment
+      quotes the old `window.open(generateOcsUrl(…))` and a check that flagged its own explanation
+      would be unusable.
+
+      **Stated limitation, not hidden:** the check matches navigation *sinks*, not every way to issue a
+      request. A component that built an OCS URL and used it as an `<img src>` or an `<a href>` would
+      **not** be caught — and T361's inline `<img>` was exactly that. It is removed because the fix
+      removes it, not because this check would have found it.
+
+      **Mutation-verified three ways.** Dropping `OCS-APIRequest` from `getEvidenceContent` fails **2**
+      (the preview and download tests, on the header itself). Reverting the card to navigation form —
+      `window.open(generateOcsUrl(...))` for preview and `window.location.href` for download — fails
+      **3**. Reintroducing only the `generateOcsUrl` import and one navigation fails the new check with
+      `OCS URL reached by navigation: src/components/review/EvidenceCard.vue:188, :192, :199`. All
+      mutations restored from exact copies; `git diff --stat` on `src/services/evidenceApi.ts` is empty,
+      confirming that file was left untouched.
+
+      **Results.** `ManagementReview.spec.ts` **36/36** (was 33) · `npm run test` **308/308** (was 304:
+      +3 net evidence tests, +1 navigation check) · `npm run typecheck` clean · `npm run stylelint` clean
+      · `npx eslint src/ tests/Frontend` **0 errors** (162 warnings, all pre-existing) ·
+      `node scripts/portability-check.js` **OK**. **No PHP changed**, so `scripts/dev/phpunit` was not
+      re-run and stands at the session baseline (1226 tests, 1 failure — T275's).
+
+      **Not closed here, and named rather than absorbed.** This endpoint's **authorization** is T362's
+      subject — `EvidenceController::content()` still admits by uploader rather than by transaction
+      visibility, which is a server-side hole and the more serious of the two. This task made the
+      request well-formed; T362 makes it correctly addressed. They touch one endpoint and are worth
+      sequencing adjacently.
+      Cross-references: T362, T360, T094, T091, T328, T329, T342.
+
+      ---
+
+      **Original task text, preserved:**
+
+      **evidence preview and download in both review views answer `412 CSRF check failed` for every user**
+      (FR-060, US2/AC1, US3/AC1, `src/components/review/EvidenceCard.vue`) (`contradicts`)
+
+      **`EvidenceCard.vue:89` builds a URL and `:110`/`:114` navigate to it:**
+
+      ```ts
+      const previewUrl = computed(() => generateOcsUrl('apps/pettycash/api/v1/evidence/{id}/content', { id: props.evidence.id }))
+      function preview(): void { window.open(previewUrl.value, '_blank') }
+      function download(): void { window.location.href = `${previewUrl.value}?disposition=attachment` }
+      ```
+
+      **A browser navigation cannot set a request header**, and this OCS route requires one:
+      `SecurityMiddleware::isValidOCSRequest()` (`lib/private/AppFramework/Middleware/Security/SecurityMiddleware.php:239-242`)
+      accepts only `OCS-APIREQUEST: true` or a `Bearer` `Authorization`, and `Request::passesCSRFCheck()`
+      (`:453`) treats that same header as the CSRF bypass. `EvidenceController::content()` carries
+      `#[NoAdminRequired]` and **no `#[NoCSRFRequired]`**, so the check applies.
+
+      **Measured in the running container**, as the contract test's own user, against the live route:
+
+      ```
+      GET /evidence/{id}/content   with OCS-APIRequest: true  -> 404   (routing/auth reached)
+      GET /evidence/{id}/content   without the header         -> 412 {"message":"CSRF check failed"}
+      ```
+
+      The `404` is the fabricated uuid not existing; the point is that the header is the difference between
+      reaching the action and being stopped in the middleware. The inline `<img :src="previewUrl">` at `:6` is
+      the same request by a different mechanism and fails identically.
+
+      **This is T328/T329's exact failure class, in the one component Phase 55's enumeration did not reach.**
+      `EvidenceCard` is the review surface: `TransactionReviewDetailView.vue:54` and `FinanceReviewView.vue:84`
+      both render it, so FR-060 is unavailable at every point US2 and US3 ask for it.
+
+      **Why the suite is green.** `ManagementReview.spec.ts:405-419` asserts the two buttons *exist* and are
+      *named*, and never clicks them; nothing in `tests/Frontend/` references `window.open`. And the PHP side
+      cannot see it either: `OcsTestClient.php:37` sets `OCS-APIRequest: true` on every request.
+
+      **Acceptance criteria.** Use `getEvidenceContent()` from `src/services/evidenceApi.ts` (it already sends
+      the header at `:49`) and hand the browser a `Blob` URL, as `src/components/evidence/EvidenceList.vue:44-52`
+      already does for the purchaser side. Add a component test that clicks download and asserts the request
+      carried `OCS-APIRequest`. Consider promoting T326's route-dispatch check to cover this shape too: a
+      client URL reached by navigation rather than by request is the same class of defect. Cross-references:
+      T094, T091, T328, T329, T342, T360.
+
+- [x] T362 [HIGH] Authorize `GET /evidence/{id}/content` by transaction visibility rather than by uploader
+      identity, because **no reviewer can ever open a receipt, and the endpoint answers `404` to hide it**
+
+      ---
+
+      **Delivered: the rule now reads transaction visibility, and it lives in a new
+      `Application\Evidence\EvidenceVisibility` rather than in the controller.** Extracted for the reason
+      T327 extracted `SheetCapabilities`: the rule is a boolean over (ownership, role, scope, the
+      transaction's stage, its cost centre), and a private method on the controller cannot be asserted as
+      a matrix because the PHPUnit process has no `IDBConnection`.
+
+      **An actor may read a transaction's evidence when they own it, administer the instance, or may
+      `canReview()` it at its current stage.** The third clause is the same call the decision endpoints
+      make, so "may I see this receipt" and "may I decide on this transaction" cannot drift apart.
+      `404` is **kept** for an out-of-scope caller — the endpoint must not confirm the existence of a
+      record the caller may not see (FR-003), the same treatment `AccountController` gives a foreign
+      ledger. **What changed is which question is asked, not the shape of the answer.**
+
+      **The obvious shortcut was rejected, and the tests are what prove it was a shortcut.**
+      `AuthorizationService::canView()` exists, is public, and answers exactly the question asked here —
+      and using it would have fixed every reviewer's 404 while **disclosing every transaction's evidence
+      to every purchaser holding the `PURCHASER` role**, because its third clause is `$context->roles !==
+      []`: *has any role at all*, and every authenticated user is at least a purchaser. That trades an
+      availability bug for a confidentiality bug. `EvidenceVisibility` therefore does not call it, and
+      `canView()` — which **has no production caller** — now carries a docblock warning that it must not
+      be used for anything scoped. Its behaviour is deliberately unchanged: narrowing it would alter a
+      method only its own tests exercise, and that is a separate reviewable decision about what "any role
+      may see" was ever meant to mean.
+
+      **Two design points worth recording.** (a) The actor's roles and managed cost-centre codes are
+      resolved **inside** `EvidenceVisibility`, not passed in — `ManagementReviewService` and
+      `FinanceSettlementService` each carry a private copy of that resolution, and a third copy in a
+      controller would be a third definition to keep in step, in a rule where divergence is a disclosure
+      bug. (b) The scope is built from the **actor's own assignments, never from the record**;
+      `canReview()` asks whether the subject's centre is in that list, so a subject-derived list makes the
+      comparison permanently true. That trap is called out in the same words
+      `ManagementReviewService:126-131` uses, and one of the two mutations below is exactly it.
+
+      **An unresolvable transaction is a `422`, not a `404`.** An evidence row whose transaction does not
+      resolve is a stored-data fault: the caller may well be entitled to read it, and answering `404`
+      would tell a legitimate reader the file had vanished — the Phase 33 "header, no data" shape. FR-083
+      requires an unreadable stored record to be reported as a data fault rather than papered over.
+
+      **Twelve tests / 45 assertions over the whole matrix**, in `tests/Unit/Evidence/EvidenceVisibilityTest.php`.
+      A matrix rather than endpoint tests because the OCS suite holds **one** credential and so cannot
+      express a second identity — the same harness limit T291 records for a different rule, and the reason
+      this defect was invisible to it. The cells: the owner at all five stages; an in-scope cost-centre
+      manager; an **out-of-scope** one; an in-scope senior manager and an out-of-scope one; finance with
+  no cost-centre scope on a transaction in a centre they do not manage (FR-016's shared queue);
+      an administrator (FR-007 visibility — **and `canReview()` still refuses them a decision**, so this
+      grants no authority); **the leak case, a purchaser with no review role**; a manager whose scope
+      matches but whose stage has moved on; a transaction with no cost centre; and a settled transaction
+      staying readable as history (FR-059). One test asserts the method signature is
+      `('actorUid', 'transaction')` — **a structural property**, because no caller-supplied stage is what
+      makes it impossible to pass the stage you hold and read a transaction at any other.
+
+      **The repository's own in-memory doubles are used, not anonymous port implementations.** A first
+      draft declared `new class implements RoleAssignmentRepository`, which PHP rejected for four
+      unimplemented methods — and would have needed restating on every interface change, which is how a
+      stub drifts from the adapter it stands in for. `InMemoryRoleAssignmentRepository`'s own docblock
+      records an instance of exactly that drift. The cost-centre codes are **read back from the double**
+      rather than assumed, because an assumption would make "in scope" and "out of scope" the same centre
+      and turn every scope test green for the wrong reason.
+
+      **One test failed on first run and the fixture was wrong, not the rule.**
+      `testASeniorManagerOutOfScopeMayNotReadEvidence` reused the *in-scope* senior manager and asserted
+      a refusal. The honest repair was a second, genuinely out-of-scope senior manager plus an assertion
+      that the in-scope one **is** admitted — so "fails for the scope reason, not the role reason" becomes
+      a claim rather than a hope. Recorded because a test that failed for a reason the author had not
+  considered is the moment a lazy repair (delete the assertion) would have looked identical.
+
+      **Mutation-verified two ways, and the first is the one that matters.** Rebuilding the rule on
+      `canView()` fails **5 of 12** — starting with the leak case, then both out-of-scope managers, the
+      moved-on-stage case, and the no-cost-centre case. That is the shape of the shortcut this task had
+      to avoid. Deriving the actor's scope from the **subject** instead of from their assignments fails
+  **3 of 12** — precisely the two out-of-scope managers and the no-cost-centre case. Both mutations
+      restored from exact copies.
+
+      **Results.** `EvidenceVisibilityTest` **12/12, 45 assertions** · `scripts/dev/phpunit`
+      **1238 tests / 6418 assertions / 1 failure** — baseline was 1226/6369/1, so **+12 tests, +49
+      assertions and no new failure**; the single failure remains T275's `application/octet-stream`
+      conflict, which is unrelated and already owned. `npm run test` **308/308** (frontend untouched) ·
+      `node scripts/portability-check.js` **OK** · `php -l` clean on all four changed PHP files.
+
+      **What is deliberately not claimed.** The contract suite still cannot test this endpoint with two
+      identities, so this task's acceptance criterion asking for "a contract test with **two**
+ authenticated users" is **not met** and is not pretended otherwise: the harness has one credential,
+ and adding a second is T291's named blocker. What exists is the full rule matrix at unit level plus the
+      existing single-identity endpoint coverage, which proves the owner path still answers `200`
+      (`PurchaserFlowControllerTest::testGetEvidenceContentReturns200WithStream`). The multi-identity
+      harness remains the honest gap.
+      Cross-references: T361, T091, T094, T013, T026, T291.
+
+      ---
+
+      **Original task text, preserved:**
+
+      **no reviewer can ever open a receipt, and the endpoint answers `404` to hide it**
+      (FR-060, US2/AC1, Constitution IV) (`contradicts`)
+
+      **`lib/Controller/EvidenceController.php:320-324`:**
+
+      ```php
+      $ownerUid = $this->currentUser->uid();
+      $evidence = $this->evidenceRepository->findByPublicId($evidenceId);
+
+      if ($evidence === null || $evidence->uploadedBy !== $ownerUid) {
+          return $this->ocsErrorMapper->notFound('Evidence not found');
+      }
+      ```
+
+      **A reviewer is never the uploader.** The evidence was uploaded by the purchaser; the cost-centre
+      manager, senior manager and finance officer who must rely on it are three different accounts. So every
+      one of them receives `404 Evidence not found` for every receipt on every transaction they are asked to
+      approve.
+
+      **FR-060's own words are "Authorized users MUST be able to preview supported evidence"** — not "the
+      uploader". US2/AC1 says the manager "sees its current details, evidence, history". Constitution IV
+      requires the opposite of what this code does: "Document and export access MUST follow transaction
+      visibility and MUST not expose data beyond the caller's role and responsibility scope." Transaction
+      visibility is the rule named by both; uploader identity is a rule neither states.
+
+      **`404` rather than `403` makes it worse than a refusal.** It reports the evidence as nonexistent, so a
+      reviewer sees a transaction whose receipt has vanished rather than one they are not permitted to open.
+      That is the same misinforming failure Phase 33 recorded for the sheet-detail audit card: an empty body
+      that reads as "there is nothing here".
+
+      **Why the suite is green.** `PurchaserFlowControllerTest::testGetEvidenceContentReturns200WithStream`
+      (`:1088`) uploads and reads back as the same user. `EvidenceLifecycleControllerTest` never reads content
+      as a second account — grepping `uploadedBy` across `tests/Contract/Controller/` finds no such assertion.
+      The account-scope tests that do exist (`AccountControllerTest:283`, `ErrorEnvelopeContractTest:237`)
+      cover accounts, which is why the pattern was not applied here.
+
+      **Acceptance criteria.** Resolve the transaction for the evidence and authorize through the same
+      visibility rule `GET /transactions/{id}` and the review queues use (`AuthorizationService` /
+      `AuthorizationContext`), so a manager in scope, a senior manager in scope and a finance officer can read
+  it and an out-of-scope manager cannot. Add a contract test with **two** authenticated users — the uploader
+      and an in-scope reviewer — asserting `200` for the second and `403`/`404` for a third who is neither.
+      Cross-references: T091, T094, T013, T026, T361.
+
+- [ ] T363 [MEDIUM] Declare the PHP floor in `appinfo/info.xml` and give the ACC-001 compliance line an
+      owning task, because the register's 8.2–8.5 range is **stated in `composer.json` only** and the
+      compliance review lists four sibling items with task numbers and this one without (ACC-001,
+      Constitution III, `appinfo/info.xml`) (`missing`)
+
+      **The gap.** `appinfo/info.xml` declares `<database>mysql</database>`, `<database>pgsql</database>`,
+      `<database>sqlite</database>` and `<nextcloud min-version="34"/>` — and no `<php>` element. The 8.2
+      floor therefore rests on `composer.json:17` (`">=8.2 <8.6"`) alone.
+
+      **It is declarable, and the question the compliance review left open is now answered.** It recorded the
+      item as "Open, tracked" with the note "whether `info.xsd` permits `<php>` there is unverified". The
+      schema Nextcloud serves says it does:
+
+      ```xml
+      <xs:complexType name="dependencies">
+        <xs:sequence>
+          <xs:element name="php" type="php" minOccurs="0" maxOccurs="1"/>
+          <xs:element name="database" .../>
+          <xs:element name="nextcloud" .../>
+      ...
+      <xs:complexType name="php">
+        <xs:simpleContent>
+          <xs:extension base="empty-string">
+            <xs:attribute name="min-version" type="version" use="optional"/>
+            <xs:attribute name="max-version" type="version" use="optional"/>
+      ```
+
+      So `<php min-version="8.2" max-version="8.5"/>` is valid — and, because `xs:sequence` fixes the order,
+      it must be inserted **before** the three `<database>` elements, exactly as the existing comment in
+      `info.xml` already reasons about `<database>` preceding `<nextcloud>`.
+
+      **Why it is a finding rather than a note.** The Constitution Compliance Review's closing paragraph
+      claims five open items are "recorded as open work with named owners (T128, T122/T123, T124, T239, and the
+      `info.xml` floor)". Four of the five are task numbers. The fifth is a description. So the review asserts
+      an owner that does not exist, which is the same defect class the paragraph above it forbids: "An
+      unrecorded exception would be invalid; none is recorded here."
+
+      **Acceptance criteria.** Add the `<php>` element in schema order, keep `composer.json` and
+      `info.xml` in agreement, and cite a task ID for the ACC-001 line so every open item in that review has
+      one. Cross-references: T001, T002, T241, T239, T240, the Constitution Compliance Review section.
+
+- [ ] T364 [MEDIUM] Give the purchaser a resubmission control, or remove the store action and say so,
+      because US4/AC2's second half is **unreachable from the interface and its test cannot fail**
+      (US4/AC2, FR-026, `src/stores/transactions.ts`, `tests/Frontend/Component/TransactionCorrection.spec.ts`)
+      (`partial`)
+
+      **The service and store layers are complete.** `resubmitCorrection` (`src/services/transactionsApi.ts:62`)
+      posts to `/transactions/{id}/resubmit` with the required `X-PettyCash-Command-ID`, and
+      `resubmitCorrectionDraft` (`src/stores/transactions.ts:181`) wraps it. **`grep -rc "resubmit-correction" src/`
+      is `0`** — no view renders the control, so the only way to resubmit a corrected transaction is to call the
+      store by hand. `TransactionCorrection.spec.ts:313-348` exercises it that way, which is why the store
+      looks covered.
+
+      **The test that appears to guard the UI cannot fail.** `TransactionCorrection.spec.ts:365-379`:
+
+      ```ts
+      const resubmit = wrapper.find('[data-test="resubmit-correction-btn"]')
+      if (resubmit.exists()) {
+          expect((resubmit.element as HTMLButtonElement).disabled).toBe(true)
+      }
+      ```
+
+      Since no such selector exists anywhere in `src/`, `exists()` is `false` and the assertion never executes.
+      The test is titled "does not offer resubmission while the correction is missing a description" — a real
+      FR-026/FR-047 rule — and it would pass identically if the button were present and enabled.
+
+      **This is the same vacuous-assertion defect Phase 36 recorded for the US2 RED state**, in a different
+      file. A conditional assertion around a control that does not exist is not evidence of anything.
+
+      **Acceptance criteria.** Render a resubmission control in the correction form, gated on FR-047's
+      validation rule, and make the assertion unconditional — either the control is absent for an incomplete
+      draft, or it is present and disabled. Note the deliberate wording in the existing comment: the rule is
+      "no *enabled* resubmit control", so the fix is to assert that, not to require a particular selector.
+      If instead the decision is that resubmission belongs to a later task, say so on that task rather than
+      leaving a permanently-satisfied assertion standing in for it. Cross-references: T075, T069, T074, T071,
+      T359, Phase 36.
+
+**What this pass did not find, and why that is worth recording.** The transaction and correction **backend** is
+intact: `ResubmitCorrection` is atomic, idempotency-wrapped, and its tests run. Every finding above is at a
+boundary — a route name, a component boundary, a request header, an authorization predicate, a manifest
+element, a conditional assertion. Phase 55's generalisation extends by one correspondence: **client URL ↔
+transport mechanism**, since a URL reached by browser navigation is not a request and cannot carry the header
+the OCS layer demands. That is why F3 is invisible to both suites at once, and it is a check no suite in this
+repository asserts. No finding here contradicts a constitution principle's letter — F4 violates Principle IV's
+substantive rule and is therefore CRITICAL-adjacent in substance but recorded as HIGH because the work is a
+narrow predicate change rather than a blocked journey. Nothing was deleted, renamed or renumbered; the 70
+tasks that were already unchecked are untouched.
+
+---
+
+## Phase 58: Convergence (six gaps reached only by following the stated scope to its end)
+
+This pass started from the artifacts rather than from a symptom, the way Phase 55 did, and took the
+mechanical route: for every place `spec.md` or `plan.md` names a **surface**, follow the data to the
+end and ask what reads the last field. Six places stop short. None is a constitution violation; all six
+are cases where a requirement or a plan decision is satisfied on one surface and silently not on the
+three the same sentence names.
+
+**What made these findable and what kept them invisible.** F1, F4 and F5 are all cases of a requirement
+that reads as a single sentence and is implemented as a subset of it. F2 and F3 are the inverse: an
+exporter that exists, is mutation-verified, and is checked — and that no route can reach. The suites
+cannot see either shape. `npm run test` is 296/296 and `scripts/dev/phpunit` is 1226 with one known
+failure, because every one of these is an **absence** (a column not rendered, a caller that does not
+exist, an event that is not written) rather than a wrong value, and a green suite is evidence about
+values. Phase 55 recorded that "contract ↔ code" and "client payload key ↔ server payload key" are the
+correspondences with no symptom; this pass adds the third: **"requirement sentence ↔ every surface the
+same sentence names."**
+
+F2 and F3 are the pair worth reading together. `XlsxExporter::completeSheet()` and
+`ExportService::generateZip()` are two complete, tested implementations of two approved export formats,
+and neither has a caller — the same defect Phase 56 recorded as "how the code is loaded," seen here as
+"who asks for it." T108's and T110's notes are accurate about what they built. Neither note says the
+result is unreachable, and a reader who trusts a `[x]` plus "mutation-verified four ways" would
+reasonably conclude the format works. `contracts/exports.md:18,20` lists both under a table of what the
+application produces.
+
+- [ ] T365 [HIGH] Render FR-062's stage-approved columns on the sheet list, the dashboard, and the
+      sheet export rows, because `plan.md:523-525` says the presentation "applies to dashboards, sheet
+      lists, sheet details, and exports" and only the detail view does it
+      (FR-062, `plan.md` Stage-Approved Totals Presentation, `src/views/sheets/SheetListView.vue`,
+      `lib/Controller/ExportController.php`) (`partial`)
+
+      **Measured, surface by surface.** `SheetDetailView.vue:192-204` renders all three — a
+      `data-test="cost-center-approved-total"` chip, `senior-approved-total`, `finance-approved-total` —
+      inside the same `data-test="effective-outcome-total"` group that T282 added to distinguish the
+      latest-effective column from the per-stage ones. That is the whole of FR-062's presentation, and
+      it exists on exactly one surface.
+
+      | Surface `plan.md:523-525` names | State |
+      |---|---|
+      | sheet details | all three columns, T282 |
+      | **sheet lists** | `SheetListView.vue:71` and `:131` render `formatMoney(item.totals.current)` and nothing else |
+      | **dashboards** | `grep -n "totals\|effectiveApproved\|costCenterApproved" src/views/DashboardView.vue src/components/dashboard/*.vue` returns nothing |
+      | **exports** | `ExportController::SHEET_COLUMNS` (`lib/Controller/ExportController.php:61`) is `['id','title','ownerUid','status','currency','submittedTotalMinor','createdAt']` — no `totals` object at all, and `ExportService::columnsOf()` (`:327-341`) derives its columns from that declaration plus the row keys |
+
+      **Why the export half is the load-bearing one rather than cosmetic.** The figures exist and are
+      correct: `SheetPayloadFormatter::totals()` (`:209-217`) emits `costCenterApproved`, `seniorApproved`
+      and `financeApproved` as typed `Money`, `SheetTotals::fromRows()` computes them as independent sums,
+      and `XlsxExporter::COMPLETE_SHEET_COLUMNS['Sheet']` (`:95-97`) already declares
+      `costCenterApprovedMinor`/`seniorApprovedMinor`/`financeApprovedMinor` as `TYPE_NUMBER`. So the
+      **complete-sheet** layout knows about them and the **ordinary** sheet export does not — which is
+      T359's real shape: the richer layout is unreachable (T366) and the reachable one is thinner than
+      the layout it is measured against. T101's note claims "T108's `Sheet` sheet now exports them as
+      typed numeric cells", which is true of `completeSheet()` and false of any artifact a user can
+      actually obtain.
+
+      **Why it shipped.** FR-062's own text is about "sheet summaries," and the detail view's summary
+      renders them. The plan's sentence is the only place the other three surfaces are named, and a
+      requirement's own wording is what a reader checks first — the same artifact-drift shape Phase 55
+      found in the payload keys.
+
+      **Acceptance criteria.** The three stage figures appear on the sheet list and on the dashboard
+      beside the latest-effective column; a sheet export artifact's header row names all three as numeric
+      cells (read the produced workbook back with `PhpSpreadsheet`, as `XlsxExporterTest` already does,
+      rather than asserting on the exporter's own report); and the *dashboard* half needs a decision
+      recorded rather than assumed, because a dashboard card is not a sheet summary and the plan's
+      sentence may be over-broad there. That judgement is not this task's to make silently.
+      Cross-references: T101, T108, T282, T306, T366, T062, T113.
+
+- [ ] T366 [HIGH] Give `XlsxExporter::completeSheet()` a caller, or record that the six-sheet
+      complete-sheet layout is unreachable, because FR-067's "complete sheet export" is implemented and
+      nothing can request it (FR-067, `contracts/exports.md:18`, `lib/Infrastructure/Export/XlsxExporter.php`,
+      `lib/Controller/ExportController.php`) (`missing`)
+
+      **Measured.** `completeSheet()` is declared at `lib/Infrastructure/Export/XlsxExporter.php:172` and
+      its only non-definition references are its own internals plus `tests/Unit/Export/XlsxExporterTest.php`
+      (five call sites) and the real-database `roundtrip-runner.php`. `grep -rn "completeSheet" lib/Controller/`
+      returns **nothing**, and no route in `appinfo/routes.php` names a complete-sheet export.
+      `ExportService::generate()` reaches `generateXlsx($rows, $columns)` (`:266-283`), which builds one
+      `XlsxSheet` named `Rows` from the caller's declared columns — never the six named sheets.
+
+      **What FR-067 asks for.** "A complete sheet export MUST preserve the relationships among sheet
+      information, transactions, decisions, revisions, audit events, and evidence." The six-sheet layout is
+      exactly that: `Sheet`, `Transactions`, `Decisions`, `Revisions`, `Audit`, `Evidence`, declared as
+      `COMPLETE_SHEET_COLUMNS` and built by `completeSheet()`. What `POST /exports` produces for
+      `resource: sheets` is a **single flat row set of seven columns** — no transactions, no decisions,
+      no revisions, no audit, no evidence, and therefore no relationships to preserve. The requirement is
+      unimplementable as the endpoint stands, and the artefact that would satisfy it is fully built.
+
+      **This is the same defect F3 records from the ZIP side, and the two are one root cause:** the
+      export controller resolves **rows** for its subjects and never reaches the two layout builders that
+      exist above it. One fix — giving the controller a subject→layout resolution rather than a
+      subject→columns list — closes both. They are separate tasks because the ZIP additionally needs an
+      `EvidenceArchiveEntry` producer and the complete-sheet layout additionally needs its six
+      projections, and those are different amounts of work on different files.
+
+      **Two directions, and the choice matters.** (a) Wire `resource: sheet` (singular — the contract's
+      enum carries both `sheet` and `sheets`, `ocs-api.yaml:1281` area) to `completeSheet()` with six
+      real projections. This is the honest answer and it is a substantial amount of work: each sheet
+      needs its transactions, decisions, revisions, audit events and evidence assembled per sheet.
+      (b) Amend the contract so `sheets` is the complete-sheet export, or record FR-067 as reachable only
+      through a future capability. (b) contradicts an approved MUST, so (a) is the answer; what is open is
+      scope and ordering, not direction.
+
+      **Acceptance criteria.** `POST /exports` with `resource: sheet` and one sheet id returns a `200`
+      whose artifact, read back, contains the six named sheets with their declared columns and typed
+      numeric cells, and the relationships are verifiable (the same sheet public id, the same revision
+      ids, the same evidence ids appear across sheets). A mutation that drops one projection must fail
+      a named test, since `XlsxExporterTest`'s current coverage proves the layout works but proves
+      nothing about who asks for it.
+      Cross-references: T108, T111, T112, T302, T306, T342, T365, T361.
+
+- [ ] T367 [HIGH] Resolve rows for `resource: evidence` and `resource: audit` so the grouped evidence
+      ZIP and the audit export produce files instead of a 422, because FR-069 and FR-066 name both and
+      `POST /exports` refuses both unconditionally (FR-069, FR-066, FR-074, FR-082,
+      `lib/Controller/ExportController.php`, `lib/Infrastructure/Export/EvidenceArchiveExporter.php`) (`missing`)
+
+      **Measured, and the refusal is total rather than partial.** `ExportController::rowsForSelection()`
+      resolves rows for exactly three resources — `sheet`, `sheets`, `transactions` (`:245-260`). Every
+      other resource takes one of two `throw new UnsupportedSelection(...)` branches: `:262-271` when the
+      caller sent a selection, and `:284-288` when they did not. So `resource: evidence` answers **422 in
+      both cases**, and there is no request shape that produces an artifact.
+
+      **Consequently `generateZip()` is unreachable.** `ExportService::generate()` routes
+      `FORMAT_ZIP => $this->generateZip($entries)` (`:121`), and `$entries` is a parameter the controller
+      always passes as `[]` — `ExportController.php:153` reads
+      `$this->exports->generate($scope, $resource, $fileFormat, $rows, [], $columns)`. Corroborating
+      that the omission is structural rather than a missing one-liner: **`grep -rn "new EvidenceArchiveEntry" lib/`
+      returns nothing.** Nothing in the application constructs the value object, so even removing the
+      refusal would hand `EvidenceArchiveExporter` an empty list and produce a **valid, empty ZIP with an
+      empty manifest** — precisely the "manifest that looks like evidence but is not" failure T110's
+      result object was built to prevent, and T110's own comment at `:291-295` documents having already
+      been bitten by an empty-entries path once.
+
+      **What FR-069 and FR-066 require.** FR-069: "Group evidence exports MUST identify the sheet,
+      transaction, revision relationship, file metadata, and active state for every exported item."
+      FR-066 lists `zip` among the four formats V1 supports. `contracts/exports.md:20` describes ZIP as
+      "Original files plus UTF-8 manifest linking sheet, transaction, revision, and evidence metadata."
+      `EvidenceArchiveExporter` and its manifest already implement all of it, with 41 tests and
+      mutation verification recorded on T110.
+
+      **The client already offers it, and that is why this is HIGH rather than MEDIUM.**
+      `src/types/reporting.ts:149` maps `evidence: ['csv', 'zip']` and `:161` maps `evidence: 'evidence'`.
+      T342's note justifies keeping the offer deliberately — "a refusal the server explains on click
+      tells a user something a silently disabled control does not" — so the choice is recorded and
+      defensible. But a V1 user clicking the evidence ZIP button gets a 422 for a format FR-066 calls
+      supported, and the explanation is that the feature was never built. **The same applies to
+      `audit: ['csv','xlsx','pdf']`** (`:148`), which is FR-066's audit export and is refused identically.
+
+      **Acceptance criteria.** `POST /exports` with `resource: evidence` and a selection of evidence ids
+      returns a `200` whose artifact is a ZIP whose members correspond one-to-one with the manifest rows,
+      and `resource: audit` returns its history rows under the same selection discipline T302/T306
+      established (honoured or refused, never accepted and discarded). The FR-074 100 MB rule must survive
+      the move — T110 treats an oversized file as a **refusal about upload validation**, not as an
+      omission, and that distinction must be asserted at the endpoint rather than only in the exporter's
+      unit tests. A mutation that passes `[]` for entries must fail, since that is the exact shape of the
+      empty-manifest defect.
+      Cross-references: T110, T108, T302, T306, T342, T343, T366, T365.
+
+- [ ] T368 [MEDIUM] Carry each account's movements as data of the `accounts` report row, because FR-065
+      requires "one account per row, carrying that account's balance **and its movements**" and the
+      report carries only the balance (FR-065, `lib/Controller/ReportController.php`,
+      `contracts/ocs-api.yaml`) (`partial`)
+
+      **Measured.** `ReportController::accountsReport()` builds each row as
+      `['id', 'currency', 'userUid', 'balanceMinor', 'active']` (`:355-360`) and declares the columns as
+      exactly that list (`:378`). The controller's constructor (`:77-93`) takes `AccountRepository` and
+      **no** `AccountMovementRepository`, so there is no path by which a movement could reach a row. The
+      movements are reachable, but only one account at a time through
+      `GET /accounts/{accountId}/movements` (`AccountController.php:217-240`), which is the *ledger*
+      endpoint rather than the report.
+
+      **Why the report and not the endpoint is the right reading, and why this is not a naming
+      preference.** The 2026-09-28 clarification settled the question the earlier notes left open:
+      "Should petty-cash balances and movements be their own report types, or data within the existing
+      `accounts` report? → A: Data within the existing `accounts` report; the report-type enum is not
+      extended." FR-065's text then states the shape: "one account per row, carrying that account's
+      balance and its movements." So the enum is settled and settled **against** an eighth type — this
+      task must not add one, and `ReportQuery::SUPPORTED_TYPES` is asserted as the contract's exact seven,
+      so adding one would fail T106's test as well as FR-065's sentence.
+
+      **The shape needs a decision rather than a guess, and the decision is small.** Two readings: a
+      `movements` array nested on each row, or a `movementCount` plus the balance with the ledger
+      reached through the existing per-account endpoint. The first matches FR-065's wording ("carrying
+      … its movements") and matches how the client would render one account with its history; the second
+      is cheaper but is not what the requirement says. Note the interaction with `ReportPage.rows`, which
+      the contract types as `additionalProperties: true` (`ocs-api.yaml:1301`), so **no contract amendment
+      is needed** for either shape — which is why this is MEDIUM and not the HIGH that F3 carries.
+
+      **Acceptance criteria.** `GET /reports/accounts` returns the caller's permitted accounts each
+      carrying its movements, with the scope rules T299/T112 delivered preserved exactly — own accounts,
+      charged accounts for a finance officer, all for an administrator, and the `scope` /
+      `chargedAccountsIncluded` / `chargedAccountCount` summary left intact. A movement belonging to
+      another account, or one beyond the report page bound, must not widen the visible set — the same
+      property `ChargedAccountScope` asserts when an unresolvable account is dropped.
+      Cross-references: T106, T112, T299, T063, T361.
+
+- [ ] T369 [MEDIUM] Write a configuration-audit event for the FR-015 account-funding charge, because
+      FR-055 derives an officer's charged accounts from "account **funding** and balance-charging"
+      events and only the settlement side writes one (FR-055, FR-015, FR-017,
+      `lib/Application/Account/AccountService.php`, `lib/Application/Reporting/ChargedAccountScope.php`) (`partial`)
+
+      **Measured.** `AccountService::charge()` (`lib/Application/Account/AccountService.php:226-289`)
+      performs the full FR-015 write — role gate, account lookup, `expectedVersion` guard, active check,
+      `IdempotencyService::execute()`, movement save, balance update — and writes **no configuration
+      audit event**. `grep -rn "appendConfiguration\|ConfigurationAudit\|CHARGE_EVENT_TYPE" lib/Application/Account/AccountService.php`
+      returns nothing, and `AccountService`'s constructor (`:9-18`) does not take an `AuditWriter`.
+
+      The only producer of `ACCOUNT_CHARGED` is settlement:
+      `FinanceSettlementService.php:294` writes it on approval only. `ChargedAccountScope` reads exactly
+      that constant (`:63`) and derives the whole charged-account set from it.
+
+      **The consequence is concrete and it lands on FR-055's own wording.** FR-055 (clarified
+      2026-09-28) says an officer's charged accounts "are the distinct account subjects of that officer's
+      own **account funding and balance-charging** configuration audit events" — two event kinds, not
+      one. Only the second is written. So an officer who has **funded** an account under FR-015 and whose
+      expense has not yet been settled does not have that account in `chargedAccountDbIds()`, and it is
+      therefore absent from the `accounts` report (`ReportController::accountsReport()`, `:336-345`)
+      and from their configuration-audit visibility. The requirement's clarification anticipates exactly
+      this: "relying on the transaction-audit decision alone would leave this scope empty for every officer
+      who had actually charged an account." The settlement event closed half of that sentence; the
+      funding half is still open.
+
+      **Two design points that are not this task's to decide silently.** (a) Whether funding and
+      settlement share one event type or get two — FR-055 says "an event type outside funding and
+      charging … MUST NOT count," which implies the set is {funding, charging}, so a second constant may
+      be needed rather than reusing `ACCOUNT_CHARGED` for a different business fact.
+      `ConfigurationEventType`'s docblock (`:25-33`) currently records that `ACCOUNT_CHARGED` is
+      deliberately outside that enum because it is reached through its own path, and says the
+      consolidation "belongs with the task that owns those writes" — this may be that task. (b) The
+      funding charge's `after` value: `AccountService::charge()` receives the account **before**
+      `save()`, so a before/after balance pair can be read honestly here, unlike the settlement case that
+      `FinanceSettlementService.php:296-299` explains at length. Do not lose that by copying the
+      settlement payload shape.
+
+      **Acceptance criteria.** After `POST /accounts/{id}/charges` succeeds, a configuration-audit event
+      names that account under the funding event type, and `ChargedAccountScope::chargedAccountDbIds()`
+      includes it **without** any settlement having occurred. The refusal direction holds too: a
+      currency rename, activation or deactivation on the same account must still not count, since that
+      is the distinction `ChargedAccountScopeTest.php:103-108` already asserts for the other event type.
+      FR-055's "an officer with no funding or charging event sees no configuration audit, which is a true
+      zero" must remain a true zero after this change.
+      Cross-references: T294, T299, T085, T086, T291, T369, T362.
+
+- [ ] T370 [MEDIUM] Assert over HTTP that a `COMPLETED` sheet refuses add, edit and submit, because
+      SC-011 says 100% of completed sheets reject those and no contract test drives a completed sheet
+      (FR-044, SC-011, `tests/Contract/Controller/`, `lib/Application/Expense/TransactionService.php`) (`partial`)
+
+      **Measured.** The enforcement exists in three places and none of them is a contract test:
+      `TransactionService.php:91` refuses `Cannot add transactions to a submitted sheet` on any
+      non-`Open` sheet, `:245` refuses an update that is not a correction, `:446` refuses a delete;
+      `SheetService.php:132` refuses a sheet update; and `ExpenseSheet::addTransaction()` (`:62-64`)
+      refuses at the domain level. `SheetCapabilitiesTest.php:114-123` proves the capability set denies
+      `canUpdate`/`canAddTransaction`/`canSubmit` for both `Completed` and `CompletedWithRejections`.
+      `grep -rn "COMPLETED" tests/Contract/Controller/PurchaserFlowControllerTest.php` returns **nothing**;
+      the only two references to a completed sheet anywhere in the contract suite are
+      `FinanceReviewControllerTest.php:365` (asserting the sheet *became* `COMPLETED`) and
+      `ReportAndExportControllerTest.php:985` (a status filter on it).
+
+      **Why this is a test gap and not a code gap, stated so it is not read as a defect.** The guards are
+      written against `status !== Open`, which covers both completed states by construction — there is no
+      code path that could pass a `COMPLETED` sheet. What is unproven is that the *endpoint* refuses it
+      rather than the service being bypassed, which is the shape of assertion SC-011 actually asks for
+      ("100% of completed … sheets reject attempts"). Phase 55's lesson applies: the gap is an absence,
+      so no failing test exists to point at it.
+
+      **There is a second, smaller half, and it is the one that makes this worth a task.** FR-044 says
+      completed sheets are locked "for viewing and reporting **only**." Nothing asserts the permissive
+      half — that a completed sheet still answers `GET /sheets/{id}` and appears in
+      `GET /reports/sheets`. A lock test that only checks refusals would pass for an implementation that
+      simply broke the read path, which is the opposite of the requirement.
+
+      **Fixture note, because it is the reason no such test exists today.**
+      `tests/Contract/Fixture/seed-contract-fixtures.php:689` does seed a `'status' => 'COMPLETED'` sheet,
+      so the state is available without new seeding work; the consumer simply does not exist. If the
+      seeder's completed sheet turns out to be reachable only by a fixture-internal route, prefer
+      settling the real one through the finance decision path the way
+      `FinanceReviewControllerTest::testFinanceApprovalFinalisesTheTransactionAndItsSheet()` already does,
+      because that proves the completion rule itself rather than assuming it.
+
+      **Acceptance criteria.** Over HTTP against a `COMPLETED` sheet, `POST /sheets/{id}/transactions`,
+      `PATCH /sheets/{id}`, `PATCH /transactions/{id}` and `DELETE /transactions/{id}` are each refused
+      with the status the contract declares, and `GET /sheets/{id}` still answers `200`. Repeat the
+      permissive half for `COMPLETED_WITH_REJECTIONS`. Mutating a guard to accept a completed sheet must
+      fail a named test — the capability test alone would not catch it, since it exercises
+      `SheetCapabilities::derive()` rather than the service.
+      Cross-references: T033, T034, T281, T327, T314, T134.

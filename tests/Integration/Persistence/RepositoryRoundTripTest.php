@@ -961,6 +961,144 @@ final class RepositoryRoundTripTest extends TestCase
         $this->assertTrue($command['unknownCommandIdIsNull'], 'an unissued command id must find nothing');
     }
 
+    // ===== T332: `GET /sheets` reports a real `total` =====
+
+    /**
+     * T332: `SheetService::listSheets()`'s `total` is the owner's record count, not the page's length.
+     *
+     * ## The defect
+     *
+     * ```php
+     * // For total count, we need to add a method to the repository
+     * // For now, we'll estimate from the returned items
+     * $total = count($sheets);
+     * ```
+     *
+     * `$sheets` was the already-paged read, so `total` was the page size and nothing else: 26 sheets,
+     * a page of 25, and a response that said the caller held 25 while printing 25 of its own rows.
+     *
+     * ## Why this assertion needs more than one page of sheets
+     *
+     * Below 25 sheets the defect is invisible — `count($sheets)` and the true count coincide, which is
+     * why the whole suite was green and why no fixture-based contract test could have found it. The
+     * scenario therefore writes 26 and reads it back, and the count it is compared with is a `COUNT(*)`
+     * issued as plain SQL against the table, so "the service agrees with the repository" cannot be
+     * satisfied by two halves of the same defect agreeing with each other.
+     */
+    public function testTheSheetListReportsTheOwnersRecordCountAndNotThePageSize(): void
+    {
+        $list = $this->report('sheetlist')['sheetList'];
+
+        $this->assertGreaterThan(
+            $list['pageSize'],
+            $list['written'],
+            'this scenario is only meaningful with more sheets than one page can carry; a fixture that '
+            . 'fits in one page cannot distinguish a page length from a record count'
+        );
+        $this->assertSame(
+            $list['written'],
+            $list['rawOwnerRowCount'],
+            'the probe sheets must actually be in `pettycash_sheets`, or the figures below measure nothing'
+        );
+        $this->assertSame($list['pageSize'], $list['pageOne']['itemCount'], 'the first page must be full');
+        $this->assertSame(
+            $list['written'],
+            $list['pageOne']['total'],
+            '`total` is the owner-scoped record count, not the number of rows on this page'
+        );
+        $this->assertSame(
+            $list['written'],
+            $list['ownerScopedCount'],
+            'the repository count the service reads must equal the table'
+        );
+    }
+
+    /**
+     * Every page of the same scope reports the same `total` — including one past the end.
+     *
+     * The page past the end is the interesting one: its rows are empty, so a `total` taken from them is
+     * zero, and a client that walks forward until it sees an empty page concludes from that number that
+     * it has reached the end of the owner's history. It has; that is the problem. The number beside an
+     * empty page still describes the set the page was drawn from.
+     */
+    public function testTheSheetTotalIsTheOwnersCountOnEveryPageIncludingOnePastTheEnd(): void
+    {
+        $list = $this->report('sheetlist')['sheetList'];
+
+        $this->assertSame($list['pageOne']['total'], $list['pageTwo']['total']);
+        $this->assertSame(
+            $list['pageOne']['total'],
+            $list['pageThree']['total'],
+            'a page past the end carries no rows, but its total still describes the owner\'s whole set'
+        );
+        $this->assertSame(
+            $list['written'] - $list['pageSize'],
+            $list['pageTwo']['itemCount'],
+            'the second page must carry exactly the rows the first one could not'
+        );
+        $this->assertSame(0, $list['pageThree']['itemCount'], 'a page past the end carries no rows');
+    }
+
+    /**
+     * Walking the pages reaches every sheet the owner holds, once each.
+     *
+     * The `total` above says how many rows exist; this says the pages can actually produce them, which
+     * is a separate property — a paged read whose offset drifts repeats rows and drops others while
+     * still reporting the right total. Only detectable by comparing the pages against one unbounded
+     * read of the same scope.
+     */
+    public function testPagingTheSheetListReachesEveryOwnedSheetExactlyOnce(): void
+    {
+        $list = $this->report('sheetlist')['sheetList'];
+
+        $paged = array_merge($list['pageOne']['ids'], $list['pageTwo']['ids']);
+        $owned = $list['everyOwnedId'];
+
+        sort($paged);
+        sort($owned);
+
+        $this->assertSame(
+            array_values(array_unique($paged)),
+            $paged,
+            'a sheet must not appear on two pages, or the pager shows it twice'
+        );
+        $this->assertSame(
+            $owned,
+            $paged,
+            'paging through the list must reach every sheet the owner holds, so no row is dropped '
+            . 'between pages'
+        );
+    }
+
+    /**
+     * The count is scoped, not global and not blind to the predicate it shares with the read.
+     *
+     * Two things are checked, and neither is visible from the unfiltered figure alone. The status-scoped
+     * counts must **partition** the owner's sheets: if the count ignored `status` it would answer 26 for
+     * both, and the sum would be 52 — which is why the assertion is on the sum rather than on either
+     * value. And an owner with no sheets must be answered zero rather than an exception, since that is
+     * what every new purchaser arrives at.
+     */
+    public function testTheSheetCountIsScopedToItsOwnerAndHonoursItsPredicate(): void
+    {
+        $list = $this->report('sheetlist')['sheetList'];
+
+        $this->assertSame(
+            $list['written'],
+            $list['openCount'] + $list['submittedCount'],
+            'the status-scoped counts must partition the owner\'s sheets, so the count filters by the '
+            . 'same predicate its read uses rather than answering one number for any argument'
+        );
+        $this->assertGreaterThan(0, $list['openCount']);
+        $this->assertGreaterThan(0, $list['submittedCount']);
+        $this->assertLessThan($list['written'], $list['openCount'], 'both statuses must be present, or the partition proves nothing');
+        $this->assertSame(
+            0,
+            $list['otherOwnerCount'],
+            'an owner who holds no sheets is answered zero, and is never told about another owner\'s'
+        );
+    }
+
     // ===== HARNESS =====
 
     /**

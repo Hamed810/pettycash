@@ -6,6 +6,8 @@ namespace OCA\PettyCash\AppInfo;
 
 use OCA\PettyCash\Application\Command\CommandResultRepository;
 use OCA\PettyCash\Application\Command\IdempotencyService;
+use OCA\PettyCash\Application\Account\AccountAdministrationService;
+use OCA\PettyCash\Application\Configuration\ConfigurationPayloadFormatter;
 use OCA\PettyCash\Application\Configuration\CostCenterService;
 use OCA\PettyCash\Domain\Shared\Clock;
 use OCA\PettyCash\Application\Port\AdministratorCheck;
@@ -16,6 +18,7 @@ use OCA\PettyCash\Application\Configuration\FinanceAssignmentService;
 use OCA\PettyCash\Application\Expense\SheetService;
 use OCA\PettyCash\Application\Expense\TransactionService;
 use OCA\PettyCash\Application\Evidence\EvidenceService;
+use OCA\PettyCash\Application\Evidence\EvidenceVisibility;
 use OCA\PettyCash\Application\Port\AuditWriter;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Application\Port\PrivateFileStore;
@@ -261,7 +264,13 @@ final class Application extends App implements IBootstrap
             return new SheetPayloadFormatter(
                 $c->query(SheetSummaryQuery::class),
                 $c->query(ExpenseTransactionRepository::class),
-                $c->query(CurrencyRepository::class)
+                $c->query(CurrencyRepository::class),
+                // `SheetSummary.ownerDisplayName` is resolved rather than emitted as a literal, through
+                // the same port `SessionController` resolves the caller's own name through (T340).
+                $c->query(UserDirectory::class),
+                // `SheetDetail.transactions` is `TransactionSummary[]`, formatted by the transaction
+                // formatter rather than by a second private copy of that mapping here.
+                $c->query(TransactionPayloadFormatter::class)
             );
         });
 
@@ -275,6 +284,7 @@ final class Application extends App implements IBootstrap
                 $c->query(CostCenterRepository::class),
                 $c->query(CurrencyRepository::class),
                 $c->query(RoleAssignmentRepository::class),
+                $c->query(ExpenseSheetRepository::class),
                 $c->query(CurrentUser::class)
             );
         });
@@ -382,6 +392,22 @@ final class Application extends App implements IBootstrap
                 $c->query(ConfigurationAuditService::class)
             );
         });
+        // T087. The formatter is registered rather than left to autowiring so that the shape
+        // `contracts/ocs-api.yaml` declares is resolved from one named definition in review, next to the
+        // four services that produce the aggregates it reads.
+        $context->registerService(ConfigurationPayloadFormatter::class, function () {
+            return new ConfigurationPayloadFormatter();
+        });
+        // T085. Depends on `CurrencyService` rather than `CurrencyRepository`: the default rial's *scale*
+        // is configuration (`minor_unit = 0`) and `CurrencyService::defaultRial()` is the one place that
+        // decides so. Querying the repository here would let provisioning read an `IRR` whose scale
+        // nothing has checked.
+        $context->registerService(AccountAdministrationService::class, function ($c) {
+            return new AccountAdministrationService(
+                $c->query(\OCA\PettyCash\Domain\Account\Repository\AccountRepository::class),
+                $c->query(CurrencyService::class)
+            );
+        });
 
         // Application services
         $context->registerService(SheetService::class, function ($c) {
@@ -417,6 +443,18 @@ final class Application extends App implements IBootstrap
                 $c->query(AuditWriter::class),
                 $c->query(UserDirectory::class),
                 $c->query(IdempotencyService::class)
+            );
+        });
+
+        // FR-060 / Constitution IV: who may open a transaction's evidence. Registered as its own
+        // service rather than built inside the controller, because the rule has to be assertable as a
+        // matrix and a private method on the controller is not testable without an `IDBConnection`
+        // (T362). It deliberately does not consult `AuthorizationService::canView()`; see its docblock.
+        $context->registerService(EvidenceVisibility::class, function ($c) {
+            return new EvidenceVisibility(
+                $c->query(AuthorizationService::class),
+                $c->query(RoleAssignmentRepository::class),
+                $c->query(CostCenterRepository::class)
             );
         });
 
@@ -482,8 +520,18 @@ final class Application extends App implements IBootstrap
         // It was a private constant and a private method on `ReportController`, which left the export
         // endpoint free to answer the same filter name differently -- and it did, by ignoring filters
         // entirely. One definition, two callers.
+        //
+        // T329 added the `FilterIdentityResolver` argument: the vocabulary now accepts cost centres and
+        // expense types by **public UUID**, which is what `data-model.md` requires on the wire, and
+        // resolving one to the surrogate key the rows are filtered on is a server responsibility. Both
+        // repositories it needs are registered above.
         $context->registerService(\OCA\PettyCash\Application\Reporting\ReportFilterFactory::class, function ($c) {
-            return new \OCA\PettyCash\Application\Reporting\ReportFilterFactory();
+            return new \OCA\PettyCash\Application\Reporting\ReportFilterFactory(
+                new \OCA\PettyCash\Application\Reporting\FilterIdentityResolver(
+                    $c->get(CostCenterRepository::class),
+                    $c->get(ExpenseTypeRepository::class)
+                )
+            );
         });
 
         $context->registerService(ExportService::class, function ($c) {

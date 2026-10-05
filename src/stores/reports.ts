@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import type { ExportRequest } from '@/types/api'
+import { ApiError, type ExportRequest } from '@/types/api'
 import {
 	REPORT_EXPORT_FORMATS,
 	REPORT_EXPORT_RESOURCE,
@@ -14,6 +14,7 @@ import {
 	REPORT_PAGE_SIZE_DEFAULT,
 	clampPage,
 	clampPageSize,
+	exportArtifactBlob,
 	fetchReport,
 	requestExport,
 } from '@/services/reportsApi'
@@ -51,6 +52,16 @@ export const useReportsStore = defineStore('reports', () => {
 	const error = ref<string | null>(null)
 	const exporting = ref(false)
 	const exportError = ref<string | null>(null)
+	/**
+	 * `fieldErrors` from a refused export, keyed by the field the server named.
+	 *
+	 * `Error.fieldErrors` is the payload FR-023/FR-064 validation messages are read from, and it
+	 * arrives at `ocs.data.error.fieldErrors` (T334). It is kept beside `exportError` rather than
+	 * folded into that string: `exportError` answers *why* the request was refused, this answers
+	 * *which* of the fields the caller sent was unacceptable, and a form can only place the second
+	 * next to its input.
+	 */
+	const exportFieldErrors = ref<Record<string, string[]>>({})
 
 	const reportTypes = REPORT_TYPES
 	const availableFormats = computed<ExportFormat[]>(() => [...REPORT_EXPORT_FORMATS[reportType.value]])
@@ -131,6 +142,7 @@ export const useReportsStore = defineStore('reports', () => {
 
 	function clearExportError(): void {
 		exportError.value = null
+		exportFieldErrors.value = {}
 	}
 
 	/**
@@ -144,21 +156,30 @@ export const useReportsStore = defineStore('reports', () => {
 		}
 		exporting.value = true
 		exportError.value = null
+		exportFieldErrors.value = {}
 		try {
 			const body: ExportRequest = {
 				resource: REPORT_EXPORT_RESOURCE[reportType.value],
-				format,
+				// `fileFormat`, not `format`: the endpoint binds `fileFormat`, and Nextcloud's OCS layer
+				// reserves a request parameter called `format` for envelope selection. Sending `format`
+				// made every export a `422` with `fieldErrors.fileFormat` — see `ExportRequest`.
+				fileFormat: format,
 				reportType: reportType.value,
 				filters: filters.value,
 			}
-			const blob = await requestExport(body)
+			const result = await requestExport(body)
 			return {
-				blob,
+				// The artifact, decoded out of the OCS envelope and re-typed by the server's own
+				// `mediaType`. Returning the envelope bytes would save a file whose contents are JSON.
+				blob: exportArtifactBlob(result),
 				format,
 				filename: exportFilename(format),
 			}
 		} catch (e: unknown) {
 			exportError.value = e instanceof Error ? e.message : 'pettycash.error.export'
+			// Read straight off the envelope rather than parsed out of the message: the server names
+			// the offending field and this is the only place that name arrives intact.
+			exportFieldErrors.value = e instanceof ApiError ? { ...e.body.fieldErrors } : {}
 			throw e
 		} finally {
 			exporting.value = false
@@ -183,6 +204,7 @@ export const useReportsStore = defineStore('reports', () => {
 		error,
 		exporting,
 		exportError,
+		exportFieldErrors,
 		availableFormats,
 		hasRows,
 		isEmpty,

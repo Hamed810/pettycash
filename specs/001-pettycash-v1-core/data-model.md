@@ -417,15 +417,32 @@ all active nonterminal revisions have progressed beyond it.
 
 ### Sheet Status Derivation
 
-1. `OPEN`: sheet has never been submitted.
-2. `AWAITING_COST_CENTER_REVIEW`: at least one active nonterminal revision lacks a current cost
-   center decision, including a corrected revision.
-3. `AWAITING_SENIOR_REVIEW`: every active nonterminal revision has a cost center decision and at
-   least one lacks a senior decision.
-4. `AWAITING_FINANCE_REVIEW`: every active nonterminal revision has a senior decision and at least
-   one lacks a finance decision.
-5. `COMPLETED`: every transaction is terminal and none is finally rejected.
-6. `COMPLETED_WITH_REJECTIONS`: every transaction is terminal and at least one is finally rejected.
+The sheet's status is the **earliest stage still outstanding** across its active nonterminal
+revisions. It is a derivation, not a gate: a transaction enters and leaves its queue on its own
+decision, and no transaction blocks another. The statuses below are `SheetStatus` values as
+declared in `lib/Domain/Workflow/SheetStatus.php` — the `AWAITING_*` names in the transaction
+state machine above are `TransactionStatus` values and are **not** sheet statuses.
+
+1. `OPEN`: sheet has never been submitted, or a revision is still a draft.
+2. `COST_CENTER`: at least one active nonterminal revision is at the cost center stage, including a
+   freshly corrected revision that has restarted review there.
+3. `CORRECTION`: no revision is at cost center, and at least one is awaiting purchaser correction.
+4. `SENIOR`: every active nonterminal revision has a cost center decision and at least one lacks a
+   senior decision.
+5. `FINANCE`: every active nonterminal revision has a senior decision and at least one lacks a
+   finance decision.
+6. `COMPLETED`: every transaction is terminal and none is finally rejected.
+7. `COMPLETED_WITH_REJECTIONS`: every transaction is terminal and at least one is finally rejected.
+
+The stage ranking behind the derivation is `Draft 0, CostCenter 1, Correction 2, Senior 3,
+Finance 4, Final 5`, and the sheet takes the minimum. `CORRECTION` therefore outranks `SENIOR` and
+`FINANCE`: a sheet with one transaction awaiting purchaser correction displays `CORRECTION` **even
+when another transaction is already at finance**. That is intended, and it is what
+`tests/Integration/Workflow/TransactionCorrectionTest.php` asserts.
+
+Both a senior approval and a senior rejection count as a senior decision for rule 5, because a
+senior-rejected transaction still enters the finance queue (FR-039 forbids finance from approving
+it, not from seeing it). Completion under rules 6 and 7 is FR-043's rule and is the only true gate.
 
 `SUBMITTED` is the atomic milestone and first audit event between `OPEN` and initial routing, not a
 long-lived sheet status. Returned transactions are surfaced separately in purchaser work queues;

@@ -35,6 +35,11 @@ export const DASHBOARD_ROLE_FOR_SESSION_ROLE: Record<Role, DashboardRole> = {
  * review queues, decision counts, finance work, balances, movements, and administrative summaries.
  * A fixed client-side shape would therefore be a guess at T106's output that could contradict it, so
  * the bucket is read as the open object the contract declares and every key it carries is rendered.
+ *
+ * The bucket is an *envelope* around those figures, not a flat map of them:
+ * `DashboardController::card()` returns `{ userId, figures, figuresBoundedBy, figuresTruncated }`.
+ * `DASHBOARD_FIGURES_KEY` names where the figures sit and `DASHBOARD_NOTE_KEYS` names the keys around
+ * them, both read off the controller rather than guessed from the contract's silence.
  */
 export type DashboardBucket = Record<string, unknown>
 
@@ -63,8 +68,24 @@ export interface DashboardMetric {
 	boolean?: boolean
 }
 
-/** One role's card: the bucket's role and the metrics derived from its contents. */
+/**
+ * One line of a role card that is **not** a figure.
+ *
+ * `DashboardController::card()` answers each bucket as an envelope around the figures: the acting
+ * `userId`, a `figures` object, the read-window `figuresBoundedBy` the figures were computed under,
+ * and whether `figuresTruncated` says there may be more behind that window. The last three are
+ * identity and caveat, not measurements, and giving them a figure's presentation made the bound —
+ * 100, on every card — the largest number on it.
+ *
+ * A note carries the same value-type discrimination a metric does, because `figuresBoundedBy` is a
+ * number and `figuresTruncated` a boolean and both have to obey the rendering rules. What it does not
+ * carry is the headline treatment: the card renders notes in a separate list.
+ */
+export type DashboardNote = DashboardMetric
+
+/** One role's card: the bucket's role, the figures it holds, and the envelope it arrived in. */
 export interface DashboardCard {
 	role: DashboardRole
 	metrics: DashboardMetric[]
+	notes: DashboardNote[]
 }

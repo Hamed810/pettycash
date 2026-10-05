@@ -7,11 +7,9 @@ import type {
 	Revision,
 	Decision,
 	Evidence,
-	TransactionFilters,
 	CommandOptions
 } from '../types/api'
 import {
-	listTransactions,
 	createTransaction,
 	getTransaction,
 	updateTransaction,
@@ -24,6 +22,17 @@ import {
 } from '../services/transactionsApi'
 
 export const useTransactionStore = defineStore('transactions', () => {
+	/**
+	 * A sheet's transactions, as they arrive on the sheet payload.
+	 *
+	 * There is deliberately no loader in this store. `GET /sheets/{sheetId}/transactions` was never
+	 * routed, so the call this store used to make answered `405` with an empty body and left this
+	 * array permanently empty on every screen that read it — a purchaser could save a draft
+	 * transaction and never see it. `contracts/ocs-api.yaml` carries the same data on
+	 * `SheetDetail.transactions`, so `useSheetStore` is the single source and both views read it from
+	 * there. This ref remains only so a mutation that happens without a sheet reload still has
+	 * somewhere to record itself; nothing renders it.
+	 */
 	const transactions = ref<TransactionSummary[]>([])
 	const currentTransaction = ref<TransactionDetail | null>(null)
 	const revisions = ref<Revision[]>([])
@@ -31,31 +40,8 @@ export const useTransactionStore = defineStore('transactions', () => {
 	const evidence = ref<Evidence[]>([])
 	const loading = ref(false)
 	const error = ref<string | null>(null)
-	const pagination = ref({ page: 1, pageSize: 25, total: 0 })
-	const filters = ref<TransactionFilters>({})
 
 	function resetError() { error.value = null }
-
-	async function loadTransactions(sheetId: string, params: { page?: number; pageSize?: number; filters?: TransactionFilters } = {}) {
-		loading.value = true
-		resetError()
-		try {
-			const { page = 1, pageSize = 25, filters: newFilters } = params
-			if (newFilters) filters.value = newFilters
-			pagination.value.page = page
-			pagination.value.pageSize = pageSize
-
-			const response = await listTransactions(sheetId, { page, pageSize, filters: filters.value })
-			transactions.value = response.items
-			pagination.value.total = response.total
-		} catch (e: unknown) {
-			const err = e as Error
-			error.value = err.message ?? 'Failed to load transactions'
-			throw e
-		} finally {
-			loading.value = false
-		}
-	}
 
 	async function loadTransaction(transactionId: string) {
 		loading.value = true
@@ -97,10 +83,10 @@ export const useTransactionStore = defineStore('transactions', () => {
 		loading.value = true
 		resetError()
 		try {
-			const tx = await createTransaction(sheetId, data, options)
-			transactions.value.unshift(tx)
-			pagination.value.total += 1
-			return tx
+			// The created transaction is returned rather than pushed into `transactions`: the sheet
+			// payload is where the list comes from, and `SheetDetailView` reloads the sheet after a
+			// save. Appending here as well would leave two copies with no rule for which one wins.
+			return await createTransaction(sheetId, data, options)
 		} catch (e: unknown) {
 			const err = e as Error
 			error.value = err.message ?? 'Failed to create transaction'
@@ -133,8 +119,6 @@ export const useTransactionStore = defineStore('transactions', () => {
 		resetError()
 		try {
 			await deleteTransaction(transactionId, expectedVersion, options)
-			transactions.value = transactions.value.filter(t => t.id !== transactionId)
-			pagination.value.total = Math.max(0, pagination.value.total - 1)
 			if (currentTransaction.value?.id === transactionId) currentTransaction.value = null
 		} catch (e: unknown) {
 			const err = e as Error
@@ -145,15 +129,30 @@ export const useTransactionStore = defineStore('transactions', () => {
 		}
 	}
 
+	/**
+	 * Record a decision and write the returned `transaction` into the store.
+	 *
+	 * **The decision itself is returned, not the transaction (T344).** This used to be typed and behaved
+	 * as if the endpoint answered `TransactionDetail`, which is what the unrouted, dead
+	 * `TransactionController::decide()` returned; `review#decide` — the route that serves this path —
+	 * answers `DecisionResult`, so the store was writing a whole transaction where the decision was and
+	 * no caller could read the decision or the account effect at all. Writing `result.transaction` makes
+	 * the store incapable of the old mistake: there is no bare transaction in scope to write.
+	 *
+	 * Still exported with **no consumer in `src/`** — `DecisionForm.vue` calls `reviewsStore.recordDecision`.
+	 * That is recorded rather than hidden: the export exists so the decision path has one owner, and the
+	 * route-dispatch check now proves the endpoint it addresses is the one the server serves.
+	 */
 	async function submitDecision(transactionId: string, decision: 'APPROVE' | 'REJECT' | 'RETURN', explanation: string | undefined, expectedVersion: number, options: CommandOptions = {}) {
 		loading.value = true
 		resetError()
 		try {
-			const tx = await submitTransactionDecision(transactionId, decision, explanation, expectedVersion, options)
+			const result = await submitTransactionDecision(transactionId, decision, explanation, expectedVersion, options)
+			const updated = result.transaction
 			const index = transactions.value.findIndex(t => t.id === transactionId)
-			if (index !== -1) transactions.value[index] = tx
-			if (currentTransaction.value?.id === transactionId) currentTransaction.value = tx
-			return tx
+			if (index !== -1) transactions.value[index] = updated
+			if (currentTransaction.value?.id === transactionId) currentTransaction.value = updated
+			return result
 		} catch (e: unknown) {
 			const err = e as Error
 			error.value = err.message ?? 'Failed to submit decision'
@@ -208,9 +207,6 @@ export const useTransactionStore = defineStore('transactions', () => {
 		evidence,
 		loading,
 		error,
-		pagination,
-		filters,
-		loadTransactions,
 		loadTransaction,
 		loadRevisions,
 		loadAudit,

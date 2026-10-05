@@ -36,7 +36,7 @@ declare(strict_types=1);
  * Usage (from the app root, inside the container):
  *   php tests/Integration/Persistence/roundtrip-runner.php <scenario>
  *
- * Scenarios: configuration | account | expense | command
+ * Scenarios: configuration | account | expense | command | retention | appdata | exportservice | sheetlist
  */
 
 if (PHP_SAPI !== 'cli') {
@@ -52,11 +52,20 @@ if (!is_file($nextcloudRoot . '/lib/base.php')) {
 
 require_once $nextcloudRoot . '/lib/base.php';
 
-// The app's own composer autoloader. Nextcloud core loads `<app>/vendor/autoload.php` for every enabled
-// app (OC_App::registerAutoloading), which is why the app can use PhpSpreadsheet under Apache. This
-// runner bypasses that machinery by loading `lib/base.php` directly, so without this line any scenario
-// touching a third-party class dies on "Class ... not found" — which is what the exportservice scenario
-// did when it reached XlsxExporter, on a class that demonstrably works in the real runtime.
+// The app's own composer autoloader, required here rather than inherited.
+//
+// T345 corrected this comment, which previously claimed "Nextcloud core loads `<app>/vendor/autoload.php`
+// for every enabled app (OC_App::registerAutoloading), which is why the app can use PhpSpreadsheet under
+// Apache". That was false, and it was the premise the defect rested on. `registerAutoloading()` probes
+// `<app>/composer/autoload.php` and never `<app>/vendor/autoload.php`, so PhpSpreadsheet was reachable in
+// this runner and in every PHPUnit process — both of which load it by hand — and unreachable from the
+// deployed app, where every XLSX export answered 500.
+//
+// So the asymmetry is the point, and it is why this line is not redundant: this runner bypasses the
+// AppFramework bootstrap by loading `lib/base.php` directly and therefore does not get
+// `composer/autoload.php` either, while a real request does. Any scenario touching a third-party class
+// dies on "Class ... not found" without this line, on a class that works in the real runtime for a reason
+// this runner does not share.
 $appVendor = __DIR__ . '/../../../vendor/autoload.php';
 if (is_file($appVendor)) {
     require_once $appVendor;
@@ -75,12 +84,14 @@ use OCA\PettyCash\Domain\Evidence\Evidence;
 use OCA\PettyCash\Domain\Evidence\EvidenceLink;
 use OCA\PettyCash\Domain\Expense\ExpenseSheet;
 use OCA\PettyCash\Domain\Expense\ExpenseTransaction;
+use OCA\PettyCash\Domain\Expense\SheetListFilter;
 use OCA\PettyCash\Domain\Expense\TransactionRevision;
 use OCA\PettyCash\Domain\Shared\Enum\AuditEventType;
 use OCA\PettyCash\Domain\Shared\Enum\Role;
 use OCA\PettyCash\Domain\Shared\Money;
 use OCA\PettyCash\Domain\Shared\Uuid;
 use OCA\PettyCash\Domain\Workflow\Decision;
+use OCA\PettyCash\Domain\Workflow\SheetStatus;
 use OCA\PettyCash\Domain\Workflow\WorkflowDecision;
 use OCA\PettyCash\Domain\Workflow\WorkflowStage;
 use OCA\PettyCash\Infrastructure\Nextcloud\NextcloudCurrentUser;
@@ -94,6 +105,7 @@ use OCA\PettyCash\Infrastructure\Persistence\Configuration\DbCurrencyRepository;
 use OCA\PettyCash\Application\Configuration\CostCenterService;
 use OCA\PettyCash\Application\Configuration\CurrencyService;
 use OCA\PettyCash\Application\Configuration\ExpenseTypeService;
+use OCA\PettyCash\Application\Expense\SheetService;
 use OCA\PettyCash\Application\Audit\AuditWriterService;
 use OCA\PettyCash\Application\Audit\ConfigurationAuditService;
 use OCA\PettyCash\Application\Configuration\FinanceAssignmentService;
@@ -103,6 +115,7 @@ use OCA\PettyCash\Infrastructure\Persistence\Configuration\DbExpenseTypeReposito
 use OCA\PettyCash\Infrastructure\Persistence\Configuration\DbRoleAssignmentRepository;
 use OCA\PettyCash\Infrastructure\Persistence\NextcloudTransactionManager;
 use OCA\PettyCash\Tests\TestDoubles\FailingAuditWriter;
+use OCA\PettyCash\Tests\TestDoubles\InMemoryCurrentUser;
 use OCA\PettyCash\Infrastructure\Persistence\Evidence\DbEvidenceLinkRepository;
 use OCA\PettyCash\Infrastructure\Persistence\Evidence\DbEvidenceRepository;
 use OCA\PettyCash\Infrastructure\Persistence\Expense\DbExpenseSheetRepository;
@@ -117,8 +130,38 @@ use OCP\IUserSession;
 
 require_once __DIR__ . '/../../Support/LeakedRows.php';
 
+/**
+ * The owner the `sheetlist` scenario's rows belong to.
+ *
+ * Deliberately not `$actorUid`. `employee1` is the user `ContractFixtures` seeds, so an owner-scoped
+ * count taken over it is the fixture's sheets plus this scenario's, and the figure would then depend on
+ * which scenario ran before it. A probe owner makes the owner scope exactly what this scenario wrote,
+ * which is what lets the count be asserted as an exact number instead of as a comparison between two
+ * answers that could be wrong together.
+ *
+ * `pettycash_sheets.owner_uid` is a plain 64-character column with no foreign key, so a uid that names
+ * no Nextcloud user is a legal value and is what this probe needs.
+ */
+const PROBE_OWNER_UID = 't332-sheet-list-probe';
+
+/**
+ * The owner the filter probes' rows belong to.
+ *
+ * Separate from {@see PROBE_OWNER_UID} on purpose. That owner's 26 sheets are one currency and two
+ * statuses written in the same second, which is what makes the paging figures exact; the filter probes
+ * need a *second* currency and a sheet that was created on a *different day*, and adding those to the
+ * same owner would change `written` out from under four assertions written against it.
+ *
+ * Declared here, beside {@see PROBE_OWNER_UID} and above the dispatch, rather than beside the
+ * scenario that reads it. PHP executes a top-level `const` as an ordinary statement in file order, so a
+ * constant declared after the `$scenario` dispatch below is still undefined when the scenario runs --
+ * and it fails as `Undefined constant` from inside the scenario, which reads like a missing import
+ * rather than an ordering mistake. Every constant this runner uses has to precede line 137.
+ */
+const T333_FILTER_PROBE_UID = 't333-sheet-filter-probe';
+
 $scenario = $argv[1] ?? '';
-$scenarios = ['configuration', 'account', 'expense', 'command', 'retention', 'appdata', 'exportservice'];
+$scenarios = ['configuration', 'account', 'expense', 'command', 'retention', 'appdata', 'exportservice', 'sheetlist'];
 if (!in_array($scenario, $scenarios, true)) {
     fwrite(STDERR, 'Unknown scenario ' . var_export($scenario, true) . '; expected one of ' . implode(', ', $scenarios) . ".\n");
     exit(1);
@@ -305,6 +348,24 @@ $surrogateIdOfCurrency = static function (string $code) use ($db): int {
 };
 
 /**
+ * How many rows `pettycash_sheets` holds for one owner, counted by SQL rather than by the repository.
+ *
+ * Built here and passed in like `$surrogateIdOf`, because the scenario has no `$db`. It exists so T332's
+ * `total` is checked against the table and not against the code under test: an assertion of the form
+ * "`listSheets()` agrees with `countByOwnerUid()`" would be satisfied by any implementation that got
+ * both halves of the same defect wrong in the same way, which is precisely what the original
+ * `count($sheets)` estimate was.
+ */
+$rawOwnerSheetCount = static function (string $ownerUid) use ($db): int {
+    $qb = $db->getQueryBuilder();
+    $qb->select($qb->func()->count('*', 'raw_sheet_count'))
+        ->from('pettycash_sheets')
+        ->where($qb->expr()->eq('owner_uid', $qb->createNamedParameter($ownerUid)));
+
+    return (int) $qb->executeQuery()->fetchOne();
+};
+
+/**
  * Short, column-safe natural keys, so repeated or concurrent runs cannot collide.
  *
  * The currency code is three uppercase letters and nothing else — `Currency::create()` rejects
@@ -417,6 +478,45 @@ try {
         'retention' => scenarioRetention($auditEvents, $db, $actorUid, $now, $track, $surrogateIdOf),
         'appdata' => scenarioAppDataExportStore(),
         'exportservice' => scenarioExportService(),
+        // T332: `GET /sheets` reported the length of the page it had just read as `total`. The
+        // service is the real one over the real repository, and the identity is an `InMemoryCurrentUser`
+        // naming a probe owner, so the owner's sheet count is exactly what this scenario wrote --
+        // `employee1`, the user the contract fixtures seed, would make every figure depend on which
+        // fixtures happened to exist when the suite ran.
+        'sheetlist' => scenarioSheetList(
+            $currencies,
+            $accounts,
+            $sheets,
+            (new SheetService($sheets, $accounts, new InMemoryCurrentUser(PROBE_OWNER_UID), $transactionManager)),
+            // T333's date facet compares a `created_at` written by `save()` (always `now()`) against a
+            // back-dated one, so the scenario needs the same instant the dispatch stamped. Passing it
+            // explicitly, as every other scenario does, is what keeps the two dates on one clock: read
+            // from `new DateTimeImmutable` a second time, a boundary that crosses midnight mid-scenario
+            // would make the fixtures disagree with the assertions.
+            $now,
+            $track,
+            $surrogateIdOfCurrency,
+            $currencyCode,
+            $rawOwnerSheetCount,
+            // T333 needs a sheet created on a different day, and `DbExpenseSheetRepository::save()` stamps
+            // `created_at` with `now()` on every insert. Back-dating one row by SQL is the only way to
+            // get a date facet whose two bounds disagree; a fixture whose rows all share one timestamp
+            // cannot tell `from` from `to`, and both could be wrong in the same direction.
+            static function (int $sheetDbId, string $createdAt) use ($db): void {
+                $qb = $db->getQueryBuilder();
+                $qb->update('pettycash_sheets')
+                    ->set('created_at', $qb->createNamedParameter($createdAt))
+                    ->where($qb->expr()->eq('id', $qb->createNamedParameter($sheetDbId)))
+                    ->executeStatement();
+            },
+            // A second `SheetService` over the same repositories, reading as a different owner.
+            static fn (string $ownerUid): SheetService => new SheetService(
+                $sheets,
+                $accounts,
+                new InMemoryCurrentUser($ownerUid),
+                $transactionManager
+            )
+        ),
     };
 } catch (Throwable $e) {
     fwrite(STDERR, $e::class . ': ' . $e->getMessage() . "\n" . $e->getTraceAsString() . "\n");
@@ -2468,6 +2568,261 @@ function scenarioExportService(): array
  * `OC\Files\AppData\AppData`, which is not an instance of the `OCP\Files\AppData\IAppData`
  * interface, so hinting the interface makes the helper uncallable from the only place it is used.
  */
+/**
+ * T332: `SheetService::listSheets()` over the real repository, asked for more than one page.
+ * T333: the same service asked for the four facets FR-064 names.
+ *
+ * ## Why this scenario exists separately from `expense`
+ *
+ * `expense` writes one sheet. One sheet is a single page, so every `total` derived from that page is
+ * arithmetically indistinguishable from the owner's real count -- which is why the defect survived
+ * there and why a fixture-driven contract test cannot catch it either. The count is only observable
+ * when the owner holds more sheets than a page can carry, so this scenario writes 26 and reads two
+ * pages.
+ *
+ * ## What is measured, and against what
+ *
+ * The pages and their `total` come from the real `SheetService` over the real
+ * `DbExpenseSheetRepository`. The count they are compared against is a plain `COUNT(*)` over the table
+ * (`$rawOwnerSheetCount`), not the repository's own count: an assertion of the form "the service agrees
+ * with the repository" would be satisfied by two halves of the same defect agreeing with each other,
+ * and that is exactly the shape the original `count($sheets)` estimate had.
+ *
+ * ## Why a probe owner
+ *
+ * See `PROBE_OWNER_UID`. The count is an exact number rather than a comparison, because nothing else
+ * in this shared instance owns those rows.
+ *
+ * ## Why the facets are measured here rather than only in a contract test
+ *
+ * A facet that reaches SQL as a named parameter is not the same question as a facet compared in PHP.
+ * The currency facet is a **join** to `pettycash_currencies` and the date bounds are
+ * `PARAM_DATETIME` comparisons against a `DATETIME` column, and both can be wrong in ways an
+ * in-memory double cannot reproduce: a `createNamedParameter()` that silently emits an unbound token, a
+ * `to` bound read as midnight and excluding every row created during the day it names, a joined `*`
+ * that becomes ambiguous. Only this scenario runs the real statement.
+ *
+ * ## What it still does not do
+ *
+ * It does not bind the query parameters through HTTP, so the transport half -- that `status`, `currency`,
+ * `from` and `to` arrive under those names at all, and that an unrecognised value is refused -- is
+ * measured by the contract suite. This block answers the narrower question of what the repository does
+ * with a filter once it has one.
+ */
+function scenarioSheetList(
+    DbCurrencyRepository $currencies,
+    DbAccountRepository $accounts,
+    DbExpenseSheetRepository $sheets,
+    SheetService $sheetService,
+    DateTimeImmutable $now,
+    callable $track,
+    callable $surrogateIdOfCurrency,
+    callable $currencyCode,
+    callable $rawOwnerSheetCount,
+    callable $backdateCreatedAt,
+    callable $sheetServiceFor
+): array {
+    $code = $currencyCode();
+    $currencies->save(Currency::create($code, 'Round Trip Sheet List Currency', 0));
+    $track('pettycash_currencies', $surrogateIdOfCurrency($code));
+    $currency = $currencies->findByCode($code);
+
+    $account = PettyCashAccount::create((string) Uuid::random(), PROBE_OWNER_UID, $currency);
+    $accounts->save($account);
+    $track('pettycash_accounts', (int) $account->dbId);
+
+    // 26 sheets for one owner against a page size of 25: one full page, one row beyond it, and a
+    // second page that exists but holds a single row. The two statuses are what let the count's
+    // predicate be checked as well as its result -- a count that ignored `status` would still answer
+    // the right number for an unfiltered request.
+    $pageSize = 25;
+    $written = 26;
+    $open = 20;
+    for ($i = 0; $i < $written; $i++) {
+        $sheet = new ExpenseSheet(
+            (string) Uuid::random(),
+            PROBE_OWNER_UID,
+            $account->id,
+            $account->currencyCode(),
+            $i < $open ? SheetStatus::Open : SheetStatus::CostCenter,
+            title: LeakedRows::ROUND_TRIP_SHEET_TITLE
+        );
+        $sheets->save($sheet);
+        $track('pettycash_sheets', (int) $sheet->dbId);
+    }
+
+    /** One page as the service answered it, flattened for the JSON report. */
+    $pageOf = static function (array $page): array {
+        return [
+            'itemCount' => count($page['items']),
+            'total' => $page['total'],
+            'ids' => array_map(static fn (ExpenseSheet $s): string => $s->id, $page['items']),
+        ];
+    };
+
+    $pageOne = $pageOf($sheetService->listSheets(1, $pageSize));
+    $pageTwo = $pageOf($sheetService->listSheets(2, $pageSize));
+    // Past the end. Its rows are empty, but its `total` is not: this is the case that used to report
+    // zero, because a total taken from an empty page is zero, and it is the shape a client reads when
+    // it asks for the page after the last one.
+    $pageThree = $pageOf($sheetService->listSheets(3, $pageSize));
+
+    $everyOwned = $sheets->findByOwnerUid(PROBE_OWNER_UID, null, 0, $written * 4);
+    $otherOwner = $sheets->countByOwnerUid('t332-sheet-list-other-owner');
+
+    // ===== T333: the FR-064 facets, over the same real statement =====
+
+    // Two currencies, because a currency facet measured against a single currency cannot distinguish
+    // "filtered" from "matched everything": every sheet would carry the same code.
+    $firstCode = $code;
+    $secondCode = $currencyCode();
+    while ($secondCode === $firstCode) {
+        $secondCode = $currencyCode();
+    }
+    $currencies->save(Currency::create($secondCode, 'Round Trip Second Sheet Currency', 0));
+    $track('pettycash_currencies', $surrogateIdOfCurrency($secondCode));
+    $secondCurrency = $currencies->findByCode($secondCode);
+
+    // One account per currency. The sheet's currency is a property of the sheet, but its `account_id`
+    // is a separate column, and a sheet pointing at an account denominated in something else is exactly
+    // the inconsistency `ExpenseSheet` refuses at the aggregate boundary -- so each sheet's account
+    // carries its own currency.
+    $firstAccount = PettyCashAccount::create((string) Uuid::random(), T333_FILTER_PROBE_UID, $currency);
+    $accounts->save($firstAccount);
+    $track('pettycash_accounts', (int) $firstAccount->dbId);
+
+    $secondAccount = PettyCashAccount::create((string) Uuid::random(), T333_FILTER_PROBE_UID, $secondCurrency);
+    $accounts->save($secondAccount);
+    $track('pettycash_accounts', (int) $secondAccount->dbId);
+
+    // Four sheets that between them make every facet two-sided: a status with two members on each side,
+    // a currency with three and one, and a creation day with three today and one yesterday.
+    $openToday = new ExpenseSheet(
+        (string) Uuid::random(),
+        T333_FILTER_PROBE_UID,
+        $firstAccount->id,
+        $firstAccount->currencyCode(),
+        SheetStatus::Open,
+        title: LeakedRows::ROUND_TRIP_SHEET_TITLE
+    );
+    $sheets->save($openToday);
+    $track('pettycash_sheets', (int) $openToday->dbId);
+
+    $costCenterToday = new ExpenseSheet(
+        (string) Uuid::random(),
+        T333_FILTER_PROBE_UID,
+        $firstAccount->id,
+        $firstAccount->currencyCode(),
+        SheetStatus::CostCenter,
+        title: LeakedRows::ROUND_TRIP_SHEET_TITLE
+    );
+    $sheets->save($costCenterToday);
+    $track('pettycash_sheets', (int) $costCenterToday->dbId);
+
+    $costCenterYesterday = new ExpenseSheet(
+        (string) Uuid::random(),
+        T333_FILTER_PROBE_UID,
+        $firstAccount->id,
+        $firstAccount->currencyCode(),
+        SheetStatus::CostCenter,
+        title: LeakedRows::ROUND_TRIP_SHEET_TITLE
+    );
+    $sheets->save($costCenterYesterday);
+    $track('pettycash_sheets', (int) $costCenterYesterday->dbId);
+    // Back-dated by SQL because `save()` always stamps `now`: a date facet measured only against rows
+    // created in the same second cannot tell `from` from `to` apart, and both bounds could be wrong in
+    // the same direction.
+    $backdateCreatedAt((int) $costCenterYesterday->dbId, $now->modify('-1 day')->format('Y-m-d H:i:s'));
+
+    $openInOtherCurrency = new ExpenseSheet(
+        (string) Uuid::random(),
+        T333_FILTER_PROBE_UID,
+        $secondAccount->id,
+        $secondAccount->currencyCode(),
+        SheetStatus::Open,
+        title: LeakedRows::ROUND_TRIP_SHEET_TITLE
+    );
+    $sheets->save($openInOtherCurrency);
+    $track('pettycash_sheets', (int) $openInOtherCurrency->dbId);
+
+    $today = $now->format('Y-m-d');
+    $yesterday = $now->modify('-1 day')->format('Y-m-d');
+    $tomorrow = $now->modify('+1 day')->format('Y-m-d');
+
+    $filteredService = $sheetServiceFor(T333_FILTER_PROBE_UID);
+    $facet = static function (?SheetListFilter $filter) use ($filteredService): array {
+        $page = $filteredService->listSheets(1, 25, $filter);
+
+        return [
+            'total' => $page['total'],
+            'ids' => array_map(static fn (ExpenseSheet $s): string => $s->id, $page['items']),
+        ];
+    };
+
+    return [
+        'sheetList' => [
+            'written' => $written,
+            'pageSize' => $pageSize,
+            // The table, by SQL.
+            'rawOwnerRowCount' => $rawOwnerSheetCount(PROBE_OWNER_UID),
+            // The same question through the repository's count.
+            'ownerScopedCount' => $sheets->countByOwnerUid(PROBE_OWNER_UID),
+            'openCount' => $sheets->countByOwnerUid(PROBE_OWNER_UID, new SheetListFilter(SheetStatus::Open)),
+            'submittedCount' => $sheets->countByOwnerUid(PROBE_OWNER_UID, new SheetListFilter(SheetStatus::CostCenter)),
+            // An owner with no sheets at all. Zero, not an exception: every new purchaser arrives here.
+            'otherOwnerCount' => $otherOwner,
+            'pageOne' => $pageOne,
+            'pageTwo' => $pageTwo,
+            'pageThree' => $pageThree,
+            'everyOwnedId' => array_map(static fn (ExpenseSheet $s): string => $s->id, $everyOwned),
+        ],
+        'sheetFacets' => [
+            // The known shape of the probe set, reported rather than assumed, so the facet assertions
+            // below are checked against what was written and not against this file's own arithmetic.
+            'owner' => T333_FILTER_PROBE_UID,
+            'firstCurrency' => (string) $firstAccount->currencyCode(),
+            'secondCurrency' => (string) $secondAccount->currencyCode(),
+            'written' => 4,
+            'today' => $today,
+            'yesterday' => $yesterday,
+            'openToday' => $openToday->id,
+            'costCenterToday' => $costCenterToday->id,
+            'costCenterYesterday' => $costCenterYesterday->id,
+            'openInOtherCurrency' => $openInOtherCurrency->id,
+            'all' => $facet(null),
+            'statusOpen' => $facet(new SheetListFilter(SheetStatus::Open)),
+            'statusCostCenter' => $facet(new SheetListFilter(SheetStatus::CostCenter)),
+            // Nothing matches, which is the case a filter-appears-to-work test cannot distinguish from a
+            // filter that was ignored.
+            'statusCompleted' => $facet(new SheetListFilter(SheetStatus::Completed)),
+            'currencyFirst' => $facet(new SheetListFilter(null, $firstAccount->currencyCode())),
+            'currencySecond' => $facet(new SheetListFilter(null, $secondAccount->currencyCode())),
+            // A whole-day bound, exactly as the controller builds one from `?from=2026-10-04`.
+            'fromToday' => $facet(new SheetListFilter(from: new DateTimeImmutable($today . ' 00:00:00', new DateTimeZone('UTC')))),
+            'toToday' => $facet(new SheetListFilter(to: new DateTimeImmutable($today . ' 23:59:59', new DateTimeZone('UTC')))),
+            'justYesterday' => $facet(new SheetListFilter(
+                from: new DateTimeImmutable($yesterday . ' 00:00:00', new DateTimeZone('UTC')),
+                to: new DateTimeImmutable($yesterday . ' 23:59:59', new DateTimeZone('UTC'))
+            )),
+            // `to` at midnight: the reading this scenario exists to catch, because it would exclude
+            // every row created during the very day it names.
+            'toTodayAtMidnight' => $facet(new SheetListFilter(to: new DateTimeImmutable($today . ' 00:00:00', new DateTimeZone('UTC')))),
+            'fromTomorrow' => $facet(new SheetListFilter(
+                from: new DateTimeImmutable($tomorrow . ' 00:00:00', new DateTimeZone('UTC'))
+            )),
+            // Two facets at once. A filter object that resolved only its first argument would answer
+            // this identically to `statusOpen`.
+            'openInSecondCurrency' => $facet(new SheetListFilter(SheetStatus::Open, $secondAccount->currencyCode())),
+            'openTodayOnOrBeforeYesterday' => $facet(new SheetListFilter(
+                SheetStatus::Open,
+                null,
+                null,
+                new DateTimeImmutable($yesterday . ' 23:59:59', new DateTimeZone('UTC'))
+            )),
+        ],
+    ];
+}
+
 function listingOf(object $appData): array
 {
     try {

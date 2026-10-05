@@ -342,6 +342,11 @@ final readonly class ReportQuery
     private const RULE_REQUEST_NAMES = [
         'amountRange' => ['amountMinMinor', 'amountMaxMinor'],
         'dateRange' => ['from', 'to'],
+        // Two spellings of one facet. `ReportFilterFactory` resolves the public-uuid name into the
+        // surrogate-key name, so by the time a rule is reached there is one field -- but the refusal
+        // has to speak both, because the caller only ever sent one of them.
+        'costCenterDbIds' => ['costCenterIds', 'costCenterDbIds'],
+        'expenseTypeDbIds' => ['expenseTypeIds', 'expenseTypeDbIds'],
     ];
 
     /**
@@ -350,6 +355,11 @@ final readonly class ReportQuery
      * All of them, not the first. A caller who sent `to` and is told the report cannot be filtered by
      * `from` has been handed a word they did not use, and the message has told them nothing about the
      * request they actually made.
+     *
+     * The id-space pairs are here for the same reason and one more: `costCenterIds` and
+     * `costCenterDbIds` are two spellings of one facet, so a caller may have sent either and must be
+     * shown both. Without these entries a caller who sent the public spelling would have been told the
+     * report cannot be filtered by `costCenterDbIds` -- a word that appears nowhere in its request.
      */
     private function nameOfRule(string $rule): string
     {
