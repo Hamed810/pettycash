@@ -31,9 +31,11 @@ use OCA\PettyCash\Domain\Account\PettyCashAccount;
  *
  * The Application layer is the one layer both the service and the controllers can depend on —
  * Presentation depends on Application, which is the direction the rules set — so this is the home
- * where there is exactly one definition. It sits beside `AccountService` rather than in a new
- * `Dto/` directory because `plan.md`'s declared structure reconciliation is T238's open work, and
- * creating a fourth declared-but-missing directory here would quietly take a piece of it.
+ * where there is exactly one definition. It sits beside `AccountService` rather than in a
+ * `Dto/` directory because T238 reconciled `plan.md`'s declared structure against the tree and
+ * `lib/Application/Account/` is what the plan now declares; the plan had declared a `Dto/`
+ * directory that never existed, which is exactly why nothing may be placed on the strength of
+ * the plan naming it.
  *
  * The class is a pure mapping from aggregate to array: it reads the domain and invents no business
  * rule, so both callers get the same `Account` and the same `Movement` for the same aggregate.

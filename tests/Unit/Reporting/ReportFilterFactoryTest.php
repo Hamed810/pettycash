@@ -11,8 +11,12 @@ use OCA\PettyCash\Application\Reporting\ReportFilterFactory;
 use OCA\PettyCash\Application\Reporting\ReportQuery;
 use OCA\PettyCash\Application\Reporting\UnsupportedFilterField;
 use OCA\PettyCash\Domain\Configuration\CostCenter;
+use OCA\PettyCash\Domain\Shared\JalaliReportingPeriods;
 use OCA\PettyCash\Domain\Configuration\ExpenseType;
+use OCA\PettyCash\Tests\TestDoubles\FixedClock;
+use OCA\PettyCash\Tests\TestDoubles\FixedRequestTimeZone;
 use OCA\PettyCash\Tests\TestDoubles\InMemoryCostCenterRepository;
+use OCA\PettyCash\Tests\TestDoubles\InMemoryCurrentUser;
 use OCA\PettyCash\Tests\TestDoubles\InMemoryExpenseTypeRepository;
 use DateTimeImmutable;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -68,8 +72,181 @@ final class ReportFilterFactoryTest extends TestCase
         $this->expenseTypes->save($expenseType);
 
         $this->factory = new ReportFilterFactory(
-            new FilterIdentityResolver($this->costCenters, $this->expenseTypes)
+            new FilterIdentityResolver($this->costCenters, $this->expenseTypes),
+            // FR-068. The clock and the zone are the whole of a period's resolution, so both are fixed
+            // here rather than left to the system: a test that cannot move the clock cannot assert that a
+            // period is the *in-progress* one.
+            new JalaliReportingPeriods(new FixedClock('2026-09-23T10:00:00+03:30')),
+            new FixedRequestTimeZone('Asia/Tehran'),
+            new InMemoryCurrentUser('employee1')
         );
+    }
+
+    // ===== FR-068: the `period` filter =====
+
+    /**
+     * The three predefined periods resolve to concrete dates a query can use.
+     *
+     * The clock is fixed at 2026-09-23 10:00 Asia/Tehran — Mehr 1 1405 — which `plan.md` records as the
+     * measured case, so the expected values are the plan's rather than ones chosen for convenience.
+     */
+    public function testAPredefinedPeriodResolvesToTheInProgressJalaliRange(): void
+    {
+        $cases = [
+            'month'   => ['2026-09-23', '2026-10-22'],
+            'quarter' => ['2026-09-23', '2026-12-21'],
+            'year'    => ['2026-03-21', '2027-03-20'],
+        ];
+
+        foreach ($cases as $period => [$from, $to]) {
+            $filter = $this->factory->fromArray(['period' => $period]);
+
+            self::assertSame($from, $filter->from?->format('Y-m-d'), "period={$period} start");
+            self::assertSame($to, $filter->to?->format('Y-m-d'), "period={$period} end");
+            self::assertTrue($filter->hasReportingPeriod(), 'a resolved period is still a filter');
+            self::assertTrue($filter->hasFieldFilters(), 'and must not read as "everything in scope"');
+        }
+    }
+
+    /**
+     * FR-068 requires the response to state the zone it resolved in, so the filter carries it.
+     */
+    public function testAResolvedPeriodCarriesTheZoneItWasResolvedIn(): void
+    {
+        self::assertSame('Asia/Tehran', $this->factory->fromArray(['period' => 'month'])->resolvedZone);
+    }
+
+    public function testNoPeriodMeansNoZoneToDisclose(): void
+    {
+        $filter = $this->factory->fromArray([]);
+
+        self::assertFalse($filter->hasReportingPeriod());
+        self::assertNull($filter->resolvedZone, 'a disclosure for a filter that resolved nothing is a lie');
+    }
+
+    /**
+     * Two users in different zones get different ranges — FR-068's own verification, at the filter layer
+     * where the zone enters.
+     */
+    public function testTwoUsersInDifferentZonesResolveDifferentRanges(): void
+    {
+        $tehran = new ReportFilterFactory(
+            new FilterIdentityResolver($this->costCenters, $this->expenseTypes),
+            new JalaliReportingPeriods(new FixedClock('2026-09-23T00:30:00+03:30')),
+            new FixedRequestTimeZone('Asia/Tehran'),
+            new InMemoryCurrentUser('employee1')
+        );
+        $utc = new ReportFilterFactory(
+            new FilterIdentityResolver($this->costCenters, $this->expenseTypes),
+            new JalaliReportingPeriods(new FixedClock('2026-09-23T00:30:00+03:30')),
+            new FixedRequestTimeZone('UTC'),
+            new InMemoryCurrentUser('employee2')
+        );
+
+        self::assertSame('2026-09-23', $tehran->fromArray(['period' => 'month'])->from?->format('Y-m-d'));
+        self::assertSame(
+            '2026-08-23',
+            $utc->fromArray(['period' => 'month'])->from?->format('Y-m-d'),
+            'the same instant resolves the previous Jalali month for a UTC user'
+        );
+    }
+
+    /**
+     * FR-068 requires every resolving response to state the range **and** the zone.
+     *
+     * Asserted as data rather than through a controller, because the disclosure is built here and both
+     * endpoints spread it into their own response — so this is the single place its shape is decided.
+     * A mutation that returned nothing would otherwise pass every test here: an empty disclosure is
+     * indistinguishable from "no period was requested", which is exactly what it looks like on the wire.
+     */
+    public function testAResolvedPeriodDisclosesItsRangeAndZone(): void
+    {
+        self::assertSame(
+            [
+                'period' => 'month',
+                'resolvedFrom' => '2026-09-23',
+                'resolvedTo' => '2026-10-22',
+                'resolvedTimeZone' => 'Asia/Tehran',
+            ],
+            $this->factory->fromArray(['period' => 'month'])->periodDisclosure()
+        );
+    }
+
+    /**
+     * A request that resolved nothing discloses nothing.
+     *
+     * Absent rather than null-valued, because a key describing a request the response did not use is a
+     * claim about the request rather than about the answer.
+     */
+    public function testNoDisclosureWhenNoPeriodWasRequested(): void
+    {
+        self::assertSame([], $this->factory->fromArray([])->periodDisclosure());
+        self::assertSame([], $this->factory->fromArray(['from' => '2026-01-01T00:00:00+00:00'])->periodDisclosure());
+    }
+
+    // ===== The mutual exclusion FR-068 requires =====
+
+    /**
+     * `period` and an explicit range are mutually exclusive, and **neither order is honoured**.
+     *
+     * All four combinations are refused, because "whichever key arrived first wins" is exactly the
+     * silent discard FR-068 forbids: the caller would get one filter while believing they sent two.
+     */
+    public function testAPeriodAndAnExplicitRangeAreRefusedInBothOrderings(): void
+    {
+        foreach ([['from', 'to'], ['to', 'from']] as [$first, $second]) {
+            $range = [$first => '2026-01-01T00:00:00+00:00', $second => '2026-06-30T23:59:59+00:00'];
+
+            try {
+                $this->factory->fromArray(['period' => 'month'] + $range);
+                self::fail("period + {$first} must be refused");
+            } catch (InvalidArgumentException $e) {
+                self::assertStringContainsString('mutually exclusive', $e->getMessage());
+                self::assertStringContainsString('Remove one of them', $e->getMessage());
+            }
+        }
+    }
+
+    /**
+     * The refusal names which keys conflicted, so the client can fix it in one attempt.
+     */
+    public function testTheRefusalNamesTheKeysThatConflict(): void
+    {
+        try {
+            $this->factory->fromArray(['period' => 'month', 'to' => '2026-06-30T23:59:59+00:00']);
+            self::fail('period + to must be refused');
+        } catch (InvalidArgumentException $e) {
+            self::assertStringContainsString('period', $e->getMessage());
+            self::assertStringContainsString('`to`', $e->getMessage());
+        }
+    }
+
+    /**
+     * Neither one is quietly discarded, and they are never intersected.
+     *
+     * A blank `period` is "the caller did not supply one", not a period named "" — so it must not trip the
+     * exclusion and turn an ordinary explicit range into a 422.
+     */
+    public function testABlankPeriodIsNotAConflict(): void
+    {
+        $filter = $this->factory->fromArray(['period' => '', 'from' => '2026-01-01T00:00:00+00:00']);
+
+        self::assertSame('2026-01-01', $filter->from?->format('Y-m-d'));
+        self::assertFalse($filter->hasReportingPeriod());
+    }
+
+    /**
+     * A period outside FR-068's vocabulary is refused by name.
+     *
+     * `week` is the tempting one: "this week" is a thing people ask for and it is not one of the three
+     * periods FR-068 defines.
+     */
+    public function testAnUnknownPeriodNameIsRefusedRatherThanGuessed(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Unknown reporting period');
+
+        $this->factory->fromArray(['period' => 'week']);
     }
 
     // ===== The vocabulary is closed, and the list is the contract =====
@@ -123,6 +300,10 @@ final class ReportFilterFactoryTest extends TestCase
                 'from', 'to', 'statuses', 'currencyCodes', 'costCenterIds', 'costCenterDbIds', 'actorUids',
                 'eventTypes', 'createdBy', 'expenseTypeIds', 'expenseTypeDbIds', 'stages', 'amountMinMinor',
                 'amountMaxMinor',
+                // FR-068. Written out rather than derived, deliberately: this assertion exists to catch
+                // the vocabulary and the constant drifting apart, and deriving one from the other would
+                // make it incapable of failing. FR-064 was amended on 2026-09-30 to accept `period`.
+                'period',
             ],
             ReportFilterFactory::ACCEPTED_FILTERS
         );

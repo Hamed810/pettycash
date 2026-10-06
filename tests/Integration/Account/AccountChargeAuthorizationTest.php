@@ -10,6 +10,7 @@ use OCA\PettyCash\Application\Command\IdempotencyService;
 use OCA\PettyCash\Domain\Configuration\Currency;
 use OCA\PettyCash\Domain\Configuration\RoleAssignment;
 use OCA\PettyCash\Domain\Shared\Enum\Role;
+use OCA\PettyCash\Tests\TestDoubles\InMemoryAuditWriter;
 use OCA\PettyCash\Tests\TestDoubles\InMemoryAccountMovementRepository;
 use OCA\PettyCash\Tests\TestDoubles\InMemoryAccountRepository;
 use OCA\PettyCash\Tests\TestDoubles\InMemoryCommandResultRepository;
@@ -51,6 +52,15 @@ final class AccountChargeAuthorizationTest extends TestCase
     private InMemoryRoleAssignmentRepository $roleAssignments;
     private AccountService $service;
 
+    /**
+     * T369: the configuration stream this service now writes to on a funding charge.
+     *
+     * Held rather than constructed inline because the funding audit assertions read it, and
+     * `InMemoryAuditWriter` is the only way to see what the service recorded without standing up the
+     * real audit table.
+     */
+    private InMemoryAuditWriter $auditWriter;
+
     private const OWNER = 'the-account-owner';
     private const CURRENCY = 'ATZ';
 
@@ -67,7 +77,8 @@ final class AccountChargeAuthorizationTest extends TestCase
             $this->roleAssignments,
             new IdempotencyService(new InMemoryCommandResultRepository()),
             new InMemoryCurrentUser(self::OWNER),
-            new AccountPayloadFormatter()
+            new AccountPayloadFormatter(),
+            $this->auditWriter = new InMemoryAuditWriter()
         );
     }
 

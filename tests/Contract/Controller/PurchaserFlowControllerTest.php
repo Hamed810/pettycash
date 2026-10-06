@@ -1084,6 +1084,20 @@ final class PurchaserFlowControllerTest extends TestCase
         );
     }
 
+    /**
+     * FR-060 (T275): an inline-safe type is served with **its own** media type so it renders.
+     *
+     * This assertion used to require `application/octet-stream` for every evidence file, which is what
+     * `contracts/ocs-api.yaml` used to declare — and that combination made FR-060's preview journey
+     * unimplementable, because an `application/octet-stream` response downloads rather than renders.
+     * The 2026-09-30 clarification settled that the contract was the artifact at fault; this test and
+     * the contract were changed together so they cannot drift apart again.
+     *
+     * The fixture uploads a `.pdf`, so this is the "PDF renders in place" half of FR-060 rather than
+     * the fallback half. The safety-critical half — an unlisted type being forced to
+     * `application/octet-stream` + `attachment` — is pinned exhaustively and without HTTP in
+     * `EvidenceContentPolicyTest`, because it needs an upload whose declared type is hostile.
+     */
     public function testGetEvidenceContentReturns200WithStream(): void
     {
         $evidenceId = $this->uploadEvidence();
@@ -1092,12 +1106,122 @@ final class PurchaserFlowControllerTest extends TestCase
             'query' => ['disposition' => 'inline'],
         ]);
 
-        // Contract: GET /evidence/{id}/content returns 200 with byte stream
-        $this->assertEquals(200, $response->getStatusCode(), 'GET /evidence/{id}/content should return 200 OK');
-        $this->assertEquals('application/octet-stream', $response->getHeaderLine('Content-Type'));
+        self::assertEquals(200, $response->getStatusCode(), 'GET /evidence/{id}/content must answer 200');
+
+        // Both headers, asserted together. They are one decision: a correct type under the wrong
+        // disposition is what makes a browser render something it should not, so checking the type
+        // alone would accept the failure this task exists to prevent.
+        self::assertSame(
+            'application/pdf',
+            $response->getHeaderLine('Content-Type'),
+            'FR-060 sends an inline-safe type with its stored media type so it renders in place'
+        );
+        self::assertStringContainsString(
+            'inline',
+            $response->getHeaderLine('Content-Disposition'),
+            'and with an inline disposition; the content type and the disposition are one decision'
+        );
+    }
+
+    /**
+     * FR-060's other half, from the caller's side: the disposition is the caller's to choose.
+     *
+     * Without this, an implementation could satisfy the test above by serving every file as a download
+     * and keeping the type right — which satisfies the header assertion and removes preview entirely.
+     */
+    public function testAnInlineSafeEvidenceCanBeRequestedAsADownload(): void
+    {
+        $evidenceId = $this->uploadEvidence();
+
+        $response = $this->client->request('GET', '/ocs/v2.php/apps/pettycash/api/v1/evidence/' . $evidenceId . '/content', [
+            'query' => ['disposition' => 'attachment'],
+        ]);
+
+        self::assertEquals(200, $response->getStatusCode());
+        self::assertSame(
+            'application/pdf',
+            $response->getHeaderLine('Content-Type'),
+            'the media type does not change with the disposition'
+        );
+        self::assertStringContainsString(
+            'attachment',
+            $response->getHeaderLine('Content-Disposition'),
+            'FR-060 requires a caller to be able to request either disposition explicitly'
+        );
     }
 
     // ===== EVIDENCE CONSTRAINTS =====
+
+    /**
+     * FR-060's safety half, over HTTP: an attacker-declared type is never rendered.
+     *
+     * `upload()` stores the uploader's declared media type verbatim — FR-030 defers classification and
+     * redaction to V2 — so this is not a hypothetical type. A purchaser who uploads a file declaring
+     * `text/html` must not have it executed as script in a reviewer's session when that reviewer opens
+     * the receipt, and FR-060 names that harm in its own words.
+     *
+     * **This is the assertion that makes the wiring observable.** Every other evidence-content test
+     * uploads a PDF, and a PDF is inline-safe, so the policy's output and the stored media type are
+     * the same string. That was measured rather than assumed: reverting `EvidenceController::content()`
+     * to `'Content-Type' => $evidence->mediaType` left the PDF tests green, because for an inline-safe
+     * type the two implementations are indistinguishable. Only a hostile upload separates them.
+     *
+     * The `?disposition=inline` request is the load-bearing half — it is what a naive client sends, and
+     * exactly the request that must be overridden.
+     */
+    public function testAnEvidenceDeclaringAScriptableMediaTypeIsNeverServedInline(): void
+    {
+        $evidenceId = $this->uploadEvidence('contract-fixture-receipt.html', 'text/html');
+
+        $response = $this->client->request('GET', '/ocs/v2.php/apps/pettycash/api/v1/evidence/' . $evidenceId . '/content', [
+            'query' => ['disposition' => 'inline'],
+        ]);
+
+        self::assertEquals(200, $response->getStatusCode(), 'the bytes are still served; FR-060 offers them as a download');
+
+        self::assertSame(
+            'application/octet-stream',
+            $response->getHeaderLine('Content-Type'),
+            'FR-060 requires any media type outside the inline-safe set to be served as '
+            . 'application/octet-stream, whatever the uploader declared'
+        );
+        self::assertStringContainsString(
+            'attachment',
+            $response->getHeaderLine('Content-Disposition'),
+            'and forced to attachment even when the caller asks for inline, because an attacker-supplied '
+            . 'type served inline would execute as script in the viewer\'s session'
+        );
+    }
+
+    /**
+     * The stored type is still recorded — the coercion is about how it is *served*, not about erasing it.
+     *
+     * Without this, "serve everything as octet-stream" would satisfy the safety test above while
+     * destroying the metadata an auditor needs to know what a purchaser actually uploaded.
+     */
+    public function testTheDeclaredMediaTypeIsStillRecordedEvenWhenItIsNotServed(): void
+    {
+        $evidenceId = $this->uploadEvidence('contract-fixture-receipt.html', 'text/html');
+
+        $response = $this->client->request('GET', '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId());
+
+        self::assertEquals(200, $response->getStatusCode());
+
+        $evidence = null;
+        foreach (json_decode((string) $response->getBody(), true)['ocs']['data']['evidence'] ?? [] as $item) {
+            if (($item['id'] ?? null) === $evidenceId) {
+                $evidence = $item;
+            }
+        }
+
+        self::assertNotNull($evidence, 'the uploaded evidence must appear on the transaction');
+        self::assertSame(
+            'text/html',
+            $evidence['mediaType'],
+            'FR-030 defers classification to V2, so the declared type is kept verbatim in the record and '
+            . 'only the response headers are coerced'
+        );
+    }
 
     public function testEvidenceUploadEnforces100MBLimit(): void
     {
@@ -1455,23 +1579,38 @@ final class PurchaserFlowControllerTest extends TestCase
      * well-formed UUID that matches nothing only ever proves the 404 branch, so
      * each of them uploads its own evidence first.
      */
-    private function uploadEvidence(): string
-    {
+    /**
+     * Upload an evidence file and return its public id.
+     *
+     * `$mediaType` exists so a suite can store a **hostile declared type**. Without it the multipart
+     * infers `application/pdf` from the filename, and since a PDF is an inline-safe type the response
+     * headers are identical whether the FR-060 policy is applied or the stored type is echoed back
+     * verbatim — so a contract test uploading only PDFs cannot tell the safe implementation from the
+     * unsafe one. That was measured: reverting `EvidenceController::content()` to
+     * `'Content-Type' => $evidence->mediaType` left every PDF-path assertion green.
+     */
+    private function uploadEvidence(
+        string $filename = 'contract-fixture-receipt.pdf',
+        ?string $mediaType = null
+    ): string {
         $tempFile = tempnam(sys_get_temp_dir(), 'evidence_');
         file_put_contents($tempFile, str_repeat('x', 1024));
 
         try {
+            $part = [
+                'name' => 'file',
+                'contents' => fopen($tempFile, 'r'),
+                'filename' => $filename,
+            ];
+            if ($mediaType !== null) {
+                $part['type'] = $mediaType;
+            }
+
             $response = $this->client->request('POST', '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId() . '/evidence', [
                 'headers' => [
                     'X-PettyCash-Command-ID' => ContractFixtures::commandId(),
                 ],
-                'multipart' => [
-                    [
-                        'name' => 'file',
-                        'contents' => fopen($tempFile, 'r'),
-                        'filename' => 'contract-fixture-receipt.pdf',
-                    ],
-                ],
+                'multipart' => [$part],
             ]);
 
             $this->assertEquals(201, $response->getStatusCode(), 'Evidence upload must succeed before its id can be addressed');

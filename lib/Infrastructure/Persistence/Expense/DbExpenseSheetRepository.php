@@ -270,15 +270,16 @@ final class DbExpenseSheetRepository implements ExpenseSheetRepository
      * ## Why this exception type
      *
      * `UnreadableRecordData` is what `DbTransactionRevisionRepository` already throws for the same
-     * fault, so this is now one rule and not two. It extends `LogicException`, which is deliberate:
-     * `ReportController` translates it into a 422 that explains itself and withholds the message,
-     * while every other caller keeps the classification `OcsErrorMapper` already gives an
-     * unrecognised fault — 500, message withheld, full detail logged. Loud everywhere, and explained
-     * where an explanation is available. The alternative to either is the answer that was here.
+     * fault, so this is now one rule and not two. It extends `LogicException`, and that is deliberate:
+     * it is not the caller's fault, so it must not be answered as a validation failure. `OcsErrorMapper`
+     * classifies it once, ahead of the `InvalidArgumentException` arm, and every endpoint on the path
+     * then answers 422 with the same explanation — sheets, sheet detail, dashboard and the reports.
+     * That single answer is FR-083's requirement ("a client writes one handler rather than one per
+     * endpoint") and it was not available while the translation lived in `ReportController` alone.
      *
-     * The message names both surrogate ids because that is what an operator needs to find the row,
-     * and it is never sent to a caller: `ReportController` builds a different string, and
-     * `OcsErrorMapper` withholds this one.
+     * The message names both surrogate ids because that is what an operator needs to find the row, and
+     * it is never sent to a caller: `OcsErrorMapper` logs this one in full and substitutes its own
+     * canonical text for the body.
      *
      * @throws UnreadableRecordData
      */

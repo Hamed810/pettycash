@@ -66,7 +66,17 @@ final readonly class ReportFilter
         public array $expenseTypeDbIds = [],
         public array $stages = [],
         public ?int $amountMinMinor = null,
-        public ?int $amountMaxMinor = null
+        public ?int $amountMaxMinor = null,
+        // FR-068. `period` is resolved into `from`/`to` by `ReportFilterFactory`, so the filter that
+        // reaches a query carries dates, not a period name -- a query has no clock and no zone, and
+        // resolving there would put the Jalali conversion in the query path `plan.md` forbids.
+        //
+        // These two survive resolution so the *response* can disclose what was resolved and where. FR-068
+        // requires it: "every response that resolved a predefined period states the exact date range it
+        // resolved" and the zone it was resolved in, "so two users in different zones can explain a
+        // difference between their exports". Without them the disclosure has nothing to read.
+        public ?string $period = null,
+        public ?string $resolvedZone = null
     ) {
         if ($page < 1) {
             throw new InvalidArgumentException("Report page must be 1 or greater; {$page} was requested");
@@ -98,6 +108,52 @@ final readonly class ReportFilter
     public function hasDateRange(): bool
     {
         return $this->from !== null || $this->to !== null;
+    }
+
+    /**
+     * Whether this filter resolved a predefined reporting period.
+     *
+     * FR-068 requires the *distinction* to survive resolution: a report resolved to "this month" is a
+     * filtered slice, and one that resolved nothing is "everything in scope". Both carry `from`/`to` by
+     * the time they get here, so `hasDateRange()` alone cannot tell a period from an explicit range --
+     * and a caller that disclosed the range without saying it came from a period would let two users
+     * compare different-looking ranges without either knowing why.
+     */
+    public function hasReportingPeriod(): bool
+    {
+        return $this->period !== null;
+    }
+
+    /**
+     * What FR-068 requires every resolving response to state, or an empty array when it resolved none.
+     *
+     * Two facts, and both are about **disagreement between users** rather than about the filter: the
+     * exact Gregorian range a Jalali period resolved to, and the zone it was resolved in. Without them two
+     * people looking at "this month" cannot tell whether a difference in their figures is a different
+     * period or a different timezone, which is the whole reason FR-068 asks for the zone and not just
+     * the dates.
+     *
+     * **Defined once, here, rather than in each controller.** A disclosure assembled in two places is the
+     * class of defect this codebase has been bitten by repeatedly — `ReportFilterFactory` exists for
+     * exactly this reason — and here the two endpoints are `GET /reports` and `POST /exports`.
+     *
+     * Empty when no period was resolved, because a response carrying a `period` key it did not use is a
+     * claim about the request rather than about the answer.
+     *
+     * @return array{period?: string, resolvedFrom?: string, resolvedTo?: string, resolvedTimeZone?: string}
+     */
+    public function periodDisclosure(): array
+    {
+        if (!$this->hasReportingPeriod()) {
+            return [];
+        }
+
+        return [
+            'period' => $this->period,
+            'resolvedFrom' => $this->from?->format('Y-m-d'),
+            'resolvedTo' => $this->to?->format('Y-m-d'),
+            'resolvedTimeZone' => $this->resolvedZone,
+        ];
     }
 
     public function hasStatusFilter(): bool

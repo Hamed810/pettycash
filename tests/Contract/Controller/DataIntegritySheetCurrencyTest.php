@@ -32,17 +32,25 @@ use Psr\Http\Message\ResponseInterface;
  * keeps the window in which the fault exists from stretching across a file that also tests unrelated
  * things.
  *
- * ## What is asserted, and what is deliberately not
+ * ## What is asserted, and what was deliberately loose until now
  *
- * Asserted: **the substitution is gone.** A response that carries the probe sheet alongside a currency
- * of `"IRR"` is the defect, and no status code makes that acceptable.
+ * Asserted then: **the substitution is gone.** A response that carries the probe sheet alongside a
+ * currency of `"IRR"` is the defect, and no status code makes that acceptable.
  *
- * Deliberately **not** asserted: that these endpoints answer 422. `UnreadableRecordData` extends
- * `LogicException` on purpose, and `OcsErrorMapper` maps an unrecognised exception to 500 with the
- * message withheld and logged — so today they answer 500, and a follow-on task may generalise T308's
- * 422 policy to them. Pinning 500 here would make that improvement fail a test, which is the same
- * mistake T311 avoided by not pinning `"IRR"`. The tests below therefore assert the *absence of the
- * wrong answer*, and a follow-on can tighten them to a status without having to delete anything.
+ * Deliberately **not** asserted then: that these endpoints answer 422. `UnreadableRecordData` extends
+ * `LogicException` on purpose, and `OcsErrorMapper` mapped an unrecognised exception to 500 with the
+ * message withheld and logged — so they answered 500, and a follow-on task might generalise T308's
+ * 422 policy to them. Pinning 500 would have made that improvement fail a test, which is the same
+ * mistake T311 avoided by not pinning `"IRR"`. The tests therefore asserted the *absence of the wrong
+ * answer* and enumerated the acceptable statuses, so a follow-on could tighten them without deleting
+ * anything.
+ *
+ * **T313 is that follow-on, and this is the tightening.** FR-083 now settles the status at 422 for
+ * these endpoints and forbids 500 outright, so the enumerations are replaced by pinned statuses. The
+ * five concerns, the fixture and the control are all unchanged — only the acceptable answer stopped
+ * being a set. That was possible precisely because the tests were written not to pin 500, which is
+ * also why the control (both endpoints served again once the probe is removed) is still the
+ * assertion that proves the fault is the fixture's doing rather than the endpoint's permanent state.
  */
 final class DataIntegritySheetCurrencyTest extends TestCase
 {
@@ -62,12 +70,15 @@ final class DataIntegritySheetCurrencyTest extends TestCase
     }
 
     /**
-     * The defect, on the endpoint a user actually opens.
+     * The defect, on the endpoint a user actually opens, answered as FR-083 requires.
      *
      * `GET /sheets/{id}` on the broken sheet answered `200` with a full, well-formed sheet whose
-     * currency was `'IRR'`. Every figure on it — current total, submitted total, the effective-outcome
-     * column — is then a number in the wrong unit, and nothing in the response distinguishes that from a
-     * sheet that really is denominated in rials.
+     * currency was `'IRR'`. Every figure on it — current total, submitted total, the
+     * effective-outcome column — is then a number in the wrong unit, and nothing in the response
+     * distinguishes that from a sheet that really is denominated in rials. After T267 it answered
+     * `500`, because `UnreadableRecordData` reached `OcsErrorMapper`'s default arm.
+     *
+     * FR-083 settles both halves of that: 422, and never 500.
      */
     public function testASheetWhoseCurrencyDoesNotResolveIsNotPresentedAsARialSheet(): void
     {
@@ -75,31 +86,40 @@ final class DataIntegritySheetCurrencyTest extends TestCase
 
         try {
             $response = $this->get('/sheets/' . $probe['sheetId']);
-            $entry = $this->entryFor($response['data'], $probe['sheetId']);
 
-            // The invariant is the strong one, and it took a mutation to see why the obvious one is
-            // too weak. `assertNotSame('IRR', $entry['currency'])` passes against an implementation
-            // that substitutes *USD* instead — a different wrong number, in a different unit, from
-            // the same one line of code. There is no currency this record is entitled to be shown as,
-            // because it does not have one, so the only sound form is: a `200` may not carry this
-            // record at all.
-            if ($response['status'] === 200) {
-                $this->assertNull(
-                    $entry,
-                    'GET /sheets/{id} answered 200 with a sheet whose currency reference resolves to '
-                    . 'nothing. Whatever currency it is given, it is a fabrication: the record has no '
-                    . 'readable currency, so every amount on it is in a unit nobody chose, and nothing '
-                    . 'in the response says so.'
-                );
-            }
-
-            // A 200 that omits the record would be a *different* defect -- telling a caller something
-            // does not exist that does -- so the acceptable statuses are enumerated rather than
-            // assumed. What may not vary is the wrong answer above.
-            $this->assertContains(
+            // A 500 reads as a transient server fault: the client retries, the operator goes looking
+            // at the server rather than at the row. That is the confusion T029 was raised for,
+            // repeated under a status that looks worse rather than better.
+            $this->assertSame(
+                422,
                 $response['status'],
-                [200, 404, 422, 500],
-                'GET /sheets/{id} must answer with a status that means something about the fault'
+                'a sheet whose currency reference resolves to nothing is a data fault, and FR-083 '
+                . 'requires this endpoint to say so rather than answering 500'
+            );
+
+            // The invariant that survived the tightening, and it is the strong one.
+            // `assertNotSame('IRR', $entry['currency'])` would pass against an implementation that
+            // substituted *USD* instead — a different wrong number, in a different unit, from the
+            // same one line of code. There is no currency this record is entitled to be shown as, so
+            // the only sound form is that no 200 carries it at all, which the pinned 422 now
+            // guarantees directly.
+            $this->assertNull(
+                $this->entryFor($response['data'], $probe['sheetId']),
+                'the unreadable sheet must not appear in a result set at all, whatever status carries it'
+            );
+
+            $this->assertSame(
+                'DATA_FAULT',
+                $response['data']['error']['code'] ?? null,
+                'FR-083 asks for one handler across the report and sheet endpoints, which means one '
+                . 'error code as well as one status'
+            );
+
+            $this->assertStringContainsString(
+                'data fault',
+                (string) ($response['data']['error']['message'] ?? ''),
+                'and the explanation must name the fault as being in the data, so a caller does not go '
+                . 'looking for a permission or filter problem'
             );
         } finally {
             CorruptRecordFixture::remove();
@@ -111,7 +131,7 @@ final class DataIntegritySheetCurrencyTest extends TestCase
      *
      * `GET /sheets` returned `200` with the probe among the caller's own sheets, reported as rial. The
      * user sees a list that looks complete and correct, and the corruption is one row of it that no
-     * amount of looking will reveal.
+     * amount of looking will reveal. FR-083 settles the answer at 422 here exactly as for the detail.
      */
     public function testAListOfSheetsNeverCarriesTheSubstitutedCurrency(): void
     {
@@ -119,21 +139,19 @@ final class DataIntegritySheetCurrencyTest extends TestCase
 
         try {
             $response = $this->get('/sheets?pageSize=100');
-            $entry = $this->entryFor($response['data'], $probe['sheetId']);
 
-            if ($response['status'] === 200) {
-                $this->assertNull(
-                    $entry,
-                    'GET /sheets answered 200 with a sheet whose currency reference resolves to nothing '
-                    . 'in the list. A user cannot tell which row is wrong, which is why this is the '
-                    . 'more damaging of the two endpoints even though it is the less specific one.'
-                );
-            }
-
-            $this->assertContains(
+            $this->assertSame(
+                422,
                 $response['status'],
-                [200, 422, 500],
-                'GET /sheets must answer with a status that means something about the fault'
+                'a list containing a sheet whose currency resolves to nothing must answer 422, not a '
+                . '200 that looks complete nor a 500 that reads as a transient fault'
+            );
+
+            // FR-083 also forbids the other tempting shortcut, which is dropping the offending row and
+            // returning the readable ones. A caller cannot distinguish that from a complete list.
+            $this->assertNull(
+                $this->entryFor($response['data'], $probe['sheetId']),
+                'the unreadable sheet must not be silently omitted from an otherwise complete result set'
             );
         } finally {
             CorruptRecordFixture::remove();
@@ -242,8 +260,8 @@ final class DataIntegritySheetCurrencyTest extends TestCase
         $probe = CorruptRecordFixture::insert();
 
         try {
-            $this->assertNotSame(
-                200,
+            $this->assertSame(
+                422,
                 $this->get('/sheets/' . $probe['sheetId'])['status'],
                 'the probe must be what changes the answer, or the assertions above are vacuous'
             );

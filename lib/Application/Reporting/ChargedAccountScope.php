@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace OCA\PettyCash\Application\Reporting;
 
+use OCA\PettyCash\Application\Audit\ConfigurationEventType;
 use OCA\PettyCash\Domain\Account\Repository\AccountRepository;
 use OCA\PettyCash\Domain\Audit\Repository\AuditEventRepository;
 
@@ -25,6 +26,27 @@ use OCA\PettyCash\Domain\Audit\Repository\AuditEventRepository;
  * not touch a port that idempotency depends on. No migration, and so no approval-gated baseline
  * reset.
  *
+ * ## Two event types, because FR-055 names two kinds of thing
+ *
+ * FR-055 says an officer's charged accounts are the subjects of their own "account funding **and**
+ * balance-charging" configuration audit events, and that an event type outside that pair "MUST NOT
+ * count toward the set, because touching an account is not charging it". So the pair is a set of two
+ * event types and this method reads both.
+ *
+ * Until T369 it read one. `AccountService::charge()` wrote no configuration event at all, so an
+ * officer who had **funded** an account and had not yet settled anything against it had no event of
+ * either kind naming that account — and therefore no configuration-audit visibility, and no place in
+ * the `accounts` report. The requirement's own clarification had anticipated exactly this: "relying
+ * on the transaction-audit decision alone would leave this scope empty for every officer who had
+ * actually charged an account." T294 closed the settlement half of that sentence; this closes the
+ * funding half.
+ *
+ * The set is read from `ConfigurationEventType` rather than from a literal here, because that enum is
+ * the single definition of the configuration vocabulary and a second copy of a value that scope is
+ * derived from is how the two drift apart unnoticed. That consolidation was deferred by the enum's
+ * own docblock to "the task that owns those writes"; T369 owns the funding write, so this is that
+ * task.
+ *
  * ## Instance-wide, not per-officer
  *
  * Every finance officer shares one queue, so a charge is a fact about the instance rather than about
@@ -39,8 +61,20 @@ use OCA\PettyCash\Domain\Audit\Repository\AuditEventRepository;
  */
 final readonly class ChargedAccountScope
 {
-    /** The event type a settlement writes when it debits an account (FR-055). */
-    public const CHARGE_EVENT_TYPE = 'ACCOUNT_CHARGED';
+    /**
+     * The configuration events that put an account in a finance officer's scope: FR-015's funding and
+     * FR-043's settlement consumption.
+     *
+     * A `const` list rather than a second literal, so the vocabulary lives in
+     * {@see ConfigurationEventType} and this class cannot come to name a third thing as a charge
+     * without the enum changing too. Order is irrelevant — the result is a set.
+     *
+     * @var list<string>
+     */
+    private const CHARGE_EVENT_TYPES = [
+        ConfigurationEventType::AccountFunded->value,
+        ConfigurationEventType::AccountCharged->value,
+    ];
 
     public function __construct(
         private AuditEventRepository $configurationAudit,
@@ -48,11 +82,12 @@ final readonly class ChargedAccountScope
     ) {}
 
     /**
-     * The surrogate keys of every account that has been charged, instance-wide.
+     * The surrogate keys of every account that has been funded or charged, instance-wide.
      *
      * Returned as dbIds because that is what `ReportQuery::configurationAuditScope()` takes.
      * A caller given an empty list must treat it as an empty scope, never as "all": an officer who
-     * has charged nothing sees nothing, which is the safe direction to fail.
+     * has charged nothing sees nothing, which is the safe direction to fail — and FR-055 requires
+     * that empty case to stay a *true* zero rather than becoming a widened scope.
      *
      * @return list<int>
      */
@@ -60,10 +95,12 @@ final readonly class ChargedAccountScope
     {
         $dbIds = [];
 
-        foreach ($this->configurationAudit->findEntityIdsByEventType(self::CHARGE_EVENT_TYPE) as $publicId) {
-            $account = $this->accounts->findByPublicId($publicId);
-            if ($account !== null && $account->dbId !== null) {
-                $dbIds[] = $account->dbId;
+        foreach (self::CHARGE_EVENT_TYPES as $eventType) {
+            foreach ($this->configurationAudit->findEntityIdsByEventType($eventType) as $publicId) {
+                $account = $this->accounts->findByPublicId($publicId);
+                if ($account !== null && $account->dbId !== null) {
+                    $dbIds[] = $account->dbId;
+                }
             }
         }
 

@@ -55,7 +55,8 @@ final class AccountServiceTest extends TestCase
             $this->container->query(RoleAssignmentRepository::class),
             $this->container->query(\OCA\PettyCash\Application\Command\IdempotencyService::class),
             $this->container->query(\OCA\PettyCash\Application\Port\CurrentUser::class),
-            new AccountPayloadFormatter()
+            new AccountPayloadFormatter(),
+            $this->container->query(\OCA\PettyCash\Application\Port\AuditWriter::class)
         );
         $this->userUid = 'account-service-test-user';
         // minorUnit 3 is deliberately a scale no hardcoded currency table would guess, so a

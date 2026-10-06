@@ -525,7 +525,20 @@ upsert($db, 'pettycash_accounts', 'public_id', FIXTURE_IDS['secondAccount'], arr
     'public_id' => FIXTURE_IDS['secondAccount'],
     'user_uid' => $userUid,
     'currency_id' => $secondCurrencyDbId,
-    'balance_minor' => 100000,
+    // **Zero, and that used to be 100,000.** This account exists to be *unused* --
+    // `AccountControllerTest::testAccountWithNoMovementsIsAnEmptySuccess` and
+    // `::testTheCallersOwnSecondAccountIsStillReadable` both assert its ledger is empty, and
+    // "an account that has never been used is a normal state the purchaser view has to render"
+    // is worth a fixture. It also carried a non-zero balance, and those two claims cannot both
+    // hold: FR-015 requires the amount, description and resulting balance to be recorded as a
+    // movement, so a balance with no ledger is a state the application cannot produce.
+    //
+    // T368 found it. Asserting the new accounts-report invariant -- that a row's balance is
+    // reachable from the movements it carries -- is what surfaced it, and the finding matters
+    // beyond this fixture: a non-zero balance beside an empty ledger is exactly what a charge
+    // that moved money without writing a movement would look like, so the fixture was quietly
+    // excusing that class of defect on the account every charge test uses.
+    'balance_minor' => 0,
     'active' => true,
     'lock_version' => 0,
 ], $audit));
@@ -1049,6 +1062,11 @@ $financeSharedId = null;
 $financeRejectedId = null;
 $financeSharedVersion = null;
 $financeRejectedVersion = null;
+// T370: the two finance sheets, so the completed-state lock suite can settle a transaction and
+// then address the sheet it completed. Null in every other state, like the ids above, so a suite
+// that forgets to `prepare('finance')` fails loudly rather than against a sheet that holds nothing.
+$financeSharedSheetId = null;
+$financeRejectedSheetId = null;
 
 if ($state === 'finance') {
     seedFinanceReviewTransaction($db, [
@@ -1130,6 +1148,12 @@ if ($state === 'finance') {
     $financeRejectedId = FIXTURE_IDS['rejectedTransaction'];
     $financeSharedVersion = columnValue($db, 'pettycash_transactions', FIXTURE_IDS['sharedTransaction'], 'lock_version');
     $financeRejectedVersion = columnValue($db, 'pettycash_transactions', FIXTURE_IDS['rejectedTransaction'], 'lock_version');
+    // The two finance sheets the T370 lock suite settles into `COMPLETED` and
+    // `COMPLETED_WITH_REJECTIONS`. Each finance fixture owns its own sheet precisely so that
+    // settling one transaction cannot disturb another, which is what makes each of the two
+    // completed states reachable from a single decision.
+    $financeSharedSheetId = FIXTURE_IDS['sharedSheet'];
+    $financeRejectedSheetId = FIXTURE_IDS['rejectedSheet'];
 } else {
     // The primary trio is reset by the baseline above, so only the two extra
     // transactions have to go. Their decisions go with them, which is why a later
@@ -1256,4 +1280,6 @@ echo json_encode([
     'financeSharedTransactionVersion' => $financeSharedVersion,
     'financeRejectedTransactionId' => $financeRejectedId,
     'financeRejectedTransactionVersion' => $financeRejectedVersion,
+    'financeSharedSheetId'    => $financeSharedSheetId,
+    'financeRejectedSheetId'  => $financeRejectedSheetId,
 ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES), PHP_EOL;

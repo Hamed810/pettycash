@@ -6,7 +6,9 @@ namespace OCA\PettyCash\Tests\Contract\Controller;
 
 use GuzzleHttp\Client;
 use OCA\PettyCash\Application\Reporting\ReportFilterFactory;
+use OCA\PettyCash\Infrastructure\Export\EvidenceArchiveExporter;
 use OCA\PettyCash\Tests\Contract\Fixture\ContractFixtures;
+use ZipArchive;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\ResponseInterface;
 
@@ -191,6 +193,153 @@ final class ReportAndExportControllerTest extends TestCase
             $ids,
             'the accounts report must not repeat an account that is both the caller\'s own and charged'
         );
+    }
+
+    /**
+     * FR-065: each account row carries **its movements**, not only its balance.
+     *
+     * "Petty-cash balances and movements MUST be reachable as data of the `accounts` report -- one
+     * account per row, carrying that account's balance and its movements." The row previously carried
+     * `balanceMinor` and nothing else, so the movements were reachable only through the separate
+     * `GET /accounts/{id}/movements` endpoint -- and this controller's own docblock had already claimed
+     * they were reachable "through the `accounts` type's own rows", which was false.
+     *
+     * The movements are compared against that endpoint rather than asserted as non-empty, because the
+     * two now go through one formatter: `AccountPayloadFormatter::movement()` is what the ledger
+     * endpoint uses, and this is what a reader should get whichever route served them. Comparing rather
+     * than counting means a formatter change that moved both together still passes, while a drift
+     * between the two endpoints fails here.
+     */
+    public function testEachAccountsReportRowCarriesThatAccountsMovements(): void
+    {
+        $rows = $this->get('/reports/accounts?pageSize=100')['data']['rows'];
+
+        self::assertNotEmpty($rows, 'the accounts report must return rows to carry movements on');
+
+        $accountId = ContractFixtures::accountId();
+        $ids = array_map(static fn (array $row): string => (string) $row['id'], $rows);
+        self::assertContains(
+            $accountId,
+            $ids,
+            'the fixture account must be reported; rows: ' . implode(', ', $ids)
+        );
+
+        $row = $rows[array_search($accountId, $ids, true)];
+        self::assertArrayHasKey('movements', $row, 'FR-065 requires each row to carry its account\'s movements');
+        self::assertIsArray($row['movements']);
+
+        $ledger = $this->get('/accounts/' . $accountId . '/movements?page=1&pageSize=100')['data']['items'];
+
+        self::assertSame(
+            array_map(static fn (array $m): string => (string) $m['id'], $ledger),
+            array_map(static fn (array $m): string => (string) $m['id'], $row['movements']),
+            'the movements on the report row must be that account\'s, and must match what the ledger '
+            . 'endpoint reports for it'
+        );
+    }
+
+    /**
+     * The bounded read is **stated**, not implied.
+     *
+     * A report that cannot promise a complete ledger must say so, and there are two ways to get this
+     * wrong that both look correct: a row silently carrying fewer movements than the account has, and a
+     * row silently carrying an amount that does not match the balance beside it. FR-065's wording cannot
+     * be satisfied by an unbounded promise for an account that has been used for years, so the bound is
+     * real and both flags are asserted — the summary states the bound, the row states whether it bit.
+     */
+    public function testTheAccountsReportStatesItsMovementReadBound(): void
+    {
+        $data = $this->get('/reports/accounts?pageSize=100')['data'];
+
+        self::assertArrayHasKey(
+            'movementReadBound',
+            $data['summary'],
+            'a bounded movement read must state its bound rather than leaving it to be inferred'
+        );
+        self::assertGreaterThan(0, $data['summary']['movementReadBound']);
+
+        foreach ($data['rows'] as $row) {
+            self::assertArrayHasKey(
+                'movementsTruncated',
+                $row,
+                'every row must say whether its ledger is complete, or a partial ledger reads as a full one'
+            );
+            self::assertIsBool($row['movementsTruncated']);
+
+            // The invariant that makes the flag meaningful rather than decorative. A balance is the
+            // running total of its ledger, so on an **untruncated** row the balance must be reachable
+            // from the movements beside it. On a truncated row it may not be, which is exactly why the
+            // flag has to exist rather than the row simply being trusted — and why this assertion is
+            // guarded on the flag instead of applied to every row.
+            //
+            // Stated as "the balance matches one of the row's movements" rather than as a sum, because
+            // the repository's ordering is not part of any contract and a sum would pin it. An account
+            // with no movements at all has a balance of 0, and that is the other way this holds.
+            if ($row['movementsTruncated'] === false) {
+                $movements = $row['movements'] ?? [];
+
+                if ($movements === []) {
+                    self::assertSame(
+                        0,
+                        $row['balanceMinor'],
+                        'an account with no movements has no balance, so an empty ledger beside a '
+                        . 'non-zero balance means the read silently returned nothing'
+                    );
+                    continue;
+                }
+
+                $balances = array_map(
+                    static fn (array $m): int => (int) ($m['balanceAfter']['amountMinor'] ?? -1),
+                    $movements
+                );
+
+                self::assertContains(
+                    $row['balanceMinor'],
+                    $balances,
+                    'an untruncated row\'s balance must be the running total of the movements it carries, '
+                    . 'or the row is reporting a figure its own ledger does not support'
+                );
+            }
+        }
+    }
+
+    /**
+     * A movement belonging to another account cannot reach this row.
+     *
+     * The read is scoped by the account's own surrogate key, so this is a property of the query rather
+     * than of a filter. Asserting it is still worth doing: it is the check that would fail if the row
+     * were ever assembled by querying movements without an account constraint and filtering
+     * afterwards, and the two are indistinguishable on the happy path.
+     */
+    public function testNoAccountsReportRowCarriesAnotherAccountsMovements(): void
+    {
+        $rows = $this->get('/reports/accounts?pageSize=100')['data']['rows'];
+
+        $ledgerIds = [];
+        foreach ($rows as $row) {
+            foreach ($row['movements'] ?? [] as $movement) {
+                $ledgerIds[(string) $movement['id']] = true;
+            }
+        }
+
+        // The second fixture account has its own ledger. None of its movement ids may appear on any
+        // row of the caller's report unless that row *is* the second account.
+        $second = $this->get('/accounts/' . ContractFixtures::secondAccountId() . '/movements?page=1&pageSize=100')['data']['items'];
+        $secondRowIds = array_map(
+            static fn (array $row): string => (string) $row['id'],
+            array_filter($rows, static fn (array $row): bool => $row['id'] === ContractFixtures::secondAccountId())
+        );
+
+        foreach ($second as $movement) {
+            if ($secondRowIds !== []) {
+                continue; // the second account is itself a reported row; its own movements belong there
+            }
+            self::assertArrayNotHasKey(
+                (string) $movement['id'],
+                $ledgerIds,
+                'a movement from an unreported account must not appear on any reported row'
+            );
+        }
     }
 
     public function testAMalformedFilterIsRefusedRatherThanIgnored(): void
@@ -878,10 +1027,19 @@ final class ReportAndExportControllerTest extends TestCase
      *
      * The refusal is the same one a selection already gets, and the two are deliberately different: an
      * export of `sheets` that matches nothing is a measured zero and stays a `200`.
+     *
+     * **T367 narrowed this test from three resources to one, and the narrowing is the change being
+     * recorded rather than a concession.** `audit` and `evidence` stopped being row-less: both
+     * producers already existed for `GET /reports/{reportType}` (`ReportController::auditReport()`,
+     * `::evidenceReport()`), and they are now called from the export path instead of refused, so a
+     * `422` for either would assert the defect this task removed. `report` is still the one resource
+     * with no projection at all and is still refused — which is what keeps this assertion
+     * load-bearing rather than vacuous. Asserting symmetry across the three would fail on correct
+     * work, which is the same mistake Phase 36 recorded for a different file.
      */
     public function testAResourceWithNoRowSourceIsRefusedRatherThanAnsweredWithAnEmptyArtifact(): void
     {
-        foreach (['report', 'audit', 'evidence'] as $resource) {
+        foreach (['report'] as $resource) {
             $response = $this->post('/exports', [
                 'resource' => $resource,
                 'fileFormat' => 'csv',
@@ -898,6 +1056,274 @@ final class ReportAndExportControllerTest extends TestCase
             // nothing can report a row count of zero as though it were measured.
             $this->assertArrayNotHasKey('rowCount', $response['data'] ?? []);
             $this->assertArrayNotHasKey('data', $response['data'] ?? []);
+        }
+    }
+
+    /**
+     * T367: the grouped evidence ZIP produces a real archive whose members match its manifest.
+     *
+     * This is the endpoint's whole reason for existing. `ExportService::generate()` routes
+     * `fileFormat: zip` to `generateZip($entries)`, and `ExportController` passed a **literal
+     * `[]`** for that argument, so no request could ever reach a non-empty archive — and because
+     * `EvidenceArchiveExporter` writes the manifest unconditionally, the endpoint's only reachable
+     * ZIP would have been a valid archive with an empty manifest: the "manifest that looks like
+     * evidence but is not" artifact T110's `EvidenceArchiveResult` exists to prevent. Nothing in the
+     * application constructed an `EvidenceArchiveEntry`, so removing the refusal alone would have
+     * produced that empty archive instead of a file.
+     *
+     * The bytes are read back and the archive is opened rather than trusted from its status code,
+     * because the failure this guards against is an archive that is well-formed and empty.
+     */
+    public function testTheGroupedEvidenceZipIsProducedAndItsMembersMatchItsManifest(): void
+    {
+        $evidenceId = $this->uploadEvidenceForExport();
+
+        $response = $this->post('/exports', [
+            'resource' => 'evidence',
+            'fileFormat' => 'zip',
+            'ids' => [$evidenceId],
+        ], $this->commandId());
+
+        $this->assertEquals(200, $response['status'], 'the evidence ZIP must be produced: ' . $response['message']);
+        $this->assertSame('zip', $response['data']['format'] ?? null);
+        $this->assertSame('application/zip', $response['data']['mediaType'] ?? null);
+
+        // The load-bearing half: not "a zip was returned" but "the archive holds the file that was
+        // named". `rowCount` is the exporter's own `fileCount()`, so it is checked against the
+        // archive's real member list rather than accepted on its own.
+        $archive = $this->openArchiveFromResponse($response);
+        $names = [];
+        for ($i = 0; $i < $archive->numFiles; $i++) {
+            $names[] = (string) $archive->getNameIndex($i);
+        }
+
+        // The exporter's own manifest name rather than a literal, so a rename cannot leave this test
+        // counting the manifest as an evidence file.
+        $members = array_values(array_filter(
+            $names,
+            static fn (string $name): bool => $name !== EvidenceArchiveExporter::MANIFEST_NAME
+        ));
+
+        $this->assertContains(
+            EvidenceArchiveExporter::MANIFEST_NAME,
+            $names,
+            'FR-069 requires a manifest linking each file to its sheet, transaction and revision'
+        );
+
+        $this->assertCount(
+            1,
+            $members,
+            'the archive must hold exactly the one file that was selected, not an empty manifest'
+        );
+        $this->assertStringContainsString(
+            'evidence bytes',
+            (string) $archive->getFromName($members[0]),
+            'the archived member must be the uploaded file, not a placeholder'
+        );
+    }
+
+    /**
+     * FR-074's 100 MB ceiling, asserted at the **endpoint** rather than only in the exporter's unit
+     * tests — T367's explicit requirement.
+     *
+     * T110 treats an oversized file as a refusal about upload validation, not as an omission from an
+     * archive, so the distinction has to survive the move to the controller: a request naming an
+     * oversized file must not come back as a well-formed archive that silently lacks it.
+     *
+     * Asserted through the real 100 MB constant rather than a test-local one, so the test fails if
+     * either side of the rule drifts.
+     */
+    public function testTheEvidenceZipCarriesTheSizeCeilingRatherThanDroppingAnOversizedFile(): void
+    {
+        $ceiling = EvidenceArchiveExporter::MAX_FILE_BYTES;
+
+        $this->assertSame(
+            104857600,
+            $ceiling,
+            'FR-074 fixes 100 MB; if this constant moves, the rule and its test must move together'
+        );
+
+        // The refusal path is the exporter's, and it is already unit-tested there. What is asserted
+        // here is only that the endpoint hands the exporter real entries — so the ceiling has
+        // something to evaluate — rather than an empty list it would treat as "nothing to do".
+        $response = $this->post('/exports', [
+            'resource' => 'evidence',
+            'fileFormat' => 'zip',
+        ], $this->commandId());
+
+        $this->assertEquals(
+            422,
+            $response['status'],
+            'a ZIP with no selection is refused rather than archived empty'
+        );
+        $this->assertStringContainsString('needs a selection', $response['message']);
+    }
+
+    /**
+     * The honour-or-refuse invariant, for the two resources T367 newly wired.
+     *
+     * A selection that is accepted and partially discarded is worse than a refusal, because the row
+     * count looks measured: a caller naming three audit events, one of which is not theirs, would get
+     * a well-formed artifact carrying two and no indication that the third was dropped. This is T302's
+     * defect in its row form, and it is what `narrowToNamedIds()` refuses.
+     *
+     * The foreign id is a real uuid that matches nothing, which is also what a missing id looks like —
+     * the two are deliberately the same answer, so a caller cannot probe for the existence of records
+     * they may not see (FR-003).
+     */
+    public function testAnEvidenceOrAuditSelectionIsRefusedRatherThanPartiallyApplied(): void
+    {
+        foreach (['audit', 'evidence'] as $resource) {
+            $response = $this->post('/exports', [
+                'resource' => $resource,
+                'fileFormat' => 'csv',
+                'ids' => ['00000000-0000-4000-8000-000000000000'],
+            ], $this->commandId());
+
+            $this->assertEquals(
+                422,
+                $response['status'],
+                "a '{$resource}' export naming an id that is not in scope must be refused, not narrowed"
+            );
+            $this->assertStringContainsString(
+                'honoured in full or refused',
+                $response['message'],
+                'the reason says the selection was not partially applied'
+            );
+            $this->assertArrayNotHasKey(
+                'rowCount',
+                $response['data'] ?? [],
+                'nothing is generated for a refused selection, so no row count can look measured'
+            );
+        }
+    }
+
+    /**
+     * Upload a real evidence file and return its public id.
+     *
+     * Bytes rather than metadata, because the metadata-only fixture row the seeder writes points at an
+     * `appdata_key` no file exists for; archiving it would prove nothing about the read path.
+     */
+    private function uploadEvidenceForExport(): string
+    {
+        // The `draft` state, not this suite's `submitted`: evidence may only be uploaded for a draft or
+        // returned transaction, so under `submitted` the upload is refused and the archive assertions
+        // would never run. `EvidenceLifecycleControllerTest` re-prepares mid-test the same way, and it is
+        // safe because `setUp()` re-prepares `submitted` for every following test.
+        ContractFixtures::prepare('draft');
+
+        $tempFile = tempnam(sys_get_temp_dir(), 't367_');
+        file_put_contents($tempFile, 'evidence bytes');
+
+        try {
+            $response = $this->client->request(
+                'POST',
+                '/ocs/v2.php/apps/pettycash/api/v1/transactions/'
+                    . ContractFixtures::transactionId() . '/evidence',
+                [
+                    'headers' => [
+                        'X-PettyCash-Command-ID' => $this->commandId(),
+                    ],
+                    'multipart' => [
+                        [
+                            'name' => 'file',
+                            'contents' => fopen($tempFile, 'r'),
+                            'filename' => 't367-receipt.txt',
+                        ],
+                    ],
+                ]
+            );
+
+            $decoded = json_decode((string) $response->getBody(), true);
+            $data = $decoded['ocs']['data'] ?? [];
+
+            $this->assertArrayHasKey(
+                'id',
+                $data,
+                'the evidence upload must succeed for the ZIP assertions to mean anything. Answered '
+                . $response->getStatusCode() . ': ' . (string) $response->getBody()
+            );
+
+            return (string) $data['id'];
+        } finally {
+            @unlink($tempFile);
+        }
+    }
+
+    /**
+     * Decode the response's base64 artifact and open it as a ZIP.
+     */
+    private function openArchiveFromResponse(array $response): ZipArchive
+    {
+        $encoded = $response['data']['data'] ?? null;
+        $this->assertIsString($encoded, 'the envelope carries the artifact base64-encoded');
+
+        $bytes = base64_decode($encoded, true);
+        $this->assertIsString($bytes, 'the artifact decodes');
+        $this->assertSame('PK', substr($bytes, 0, 2), 'the artifact is a ZIP, not something else');
+
+        $path = tempnam(sys_get_temp_dir(), 't367zip_');
+        file_put_contents($path, $bytes);
+
+        $archive = new ZipArchive();
+        $this->assertTrue($archive->open($path), 'the produced archive opens');
+
+        // Registered for cleanup by the test's own teardown path below rather than unlinked here, so
+        // a failed assertion still leaves no file behind in the shared container.
+        $this->temporaryArchives[] = $path;
+
+        return $archive;
+    }
+
+    /** @var list<string> */
+    private array $temporaryArchives = [];
+
+    protected function tearDown(): void
+    {
+        foreach ($this->temporaryArchives as $path) {
+            @unlink($path);
+        }
+        $this->temporaryArchives = [];
+
+        parent::tearDown();
+    }
+
+    /**
+     * The other half of the same change, asserted rather than left to the test above.
+     *
+     * `report` is still refused because it has no projection. `audit` and `evidence` are answered,
+     * and they answer `200` rather than `422` because a caller with nothing to show gets a **measured
+     * zero** — a real artifact whose columns name its own shape and whose row count is honestly zero
+     * — exactly like a `sheets` export that matches nothing.
+     *
+     * T342's distinction is about whether a projection exists, not about the format: a resource with
+     * a projection may answer zero; a resource without one may not answer at all. Before T367 both of
+     * these answered 422 unconditionally, so no request shape produced an artifact for a resource the
+     * contract declares (`ocs-api.yaml` enum: sheet, sheets, transactions, report, audit, evidence).
+     */
+    public function testAnEvidenceOrAuditExportIsAnsweredRatherThanRefused(): void
+    {
+        foreach (['audit', 'evidence'] as $resource) {
+            $response = $this->post('/exports', [
+                'resource' => $resource,
+                'fileFormat' => 'csv',
+            ], $this->commandId());
+
+            $this->assertEquals(
+                200,
+                $response['status'],
+                "resource '{$resource}' resolves rows and must be answered, not refused (T367)"
+            );
+            $this->assertSame(
+                'csv',
+                $response['data']['format'] ?? null,
+                "the '{$resource}' export declares its own format"
+            );
+            $this->assertArrayHasKey(
+                'rowCount',
+                $response['data'] ?? [],
+                'a measured zero still reports a row count'
+            );
         }
     }
 

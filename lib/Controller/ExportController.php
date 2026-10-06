@@ -11,6 +11,8 @@ use OCA\PettyCash\Application\Reporting\DashboardQuery;
 use OCA\PettyCash\Application\Reporting\ExportService;
 use OCA\PettyCash\Application\Reporting\ReportFilter;
 use OCA\PettyCash\Application\Reporting\ReportFilterFactory;
+use OCA\PettyCash\Application\Reporting\AuditSelectionQuery;
+use OCA\PettyCash\Application\Reporting\EvidenceSelectionQuery;
 use OCA\PettyCash\Application\Reporting\ReportQuery;
 use OCA\PettyCash\Application\Reporting\ReportScope;
 use OCA\PettyCash\Infrastructure\Http\OcsErrorMapper;
@@ -65,6 +67,17 @@ class ExportController extends OCSController
         'costCenterDbId', 'costCenterCode', 'expenseTypeDbId', 'expenseTypeTitle', 'amountMinor', 'currency',
     ];
 
+    /**
+     * How many rows an evidence or audit export may read.
+     *
+     * A named selection is resolved id by id and is not bounded by this at all — the cap applies
+     * only to the "export everything in scope" case, which enumerates. Stated rather than left
+     * implicit because a cap that silently truncated a caller's named selection would be a
+     * selection that was accepted and discarded, which is the invariant this method exists to
+     * make impossible.
+     */
+    private const SELECTION_BOUND = 1000;
+
     public function __construct(
         IRequest $request,
         private CurrentUser $currentUser,
@@ -72,6 +85,8 @@ class ExportController extends OCSController
         private ExportService $exports,
         private ReportQuery $reports,
         private ReportFilterFactory $filters,
+        private EvidenceSelectionQuery $evidenceSelection,
+        private AuditSelectionQuery $auditSelection,
         private \OCA\PettyCash\Domain\Expense\Repository\ExpenseSheetRepository $sheets,
         private \OCA\PettyCash\Domain\Expense\Repository\ExpenseTransactionRepository $transactions,
         private OcsErrorMapper $ocsErrorMapper
@@ -148,9 +163,34 @@ class ExportController extends OCSController
             // Resolve the selection *before* generating. Authorize-and-generate in one call still
             // holds -- `ExportService::generate()` refuses before it writes anything, which is the
             // ordering `contracts/exports.md` requires -- but the rows are now the selected ones.
-            [$rows, $columns] = $this->rowsForSelection($resource, $ids, $filter, $scope, $fileFormat);
+            [$rows, $columns] = $this->rowsForSelection($resource, $ids, $filter, $scope, $fileFormat, $uid);
 
-            $result = $this->exports->generate($scope, $resource, $fileFormat, $rows, [], $columns);
+            // T367: the ZIP entries the grouped evidence export needs.
+            //
+            // This argument was a literal `[]` and that was the whole defect: `ExportService`
+            // routes `zip` to `generateZip($entries)`, `EvidenceArchiveExporter` treats an empty
+            // entry list as "nothing to add" and still writes a manifest, so the endpoint could
+            // only ever have answered with **a valid, empty ZIP carrying an empty manifest** — the
+            // "manifest that looks like evidence but is not" failure T110's result object exists to
+            // prevent. `grep -rn "new EvidenceArchiveEntry" lib/` returned nothing, so nothing in
+            // the application could produce one.
+            //
+            // Built only for the one combination that reads them: `evidence` + `zip`. Building
+            // entries for a csv export would do four lookups per selected id and discard them.
+            $entries = [];
+            if ($resource === ExportService::RESOURCE_EVIDENCE && $fileFormat === ExportService::FORMAT_ZIP) {
+                if ($ids === []) {
+                    throw new UnsupportedSelection(
+                        "A 'zip' export of resource 'evidence' needs a selection: pass the evidence "
+                        . 'ids to include. Building an archive of every file you can see is not '
+                        . 'implemented, and answering with an empty archive would misreport it as an '
+                        . 'empty result.'
+                    );
+                }
+                $entries = $this->evidenceSelection->archiveEntries($scope, $uid, $ids);
+            }
+
+            $result = $this->exports->generate($scope, $resource, $fileFormat, $rows, $entries, $columns);
 
 
             try {
@@ -172,6 +212,11 @@ class ExportController extends OCSController
                 'format' => $result['format'],
                 'byteSize' => $result['byteSize'],
                 'rowCount' => $result['rowCount'],
+                // FR-068: an export that resolved a predefined period states the range and the zone, for
+                // the same reason a report does — and an export is where the disagreement actually gets
+                // noticed, because two finance officers reconcile their figures against each other. Built
+                // by `ReportFilter` so this endpoint and `GET /reports` cannot state it differently.
+                ...$filter->periodDisclosure(),
                 'artifactRemoved' => !$this->exports->artifactExists($result['artifactName']),
                 // Nextcloud's OCS layer wraps every body as JSON, so the artifact cannot be the raw
                 // response body the contract's media types describe. It is carried base64-encoded
@@ -189,6 +234,78 @@ class ExportController extends OCSController
         } catch (\Throwable $e) {
             return $this->ocsErrorMapper->map($e, $commandId !== '' ? $commandId : null);
         }
+    }
+
+    /**
+     * Reduce rows to the ids the caller named, or refuse.
+     *
+     * ## Why this refuses rather than filters
+     *
+     * Filtering alone is the defect this method exists to prevent, in its row form. A caller naming
+     * three evidence files, one of which does not exist or is someone else's, would receive a
+     * well-formed artifact carrying **two** — with `rowCount: 2` and nothing anywhere saying the third
+     * was dropped. That is the same shape T302 recorded for `ids` on sheets: a selection that is
+     * accepted and discarded, which is worse than a refusal because the numbers look measured.
+     *
+     * So every named id must be accounted for. A missing id and a foreign id are indistinguishable
+     * here on purpose: distinguishing them would confirm the existence of records the caller may not
+     * see, which is the disclosure FR-003 exists to prevent.
+     *
+     * @param list<array<string, mixed>> $rows
+     * @param list<string> $ids
+     * @return list<array<string, mixed>>
+     */
+    private function narrowToNamedIds(array $rows, array $ids, string $resource): array
+    {
+        $wanted = array_values(array_unique($ids));
+        $byId = [];
+
+        foreach ($rows as $row) {
+            $byId[(string) ($row['id'] ?? '')] = $row;
+        }
+
+        $missing = array_values(array_filter(
+            $wanted,
+            static fn (string $id): bool => !isset($byId[$id])
+        ));
+
+        if ($missing !== []) {
+            throw new UnsupportedSelection(
+                sprintf(
+                    "No %s in scope matches %s. A selection is honoured in full or refused; an export "
+                    . 'that silently dropped %s would report a row count that looks measured.',
+                    $resource,
+                    count($missing) === 1 ? "id '{$missing[0]}'" : 'ids ' . implode(', ', $missing),
+                    count($missing) === 1 ? 'it' : 'them'
+                )
+            );
+        }
+
+        // Reindexed: the artifact writer iterates by position, so a gap would become a blank line.
+        return array_values(array_map(
+            static fn (string $id): array => $byId[$id],
+            $wanted
+        ));
+    }
+
+    /**
+     * Apply a selection query's scope predicate, passing the scope the way its contract declares it.
+     *
+     * The predicates are `callable(array<string, mixed>, ReportScope): bool` — the same shape
+     * `ReportQuery::paginate()` calls them with — so they cannot be handed straight to
+     * `array_filter()`, which passes one argument. Doing that produced an
+     * `ArgumentCountError` from inside the closure and therefore a bare 500 on every evidence export.
+     *
+     * @param list<array<string, mixed>> $rows
+     * @param callable(array<string, mixed>, ReportScope): bool $inScope
+     * @return list<array<string, mixed>>
+     */
+    private function scopedRows(array $rows, callable $inScope, ReportScope $scope): array
+    {
+        return array_values(array_filter(
+            $rows,
+            static fn (array $row): bool => (bool) $inScope($row, $scope)
+        ));
     }
 
     /**
@@ -238,7 +355,8 @@ class ExportController extends OCSController
         array $ids,
         ReportFilter $filter,
         ReportScope $scope,
-        string $fileFormat
+        string $fileFormat,
+        string $uid
     ): array {
         $selectsSomething = $ids !== [] || $filter->hasFieldFilters();
 
@@ -259,14 +377,45 @@ class ExportController extends OCSController
             ];
         }
 
+        // T367. These two answered 422 in **both** the selected and the unselected case, because
+        // nothing resolved rows for them — so no request shape produced an artifact for a resource
+        // the contract declares and the client offers. Both producers already existed for
+        // GET /reports/{type}; they are called rather than copied, so a scope rule cannot mean one
+        // thing in a report and another in an export.
+        if ($resource === ExportService::RESOURCE_EVIDENCE) {
+            [$rows, $inScope, $columns] = $this->evidenceSelection->candidates($uid, self::SELECTION_BOUND);
+
+            if ($ids !== []) {
+                $rows = $this->narrowToNamedIds($rows, $ids, 'evidence');
+            }
+
+            return [
+                $this->reports->narrow($filter, $this->scopedRows($rows, $inScope, $scope)),
+                $columns,
+            ];
+        }
+
+        if ($resource === ExportService::RESOURCE_AUDIT) {
+            [$rows, $inScope, $columns] = $this->auditSelection->candidates($uid, self::SELECTION_BOUND);
+
+            if ($ids !== []) {
+                $rows = $this->narrowToNamedIds($rows, $ids, 'audit');
+            }
+
+            return [
+                $this->reports->narrow($filter, $this->scopedRows($rows, $inScope, $scope)),
+                $columns,
+            ];
+        }
+
         if ($selectsSomething) {
             // The refusal that makes the defect impossible to reintroduce silently. `report`, `audit`
             // and `evidence` do not yet resolve a selection, and until they do the honest answer is
             // "not supported" rather than an artifact that quietly omits what was asked for.
             throw new UnsupportedSelection(
                 "Exporting a selection of '{$resource}' is not supported yet; ids/filters are honoured "
-                . "for resource 'sheet', 'sheets' and 'transactions'. Requesting the export without a "
-                . 'selection is unaffected.'
+                . "for resource 'sheet', 'sheets', 'transactions', 'evidence' and 'audit'. Requesting "
+                . "the export of 'report' without a selection is unaffected."
             );
         }
 
@@ -283,8 +432,9 @@ class ExportController extends OCSController
         // a measurement at all, and the only honest answer is the same refusal a selection gets.
         throw new UnsupportedSelection(
             "Exporting resource '{$resource}' is not supported yet; rows are resolved for 'sheet', "
-            . "'sheets' and 'transactions'. No artifact is produced for a resource with no row source, "
-            . 'because an empty file with a row count of zero reads as a measured result.'
+            . "'sheets', 'transactions', 'evidence' and 'audit', and 'report' is the one resource "
+            . 'still without a row source. No artifact is produced for a resource with no row '
+            . 'source, because an empty file with a row count of zero reads as a measured result.'
         );
 
         // The refusal above is the only exit for a resource with no row source: every path that reaches

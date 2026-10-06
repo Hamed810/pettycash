@@ -71,7 +71,8 @@ final class AccountPayloadSingleDefinitionTest extends TestCase
             $this->roleAssignments,
             new IdempotencyService(new InMemoryCommandResultRepository()),
             new InMemoryCurrentUser(self::PROBE_USER),
-            new AccountPayloadFormatter()
+            new AccountPayloadFormatter(),
+            new \OCA\PettyCash\Tests\TestDoubles\InMemoryAuditWriter()
         );
     }
 

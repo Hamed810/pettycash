@@ -657,15 +657,53 @@ paths:
         - $ref: '#/components/parameters/EvidenceId'
         - name: disposition
           in: query
+          description: >-
+            Preview or download. Honoured for a media type that is safe to render in the
+            Nextcloud origin (images, PDF, plain text). A media type outside that set is
+            always served as `application/octet-stream` with an `attachment` disposition
+            regardless of this parameter, because an attacker-supplied type served inline
+            would execute as script in the viewer's session. FR-060.
           schema:
             type: string
             enum: [inline, attachment]
             default: inline
       responses:
         '200':
+          # FR-060 (T275). This used to declare exactly one success content type,
+          # `application/octet-stream`, which made the requirement's preview journey
+          # unimplementable while the same block declared a `disposition` parameter
+          # defaulting to `inline` -- a value that cannot render an octet-stream body. The
+          # 2026-09-30 clarification settled that the contract was the artifact at fault.
+          #
+          # The declared set is now the closed set the endpoint can actually return: the
+          # inline-safe types are served with their own media type so they render, and
+          # everything else is served as `application/octet-stream`. Listing them explicitly
+          # rather than writing "the stored media type" keeps the response checkable -- a new
+          # type cannot be served without either appearing here or being coerced to the
+          # fallback.
+          #
+          # `image/svg+xml` is deliberately absent from the inline-safe set. SVG is an image
+          # and it can carry `<script>`; serving it inline would execute script in the
+          # viewer's session, which is the harm FR-060 names. It is served as
+          # `application/octet-stream` with an `attachment` disposition like any other
+          # unlisted type.
           description: Evidence byte stream
           content:
-            application/octet-stream:
+            'application/octet-stream':
+              schema: { type: string, format: binary }
+            'application/pdf':
+              schema: { type: string, format: binary }
+            'image/png':
+              schema: { type: string, format: binary }
+            'image/jpeg':
+              schema: { type: string, format: binary }
+            'image/gif':
+              schema: { type: string, format: binary }
+            'image/webp':
+              schema: { type: string, format: binary }
+            'image/bmp':
+              schema: { type: string, format: binary }
+            'text/plain':
               schema: { type: string, format: binary }
 
   /evidence/{evidenceId}/links:
@@ -1299,6 +1337,10 @@ components:
           properties:
             columns: { type: array, items: { type: string } }
             rows: { type: array, items: { type: object, additionalProperties: true } }
+            # FR-068: when the request resolved a predefined `period`, this carries `period`,
+            # `resolvedFrom`, `resolvedTo` and `resolvedTimeZone`. Absent otherwise, rather than present
+            # and null -- a key describing a request the response did not use is a claim about the request
+            # rather than about the answer.
             summary: { type: object, additionalProperties: true }
     ExportResult:
       type: object
@@ -1312,6 +1354,15 @@ components:
         format: { type: string, enum: [csv, xlsx, pdf, zip] }
         byteSize: { type: integer }
         rowCount: { type: integer }
+        # FR-068. Present only when the request resolved a predefined `period`. Both the range and the zone
+        # are stated so two users in different zones can tell a different period from a different
+        # timezone -- which is where an export's numbers actually get reconciled against each other.
+        period: { type: string, enum: [month, quarter, year] }
+        resolvedFrom: { type: string, format: date, description: First day of the resolved period, inclusive }
+        resolvedTo: { type: string, format: date, description: Last day of the resolved period, inclusive }
+        resolvedTimeZone:
+          type: string
+          description: The zone the period was resolved in, not an offset
         data: { type: string, format: byte, description: base64-encoded artifact bytes }
         artifactRemoved: { type: boolean, description: True once the transient artifact has been deleted }
     ExportRequest:
@@ -1339,4 +1390,25 @@ components:
           nullable: true
         filters:
           type: object
+          # FR-068. `period` is a member of the accepted filter vocabulary in its own right -- **not** a
+          # parameterisation of `from`/`to`. FR-068 presents a predefined Jalali period and an explicit
+          # custom date range as alternatives and makes them mutually exclusive, which a
+          # parameterisation and the filter it parameterises cannot be. FR-064 was amended on 2026-09-30
+          # to say so; before that this contract's closed-vocabulary rule forbade a filter FR-068 required.
+          #
+          # Each names the period **in progress at request time**, first day through last inclusive:
+          # `month`/`quarter`/`year` are Jalali (Solar Hijri), a year spans Farvardin to Esfand, and a
+          # quarter begins at Farvardin. A previous or trailing period is requested with `from`/`to`.
+          #
+          # Supplying `period` together with `from` or `to` is refused with `422` naming the conflict and
+          # stating which to remove. Neither is honoured while the other is discarded, and they are never
+          # intersected.
           additionalProperties: true
+          properties:
+            period:
+              type: string
+              enum: [month, quarter, year]
+              description: >-
+                A predefined Jalali period in progress, resolved at query time in the requesting user's
+                own time zone (their account setting, else the instance default). Mutually exclusive with
+                `from`/`to` within one request.

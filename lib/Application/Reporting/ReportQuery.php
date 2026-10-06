@@ -321,6 +321,14 @@ final readonly class ReportQuery
         'stages' => ['stage'],
         'amountRange' => ['amountMinor'],
         'dateRange' => ['occurredAt', 'createdAt'],
+        // FR-068. `period` resolves into `from`/`to` in `ReportFilterFactory`, so it reads the same keys
+        // `dateRange` does and compares the same values — the entry is here so the *name* is
+        // answerable per resource, which is what `ReportFilterFactoryTest::
+        // testEveryRequestNameIsAnsweredByARuleThatNamesIt` requires of every accepted filter. A report
+        // that cannot answer a period must be able to refuse it by the name the caller sent rather than
+        // ignore it. Adding the key without the two `match` arms below would satisfy that guard's letter
+        // with a rule that never fires, so both are here.
+        'period' => ['occurredAt', 'createdAt'],
     ];
 
     /**
@@ -424,6 +432,7 @@ final readonly class ReportQuery
             'stages' => $filter->stages !== [],
             'amountRange' => $filter->hasAmountRange(),
             'dateRange' => $filter->hasDateRange(),
+            'period' => $filter->hasReportingPeriod(),
             default => false,
         };
     }
@@ -433,7 +442,9 @@ final readonly class ReportQuery
      */
     private function rowMatches(mixed $value, ReportFilter $filter, string $field): bool
     {
-        if ($field === 'dateRange') {
+        // A resolved period narrows by the same `from`/`to` the `dateRange` rule uses, so it takes the
+        // same branch. Both rules can therefore fire for one filter and the comparison is idempotent.
+        if ($field === 'dateRange' || $field === 'period') {
             $moment = $value instanceof \DateTimeInterface
                 ? $value
                 : new \DateTimeImmutable((string) $value);

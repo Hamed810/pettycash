@@ -5,6 +5,9 @@ declare(strict_types=1);
 namespace OCA\PettyCash\Application\Reporting;
 
 use InvalidArgumentException;
+use OCA\PettyCash\Application\Port\CurrentUser;
+use OCA\PettyCash\Application\Port\RequestTimeZone;
+use OCA\PettyCash\Domain\Shared\JalaliReportingPeriods;
 
 /**
  * The one place a request's filter object becomes a `ReportFilter`.
@@ -54,9 +57,20 @@ final class ReportFilterFactory
         'from', 'to', 'statuses', 'currencyCodes', 'costCenterIds', 'costCenterDbIds', 'actorUids',
         'eventTypes', 'createdBy', 'expenseTypeIds', 'expenseTypeDbIds', 'stages', 'amountMinMinor',
         'amountMaxMinor',
+        // FR-068 / FR-064. `period` is a member in its own right, **not** a parameterisation of
+        // `from`/`to`: FR-068 presents a period and a custom date range as alternatives and makes them
+        // mutually exclusive, which a parameterisation and its own host cannot be. FR-064 was amended to
+        // say so on 2026-09-30; before that the specification required this filter and, through the
+        // closed-vocabulary rule below, forbade it.
+        'period',
     ];
 
-    public function __construct(private FilterIdentityResolver $identities) {}
+    public function __construct(
+        private FilterIdentityResolver $identities,
+        private JalaliReportingPeriods $periods,
+        private RequestTimeZone $timeZones,
+        private CurrentUser $currentUser
+    ) {}
 
     /**
      * Build a filter from an already-decoded filter object.
@@ -104,11 +118,51 @@ final class ReportFilterFactory
             ));
         }
 
+        // FR-068: `period` and an explicit date range are mutually exclusive, and neither may be
+        // honoured while the other is discarded. Both orderings are refused because a caller can send the
+        // keys in either order, and "whichever arrived first wins" is exactly the silent discard FR-068
+        // forbids -- the caller would get one filter while believing they sent two.
+        $requestedPeriod = isset($decoded['period']) ? trim((string) $decoded['period']) : null;
+        $hasExplicitFrom = isset($decoded['from']);
+        $hasExplicitTo = isset($decoded['to']);
+
+        if ($requestedPeriod !== null && $requestedPeriod !== '' && ($hasExplicitFrom || $hasExplicitTo)) {
+            $conflicting = implode('`, `', array_keys(array_filter([
+                'from' => $hasExplicitFrom,
+                'to' => $hasExplicitTo,
+            ])));
+
+            throw new InvalidArgumentException(sprintf(
+                'The `period` filter and the explicit date range `%s` are mutually exclusive within one '
+                . 'request: `period` names a predefined Jalali period while `from`/`to` name explicit '
+                . 'dates. Remove one of them \u2014 the application will not honour one while discarding '
+                . 'the other, and will not intersect them.',
+                $conflicting
+            ));
+        }
+
+        $from = $this->date($decoded, 'from');
+        $to = $this->date($decoded, 'to');
+        $resolvedZone = null;
+
+        // Resolved here, once, rather than in the query: a query has no clock and no zone, and putting
+        // the Jalali conversion in the query path is what `plan.md`'s "isolated behind a small value
+        // object" exists to prevent. `Clock` is read inside `JalaliReportingPeriods`, never PHP's.
+        if ($requestedPeriod !== null && $requestedPeriod !== '') {
+            $zone = $this->timeZones->forUser($this->currentUser->uid());
+            $period = $this->periods->resolveInProgress($requestedPeriod, $zone);
+
+            $from = new \DateTimeImmutable($period->fromDate(), $zone);
+            $to = new \DateTimeImmutable($period->toDate(), $zone);
+            $resolvedZone = $period->zoneName();
+            $requestedPeriod = $period->name;
+        }
+
         return new ReportFilter(
             $page,
             $pageSize,
-            $this->date($decoded, 'from'),
-            $this->date($decoded, 'to'),
+            $from,
+            $to,
             $this->strings($decoded, 'statuses'),
             $this->strings($decoded, 'currencyCodes'),
             $this->costCenterDbIds($decoded),
@@ -118,7 +172,9 @@ final class ReportFilterFactory
             $this->expenseTypeDbIds($decoded),
             $this->strings($decoded, 'stages'),
             $this->bound($decoded, 'amountMinMinor'),
-            $this->bound($decoded, 'amountMaxMinor')
+            $this->bound($decoded, 'amountMaxMinor'),
+            $requestedPeriod === '' ? null : $requestedPeriod,
+            $resolvedZone
         );
     }
 

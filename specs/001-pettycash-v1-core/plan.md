@@ -212,15 +212,23 @@ lib/
 ├── Controller/              # Thin page and OCS transport adapters
 ├── Application/
 │   ├── Command/             # State-changing use cases
-│   ├── Query/               # Role-scoped read use cases
-│   ├── Dto/
-│   └── Port/                # Identity, clock, file, export, transaction ports
+│   ├── Port/                # Identity, clock, file, export, transaction ports
+│   ├── Account/             # Accounts, charges, and the account payload shapes
+│   ├── Audit/               # Audit writing, event types, retention policy
+│   ├── Configuration/       # Currencies, cost centers, expense types, assignments
+│   ├── DataIntegrity/
+│   ├── Evidence/
+│   ├── Expense/             # Sheets, transactions, corrections, submission
+│   ├── Reporting/           # Role-scoped read use cases, filters, projections
+│   ├── Security/            # Authorization policies
+│   └── Workflow/            # Management review, finance settlement, commands
 ├── Domain/
 │   ├── Account/
+│   ├── Audit/
 │   ├── Configuration/
+│   ├── Evidence/
 │   ├── Expense/
 │   ├── Workflow/
-│   ├── Audit/
 │   └── Shared/              # Money, identifiers, domain errors
 ├── Infrastructure/
 │   ├── Nextcloud/           # User, admin, logging, clock, AppData adapters
@@ -235,14 +243,14 @@ src/
 ├── router/
 ├── services/                # Typed OCS client; components never call HTTP directly
 ├── stores/                  # Session and feature stores; no business-rule authority
-├── composables/
-├── formatters/
+├── composables/             # Reusable view logic (useAsyncAction — T121)
+├── utils/                   # Currency and presentation formatting (formatMoney)
 ├── components/
 ├── views/
 └── styles/                  # Logical properties, RTL, responsive, theme variables
 
 templates/main.php           # Nextcloud page mount point only
-l10n/                        # Persian source and generated translation artifacts
+l10n/                        # Persian source and generated translation artifacts (T119)
 js/                          # Generated deployable browser bundles
 css/                         # Generated/served application styles
 
@@ -250,19 +258,41 @@ tests/
 ├── Unit/
 │   ├── Domain/
 │   ├── Application/
+│   ├── Architecture/        # Layer boundaries, route/dispatch completeness
+│   ├── Audit/
+│   ├── Evidence/
+│   ├── Export/
+│   ├── Infrastructure/
+│   ├── Reporting/
 │   ├── Security/
-│   └── Export/
+│   └── Workflow/
 ├── Integration/
+│   ├── Account/
+│   ├── Audit/
+│   ├── Expense/
 │   ├── Persistence/
 │   ├── Migration/
-│   ├── Storage/
+│   ├── Storage/             # Evidence storage (T091)
 │   └── Workflow/
-├── Contract/Controller/
+├── Contract/
+│   ├── Controller/
+│   └── Fixture/
+├── Support/                 # Shared helpers
+├── TestDoubles/
 ├── Frontend/
-│   ├── Unit/
-│   └── Component/
+│   └── Component/           # Component, shell, RTL and typography specs
 └── E2E/
 ```
+
+Frontend specs that exercise a whole module rather than one component — `http.spec.ts`,
+`routeNameIntegrity.spec.ts`, `typography.spec.ts` — sit directly in `tests/Frontend/`.
+
+**This block is asserted, not just documented.** `tests/Unit/Architecture/PlanStructureTest.php`
+(T238) parses it and requires every declared path to exist, so the plan cannot drift from the tree
+again. Two declared paths do not exist yet because an open task owns each — `src/composables/`
+(T121) and `l10n/` (T119) — and are named as such above; the test keeps that allowlist in step with
+the tree as well, so it cannot outlive the work that justified it. A path may only be added to the
+allowlist together with the task ID that owns it.
 
 **Structure Decision**: Use one modular Nextcloud application. The current `appinfo/`, `lib/`,
 `js/`, and `css/` roots remain. Add the already-documented `src/`, `templates/`, `l10n/`, and

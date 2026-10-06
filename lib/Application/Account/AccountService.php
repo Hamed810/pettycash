@@ -6,7 +6,9 @@ namespace OCA\PettyCash\Application\Account;
 
 use InvalidArgumentException;
 use LogicException;
+use OCA\PettyCash\Application\Audit\ConfigurationEventType;
 use OCA\PettyCash\Application\Command\IdempotencyService;
+use OCA\PettyCash\Application\Port\AuditWriter;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Domain\Account\Repository\AccountMovementRepository;
 use OCA\PettyCash\Domain\Account\Repository\AccountRepository;
@@ -46,7 +48,8 @@ final class AccountService
         private RoleAssignmentRepository $roleAssignments,
         private IdempotencyService $idempotency,
         private CurrentUser $currentUser,
-        private AccountPayloadFormatter $payload
+        private AccountPayloadFormatter $payload,
+        private AuditWriter $auditWriter
     ) {}
 
     /**
@@ -273,7 +276,16 @@ final class AccountService
                 'occurred_at' => $occurredAt->format(\DateTimeInterface::ATOM),
                 'actor' => $actorUid,
             ],
-            function () use ($account, $amountMinor, $description, $occurredAt, $commandId): array {
+            function () use ($account, $actorUid, $amountMinor, $description, $occurredAt, $commandId): array {
+                // Read before the charge, because `PettyCashAccount::charge()` mutates
+                // `balanceMinor` in place. A "before" read after that call would be the
+                // post-charge value wearing a "before" label — the same trap
+                // `FinanceSettlementService::recordConsumption()` documents at length, avoided here
+                // rather than copied, because this method receives the account *before* the mutation
+                // and so can read an honest pair. FR-017 requires the previous value be recorded
+                // for a sensitive change, and a funding charge is one.
+                $balanceBefore = $account->balanceMinor;
+
                 $movement = $account->charge(
                     Money::of($amountMinor, $account->currencyCode()),
                     $commandId,
@@ -283,6 +295,50 @@ final class AccountService
 
                 $this->movements->save($movement);
                 $this->accounts->save($account);
+
+                // FR-055: a funding charge names its account in the configuration audit stream, and
+                // FR-055's scope is derived from exactly this event. T294 wrote the settlement side of
+                // the pair; without this half, an officer who had funded an account but not yet
+                // settled anything against it had no event naming it — so the account was absent from
+                // their `accounts` report and from their configuration-audit visibility. FR-055 names
+                // that exact gap: "relying on the transaction-audit decision alone would leave this
+                // scope empty for every officer who had actually charged an account."
+                //
+                // Inside the idempotent closure, so a replayed command writes no second event — the
+                // same rule `createTransaction()` and `updateTransaction()` follow for the FR-051
+                // events they write.
+                //
+                // `entity_type`/`entity_id` address the subject because a configuration event has no
+                // sheet or transaction of its own. `ChargedAccountScope` resolves
+                // `entity_id` with `AccountRepository::findByPublicId()`, so it must be the public id
+                // and not the surrogate key — the settlement's event gets this right only because its
+                // `entity_id` is `$account->id`, which is the public id; this is worth naming because
+                // a database id here would silently produce an empty scope rather than an error.
+                $this->auditWriter->appendConfiguration([
+                    'id' => (string)Uuid::random(),
+                    'entity_type' => 'account',
+                    'entity_id' => $account->id,
+                    'event_type' => ConfigurationEventType::AccountFunded->value,
+                    'explanation' => $description,
+                    // The two roles FR-015's actor gate admits. That gate has already run by the time
+                    // this closure executes, so one of the two is true; asking the role assignments
+                    // rather than hardcoding `FINANCE` keeps the audit row honest about who did it,
+                    // which is one of the two things FR-055 says the event must name. Defaulting to
+                    // the writer's `'PURCHASER'` would have been the alternative, and it would have
+                    // stamped a finance funding as a purchase.
+                    'actor_role' => $this->actorRoleFor($actorUid)->value,
+                    'before' => [
+                        'balance_minor' => $balanceBefore,
+                        'currency' => $account->currencyCode()->__toString(),
+                    ],
+                    'after' => [
+                        'balance_minor' => $movement->balanceAfter()->minorUnits(),
+                        'currency' => $account->currencyCode()->__toString(),
+                        'movement_id' => $movement->id,
+                        'amount_minor' => $amountMinor,
+                    ],
+                    'command_id' => $commandId,
+                ]);
 
                 return $this->payload->mutation($account, $movement);
             }
@@ -299,6 +355,26 @@ final class AccountService
         }
 
         return false;
+    }
+
+    /**
+     * The role to record on the funding audit event, resolved from the actor's own assignments.
+     *
+     * FR-015 admits finance and, through FR-013, an administrator, and FR-055 requires the funding
+     * event to "name the charging officer". An administrator funding an account is a real and
+     * specified case, so hardcoding `FINANCE` would misattribute exactly the situation FR-013
+     * creates; and `AuditWriterService`'s default of `PURCHASER` would misattribute all of them.
+     *
+     * `Administrator` is the fallback rather than an error because the actor gate above has already
+     * refused anyone holding neither role — by the time this runs, one of the two is true. A person
+     * holding both is recorded as `FINANCE`, because FR-015 names finance as the charging role and a
+     * dual-role actor is doing the finance thing here.
+     */
+    private function actorRoleFor(string $actorUid): Role
+    {
+        return $this->hasRole($actorUid, Role::Finance)
+            ? Role::Finance
+            : Role::Administrator;
     }
 
     /**

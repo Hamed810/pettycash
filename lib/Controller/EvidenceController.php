@@ -13,6 +13,7 @@ use OCA\PettyCash\Application\Expense\TransactionService;
 use OCA\PettyCash\Domain\Expense\Repository\ExpenseTransactionRepository;
 use OCA\PettyCash\Domain\Expense\Repository\ExpenseSheetRepository;
 use OCA\PettyCash\Domain\Evidence\Repository\EvidenceRepository;
+use OCA\PettyCash\Infrastructure\Http\EvidenceContentPolicy;
 use OCA\PettyCash\Infrastructure\Http\TransactionPayloadFormatter;
 use OCA\PettyCash\Domain\Workflow\TransactionStatus;
 use OCA\PettyCash\Domain\Workflow\SheetStatus;
@@ -37,7 +38,8 @@ class EvidenceController extends OCSController
         private TransactionPayloadFormatter $payloadFormatter,
         private CurrentUser $currentUser,
         private OcsErrorMapper $ocsErrorMapper,
-        private EvidenceVisibility $evidenceVisibility
+        private EvidenceVisibility $evidenceVisibility,
+        private EvidenceContentPolicy $contentPolicy
     ) {
         parent::__construct('pettycash', $request);
     }
@@ -372,15 +374,26 @@ public function destroy(string $evidenceId): DataResponse
                 throw new RuntimeException('Failed to write temporary file');
             }
 
+            // FR-060 decides the headers from the **stored** media type, not from what the caller
+            // asked for: an inline-safe type (images, PDF, plain text) is served with its own type so
+            // it renders, and anything else is forced to `application/octet-stream` + `attachment`.
+            //
+            // This was the second half of FR-060 and it was missing. The stored type is whatever the
+            // uploading client declared -- `upload()` keeps `$file['mediaType']` verbatim because
+            // FR-030 defers classification to V2 -- so serving it back verbatim under a caller-chosen
+            // `inline` disposition let an uploader store `text/html` and have it execute as script in
+            // a reviewer's session in the Nextcloud origin. FR-060 names that harm in its own words.
+            $contentType = $this->contentPolicy->resolve($evidence->mediaType, $disposition);
+
             // Return streaming response using the temporary file
             $stream = new StreamResponse(
                 $tempFile,
                 Http::STATUS_OK,
                 [
-                    'Content-Type' => $evidence->mediaType,
+                    'Content-Type' => $contentType['contentType'],
                     'Content-Length' => (string)$evidence->sizeBytes,
-                    'Content-Disposition' => $disposition === 'attachment' 
-                        ? "attachment; filename=\"{$evidence->originalName}\"" 
+                    'Content-Disposition' => $contentType['disposition'] === 'attachment'
+                        ? "attachment; filename=\"{$evidence->originalName}\""
                         : "inline; filename=\"{$evidence->originalName}\"",
                 ]
             );

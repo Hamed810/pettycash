@@ -15,6 +15,7 @@
     },
     "require": {
         "php": ">=8.2 <8.6",
+        "morilog/jalali": "^3",
         "phpoffice/phpspreadsheet": "^5.3",
         "tecnickcom/tc-lib-pdf": "^8.76"
     },

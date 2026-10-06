@@ -22,6 +22,7 @@ use OCA\PettyCash\Application\Evidence\EvidenceVisibility;
 use OCA\PettyCash\Application\Port\AuditWriter;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Application\Port\PrivateFileStore;
+use OCA\PettyCash\Application\Port\RequestTimeZone;
 use OCA\PettyCash\Application\Port\RetentionPolicyStore;
 use OCA\PettyCash\Application\Port\TransientExportStore;
 use OCA\PettyCash\Application\Port\TransactionManager;
@@ -32,6 +33,8 @@ use OCA\PettyCash\Controller\ReportController;
 use OCA\PettyCash\Application\Reporting\DashboardQuery;
 use OCA\PettyCash\Application\Reporting\ExportService;
 use OCA\PettyCash\Application\Reporting\ReportQuery;
+use OCA\PettyCash\Application\Reporting\AuditSelectionQuery;
+use OCA\PettyCash\Application\Reporting\EvidenceSelectionQuery;
 use OCA\PettyCash\Application\Security\AuthorizationService;
 use OCA\PettyCash\Application\Workflow\FinanceQueue;
 use OCA\PettyCash\Application\Workflow\FinanceSettlementService;
@@ -55,6 +58,8 @@ use OCA\PettyCash\Infrastructure\Nextcloud\NextcloudCurrentUser;
 use OCA\PettyCash\Infrastructure\Export\CsvExporter;
 use OCA\PettyCash\Infrastructure\Export\EvidenceArchiveExporter;
 use OCA\PettyCash\Infrastructure\Export\XlsxExporter;
+use OCA\PettyCash\Infrastructure\Http\EvidenceContentPolicy;
+use OCA\PettyCash\Infrastructure\Nextcloud\NextcloudRequestTimeZone;
 use OCA\PettyCash\Infrastructure\Http\OcsErrorMapper;
 use OCA\PettyCash\Infrastructure\Nextcloud\AppDataExportStore;
 use OCA\PettyCash\Infrastructure\Nextcloud\NextcloudRetentionPolicyStore;
@@ -188,6 +193,34 @@ final class Application extends App implements IBootstrap
                 $c->query(IDBConnection::class),
                 $c->query(UserDirectory::class),
                 $c->query(CurrentUser::class)
+            );
+        });
+
+        // T367: the two shared selection queries.
+        //
+        // Registered explicitly because both controllers below are built by hand — they are
+        // `new ReportController(...)` / `new ExportController(...)` inside `registerService`, not
+        // autowired — so the dependency lists there are positional and have to name these classes.
+        //
+        // That is worth stating because it is what the failure looked like. Adding two constructor
+        // parameters without adding them to these lists shifted every later argument along: position
+        // 7 received `ExpenseSheetRepository`, so the container handed `ExportController` a
+        // `DbExpenseSheetRepository` where it declared `EvidenceSelectionQuery`. Every export then
+        // answered an **empty 200** whose only trace was a TypeError in `nextcloud.log`, because the
+        // OCS error mapper had no exception to map. Nothing in the response said anything was wrong.
+        $context->registerService(EvidenceSelectionQuery::class, function ($c) {
+            return new EvidenceSelectionQuery(
+                $c->query(EvidenceRepository::class),
+                $c->query(ExpenseTransactionRepository::class),
+                $c->query(TransactionRevisionRepository::class),
+                $c->query(ExpenseSheetRepository::class),
+                $c->query(UserDirectory::class)
+            );
+        });
+
+        $context->registerService(AuditSelectionQuery::class, function ($c) {
+            return new AuditSelectionQuery(
+                $c->query(AuditEventRepository::class)
             );
         });
 
@@ -458,6 +491,29 @@ final class Application extends App implements IBootstrap
             );
         });
 
+        // FR-068's Jalali period resolver. Takes only the `Clock`, so the calendar it resolves against
+        // is the application clock rather than PHP's -- FR-068 requires resolution at query time, and a
+        // test that cannot move time cannot assert that a period is the *in-progress* one.
+        $context->registerService(\OCA\PettyCash\Domain\Shared\JalaliReportingPeriods::class, function ($c) {
+            return new \OCA\PettyCash\Domain\Shared\JalaliReportingPeriods($c->query(\OCA\PettyCash\Domain\Shared\Clock::class));
+        });
+
+        // FR-068's request time zone. The adapter reads Nextcloud's own per-user `core.timezone`
+        // preference and falls back to the `default_timezone` system value, so no migration or admin
+        // surface is needed for this app; see the port for why the chain is core's and not ours.
+        $context->registerService(RequestTimeZone::class, function ($c) {
+            return new NextcloudRequestTimeZone($c->query(\OCP\IConfig::class));
+        });
+
+        // FR-060's inline-safe media-type policy (T275). Registered explicitly for the same reason
+        // `EvidenceVisibility` above is: the container resolving it by type-hint would work, but every
+        // other `Infrastructure\Http` collaborator here is named, and an unregistered dependency that
+        // silently fails to resolve shows up as a 500 on an evidence preview rather than as a wiring
+        // error. It has no collaborators of its own.
+        $context->registerService(EvidenceContentPolicy::class, function () {
+            return new EvidenceContentPolicy();
+        });
+
         $context->registerService(SubmitSheet::class, function ($c) {
             return new SubmitSheet(
                 $c->query(TransactionManager::class),
@@ -530,7 +586,14 @@ final class Application extends App implements IBootstrap
                 new \OCA\PettyCash\Application\Reporting\FilterIdentityResolver(
                     $c->get(CostCenterRepository::class),
                     $c->get(ExpenseTypeRepository::class)
-                )
+                ),
+                // FR-068. The period resolver and the request time zone are resolved here rather than in
+                // a query, so the Jalali conversion never enters the query path (plan.md). Appended
+                // rather than inserted, and this list is positional and hand-written -- T367 recorded
+                // that getting it wrong shifts every later argument and answers an empty 200.
+                $c->query(\OCA\PettyCash\Domain\Shared\JalaliReportingPeriods::class),
+                $c->query(RequestTimeZone::class),
+                $c->query(CurrentUser::class)
             );
         });
 
@@ -560,7 +623,18 @@ final class Application extends App implements IBootstrap
                 $c->query(AccountRepository::class),
                 $c->query(EvidenceRepository::class),
                 $c->query(AuditEventRepository::class),
+                $c->query(EvidenceSelectionQuery::class),
+                $c->query(AuditSelectionQuery::class),
                 $c->query(\OCA\PettyCash\Application\Reporting\ChargedAccountScope::class),
+                // T368: FR-065's movements on each `accounts` row. Both were appended here rather than
+                // anywhere else because this list is positional and hand-written — inserting two
+                // arguments without inserting them here would shift every later one along and hand
+                // `ReportController` a `TechnicalLogger` where it declares
+                // `AccountPayloadFormatter`. That failure is silent: the endpoint answers an empty or
+                // wrong-shaped 200 rather than refusing. T367 hit this exact list and the diagnosis it
+                // recorded was "how the code is loaded", which no suite asserts.
+                $c->query(\OCA\PettyCash\Domain\Account\Repository\AccountMovementRepository::class),
+                $c->query(\OCA\PettyCash\Application\Account\AccountPayloadFormatter::class),
                 $c->query(\OCA\PettyCash\Infrastructure\Nextcloud\TechnicalLogger::class),
                 $c->query(OcsErrorMapper::class),
                 $c->query(\OCA\PettyCash\Domain\Shared\Clock::class)
@@ -575,6 +649,8 @@ final class Application extends App implements IBootstrap
                 $c->query(ExportService::class),
                 $c->query(ReportQuery::class),
                 $c->query(\OCA\PettyCash\Application\Reporting\ReportFilterFactory::class),
+                $c->query(EvidenceSelectionQuery::class),
+                $c->query(AuditSelectionQuery::class),
                 $c->query(ExpenseSheetRepository::class),
                 $c->query(ExpenseTransactionRepository::class),
                 $c->query(OcsErrorMapper::class)

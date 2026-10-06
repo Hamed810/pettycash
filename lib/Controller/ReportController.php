@@ -9,12 +9,15 @@ use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Application\Reporting\DashboardQuery;
 use OCA\PettyCash\Application\Reporting\ReportFilter;
 use OCA\PettyCash\Application\Reporting\ReportFilterFactory;
+use OCA\PettyCash\Application\Reporting\AuditSelectionQuery;
+use OCA\PettyCash\Application\Reporting\EvidenceSelectionQuery;
 use OCA\PettyCash\Application\Reporting\ReportQuery;
 use OCA\PettyCash\Application\Reporting\ChargedAccountScope;
+use OCA\PettyCash\Application\Account\AccountPayloadFormatter;
 use OCA\PettyCash\Application\Reporting\ReportScope;
-use OCA\PettyCash\Application\DataIntegrity\UnreadableRecordData;
 use OCA\PettyCash\Application\Reporting\UnsupportedFilterField;
 use OCA\PettyCash\Infrastructure\Nextcloud\TechnicalLogger;
+use OCA\PettyCash\Domain\Account\Repository\AccountMovementRepository;
 use OCA\PettyCash\Domain\Account\Repository\AccountRepository;
 use OCA\PettyCash\Domain\Audit\Repository\AuditEventRepository;
 use OCA\PettyCash\Domain\Configuration\Repository\CostCenterRepository;
@@ -44,6 +47,13 @@ use OCP\AppFramework\OCSController;
  * filter. FR-065's movements *are* reachable here, through the `accounts` type's own rows, because a
  * movement is an attribute of an account; what is not reachable is any *type* named `balances`.
  *
+ * **That sentence became true only in T368, and the way it was untrue is worth recording.** The
+ * `accounts` row carried `id`, `currency`, `userUid`, `balanceMinor` and `active` and nothing else,
+ * so "reachable through the `accounts` type's own rows" was true of the separate
+ * `GET /accounts/{id}/movements` endpoint and false of this report. `accountsReport()` now nests each
+ * account's movements on its row, bounded and flagged — see its own docblock for why the bound is
+ * reported rather than implied.
+ *
  * ## Scope is applied by the query, not by the source
  *
  * Every branch hands raw candidates plus an `$inScope` predicate to `ReportQuery::paginate()`, which
@@ -62,6 +72,21 @@ class ReportController extends OCSController
 {
     /** Bounded reads, as in `DashboardController`: these are window sizes, not instance totals. */
     private const BOUND = 100;
+
+    /**
+     * How many movements one `accounts` row carries (T368).
+     *
+     * FR-065 asks each account row to carry "that account's balance and its movements", which is
+     * unbounded in principle -- an account's ledger grows for as long as the account is used. The
+     * report therefore cannot promise the whole ledger, and the honest thing is to bound it and say
+     * so: a row reports `movementsTruncated` so a caller can tell a complete ledger from a partial
+     * one, and the response summary carries the bound itself.
+     *
+     * Deliberately not `ReportFilter::MAX_PAGE_SIZE`, which bounds *rows* rather than movements, and
+     * applied per row rather than across the page so one busy account cannot consume the whole
+     * response.
+     */
+    private const MOVEMENT_READ_BOUND = 200;
 
     /**
      * The filter rule itself lives in `ReportFilterFactory`, not here.
@@ -86,7 +111,11 @@ class ReportController extends OCSController
         private AccountRepository $accounts,
         private EvidenceRepository $evidence,
         private AuditEventRepository $auditEvents,
+        private EvidenceSelectionQuery $evidenceSelection,
+        private AuditSelectionQuery $auditSelection,
         private ChargedAccountScope $chargedAccounts,
+        private AccountMovementRepository $accountMovements,
+        private AccountPayloadFormatter $accountPayload,
         private TechnicalLogger $logger,
         private OcsErrorMapper $ocsErrorMapper,
         private Clock $clock
@@ -119,6 +148,12 @@ class ReportController extends OCSController
 
             [$candidates, $inScope, $columns, $summary] = $this->candidatesFor($reportType, $scope, $uid);
 
+            // FR-068: a response that resolved a predefined period states the exact range it resolved
+            // and the zone it resolved it in, so two users in different zones can tell a different
+            // period from a different timezone. The disclosure is built in `ReportFilter` rather than
+            // here so `POST /exports` states it identically — two copies is how the two endpoints drift.
+            $summary = array_merge($summary, $filter->periodDisclosure());
+
             return new DataResponse($this->reports->paginate(
                 $scope,
                 $filter,
@@ -126,29 +161,6 @@ class ReportController extends OCSController
                 $inScope,
                 $columns,
                 $summary
-            ));
-        } catch (UnreadableRecordData $e) {
-            // A record's stored data is incomplete, so the report cannot be produced. Answered 422
-            // rather than left as a 500: this is a fault in the data, not a fault in the request, and
-            // the caller can act on being told so. Left as a 500 it read as "the server is broken",
-            // which sent the previous investigation after permission and filter problems instead of
-            // after the currency reference that was actually missing.
-            //
-            // The count is deliberately **not** stated. The read aborts on the first unresolvable
-            // record, so the number of affected rows is not knowable without a tolerant read that
-            // returns a count -- a domain port change, deliberately not bundled into this fix. Saying
-            // "one or more" is the truth; a number would be a guess.
-            //
-            // Logged in full, because the exception names the revision and that is what an operator
-            // needs -- and it is exactly why the message is not echoed to the caller.
-            $this->logger->unexpected($e);
-
-            return $this->ocsErrorMapper->validation(sprintf(
-                'The %s report cannot be produced: one or more stored records are incomplete and cannot '
-                . 'be read (a record references a currency that no longer exists). This is a data fault, '
-                . 'not a permission or filter problem. An administrator can identify the affected '
-                . 'records from the application log.',
-                $reportType
             ));
         } catch (UnsupportedFilterField $e) {
             // A filter this report cannot answer is a client error, and the contract's response for
@@ -331,6 +343,39 @@ class ReportController extends OCSController
      * and is still correct for them. The change is that a finance officer no longer sees strictly
      * fewer accounts than the rule allows.
      *
+     * ## Why each row carries its movements
+     *
+     * FR-065: petty-cash balances and movements are "reachable as data of the `accounts` report --
+     * one account per row, carrying that account's balance **and its movements**." The 2026-09-28
+     * clarification settled the shape question against a separate report type, so the movements have
+     * nowhere else to live: a nested array on the row is FR-065's wording read literally, and it is
+     * the shape a client needs to render one account with its history without a second request per
+     * row.
+     *
+     * The alternative this rejected -- a `movementCount` beside the balance, with the ledger reached
+     * through `GET /accounts/{id}/movements` -- is cheaper and is **not** what the requirement says.
+     * It also had a concrete failure behind it: this class's own docblock claimed the movements were
+     * "reachable through the `accounts` type's own rows" while the row carried no movements at all,
+     * so the claim was true of the endpoint and false of the report.
+     *
+     * `ReportPage.rows` is `additionalProperties: true` in `contracts/ocs-api.yaml`, so no contract
+     * amendment is needed and none is claimed.
+     *
+     * ## What the movement read costs, stated rather than hidden
+     *
+     * `AccountMovementRepository` has no bulk read, so this is one paged read per candidate account --
+     * an N+1, deliberately rather than accidentally. `SheetPayloadFormatter` is the precedent for
+     * what to do when that stops being acceptable: it needed the same shape (a range per sheet) and
+     * `SheetSummaryQuery::expenseDateRanges()` exists specifically to stop a page of sheets becoming
+     * a page of queries. If this needs the same treatment, the hoist belongs in a query class beside
+     * the other report queries, not here.
+     *
+     * The read is bounded per account and the bound is **stated in the response**: `movementsTruncated`
+     * is true when an account had more history than the bound, so a caller can never mistake a
+     * bounded page for a complete ledger. That matters more here than elsewhere, because the
+     * alternative failure -- a partial ledger shown next to a balance reflecting all of it -- reads as
+     * an accounting error.
+     *
      * @return array{list<array<string, mixed>>, callable(array<string, mixed>, ReportScope): bool, list<string>, array<string, mixed>}
      */
     private function accountsReport(ReportScope $scope, string $uid): array
@@ -349,6 +394,13 @@ class ReportController extends OCSController
             ? array_merge($own, $this->accountsByDbIds($charged, $own))
             : $own;
 
+        // Read once per candidate before the rows are built, so each row's movements and its balance
+        // describe the same instant.
+        $movementsByAccount = [];
+        foreach ($candidates as $account) {
+            $movementsByAccount[$account->id] = $this->movementsFor($account);
+        }
+
         $rows = array_map(
             static fn ($account): array => [
                 'id' => $account->id,
@@ -356,6 +408,12 @@ class ReportController extends OCSController
                 'userUid' => $account->userUid,
                 'balanceMinor' => $account->balanceMinor,
                 'active' => $account->active,
+                // FR-065: the account's movements as data of this row. The `Movement` shape is the
+                // contract's own, produced by the same formatter `GET /accounts/{id}/movements` uses,
+                // so a movement cannot read differently depending on which endpoint served it -- the
+                // `AccountPayloadFormatter` docblock records having been bitten by exactly that.
+                'movements' => $movementsByAccount[$account->id]['movements'],
+                'movementsTruncated' => $movementsByAccount[$account->id]['truncated'],
             ],
             $candidates
         );
@@ -375,7 +433,7 @@ class ReportController extends OCSController
                 $id = (string) ($row['id'] ?? '');
                 return in_array($id, $ownRowIds, true) || in_array($id, $chargedRowIds, true);
             },
-            ['id', 'currency', 'userUid', 'balanceMinor', 'active'],
+            ['id', 'currency', 'userUid', 'balanceMinor', 'active', 'movements', 'movementsTruncated'],
             // Stated in the response rather than only in a task note, because a caller reading
             // `accounts` deserves to know which rule produced the set. The `t299: pending` marker
             // that stood here said the scope was unresolved; it is resolved and the marker is gone,
@@ -386,7 +444,51 @@ class ReportController extends OCSController
                     : ($includeCharged ? 'own_and_charged_accounts' : 'own_accounts'),
                 'chargedAccountsIncluded' => $includeCharged,
                 'chargedAccountCount' => count($chargedRowIds),
+                // The bound the per-account movement read applied, so the per-row truncation flag has
+                // a stated meaning rather than being an unexplained boolean.
+                'movementReadBound' => self::MOVEMENT_READ_BOUND,
             ],
+        ];
+    }
+
+    /**
+     * One account's movements, and whether the bound cut the ledger short.
+     *
+     * Scoped by the account's own surrogate key, which is the property that keeps a movement
+     * belonging to another account off this row: a per-account query cannot return one. That is why
+     * nothing filters after the read -- filtering here would be asserting the absence of a leak the
+     * query was never able to produce.
+     *
+     * `MOVEMENT_READ_BOUND + 1` rows are requested rather than `MOVEMENT_READ_BOUND`, because the only
+     * way to distinguish "exactly at the bound" from "truncated at the bound" is to see one row more
+     * than the bound allows. Asking for exactly the bound and calling the result complete would make a
+     * ledger of precisely the bound length indistinguishable from one that continues.
+     *
+     * An account with no surrogate key has no movements to read. A persisted account always has one,
+     * so this serves only an aggregate built in memory, and an empty ledger is honest for it.
+     *
+     * @return array{movements: list<array<string, mixed>>, truncated: bool}
+     */
+    private function movementsFor(\OCA\PettyCash\Domain\Account\PettyCashAccount $account): array
+    {
+        if ($account->dbId === null) {
+            return ['movements' => [], 'truncated' => false];
+        }
+
+        $found = $this->accountMovements->findByAccountIdPaged(
+            $account->dbId,
+            0,
+            self::MOVEMENT_READ_BOUND + 1
+        );
+
+        $truncated = count($found) > self::MOVEMENT_READ_BOUND;
+
+        return [
+            'movements' => array_map(
+                fn ($movement): array => $this->accountPayload->movement($movement, $account),
+                $truncated ? array_slice($found, 0, self::MOVEMENT_READ_BOUND) : $found
+            ),
+            'truncated' => $truncated,
         ];
     }
 
@@ -461,72 +563,32 @@ class ReportController extends OCSController
     }
 
     /**
+     * Delegates to `EvidenceSelectionQuery`.
+     *
+     * T367 moved the producer out of this controller because `POST /exports` with
+     * `resource: evidence` became a second consumer — an endpoint that answered 422 in both the
+     * selected and the unselected case, so the client's evidence export produced no file at all.
+     *
      * @return array{list<array<string, mixed>>, callable, list<string>, array<string, mixed>}
      */
     private function evidenceReport(ReportScope $scope, string $uid): array
     {
-        $rows = [];
-        foreach ($this->transactions->findByOwnerUid($uid, null, null, 0, self::BOUND) as $transaction) {
-            // Evidence is keyed on the transaction's own database id, not on its sheet. Reading by
-            // sheet id would have returned a plausible-looking set of the wrong rows.
-            if ($transaction->dbId === null) {
-                continue;
-            }
-            foreach ($this->evidence->findByTransactionId($transaction->dbId) as $evidence) {
-                $rows[] = [
-                    'id' => $evidence->id,
-                    'ownerUid' => $uid,
-                    'originalName' => $evidence->originalName,
-                    'mediaType' => $evidence->mediaType,
-                    'sizeBytes' => $evidence->sizeBytes,
-                    'active' => $evidence->active,
-                ];
-            }
-        }
-
-        return [
-            $rows,
-            static fn (array $row, ReportScope $s): bool => $s->coversOwned((string) ($row['ownerUid'] ?? '')),
-            ['id', 'ownerUid', 'originalName', 'mediaType', 'sizeBytes', 'active'],
-            ['rowsRead' => count($rows)],
-        ];
+        return $this->evidenceSelection->candidates($uid, self::BOUND);
     }
 
     /**
+     * Delegates to `AuditSelectionQuery`.
+     *
+     * T367 moved the producer out of this controller because `POST /exports` with
+     * `resource: audit` became a second consumer. Two copies of one scope rule would be the T307
+     * shape: a rule that means one thing in a report and another in an export, with nothing
+     * cross-checking them.
+     *
      * @return array{list<array<string, mixed>>, callable, list<string>, array<string, mixed>}
      */
     private function auditReport(ReportScope $scope, string $uid): array
     {
-        $rows = array_map(
-            static fn ($event): array => [
-                'id' => $event->id,
-                'actorUid' => $event->actorUid,
-                'actorRole' => $event->actorRole,
-                'eventType' => $event->eventType,
-                'entityType' => $event->entityType,
-                'entityId' => $event->entityId,
-                // FR-064 names `stage` as an audit facet and fixes its source: "an audit event's
-                // **stage** is the stage recorded on the event". It was already carried here, but with
-                // no filter able to read it, so `{"stages":[...]}` was refused as unevaluable.
-                'stage' => $event->stage,
-                // Likewise the date range: `occurredAt` was on the event and absent from the row, so
-                // a `from`/`to` filter could not be evaluated. `DATE_ATOM` rather than a default
-                // format, because the range comparison parses these strings and a locale-dependent
-                // one would not round-trip.
-                'occurredAt' => $event->occurredAt->format(DATE_ATOM),
-            ],
-            $this->auditEvents->findByActorUid($uid, 0, self::BOUND)
-        );
-
-        return [
-            $rows,
-            // Audit is the actor's own trail. An administrator's own events are still their own: a
-            // report that widened to everyone's audit log would need a rule for who may read another
-            // person's history, and no requirement states one.
-            static fn (array $row): bool => ($row['actorUid'] ?? null) === $uid,
-            ['id', 'actorUid', 'actorRole', 'eventType', 'entityType', 'entityId', 'stage', 'occurredAt'],
-            ['scope' => 'own_audit_trail', 'rowsRead' => count($rows), 'rowsBoundedBy' => self::BOUND],
-        ];
+        return $this->auditSelection->candidates($uid, self::BOUND);
     }
 
     /**

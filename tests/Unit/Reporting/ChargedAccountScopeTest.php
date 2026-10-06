@@ -95,17 +95,75 @@ final class ChargedAccountScopeTest extends TestCase
         self::assertSame([], $this->scope->chargedAccountDbIds());
     }
 
+    /**
+     * FR-055: an event type **outside** funding and charging must not count.
+     *
+     * **This assertion was inverted by T369, and the inversion is the record.** It previously read
+     * "only `ACCOUNT_CHARGED` denotes a charge", with `ACCOUNT_FUNDED` as its counter-example and the
+     * funding account *excluded* from the expected scope. That was a faithful encoding of the
+     * one-event-type implementation, but not of FR-055, whose text scopes visibility by "account
+     * funding **and** balance-charging" events and requires that anything outside that pair not
+     * count "because touching an account is not charging it."
+     *
+     * So the counter-example is now the thing the requirement actually names — a rename and a
+     * deactivation — and the funding account moves into the expected scope. The test kept its purpose
+     * (an event outside the pair must not widen scope) and the pair's other half is asserted
+     * separately below, so a failure says which side moved.
+     */
     public function testChargesOfOtherEventTypesAreNotCounted(): void
     {
         $this->account('acc-1', 11);
         $this->account('acc-2', 12);
-        $this->charge('acc-1', 'officer-1', 'ACCOUNT_FUNDED');
-        $this->charge('acc-2', 'officer-1', 'ACCOUNT_CHARGED');
+        $this->account('acc-3', 13);
+        $this->charge('acc-1', 'officer-1', 'CURRENCY_UPDATED');
+        $this->charge('acc-2', 'officer-1', 'ACCOUNT_DEACTIVATED');
+        $this->charge('acc-3', 'officer-1', 'ACCOUNT_CHARGED');
 
         self::assertSame(
-            [12],
+            [13],
             $this->scope->chargedAccountDbIds(),
-            'only ACCOUNT_CHARGED denotes a charge; another event type on the same account is not one'
+            'only funding and charging count; a rename or a deactivation is touching an account, not charging it'
+        );
+    }
+
+    /**
+     * FR-015's funding half of the pair, asserted on its own so the two halves are separately
+     * falsifiable.
+     *
+     * This is the case T369 exists for. An officer who had funded an account and not yet settled
+     * anything against it produced **no** event of either kind, so the account was missing from their
+     * configuration-audit visibility and from the `accounts` report — which is what FR-055's own
+     * clarification says must not happen.
+     */
+    public function testAFundingChargeCountsWithoutAnySettlement(): void
+    {
+        $this->account('acc-1', 11);
+        $this->charge('acc-1', 'officer-1', 'ACCOUNT_FUNDED');
+
+        self::assertSame(
+            [11],
+            $this->scope->chargedAccountDbIds(),
+            'FR-055 scopes by account funding as well as by balance-charging'
+        );
+    }
+
+    /**
+     * Both halves of the pair on one account.
+     *
+     * The pair is read by two separate queries and unioned, so an account that appeared twice — or
+     * one half of the pair that got dropped — is the failure mode of a change like this one.
+     */
+    public function testFundingAndChargingOneAccountYieldItOnce(): void
+    {
+        $this->account('acc-1', 11);
+        $this->charge('acc-1', 'officer-1', 'ACCOUNT_FUNDED');
+        $this->charge('acc-1', 'officer-1', 'ACCOUNT_CHARGED');
+        $this->charge('acc-1', 'officer-1', 'ACCOUNT_FUNDED');
+
+        self::assertSame(
+            [11],
+            $this->scope->chargedAccountDbIds(),
+            'the pair is a set of event types, and an account appears in it once'
         );
     }
 

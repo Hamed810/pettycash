@@ -22,20 +22,43 @@ namespace OCA\PettyCash\Application\Audit;
  * assumed -- a mutation that stopped being audited, or a new one that started without a case, is a
  * change to this enum and therefore visible in review.
  *
- * ## What is deliberately absent
+ * ## The eight administration cases, and the two account cases
  *
- * `ACCOUNT_CHARGED` and `RETENTION_POLICY_CHANGED` are configuration events and are **not** here.
- * Their producers are `FinanceSettlementService::charge()` and `RetentionPolicyService`, which name
- * them as literals (`ChargedAccountScope::CHARGE_EVENT_TYPE` and inline), and both are reached through
- * their own paths rather than through this task. Listing them here without moving those producers
- * would create a second source of truth for a value another code reads
- * (`ChargedAccountScope::findEntityIdsByEventType()` derives charged accounts from the literal), so
- * the consolidation belongs with the task that owns those writes.
+ * The first eight cases below are the configuration mutations that exist as a public method on one
+ * of the four Phase-7 administration services, and the pairing is asserted per case rather than
+ * assumed -- a mutation that stopped being audited, or a new one that started without a case, is a
+ * change to this enum and therefore visible in review.
+ *
+ * `AccountFunded` and `AccountCharged` are the two account cases, and they are here now rather than
+ * as raw strings on their producers. `AccountCharged` was deliberately absent while its only producer
+ * named it as the literal `ChargedAccountScope::CHARGE_EVENT_TYPE`, because a value that a second
+ * class *derives scope from* cannot have two definitions; the note deferring that consolidation to
+ * "the task that owns those writes" has now been paid by T369, which owns the funding write and so
+ * owns both. Moving them in is what lets `ChargedAccountScope` read the enum instead of a literal,
+ * so the vocabulary and the derivation can no longer drift apart silently.
+ *
+ * They are two cases and not one because FR-055 distinguishes them in its own text: an officer's
+ * charged accounts are the subjects of their "account funding **and** balance-charging" events, and
+ * "an event type outside funding and charging -- a rename, an activation, a deactivation -- MUST NOT
+ * count toward the set." One case for both would erase exactly the distinction that sentence is
+ * drawn to make: you could no longer ask who put money into an account, as against who consumed from
+ * it. FR-015's charge and FR-043's settlement are different business facts and are recorded as
+ * different facts.
+ *
+ * ## What is still deliberately absent
+ *
+ * `RETENTION_POLICY_CHANGED` is a configuration event and is **not** here. Its producer
+ * (`RetentionPolicyService`) names it as an inline literal, no other code reads it, and it is not one
+ * of the events FR-055 scopes by account subject -- so there is no derivation to keep in step with the
+ * enum, and moving it would be tidiness rather than correctness. It is the same situation
+ * `AccountCharged` was in before T369, and the difference that made that one worth fixing is exactly
+ * the thing that does not apply here.
  *
  * ## Width
  *
  * The column is `string(48)`. The longest case below is 30 characters, and `EnumColumnWidthTest` sizes
- * `event_type` from the enums that exist, so this vocabulary cannot force a migration.
+ * `event_type` from the enums that exist, so this vocabulary cannot force a migration. The two account
+ * cases are 14 characters each, well inside the longest.
  */
 enum ConfigurationEventType: string
 {
@@ -98,4 +121,29 @@ enum ConfigurationEventType: string
      * the caller cannot express.
      */
     case FinanceAssignmentChanged = 'FINANCE_ASSIGNMENT_CHANGED';
+
+    /**
+     * T369 `AccountService::charge()` — FR-015's funding of a petty-cash account.
+     *
+     * Its own case, not a reuse of `AccountCharged`, because FR-055 scopes configuration-audit
+     * visibility by "account funding **and** balance-charging" events and requires that anything
+     * outside that pair not count. Folding the two together would satisfy the sentence while losing
+     * the distinction it is drawn to preserve: FR-015 puts money into an account, FR-043's
+     * settlement takes it out, and an auditor asking which happened gets one answer instead of two.
+     *
+     * This is also the event that makes FR-055's clarification true. It reads, in its own words, that
+     * "relying on the transaction-audit decision alone would leave this scope empty for every officer
+     * who had actually charged an account" — T294 answered that for the settlement side only, so an
+     * officer who had funded an account and not yet settled against it saw nothing.
+     */
+    case AccountFunded = 'ACCOUNT_FUNDED';
+
+    /**
+     * T294 `FinanceSettlementService` — an approved settlement consuming an account's balance.
+     *
+     * The other half of FR-055's pair. Read together with {@see self::AccountFunded} by
+     * `ChargedAccountScope::chargedAccountDbIds()`, which is what turns the pair into the set of
+     * accounts a finance officer may read configuration audit for.
+     */
+    case AccountCharged = 'ACCOUNT_CHARGED';
 }

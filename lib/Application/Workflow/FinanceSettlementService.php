@@ -36,8 +36,8 @@ use OCA\PettyCash\Domain\Workflow\FinanceDecisionPolicy;
 use OCA\PettyCash\Domain\Workflow\Repository\WorkflowDecisionRepository;
 use OCA\PettyCash\Domain\Workflow\TransactionStatus;
 use OCA\PettyCash\Domain\Workflow\WorkflowStage;
+use OCA\PettyCash\Application\Audit\ConfigurationEventType;
 use OCA\PettyCash\Application\Audit\DecisionEventType;
-use OCA\PettyCash\Application\Reporting\ChargedAccountScope;
 
 final readonly class FinanceSettlementService
 {
@@ -289,9 +289,12 @@ final readonly class FinanceSettlementService
                         'entity_type' => 'account',
                         'entity_id' => $account->id,
                         // FR-055 configuration stream, not the FR-051 transaction vocabulary, so this
-                        // one deliberately stays out of `AuditEventType`. The constant is the one T294
-                        // already derives charged accounts from, so the two cannot drift apart.
-                        'event_type' => ChargedAccountScope::CHARGE_EVENT_TYPE,
+                        // one deliberately stays out of `AuditEventType`. The enum is the single
+                        // definition, and `ChargedAccountScope` reads the same case to derive the
+                        // charged-account set — so a producer and the code that reads it cannot drift
+                        // apart. T369 moved this off the `ChargedAccountScope::CHARGE_EVENT_TYPE`
+                        // literal for exactly that reason.
+                        'event_type' => ConfigurationEventType::AccountCharged->value,
                         'explanation' => $explanation,
                         // `recordConsumption()` mutates the account in place, so a "before"
                         // balance read here would be the post-consumption value wearing a

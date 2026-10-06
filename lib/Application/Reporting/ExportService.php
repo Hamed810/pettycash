@@ -288,6 +288,27 @@ final readonly class ExportService
      */
     private function generateZip(array $entries): array
     {
+        // T367: an empty entry list is refused here rather than archived.
+        //
+        // `EvidenceArchiveExporter` is written so that an entry it cannot read is *omitted with a
+        // reason*, which is correct for a file that vanished between selection and build. But with
+        // **no entries at all** it still opens the archive, writes the manifest and closes — so the
+        // caller would receive a well-formed ZIP whose manifest lists nothing. That is the exact
+        // artifact T110's `EvidenceArchiveResult` was built to make impossible, and it was reachable
+        // for one reason: `ExportController` passed a literal `[]` here, and nothing in the
+        // application constructed an `EvidenceArchiveEntry`.
+        //
+        // So the refusal lives at the point where an empty list is still distinguishable from an
+        // archive whose members all failed. Downstream of `build()` the two are the same object, and
+        // refusing there would mean refusing a real selection whose files were unreadable — which is
+        // a different answer and the wrong one.
+        if ($entries === []) {
+            throw new UnsupportedSelection(
+                "A 'zip' export needs the evidence entries to archive; none were resolved. An archive "
+                . 'with an empty manifest is not an empty result, so no file is produced.'
+            );
+        }
+
         // The reader is the real evidence store, not a stub. An earlier version passed a closure
         // returning null, which the archive exporter treats as "unreadable" — so every entry would have
         // been omitted and the result would have been a **valid, empty ZIP with an empty manifest**, which

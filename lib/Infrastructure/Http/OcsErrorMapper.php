@@ -7,6 +7,7 @@ namespace OCA\PettyCash\Infrastructure\Http;
 use InvalidArgumentException;
 use OCA\PettyCash\Application\Command\CommandConflict;
 use OCA\PettyCash\Application\Conflict;
+use OCA\PettyCash\Application\DataIntegrity\UnreadableRecordData;
 use OCP\AppFramework\Http;
 use OCA\PettyCash\Infrastructure\Nextcloud\TechnicalLogger;
 use OCP\AppFramework\Http\DataResponse;
@@ -23,6 +24,28 @@ use Throwable;
  */
 final class OcsErrorMapper
 {
+    /**
+     * The caller-facing text for an unreadable stored record, in one place so it cannot drift.
+     *
+     * `DataIntegrityReportTest` pins two phrases in it — that this is "a data fault" and that it is
+     * "not a permission or filter problem" — because those are the two causes a caller would otherwise
+     * go chasing. T029 was raised when a persistence fault was answered `403 Forbidden`, which sent an
+     * entire investigation after permissions that were never the problem; a 422 whose text did not
+     * name the fault would repeat that confusion under a friendlier status.
+     *
+     * **Deliberately names neither the endpoint nor the record.** FR-083 asks for "the same status
+     * and the same class of explanation, so that a client writes one handler rather than one per
+     * endpoint", which means the string cannot vary by endpoint — and the caller's own request is what
+     * tells it which endpoint it called. The exception's own message names the surrogate ids of the
+     * rows at fault, which is what an operator needs and what a caller must not be given; that goes to
+     * {@see TechnicalLogger::unexpected()} instead.
+     */
+    private const DATA_FAULT_MESSAGE = 'This record set cannot be produced because one or more stored '
+        . 'records are incomplete and cannot be read (a record references data that no longer exists, '
+        . 'such as a currency). This is a data fault, not a permission or filter problem, so neither '
+        . 'retrying nor narrowing the request will change the answer. An administrator can identify the '
+        . 'affected records from the application log.';
+
     public function __construct(
         private readonly TechnicalLogger $logger
     ) {}
@@ -41,6 +64,27 @@ final class OcsErrorMapper
             // silently swallowed every validation failure and answered 422 where the contract
             // requires a 409.
             $error instanceof Conflict => [Http::STATUS_CONFLICT, $error->errorCode()],
+            // FR-083, and the reason this arm is here rather than in four controllers.
+            //
+            // A stored record whose reference no longer resolves is a fault in the *data* — not in the
+            // request, and not in the caller's authority. It used to be answered two different ways
+            // depending on which controller caught it: `ReportController` translated it into a 422 that
+            // explained itself, while `SheetController` and `DashboardController` fell through to the
+            // default arm below and answered 500 with `pettycash.error.unexpected`. FR-083 was raised
+            // for exactly that split and now requires one answer from all of them.
+            //
+            // **Placed here so that it cannot be forgotten.** A per-controller `catch` arm is a thing
+            // the next endpoint can simply not have, and the failure is silent in the worst direction:
+            // the endpoint answers 500, the client caches it as "the server is broken", and an operator
+            // reads a data-integrity problem as a transient fault. Classifying by exception type makes
+            // the rule a property of the type rather than of the endpoint — which is what FR-083's
+            // "a client writes one handler rather than one per endpoint" actually requires.
+            //
+            // It is a `LogicException`, not an `InvalidArgumentException`, so this arm cannot be
+            // shadowed by the one below it. That separation is deliberate and must be preserved: one of
+            // the two is the caller's fault and this one is not, and a client acting on the wrong one
+            // retries forever or gives up on data it could have had.
+            $error instanceof UnreadableRecordData => [Http::STATUS_UNPROCESSABLE_ENTITY, 'DATA_FAULT'],
             $error instanceof InvalidArgumentException => [Http::STATUS_UNPROCESSABLE_ENTITY, 'VALIDATION_FAILED'],
             // There is deliberately no `LogicException => 403` arm.
             //
@@ -67,6 +111,20 @@ final class OcsErrorMapper
             // technical errors must go through standard Nextcloud logging.
             $this->logger->unexpected($error, $commandId);
             $message = 'pettycash.error.unexpected';
+        } elseif ($error instanceof UnreadableRecordData) {
+            // **Logged *and* withheld** — the combination no other 4xx arm needs. The status is a
+            // client-actionable one, so the caller gets a real explanation; but the explanation is the
+            // canonical text rather than the exception's own, because that one names the surrogate ids
+            // of the rows at fault and disclosing those is the leak T029 was raised for.
+            //
+            // Without this branch the arm above would fall through to `$error->getMessage()` and publish
+            // "Cannot resolve the currency of sheet <uuid>: currency_id 42 matches no row in
+            // pettycash_currencies" — which tells a caller precisely which stored reference is broken,
+            // i.e. something about rows they may not be able to see. It would also break the status of
+            // the answer: a caller reading surrogate keys learns it can probe, and one reading "IRR"
+            // learns a wrong unit.
+            $this->logger->unexpected($error, $commandId);
+            $message = self::DATA_FAULT_MESSAGE;
         } else {
             $message = $error->getMessage();
         }

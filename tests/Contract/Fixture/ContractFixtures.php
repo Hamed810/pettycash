@@ -273,6 +273,54 @@ final class ContractFixtures
     }
 
     /**
+     * The sheet holding the unmanaged-cost-centre finance fixture: approving its transaction
+     * completes it.
+     *
+     * Each finance fixture owns its own sheet, and that is what makes each completed state
+     * reachable from a single decision. Approving this transaction settles the only transaction on
+     * this sheet, so `ExpenseSheet::recomputeStatus()` finds every transaction completed with no
+     * rejection among them and settles on `COMPLETED`.
+     *
+     * Exposed so T370's lock assertions address the sheet the completion actually produced rather
+     * than a status written into a fixture row — the completion rule is then exercised rather than
+     * assumed, which is the difference between a lock test and a status echo.
+     */
+    public static function financeSharedSheetId(): string
+    {
+        return self::financeSheetId('financeSharedSheetId');
+    }
+
+    /**
+     * The sheet holding the senior-rejected finance fixture: rejecting its transaction completes it
+     * as `COMPLETED_WITH_REJECTIONS`.
+     *
+     * The complementary case to {@see self::financeSharedSheetId()}. Same single-transaction
+     * shape, reached through the other terminal outcome, so the lock covers both of the completed
+     * states `SheetStatus` offers instead of only the approved one — a sheet rejected by every
+     * reviewer is locked exactly as hard as an approved one.
+     */
+    public static function financeRejectedSheetId(): string
+    {
+        return self::financeSheetId('financeRejectedSheetId');
+    }
+
+    /**
+     * @param 'financeSharedSheetId'|'financeRejectedSheetId' $key
+     */
+    private static function financeSheetId(string $key): string
+    {
+        $id = self::all()[$key] ?? null;
+        if (!is_string($id)) {
+            throw new \RuntimeException(
+                'The completed-sheet fixtures are only seeded in the `finance` state; '
+                . 'call ContractFixtures::prepare(\'finance\') first.'
+            );
+        }
+
+        return $id;
+    }
+
+    /**
      * The sheet's current optimistic-lock value, which a mutable-resource command
      * must echo back as `expectedVersion` to avoid a stale-version rejection.
      */

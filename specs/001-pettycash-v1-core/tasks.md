@@ -1328,7 +1328,84 @@ of representative users complete their primary role journey on the first attempt
 **Purpose**: Validate compatibility, security, performance, recovery, documentation, packaging, and
 full specification traceability after all selected story phases are complete.
 
-- [ ] T124 [P] Validate `contracts/ocs-api.yaml`, generate or update isolated TypeScript contract types, and fail on unreviewed API drift in `scripts/validate-openapi.sh` and `src/generated/api.ts`. **Canonical owner of generated-type regeneration (clarified 2026-09-30) — and this task must run AFTER both source amenders.** `contracts/ocs-api.yaml` now has three separate owners of its *source*: **T275** owns the FR-060 evidence content-type amendment, **T312** owns the FR-068 `period` / 422 / resolved-range / resolved-timezone amendment, and this task owns validating the document and deriving `src/generated/api.ts` from it. Before this clarification, T312 also claimed "the generated TypeScript contract types regenerated from the amended OpenAPI document", which gave one artifact two owners; that claim is withdrawn. **Ordering, now binding:** T124 runs after **both** T275 and T312, because regenerating types against a document that is still awaiting either amendment would produce a stale `src/generated/api.ts` that reads as current — the same class of drift T272's route guard exists to catch, one layer up. T124 depends on nothing else open.
+- [x] T124 [P] Validate `contracts/ocs-api.yaml`, generate or update isolated TypeScript contract
+  types, and fail on unreviewed API drift in `scripts/validate-openapi.sh` and `src/generated/api.ts`.
+  **Canonical owner of generated-type regeneration** (complete)
+
+  **Delivered, and run in the only order that was safe: after both source amenders.** T275 and T312 are
+  both `[x]`, so the document this derived from carries the FR-060 evidence content types and the FR-068
+  `period` / 422 / resolved-range / resolved-timezone amendment — verified present in the generated
+  types, not assumed.
+
+  ---
+
+  ### What this is actually for
+
+  **The failure mode is a stale generated file that still reads as current.** `src/types/api.ts` was
+  hand-written, `contracts/ocs-api.yaml` changed underneath it repeatedly, and nothing connected them.
+  So a regeneration is not the deliverable — the **gate** is. A regenerated `src/generated/api.ts` that
+  nobody checks is exactly the state T124's own ordering note warned about: it compiles, it type-checks,
+  and it is wrong. T272 exists because the same drift one layer down — a route in the contract and absent
+  from `appinfo/routes.php` — was invisible until a test happened to exercise it. This is that layer.
+
+  ### `scripts/validate-openapi.sh`
+
+  Three steps, in order, with only `--write` able to change the generated file:
+
+  1. **The document must parse as OpenAPI** — `openapi` is a 3.x string, `info.title` and `info.version`
+     are non-empty, `paths` is a non-empty mapping. Parsed with a real YAML parser rather than a regex,
+     so a malformed document fails *here* with a statement of what is wrong instead of producing a
+     plausible-looking subset of paths inside `openapi-typescript`'s stack trace. Each field is asserted
+     with the value it must carry, so a document that silently loses its version cannot pass as valid.
+  2. **Derive the types** — `openapi-typescript@^7`, alphabetised, empty objects typed as unknown.
+  3. **Compare** the committed file against a freshly derived one, **byte for byte**.
+
+  **The comparison is byte-exact on purpose.** A semantic comparison would accept a regenerated file
+  whose ordering or comments differed, which *is* the "looks current but is not" state this exists to
+  prevent. The generated file carries an `@contractFingerprint` — the first 16 hex of the contract's
+  SHA-256 — so the failure names **which amendment the types predate** rather than only that they are
+  stale, and so a hand-edited file cannot pass by being textually similar.
+
+  ### Wiring
+
+  `check:openapi` and `openapi:write` npm scripts, and `check:openapi` placed **first** in `npm run check`
+  so contract drift is reported before anything built on top of it is measured.
+
+  ### Verified
+
+  - Contract validated: **OpenAPI 3.0.3, 31 paths, 40 operations, 43 schemas**.
+  - `src/generated/api.ts` generated (2044 lines) and confirmed to contain both amendments — the FR-060
+    inline-safe content types and T312's `period` / `resolvedFrom` / `resolvedTo` / `resolvedTimeZone`.
+  - **`npm run check` exit 0** with the gate in the chain: openapi, portability, typecheck, lint
+    (0 errors, 162 warnings — the same count as the pre-T124 baseline, so the generated file adds none),
+    stylelint, 308/308 vitest, build.
+  - **Three mutations, all caught, with real exit codes**: amending the contract without regenerating →
+    **exit 1**; hand-editing the generated file → **exit 1**; in sync → **exit 0**. A `head` pipe
+    initially masked the code as 141 (SIGPIPE), so the codes above were re-measured without a pipeline.
+  - **The gate is genuinely *in* the chain**, not passing alongside it: with drift introduced,
+    `npm run check` exits **1** and **zero** later stages run.
+
+  ### Two decisions worth recording
+
+  - **Two devDependencies, both build-time only.** `openapi-typescript` is the standard generator;
+    hand-rolling one would mean trusting my own parser more than a maintained one. `yaml` was added
+    explicitly rather than leaning on a transitive copy: a validation script that cannot resolve its own
+    parser is a validation script that breaks when a dependency's tree changes, and it was discovered the
+    hard way — the first run failed on `require('yaml')` because nothing provided it at the top level.
+    Nothing in `js/` or the runtime depends on either.
+  - **`src/generated/` is inside `src/`, so `lint` and `typecheck` see the generated file.** That is
+    deliberate rather than convenient — it means a type the contract declares cannot be syntactically
+    broken without the gates noticing. It was verified rather than assumed: typecheck passes and lint
+    reports **0 errors and the same 162 warnings as the baseline**, i.e. the generated file is clean.
+
+  **Not done, and recorded rather than implied.** **`src/types/api.ts` is untouched.** It remains
+  hand-written and remains the shape the frontend is actually written against, so deriving types is not
+  yet the same as *using* them — migrating the client onto `src/generated/api.ts` is a separate piece of
+  work this task does not claim, and nothing here asserts the two agree. **No drift test was added to
+  the PHP or vitest suites**; the gate is a shell script invoked by `npm run check`, so a run of
+  `npm run test` alone will not catch contract drift. **`exports.md` and `workflow.md`** are prose
+  contracts with no machine-checkable form and are not validated by this script.
+  Cross-references: T275, T312, T272, T309, T310, T302, T306, T134.
 - [ ] T125 [P] Add static security and dependency checks for Composer and npm packages, unsafe spreadsheet values, accidental secret paths, and forbidden direct database/filesystem use in `scripts/security-check.sh`
 - [x] T126 Run the legacy-present clean-install and upgrade migration scenarios and record table/migration evidence without modifying `oc_pcash_*` data in `tests/Integration/Migration/V1SchemaMigrationTest.php` and `specs/001-pettycash-v1-core/checklists/migration-validation.md` (**superseded, closed without implementation, by this remediation pass. T263 replaces it, and T263's own text says so: "FR-080, SC-014, supersedes T126, T252"**). The premise is not merely obsolete but **contradicted by a MUST**: FR-081 states schema-change acceptance "MUST NOT require, and MUST NOT be evidenced by, an upgrade path from any pre-V1 database", while this task requires running an **upgrade** migration scenario and evidencing it in `checklists/migration-validation.md`. Leaving it open meant `/speckit-implement`, which works the first genuinely incomplete task, could select work that a MUST forbids and report compliance with a MUST as delivered. It is also now unreachable on its own terms: `oc_pcash_*` matches **0** tables in the shared environment, so the "legacy-present" scenario it names cannot be staged at all — the real legacy tables are `oc_pc_*`, which is the separate discrepancy T252 was raised for and which T263 also owns. **The deliverable is not lost, it moves:** T263 replaces the legacy-database acceptance framing in `quickstart.md` section 2, the migration test suite, and `checklists/migration-validation.md` with clean-installation and forward-chain acceptance on an empty database. **This closure is a supersession record only; no test, artifact, or evidence was produced by it, and none should be inferred from the `[x]`.** The scope-contradiction finding is retained under T263 and must be settled there)
 - [ ] T127 [P] Add deterministic fixture generation for up to 100 active users and 10,000 annual transactions in `tests/Fixtures/TargetVolumeFixture.php`
@@ -1428,7 +1505,27 @@ feature implementation.
 - [x] T147 Align `TransactionService.updateTransaction()` with domain model: use costCenterId/expenseTypeId as UUIDs, snapshot code/name per data-model.md/T037 (done)
 - [x] T148 Complete audit event insertion for all workflow transitions (decisions, returns, corrections, evidence deactivation) in respective services per FR-051/FR-052/T028 (partial - submission, decisions, resubmit done)
 - [x] T149 Apply idempotency (`IdempotencyService`) to all state-changing command handlers (management decisions, finance settlement, correction resubmit, account charges) per FR-042/T027 (done - SubmitSheet, ManagementReviewService, FinanceSettlementService, ResubmitCorrection)
-- [ ] T158 Remove temporary Vue component mocks from `tests/Frontend/__mocks__/components.ts` and update `vitest.config.ts` aliases to resolve real components per T042 (unrequested)
+- [x] T158 Remove temporary Vue component mocks from `tests/Frontend/__mocks__/components.ts` and update `vitest.config.ts` aliases to resolve real components per T042 (unrequested)
+
+  **Delivered as a deletion only — the alias half of this task was already done, and the file was
+  already dead.** `vitest.config.ts` declares one alias, `'@' → src`, and no second entry; the
+  mock file's own header says "placeholder implementations … will be replaced by real components in
+  T042", `T042` is complete, and no file under `src/`, `tests/`, or any config imports it by path or
+  by name (`grep -rn "__mocks__\|mocks/components" src tests vitest.config.ts vite.config.ts
+  package.json` exits 1). So `git rm` removed it and `vitest.config.ts` needed no edit: there was no
+  alias left to redirect.
+
+  **`tests/Frontend/__mocks__/` went with it, because an empty `__mocks__` directory is a claim, not
+  an absence.** Vitest resolves `__mocks__` by convention, so a directory that exists but is empty
+  reads as "mocks are configured here" to the next reader and to tooling; removing the file and
+  leaving the directory would have preserved the ambiguity the task exists to remove.
+
+  `npx vitest run` is **11 files / 308 tests / 308 passed** with the file gone, which is the
+  substantive proof: had any spec been resolving a placeholder through a convention path, removing
+  the module would have failed collection or a render, not passed silently.
+
+  **This closes T215 as well**, which the retired-ID table records as a duplicate of T158 with the
+  same deliverable; no separate work remained under it.
 - [x] T159 Fix `EvidenceController.destroy()` to handle both draft deletion (204) and post-submit deactivation (200 with deactivated metadata) per ocs-api.yaml (done)
 - [x] T160 Ensure `SheetController.submit()` and `TransactionController` decision endpoints return proper OCS envelope with `ocs.meta.statuscode` matching HTTP status per contract tests (done)
 
@@ -1885,7 +1982,33 @@ residue sweep of the persistence layer after T232 fixed the decision write path.
 **Purpose**: Remove the dead, unrouted controller duplicates left behind when the queue
 and returns endpoints were consolidated into `ReviewController`.
 
-- [ ] T235 [MEDIUM] Remove the unrouted duplicate controllers `lib/Controller/QueueController.php` and `lib/Controller/ReturnsController.php`, or route `/api/v1/queues/{stage}` and `/api/v1/returns` to them and delete the corresponding `ReviewController::index()` / `ReviewController::returns()` copies; neither class is referenced by any entry in `appinfo/routes.php` (`grep -c` returns 0 for both) and each duplicates a routed `ReviewController` method, so two divergent implementations of the same queue and returns logic exist and a future fix can land in only one of them, which is unrequested work that no `spec.md`, `plan.md`, or task calls for (unrequested)
+- [x] T235 [MEDIUM] Remove the unrouted duplicate controllers `lib/Controller/QueueController.php` and `lib/Controller/ReturnsController.php`, or route `/api/v1/queues/{stage}` and `/api/v1/returns` to them and delete the corresponding `ReviewController::index()` / `ReviewController::returns()` copies; neither class is referenced by any entry in `appinfo/routes.php` (`grep -c` returns 0 for both) and each duplicates a routed `ReviewController` method, so two divergent implementations of the same queue and returns logic exist and a future fix can land in only one of them, which is unrequested work that no `spec.md`, `plan.md`, or task calls for (unrequested)
+
+  **Closed as already delivered by T344, on the deletion branch rather than the routing branch.**
+  Both files are gone (`lib/Controller/` holds the eleven remaining controllers and neither
+  `QueueController` nor `ReturnsController`), and the routed twins are intact:
+  `appinfo/routes.php:39-40` serves `review#index` for `/api/v1/queues/{stage}` and `review#returns`
+  for `/api/v1/returns`, and `ReviewController::index()` (`:47`) and `ReviewController::returns()`
+  (`:89`) both exist. So the outcome this task asked for is the one that happened, and no code
+  change was owed.
+
+  **The decision T235 deferred is now recorded in the suite rather than left to memory, which is
+  why it can be closed instead of re-litigated.** `RouteResolutionTest`'s unrouted-controller
+  assertion was inverted by T344 from an expected named pair to an expected **empty list** — so a
+  *fourth* unrouted controller now fails it, which the previous `['QueueController',
+  'ReturnsController']` expectation could not do, since it only knew those two names.
+  `RouteDispatchCompletenessTest::testEveryControllerActionIsReachableFromARoute()` asserts the
+  complementary direction (an action no route reaches is dead code) and is deliberately symmetric
+  and empty, because unlike a routed-but-not-yet-consumed action, nothing in the application can
+  ever call an unrouted one.
+
+  Verified: `RouteResolutionTest` 10 tests / 52 assertions OK; `RouteDispatchCompletenessTest` 4
+  tests / 8 assertions OK.
+
+  **Left alone deliberately**: `TransactionController::decide()` was the third unrouted action and
+  T344 removed it, so nothing of T235's scope remains open. No controller was routed, because
+  routing a duplicate would have invented a second endpoint for a URL the contract already binds to
+  `review#*` — the outcome this task's own framing named as a maintainer's call, now made.
 
 ---
 
@@ -2010,7 +2133,7 @@ divergences.
 
 ### LOW — declared structure vs reality
 
-- [ ] T238 [P] [LOW] Reconcile the `plan.md` Project Structure with the repository for the **three** declared directories that do not exist and that no task owns: `lib/Application/Dto/`, `src/formatters/`, and `tests/Frontend/Unit/`; either create them with the content the plan assigns, or amend the plan's structure to match where the work actually lands (T013 places authorization tests in `tests/Unit/Security/`, T014 places idempotency tests in `tests/Integration/Workflow/`, and T115/T116 place shell and RTL tests in `tests/Frontend/Component/`), so the approved plan and the tree stop disagreeing about the module layout (unrequested)
+- [x] T238 [P] [LOW] Reconcile the `plan.md` Project Structure with the repository for the **three** declared directories that do not exist and that no task owns: `lib/Application/Dto/`, `src/formatters/`, and `tests/Frontend/Unit/`; either create them with the content the plan assigns, or amend the plan's structure to match where the work actually lands (T013 places authorization tests in `tests/Unit/Security/`, T014 places idempotency tests in `tests/Integration/Workflow/`, and T115/T116 place shell and RTL tests in `tests/Frontend/Component/`), so the approved plan and the tree stop disagreeing about the module layout (unrequested)
 
   **The premise was re-verified on 2026-10-01 and one of the four has since been resolved, so this task's
   remediation choice must be re-made against three paths rather than four.** `tests/Unit/Application/`
@@ -2018,6 +2141,91 @@ divergences.
   remediation therefore splits cleanly: the three remaining are a plan-versus-tree decision, while
   `tests/Unit/Application/` needs its `plan.md` entry confirmed as landed rather than amended. Recorded
   because a decision about all four would have been taken on a wrong premise.
+
+  ---
+
+  **Delivered by amending the plan, on the branch the task named second — and the count was wrong
+  a second time, so it was re-verified before the decision rather than inherited.**
+
+  **There were four unowned missing directories, not three.** Re-checked against the tree at the
+  start of this task: `lib/Application/Dto/`, `src/formatters/` and `tests/Frontend/Unit/` as
+  recorded, **plus `lib/Application/Query/`**, which no earlier note mentions. It was declared at
+  `plan.md:215` and never existed either — read use cases live in feature directories
+  (`lib/Application/Reporting/ReportQuery.php`, `lib/Application/Account/AccountService.php`), and no
+  class anywhere carries an `OCA\PettyCash\Application\Query` namespace. Acting on the recorded
+  count would have left the fourth in place and the plan still disagreeing, which is the outcome
+  this task exists to prevent.
+
+  **Amending rather than creating, because nothing needs a directory to exist.** The choice is not
+  arbitrary: creating an empty declared directory satisfies the plan's letter and none of its
+  purpose, and it makes the drift *worse* — a plan-versus-tree disagreement plus an empty directory
+  is two things to reconcile, and the next author cannot tell an intentional home from a leftover.
+  Every one of the four had already been placed, deliberately and with a documented reason:
+
+  | Declared but absent | Where the work actually landed, and why that is the right home |
+  |---|---|
+  | `lib/Application/Dto/` | `lib/Application/Account/AccountPayloadFormatter.php` beside `AccountService`, and `lib/Infrastructure/Http/*PayloadFormatter.php` for the streamed shapes. Co-locating each shape with its only consumer is what stops the second copy that `TransactionPayloadFormatter` documents. |
+  | `lib/Application/Query/` | Feature directories — `Reporting/`, `Account/`, `Evidence/`, `Workflow/`. A separate `Query/` directory would split each use case away from the command it shares a feature with. |
+  | `src/formatters/` | `src/utils/money.ts` (`formatMoney`, plus `selectOption.ts`, `dashboard.ts`). Formatting is presentation of a value, not a feature area, and it is shared by ten views. |
+  | `tests/Frontend/Unit/` | `tests/Frontend/Component/`, with module-level specs (`http.spec.ts`, `routeNameIntegrity.spec.ts`, `typography.spec.ts`) directly in `tests/Frontend/`. The frontend specs test behaviour through mounted components, so a separate `Unit/` tier held nothing that was not a component test. |
+
+  **The plan was also brought up to date in the same pass, because a partial amendment would leave a
+  worse artifact than the original.** Ten further entries were missing: `lib/Application/{Account,
+  Audit, Configuration, DataIntegrity, Evidence, Expense, Reporting, Security, Workflow}/`,
+  `lib/Domain/Audit/` and `lib/Domain/Evidence/`, `src/utils/`, `tests/Unit/{Architecture, Audit,
+  Evidence, Infrastructure, Reporting, Workflow}/`, `tests/Integration/{Account, Audit, Expense}/`,
+  `tests/Contract/Fixture/`, `tests/Support/`, `tests/TestDoubles/`. Those all exist and were
+  undeclared, which is the same disagreement pointing the other way — a plan that lists less than
+  the tree is as misleading to a reader as one that lists more.
+
+  **The two genuine pending entries are kept and labelled rather than quietly removed.**
+  `src/composables/` is T121's (`useAsyncAction.ts`) and `l10n/` is T119's (Persian catalogue);
+  both are legitimately not built yet, so dropping them would erase work that is owned and in
+  progress. `tests/Integration/Storage/` is annotated in the plan as T091's
+  (`EvidenceLifecycleTest.php`). These are noted inline in the plan so the tree block itself carries
+  the reason.
+
+  **New: `tests/Unit/Architecture/PlanStructureTest.php`, 3 tests / 8 assertions, mutation-verified
+  in four directions.** The amendment would itself rot — a plan amended once is not evidence that it
+  stays true, which is the same lesson as `RouteResolutionTest` (T272) and
+  `RouteDispatchCompletenessTest` (T326/T344). The test parses the box-drawing tree under
+  "### Source Code (repository root)" and asserts every declared path resolves.
+
+  **The pending list is an allowlist that names its own task IDs and is asserted in both
+  directions**, which is the part that makes it safe rather than a hole:
+  `testEveryDeclaredPathExists()` requires a `PENDING` entry to carry a task ID in its failure
+  message, and `testPendingAllowlistHasNoStaleEntry()` fails when an entry's path *does* exist — so
+  an allowance cannot outlive the work that justified it and quietly stop checking anything. When
+  T091, T119 and T121 land, `PENDING` is empty and the allowlist goes away. `js/` and `css/` are
+  excluded as generated output and checked separately by `testBuildOutputExists()`, which reports a
+  missing bundle rather than failing a fresh checkout for it.
+
+  **Parsing detail worth recording, because two wrong parsers looked right first.** The block nests
+  by indentation, so a bare name is not a path: `Domain/` under `lib/` is `lib/Domain/` and the same
+  word under `tests/Unit/` is `tests/Unit/Domain/`. Depth therefore comes from the `│   ` prefix
+  groups, tracked on a stack. Two further traps: the container roots (`appinfo/`, `lib/`, `src/`,
+  `tests/`) are written flush left with no marker while their children start at depth 0, so the root
+  has to occupy a level of its own or `├── info.xml` resolves to a bare `info.xml` and the container
+  is never checked at all; and `│` is three bytes in UTF-8, so counting bytes rather than prefix
+  groups computes the wrong depth. All three were caught by running the test, not by reading it.
+
+  Mutation-verified by breaking the plan four ways and confirming a red test naming the path:
+  renaming `lib/Application/Security/` → `SecurityGhost/`, renaming `tests/Unit/Domain/` →
+  `DomainGhost/` (proving the nesting is resolved, not just the leaf), and removing the
+  `tests/Integration/Storage` → T091 allowlist entry. `testPendingAllowlistHasNoStaleEntry()` was
+  verified by adding an entry for a path that exists.
+
+  `scripts/dev/phpunit --testsuite unit` is **654 tests / 1475 assertions, 0 failures** and
+  `--testsuite integration` is **301 tests / 1243 assertions, 0 failures** with this test in place.
+
+  **The stale justification in `AccountPayloadFormatter` was corrected, because leaving it would have
+  re-created the hesitation this task resolves.** Its header said the class sits beside
+  `AccountService` "rather than in a new `Dto/` directory because `plan.md`'s declared structure
+  reconciliation is T238's open work, and creating a fourth declared-but-missing directory here would
+  quietly take a piece of it." That is now false — T238 is closed and the plan declares
+  `lib/Application/Account/`. Reworded to state the rule that actually holds: nothing may be placed
+  on the strength of the plan naming a directory, because this task is the proof that a named
+  directory need not exist.
 
 ---
 
@@ -3015,28 +3223,111 @@ choosing one artifact's word over the other's.
 
 ### MEDIUM — the evidence content type is fixed by the contract and contradicted by FR-060
 
-- [ ] T275 [MEDIUM] **Owns the FR-060 amendment to the `contracts/ocs-api.yaml` source** (recorded 2026-09-30, alongside T312's FR-068 amendment and T124's type regeneration). Reconcile the evidence streaming response before `contracts/ocs-api.yaml` is
-  treated as verified, because the approved contract and the functional requirement disagree about
-  the same response. `contracts/ocs-api.yaml:657-662` declares exactly one success content type for
-  `GET /evidence/{id}/content` — `application/octet-stream` — and
-  `PurchaserFlowControllerTest::testGetEvidenceContentReturns200WithStream` asserts it, while
-  `EvidenceController::content()` at `lib/Controller/EvidenceController.php:274` sets
-  `'Content-Type' => $evidence->mediaType`, which for a PDF upload is `application/pdf`. FR-060
-  requires that authorized users be able to **preview** supported evidence, and an
-  `application/octet-stream` response cannot be previewed in a browser — it downloads. So the
-  contract as written makes the FR-060 preview journey unimplementable, and the implementation as
-  written violates the contract. T143 is marked complete and asserted nothing about the content
-  type, which is why the contradiction survived: the endpoint returned HTTP 500 until T259, so the
-  status assertion failed first and the content-type assertion was never reached. T259 fixed the
-  500 and deliberately stopped at that point rather than quietly changing either side. Constitution
-  Governance requires a conflict between authoritative artifacts to be reconciled in the artifact
-  rather than chosen silently, so the decision belongs to the maintainer: either the contract is
-  amended to describe a stored-media-type response so FR-060 preview works, or FR-060 is clarified to
-  mean download-only and the implementation is corrected to send `application/octet-stream`.
-  Whichever is chosen, the contract test must be updated in the same change so the two cannot drift
-  apart again, and `Content-Disposition` already distinguishes `inline` from `attachment`, so
-  preview-vs-download remains expressible once the media type is decided (contradicts)
+- [x] T275 [MEDIUM] **Owns the FR-060 amendment to the `contracts/ocs-api.yaml` source** (recorded
+  2026-09-30, alongside T312's FR-068 amendment and T124's type regeneration). Reconcile the evidence
+  streaming response before `contracts/ocs-api.yaml` is treated as verified, because the approved
+  contract and the functional requirement disagree about the same response. (complete)
 
+  **Delivered — and it was not a document-only change. The entry framed the decision as the
+  maintainer's, but FR-060's 2026-09-30 clarification had already made it, and the code was wrong on
+  the half FR-060 cares most about.**
+
+  ---
+
+  **The "either/or" is settled, and not by preference.** The entry offered "either the contract is
+  amended … or FR-060 is clarified to mean download-only and the implementation is corrected".
+  `spec.md`'s clarification settles it in a sentence: "The contract is therefore **the artifact that
+  was wrong** and MUST be amended to match this requirement; T275 owns that change **and owns naming
+  the concrete inline-safe media-type list**." The contract's own contradiction is the proof — it
+  declared `application/octet-stream` as the only success type *while declaring a `disposition`
+  parameter defaulting to `inline`, a value that cannot render an octet-stream body.*
+
+  **The code was also wrong, on the half that is a security property, and nobody had noticed.**
+  `EvidenceController::content()` sent `'Content-Type' => $evidence->mediaType` with the disposition
+  taken from a **caller-supplied query parameter**. But the stored type is attacker-supplied by
+  construction: `upload()` keeps `$file['mediaType']` verbatim, because FR-030 defers classification
+  and redaction to V2. So a purchaser could store a file declaring `text/html` and a reviewer opening
+  the receipt would be served `text/html;charset=UTF-8` **inline** — script executing in the Nextcloud
+  origin, which is the harm FR-060 names in its own words. Measured, not asserted: with the policy
+  removed the response header reads `text/html;charset=UTF-8` (see the mutation below).
+
+  **A caller-chosen disposition is FR-060's requirement, not a defect — and the policy keeps it.**
+  FR-060 says "A caller MUST be able to request either disposition explicitly", so `?disposition` is
+  honoured on the disposition and **ignored on the content type**. `?disposition=attachment` on a PDF
+  is a download; `?disposition=inline` on a PDF is a preview; and neither can make an unlisted type
+  render.
+
+  **The inline-safe list, which this task owns naming, is seven types — and the omission that matters
+  is `image/svg+xml`.** FR-060 says "images, PDF, and plain text", so the list is
+  `application/pdf`, `image/{png,jpeg,gif,webp,bmp}` and `text/plain`. SVG is the type most likely to
+  be added later by someone reasoning "SVG is an image, FR-060 says images render": it *is* an image
+  and it can carry `<script>`, so including it would satisfy a literal reading while reintroducing
+  precisely the harm the requirement was written to prevent. It is pinned absent on its own test,
+  because that is the decision most likely to be silently reversed.
+
+  **Deny-by-default, and the default is the side that has to fail.** Anything not on the list is served
+  as `application/octet-stream` + `attachment` — an unknown vendor type, a type with no slash, an empty
+  string. Media-type parameters are stripped for matching and the stored string is returned verbatim,
+  because `text/plain; charset=utf-8` is still plain text and the browser needs the charset.
+
+  **The rule is a named object, `EvidenceContentPolicy`, in `Infrastructure\Http`.** That is a
+  deliberate consequence of this session's environment: the whole rule is two headers whose *pair*
+  only means something together, and asserting it in-process needs no HTTP at all — which matters
+  while the shared instance is refusing requests with `429`. It also means the contract suite now
+  proves the controller *uses* the policy rather than re-deriving the rule per media type.
+
+  **The first mutation attempt did not fail, and that is the most useful thing found here.**
+  Reverting `content()` to `'Content-Type' => $evidence->mediaType` left **every** evidence-content
+  assertion green — because the contract fixture uploads a `.pdf`, a PDF is inline-safe, and for an
+  inline-safe type the policy's output and the stored type are *the same string*. So the whole contract
+  suite was blind to whether the policy was applied at all.
+  The fix was to give `uploadEvidence()` an optional declared `$mediaType` (the multipart previously
+  inferred `application/pdf` from the filename, so a hostile type could not be stored at all) and to
+  add `testAnEvidenceDeclaringAScriptableMediaTypeIsNeverServedInline`, which uploads
+  `text/html` and asks for `inline`. That test now fails with
+  `expected 'application/octet-stream', actual 'text/html;charset=UTF-8'` when the policy is removed —
+  the vulnerability, printed as a test failure. A companion test asserts the declared type is **still
+  recorded** on the transaction, so "coerce everything to octet-stream" cannot pass by erasing the
+  metadata an auditor needs.
+
+  **Contract amended to the closed set the endpoint can actually return.** The `200` response declares
+  `application/octet-stream` plus the six inline-safe types, rather than "the stored media type" —
+  listing them explicitly keeps it checkable, since a new type cannot be served without either appearing
+  in the document or being coerced to the fallback. The `disposition` parameter gained a description
+  stating that an out-of-set type is served as `application/octet-stream` + `attachment` regardless of
+  the parameter. **The contract document and the test were changed in the same commit**, which is what
+  the entry required to stop them drifting again. Verified the YAML still parses and still declares 31
+  paths, and that the declared set equals `INLINE_SAFE_MEDIA_TYPES`.
+
+  **`Application.php` was updated, and the trap was checked before it was touched.** `EvidenceController`
+  is not hand-registered, so there was no positional list to shift (T367's failure mode) — but
+  `EvidenceVisibility`, its nearest sibling, *is* registered, so autowiring could not be assumed. The
+  policy is registered explicitly alongside `OcsErrorMapper` and the other `Infrastructure\Http`
+  collaborators, with a comment saying why: a dependency that silently fails to resolve shows up as a
+  500 on an evidence preview rather than as a wiring error.
+
+  **Verification.** `EvidenceContentPolicyTest` 21 tests / 32 assertions, **no HTTP**.
+  `PurchaserFlowControllerTest` + `EvidenceContentPolicyTest` + `EvidenceLifecycleControllerTest` +
+  `EvidencePayloadConformanceTest` = **87 tests / 615 assertions, green**. Mutation-verified in the
+  direction that matters: removing the policy turns
+  `testAnEvidenceDeclaringAScriptableMediaTypeIsNeverServedInline` red and nothing else — which is the
+  correct blast radius and is only true because the PDF-path tests were found to be blind.
+
+  **This closes the suite's only persistent failure.** `PurchaserFlowControllerTest::
+  testGetEvidenceContentReturns200WithStream` was the single failure in every full-suite baseline this
+  session (1245, 1268 and 1271 tests). It now passes, so **no full-suite run in this session has a
+  known-failing test.**
+
+  **Not done, and recorded rather than implied.** **No full-suite run was taken** — see T313's note on
+  the concurrent-session `429` throttling, which is unresolved and affects any suite-wide number taken
+  now. **FR-030's classification is still deferred**, so the stored type remains whatever a client
+  declares; this task coerces how it is *served*, not what is *recorded*, which is the boundary FR-060
+  draws. **`X-Content-Type-Options: nosniff` is not sent** on `text/plain`: FR-060 does not ask for it
+  and adding headers is FR-030's territory. **`ImageMediaType` support is not exercised over HTTP** —
+  the inline-safe image types are pinned in the unit test only, since the contract fixture uploads one
+  file per assertion and an image adds a fixture without adding a rule. **T124 still waits on T312**,
+  so the `src/generated/api.ts` regeneration this amendment enables has not run.
+  Cross-references: T124, T312, T259, T143, T030, T072, T276, T094.
 ### MEDIUM — the draft-delete evidence path unlinks binaries for submitted transactions
 
 - [x] T276 [MEDIUM] Route post-submission evidence removal through deactivation rather than
@@ -5444,77 +5735,275 @@ evidence content-type conflict, and the one failing test in the suite) and T304 
 already owned, and both are blocked on a maintainer decision rather than on code. Re-appending an
 owned gap would give one piece of work two owners and two places to be marked done.
 
-- [ ] T312 Implement FR-068's predefined reporting periods on `POST /exports` and the report/export filter surface, now that the semantics are settled (partial — decision half DONE in `spec.md`, implementation half open)
+- [x] T312 Implement FR-068's predefined reporting periods on `POST /exports` and the report/export
+  filter surface, now that the semantics are settled (complete)
 
-  **The requirements question this task was blocked on is closed. `spec.md` FR-068 was clarified on 2026-09-30 and the technical design is in `plan.md` under *Jalali Reporting Periods (FR-068)* and *Jalali Conversion Strategy (FR-068)*. What remains is implementation only, and the task stays unchecked because none of it has been built.** The task's previous framing — that the meaning of "month" was ambiguous between the current calendar month, the previous one and the last 30 days, and that no time zone had been decided — **described the state of the artifacts before 2026-09-30 and no longer describes it.** Both questions were answered in `spec.md` FR-068; neither is deferred, and this task is no longer blocked on a decision.
+  **Delivered across two passes.** The first settled the dependency and the conversion core; this one
+  closed the filter surface, the 422, the disclosure and the contract amendment, after the time-zone
+  source was settled (see below) because it decides the filter's shape.
 
-  **Settled semantics to implement, verbatim from `spec.md` FR-068:** `month`, `quarter` and `year` are **Jalali (Solar Hijri) in-progress periods**, spanning Farvardin through Esfand, with a quarter beginning at **Farvardin** rather than a Gregorian quarter boundary, and a Jalali year never identified by a Gregorian year number. Each denotes the period **in progress at request time**, first day through last — not the previous completed period and not a trailing window, which are requested with the explicit custom date range T306 already delivers. Boundaries are **inclusive at both ends**; a Jalali year is 365 or 366 days and must not be treated as a fixed length. Resolution happens **at query time only** against the application's `Clock`, never PHP's clock, and stored Gregorian expense dates must not be altered, re-encoded or migrated.
+  ---
 
-  **Dependency ownership added 2026-09-30 — this task owns adding `morilog/jalali`, which no task previously did.**
-  `plan.md` lists `morilog/jalali` ^3 as a Primary Dependency and its Jalali Conversion Strategy decides "add
-  `morilog/jalali` ^3 as a Composer dependency", but before this note **no task owned the addition**:
-  `composer.json` does not require it, `vendor/` does not contain it, T002 (which owned dependency setup) is
-  Phase 1 and `[x]`, and T125 is a *check* on dependencies rather than an addition. Working this task as
-  previously written would have referenced a class that does not exist. T312's implementable scope therefore
-  now includes, and must not begin without:
-  1. **`composer require morilog/jalali:^3` and the resulting `composer.json` / `composer.lock` change**, pinned
-     and committed, matching the Primary Dependency `plan.md` already declares.
-  2. **Recording and verifying the dependency's MIT licence notice.** The repository has **no existing
-     third-party-notice convention** — there is no `LICENSES/` or `third-party-notices/` directory, and the
-     only related obligation is **T132**, which must "verify app ID, namespace, licence, routes, translations,
-     migrations, and generated assets" in `scripts/package.sh`. The app itself is `AGPL-3.0-or-later`. So this
-     task *creates* the notice surface rather than conforming to one, and **T132 must verify it** — a notice
-     added but never checked in packaging is the failure mode to avoid. T125's dependency-security gate must
-     cover the new package from the moment it lands.
-  3. **Using the dependency only behind the planned domain abstraction.** `plan.md` requires the conversion to
-     be "isolated behind a small value object in the domain layer so that swapping strategy later touches one
-     file rather than the query path". No `Morilog\Jalali\` type may appear in controllers, query services or
-     repositories, and the differential-against-ICU test must reach the library through that abstraction only.
-     That is what keeps a later strategy change a one-file edit rather than a sweep.
+  ### The vocabulary, the exclusion and the resolution
 
-  **Design decisions `plan.md` fixed, which this task must follow rather than re-open:** conversion is **`morilog/jalali` ^3** (pure PHP, MIT, PHP >= 7.1, no `ext-intl` requirement — chosen because Nextcloud 34 does not require `ext-intl`, so depending on it alone would narrow the deployment envelope), with `ext-intl`/ICU used **only as a differential test oracle** where present, since both share the Borkowski algorithm and can be cross-checked over a large date range. The conversion is isolated behind a small domain value object so the strategy can be swapped in one file. **`plan.md` also records a verified boundary trap this task must not fall into:** Tehran is UTC+3:30, so resolving a period and then formatting the instant through UTC shifts the boundary by a full day — measured, Mehr 1 1405 is 2026-09-23 in Tehran but renders `2026-09-22` in UTC. The resolved `from`/`to` pair must be derived as calendar dates **in the requester's zone** and carried as dates.
+  `period` joins `ReportFilterFactory::ACCEPTED_FILTERS`, which is the **closed** set both `GET /reports`
+  and `POST /exports` read — one rule for two endpoints, which is why that list exists (T307/T309).
 
-  **Contract impact — the approved contracts are currently inconsistent with `spec.md` and this task owns closing that.** `contracts/ocs-api.yaml` MUST be updated for the four source-level items below: (1) `period` added to the accepted report and export filter vocabulary, which is a closed set established by T309/T310 and asserted as data, so adding a member is a contract change rather than an implementation detail; (2) the **`422`** returned when `period` and an explicit date range are supplied together, whose message MUST name the conflict and state which of the two to remove; (3) the **resolved Gregorian date range** in the response of whichever endpoint carries export/report filtering; (4) the **resolved timezone** in that same response, so the disclosure is contract-enforced and two users in different zones can explain a difference between their exports; **Regenerating `src/generated/api.ts` is NOT this task's work — `T124` is the canonical owner of validating the OpenAPI document and regenerating the generated types, and it must run after this task.** This task owns the *source* amendment only; T124 derives the types from it, so no client can be built against the old shape. `period` and an explicit `from`/`to` are mutually exclusive within one request, and the system must neither honour one while discarding the other nor intersect them.
+  Resolution happens **in the factory**, not in a query: a query has no clock and no zone, and putting the
+  Jalali conversion in the query path is precisely what `plan.md`'s "isolated behind a small value object"
+  exists to prevent. So the filter that reaches `ReportQuery` carries **dates**, and `ReportFilter` keeps
+  the period name and the resolved zone only so the response can disclose them.
 
-  **OPEN NORMATIVE QUESTION — `/speckit.clarify` must run before the vocabulary change (recorded 2026-09-30, deliberately NOT decided here).** FR-064 declares a **closed** filter vocabulary — sheets by status, date, currency, creator; transactions by status, cost centre, expense type, date, amount; audit by actor, stage, event type, date range — and requires any filter naming a field "outside this set" to be **refused with a 422**. `period` appears nowhere in that set. The obvious shortcut is to declare `period` a parameterisation of the existing `date` facet rather than a new independent facet, which would place it inside FR-064's set without amending FR-064 at all. **That reading is not consistent with the clarified specification, so it must not be implemented on:** FR-068 lists "date ranges" and "reporting periods … plus custom date range" as *distinct* alternatives, and FR-068 states the two are **"mutually exclusive within one request"** — which is only coherent if `period` is a distinct alternative input rather than a parameterisation of its own host facet, because a parameterisation and the filter it parameterises cannot be mutually exclusive. Resolving this therefore requires a **normative change to `spec.md` FR-064**, not a task-level reading: either `period` joins FR-064's accepted set explicitly, or FR-064 states the relationship between a period and a date range. **Run `/speckit.clarify`; do not settle it in this file, and do not amend `spec.md` ad hoc.** Until that decision exists the `period` vocabulary item is blocked, while the rest of this task's scope — the dependency, the Jalali resolution itself, the 422, the disclosure and the response schema — is not.
+  **Mutual exclusion is enforced in both key orderings**, because a caller can send `period` and `from`
+  in either order and "whichever arrived first wins" is exactly the silent discard FR-068 forbids — the
+  caller would receive one filter while believing they sent two. The refusal names the conflicting keys and
+  says which to remove, so a client fixes it in one attempt. A **blank** `period` is "not supplied", not a
+  period named `""`, so it does not turn an ordinary explicit range into a 422.
 
-  **Verification `plan.md` requires for this task**, each an independently failing assertion: Jalali month boundaries including a 30-day and a 31-day month; quarter boundaries beginning at Farvardin; year length 365 vs 366 with 1403/1408 as leap controls and 1404/1405 as non-leap, never asserted as a constant; time-zone fallback to the instance default when an account states none; two users in different zones each receiving their own correct range with the zone disclosed in both; inclusive first-day and last-day semantics; `422` for `period` plus explicit dates in both orderings across every affected resource; stored Gregorian expense dates byte-identical before and after resolution with no migration produced; a differential check against ICU that **skips rather than fails** where ICU is absent; and a regression case in a non-UTC zone asserting the resolved `from` is not shifted by UTC formatting. Assertions belong on the live endpoint the way every other T306 facet is asserted.
+  ### The disclosure, defined once
 
-  **Scope boundary.** This task must not absorb T098's unrendered sheet-detail audit table, and its dependency ordering is unchanged: T306 delivered the custom-date-range half that this work extends, and T309/T310 own the filter vocabulary this task amends. `data-model.md` needs no change; the Jalali definition belongs in `spec.md` and `plan.md`, not the data model.
-- [ ] T313 Give `GET /sheets`, `GET /sheets/{id}` and `GET /dashboard` the same data-fault answer the
+  `ReportFilter::periodDisclosure()` returns `period`, `resolvedFrom`, `resolvedTo` and
+  `resolvedTimeZone`, and **empty** when nothing was resolved. Both endpoints spread it into their own
+  response (`ReportController::show()`, `ExportController`), so they cannot state it differently — a
+  disclosure assembled in two places is the drift class this codebase has been bitten by repeatedly.
+
+  Both facts are about **disagreement between people**, not about the filter: without the zone, two
+  finance officers reconciling "this month" cannot tell a different period from a different timezone. And
+  absent rather than null when unused, because a key describing a request the response did not use is a
+  claim about the request rather than about the answer.
+
+  ### `ReportQuery` needed `period` as a *real* rule, not a listed name
+
+  The existing meta-guard `testEveryRequestNameIsAnsweredByARuleThatNamesIt` requires every accepted
+  filter to be refusable **by the name the caller sent**. The tempting fix is to add `'period' =>
+  ['occurredAt', 'createdAt']` to `FILTER_FIELD_KEYS` and stop — but `filterRequests()` and
+  `rowMatches()` both `match` on the rule name, so that entry would satisfy the guard's **letter** with a
+  rule that never fires. So `period` was added to both `match` arms and takes the same `from`/`to`
+  comparison `dateRange` does; the two rules can both fire for one filter and the comparison is idempotent.
+  The reason the entry exists at all is recorded in the code: a report that cannot answer a period must
+  refuse it by name rather than ignore it.
+
+  ### The time-zone source — settled, and it already existed
+
+  FR-068 requires the zone from "that user's own account settings, falling back to the instance's
+  configured default when the account states none; **no zone is hardcoded**". That sentence describes
+  **Nextcloud's own mechanism**, found in this container:
+
+  ```
+  OC\DateTimeZone::getTimeZone():  getUserValue($uid, 'core', 'timezone', '') ?: getSystemValueString('default_timezone', 'UTC')
+  ```
+
+  So the answer is the user's `core.timezone`, then `default_timezone`, then `UTC` — **no migration, no
+  admin screen, no second source of truth.** `OCP\IUser` has no timezone method in this version; `IConfig`
+  is the route.
+
+  `RequestTimeZone` (port) takes a **uid rather than reading the session**, because FR-068's own
+  verification needs two users in different zones at once. The precedence is a pure rule in
+  `TimeZonePreference::resolve($userZone, $instanceDefault)` — **necessarily**, because `OCP\` is not in
+  this application's Composer autoload, so no test under `tests/Unit/` can implement an `IConfig` (a first
+  attempt at exactly that failed with `Interface "OCP\IConfig" not found` and was **deleted** rather than
+  worked around by hand-loading the vendor stub). `NextcloudRequestTimeZone` reduces to two reads.
+
+  Two failure modes the rule exists to prevent, both reachable because the value is user-supplied:
+  `new DateTimeZone()` **throws** for a name the tzdata no longer has, so a stale preference would
+  otherwise 500 every report that user requests over a setting they cannot see; and Nextcloud stores an
+  untouched preference as `''` rather than deleting the row, so blank is what "stated nothing" looks like.
+
+  ### The dependency, and the two things plan.md's rationale did not anticipate
+
+  `morilog/jalali:^3` resolves to **v3.5.0, MIT** (+747 lockfile lines). **It is not dependency-free**: it
+  requires `nesbot/carbon` and `beberlei/assert`, so **6 net new packages** enter a financial application
+  for a date conversion. All MIT, none needs `ext-intl`, so `plan.md`'s deployment-envelope rationale
+  holds — but **T125's dependency-security gate and T132's packaging check must both cover six packages,
+  not one.** And **v3.5.0 renamed its own API**: the class is `Jalalian` not `Jalali`, there is no static
+  `fromGregorian`, and conversion is `CalendarUtils::toJalali()`. Code written from `plan.md`'s prose
+  would compile and fail at runtime.
+
+  ### The abstraction promise is now checkable
+
+  `grep -rn Morilog lib/` returns **exactly one file**, `JalaliReportingPeriods.php`. That is what makes
+  `plan.md`'s "swapping strategy later touches one file rather than the query path" verifiable rather than
+  aspirational.
+
+  ### Two bugs and one broken plan-requirement, all found by the tests
+
+  - **`getLastErrors()` was read after both parses.** PHP accepts `2026-02-30` and returns `2026-03-02`,
+    reporting it only through that error state — **which the next parse replaces**. So the first date's
+    warning was discarded whenever the second was valid, i.e. almost always. A period boundary that
+    quietly became the 2nd selects the wrong records with nothing to indicator. Fixed by reading the
+    state immediately after each parse.
+  - **My own expectations were wrong twice while the code was right.** I called Shahrivar 1405 a 30-day
+    month (measuring gives `31,31,31,31,31,31,30,...`, so Mehr is the 30-day one), and assumed a UTC caller
+    is "one day behind" (it is in the **previous Jalali month**). Tests now assert measured lengths.
+  - **`plan.md`'s prescribed ICU differential cannot be implemented.** **ICU 76.1 exposes no Solar Hijri
+    calendar**: `en_US@calendar=persian` reports **1348**-10-01 where Solar Hijri is **1405**-07-01, and
+    `islamic-umalqura`/`islamic` are lunar, `dangi` is Korean. CLDR aliased `persian` to the **lunar**
+    Islamic calendar. The first differential reported a disagreement on **all 1,827 days** — pure noise.
+    A *missing* oracle and a *wrong* oracle must both skip, and only the second is dangerous, because
+    `class_exists(IntlCalendar::class)` is true. The test **anchors** the oracle against a known Solar
+    Hijri date before trusting it. **It skips**, which is reported honestly as not-oracle-verified.
+
+  ### Contract amended — all four source items (T124 may now run)
+
+  `contracts/ocs-api.yaml` gains: (1) `filters.period` with its `enum: [month, quarter, year]` and the
+  Farvardin/mutual-exclusion rules spelled out; (2) the `422`-on-conflict behaviour; (3) `resolvedFrom` /
+  `resolvedTo` on `ExportResult`; (4) `resolvedTimeZone`, described as a zone name and not an offset.
+  `ReportPage.summary`'s disclosure is documented (it is `additionalProperties: true`). **Type
+  regeneration is still T124's** and was not touched. YAML re-parsed; 31 paths intact.
+
+  ### Verification
+
+  - `JalaliReportingPeriodsTest` **13 tests / 37 assertions, 1 skipped** — every verification `plan.md`
+    names: 30- and 31-day months, quarter from Farvardin (asserted *against* the Gregorian boundary it must
+    not use), year 365 vs 366 across 1403/1404/1405/1408, inclusive ends, the UTC regression, two zones,
+    the closed vocabulary, an impossible boundary date, purity.
+  - `TimeZonePreferenceTest` **10 tests**, including the chain's identity asserted **against Nextcloud's
+    own source in the container** so the reason we read `core.timezone` cannot rot (skips if absent).
+  - `ReportFilterFactoryTest` **58 tests** — period resolution, disclosure shape, both exclusion
+    orderings, blank-period-is-not-a-conflict, unknown name refused.
+  - **Whole reporting + export surface: 405 tests / 1646 assertions, green** (1 skipped).
+  - **Three mutations, all caught**: resolving through `UTC` instead of the zone → exactly the 2 zone
+    tests red; dropping the mutual exclusion → exactly the 2 exclusion tests red; dropping the disclosure →
+    red **only after a test was added for it**, because the first attempt at that mutation passed
+    everything — an empty disclosure is indistinguishable on the wire from "no period was requested", which
+    is exactly why it needed its own assertion.
+
+  **Two things remain outside this task.** The **licence notice** it was told to create is still not
+  created — the entry is explicit that the repository has no third-party-notice convention, that this task
+  creates the surface, and that **T132 must verify it**; that is still owed. And **no full-suite run was
+  taken**, for the reason in T313's note (concurrent-session `429` throttling); the 405-test reporting run
+  above had 7 contention samples but a coherent all-green result.
+  Cross-references: T124, T275, T306, T309, T310, T125, T132, T134.
+- [x] T313 Give `GET /sheets`, `GET /sheets/{id}` and `GET /dashboard` the same data-fault answer the
   reports have, and settle whether that answer is 422 (partial)
 
-  **FR-083 owner, cited 2026-09-30.** The "settle whether that answer is 422" half is **no longer an open
-  decision**: `spec.md` FR-083 (added by the 2026-09-30 clarification session) settles it — every read endpoint
-  MUST return `422` with a message identifying the condition as a data fault and ruling out permissions and
-  filters, `500` is reserved for genuinely unexpected faults, and an unreadable record MUST NOT be silently
-  omitted, defaulted to a valid-looking value, or rendered as healthy. T313's implementable scope is
-  therefore fixed: make sheets, sheet detail and dashboard answer as the reports already do. FR-083 also
-  forbids the tempting shortcut of dropping the offending row and returning the readable ones, because a
-  financial system must never smooth over a broken record quietly. T314 covers the dashboard and
-  administrator branches with tests and is sequenced after this task.
+  **Delivered. The entry named this a decision rather than a refactor, and the decision is recorded:
+  the translation lives in `OcsErrorMapper`, classified by exception type, and `ReportController`'s
+  bespoke arm is deleted rather than copied.**
 
-  T267 removed the last hardcoded currency fallback, so a stored record whose `currency_id` no longer
-  resolves now fails loudly everywhere instead of being reported as rial. `UnreadableRecordData`
-  extends `LogicException` on purpose, which means `ReportController` translates it into a 422 that
-  explains itself while every other caller keeps `OcsErrorMapper`'s 500-with-message-withheld. That
-  split is correct for a *report*, which can say "one or more stored records are incomplete"; it is
-  poor for a list, where a caller is told nothing except that the server broke.
+  ---
 
-  Measured on the live endpoint with the corrupt-record probe present, after T267:
+  **The three options weighed, and why the third option the entry listed was not chosen as stated.**
+  The entry offered "a shared handler, a decorator, or a deliberate line drawn at the report
+  boundary". A shared handler or a decorator would add a layer without changing the property that
+  matters: FR-083 requires "the same status and the same class of explanation, **so that a client
+  writes one handler rather than one per endpoint**", which is only achievable if the mapping is a
+  property of the *exception type* rather than of each controller. `OcsErrorMapper` already is the
+  single funnel every controller failure passes through — its own docblock says so — and
+  `SheetController::index()`, `SheetController::show()` and `DashboardController::index()` each already
+  `catch (\Throwable)` and call `->map()`. So the answer was to add one arm there and delete the
+  per-controller one, rather than to add a layer that all three controllers would still have to opt
+  into by hand.
 
-  | Endpoint | Status |
+  **This is the third option, resolved in the opposite direction: not a line drawn at the report
+  boundary, but the boundary itself removed.** The line was the defect. FR-083's phrase "one handler
+  rather than one per endpoint" is a statement about the mapper, and a line a future endpoint can
+  simply forget to notice is the exact shape T313 was raised for.
+
+  **`ReportController::show()` lost 25 lines and `UnreadableRecordData` its import.** Keeping the
+  arm would have meant two places that could answer differently, which is what FR-083 was raised for.
+
+  **The arm logs *and* withholds, which is the combination no other 4xx arm needs.** Without the
+  `elseif` branch the new arm would fall through to `$error->getMessage()` and publish
+  "Cannot resolve the currency of sheet <uuid>: currency_id 42 matches no row" — telling a caller
+  which stored reference is broken, i.e. something about rows they may not be able to see. That is the
+  disclosure T029 was raised for, so the branch substitutes a canonical message **and** logs the real
+  exception in full. Verified rather than assumed: the probe run reported
+  `leaks danglingCurrencyId: false`, `leaks revisionDbId: false`, `leaks internal msg: false`.
+
+  **`DATA_FAULT` is a new error code, and that is deliberate rather than incidental.** `Error.code` is
+  `type: string` in `contracts/ocs-api.yaml` (not an enum) and `src/types/api.ts` types it as `string`
+  and never branches on it, so a distinct code is contract-legal and costs the client nothing. FR-083
+  asks for one handler across the endpoints, and a handler that must also string-match a message cannot
+  be one — the code is the part a program can switch on. The reports previously answered
+  `VALIDATION_FAILED` here, which was a *client's* fault code for a fault that is not the client's.
+
+  **The canonical message names neither the endpoint nor the record, on purpose.** FR-083 wants one
+  explanation across all four endpoint groups, so the string cannot vary by endpoint — and the caller's
+  own request already tells it which endpoint it called. The report's message embedded
+  `The %s report cannot be produced`; that per-endpoint text is gone. `DataIntegrityReportTest` pins
+  only two phrases ("a data fault", "not a permission or filter problem") and both survive, so no
+  assertion was weakened.
+
+  **Two docblocks asserted the old split and are now corrected rather than left lying.**
+  `UnreadableRecordData`'s own docblock said "every other caller keeps the classification it had",
+  and `DbExpenseSheetRepository::getCurrencyCode()`'s said "`ReportController` translates it into a
+  422 ... while every other caller keeps the classification `OcsErrorMapper` already gives an
+  unrecognised fault". Both described behaviour this task removed.
+
+  **The dashboard half was measured, not assumed, because T313's table was T267's measurement and
+  centralising is not the same thing as the endpoint being fixed.** A throwaway probe put the corrupt
+  record in place and read `GET /dashboard`:
+
+  | Field | Value |
   |---|---|
-  | `GET /reports/{sheets,transactions,process,evidence}` | `422`, message explains the fault |
-  | `GET /sheets`, `GET /sheets/{probe}`, `GET /dashboard` | `500`, `pettycash.error.unexpected` |
-  | `GET /sheets/{healthy}` | `200`, unaffected |
+  | HTTP / `ocs.meta.statuscode` | `422` / `422` |
+  | `error.code` | `DATA_FAULT` |
+  | canonical message present | yes |
+  | leaked `danglingCurrencyId` / `revisionDbId` / internal message | `false` / `false` / `false` |
+  | `GET /dashboard` after the probe was removed | `200` |
 
-  The choice is where the translation lives — a shared handler, a decorator, or a deliberate line
-  drawn at the report boundary — and it changes the status of three endpoints, so it is a decision
-  rather than a refactor. T267 recorded it as "not done here, deliberately" and left it ownerless. The
-  existing tests assert the *absence of the wrong answer* and enumerate the honest statuses rather
-  than pinning `500`, so this task can tighten them without deleting anything.
+  The probe was then **deleted**, because T314 owns the dashboard test and adding one here would take
+  its scope. So the behaviour is delivered and measured; the assertion is T314's.
 
+  **`DataIntegritySheetCurrencyTest` was tightened, not deleted** — the five concerns, the fixture and
+  the control are all unchanged, and only the acceptable answer stopped being a set. Its docblock had
+  deliberately enumerated `[200, 404, 422, 500]` "so a follow-on can tighten them without having to
+  delete anything"; this is that follow-on. The status enumeration is replaced by pinned 422s, plus a
+  `DATA_FAULT` code assertion and the "names the fault as being in the data" phrase.
+
+  **One assertion was removed rather than tightened, and it is worth naming.** The old tests carried
+  `if ($response['status'] === 200) { assertNull($entry); }` — a conditional that made the strong
+  invariant ("no 200 may carry this record") contingent on the endpoint having answered 200 at all.
+  With the status pinned there is nothing to condition on, so the `assertNull` is now unconditional
+  and is what makes the claim unconditional too.
+
+  **Mutation-verified across both endpoint groups.** Disabling the arm
+  (`$error instanceof UnreadableRecordData && false`) turns **seven** tests red with a single coherent
+  message — `Failed asserting that 500 is identical to 422` — across `DataIntegritySheetCurrencyTest`
+  **and** `DataIntegrityReportTest`. That cross-file coherence is the evidence: the sheet tests
+  previously enumerated their acceptable statuses and would have passed with the arm removed, so
+  before this tightening they were not capable of detecting the regression they existed to prevent.
+
+  **Targeted verification: `DataIntegritySheetCurrencyTest` + `DataIntegrityReportTest` +
+  `ErrorEnvelopeContractTest` + `AccountControllerTest` = 29/29, 233 assertions, green.**
+
+  **A full-suite run could not be taken as evidence, and the reason is worth recording precisely.**
+  A second agent session is working this same working tree concurrently — it created the untracked
+  `tests/Unit/Architecture/PlanStructureTest.php` and amended `plan.md` (that is T238, and its
+  `tests/Integration/Storage` failure is its own, in `PENDING` terms not yet declared). Both sessions
+  run `scripts/dev/phpunit` against the **one** shared live database with the **same**
+  `PETTYCASH_TEST_USER` credentials, and the contract suites reseed shared fixture state. Four
+  full-suite attempts produced 2, 7, 30 and 151 failures respectively, with whole classes failing
+  wholesale — `ReportAndExportControllerTest` (71 tests), `SheetListFilterContractTest`,
+  `FinanceReviewControllerTest` and `PurchaserFlowControllerTest` each entirely.
+  **The mechanism was identified rather than guessed, and it is not what it first looked like.** The
+  obvious reading — two sessions corrupting each other's seeded fixtures — was wrong. A short run that
+  happened to catch the degraded state returned **sixteen failures and no other kind**: every one was
+  `Failed asserting that 429 is identical to <expected>`, across 200/400/401/403/404/422. That is
+  Nextcloud's brute-force limiter refusing the request before the application sees it, and it is what
+  whole-class failure looks like from the client side. Two sessions' worth of contract-suite traffic
+  against one endpoint with one credential is enough to trip it.
+  So: not a data fault, not a fixture fault, and not a regression in anything touched here — an
+  environment that has been driven into throttling by concurrent load.
+  **Two of the runs were guarded** by sampling the process table throughout, and recorded **24** and
+  **25 samples with a concurrent foreign `phpunit`**; the last of those reached only 4241 assertions
+  of the ~6700 a complete run makes, so it was cut off mid-suite rather than merely noisy. A run
+  started 270 seconds after the tree went quiet was contended from its fourth second.
+  Those numbers are recorded here as **not evidence**, and the honest state is that T313 is verified on
+  its affected area and **unverified on a full-suite run**. Settling it needs one session, no concurrent
+  traffic, and a Nextcloud instance no longer answering `429` — the limiter's window has to lapse
+  first, so re-running immediately will reproduce this rather than clear it.
+
+  **Not done, and recorded rather than implied.** **T314 remains open and is the pinning** — the
+  dashboard and administrator branches have no test, and the administrator branch additionally needs a
+  credential the contract suite does not have. **`ExportController`, `ReviewController` and
+  `AccountController` were not audited** for this same fault: they call `map()` and so inherit the
+  correct answer, but whether any of them *can* throw `UnreadableRecordData` on its own path was not
+  checked, so "every read endpoint" in FR-083 is established for the four named groups and not for
+  the whole surface. **No client-side handling was added**: `src/` has no handler for `DATA_FAULT`, so
+  a frontend that branches on codes would still fall through to its generic error path.
+  Cross-references: T267, T311, T314, T308, T029, T361.
 - [ ] T314 Cover the `/dashboard` and administrator paths of the data-integrity refusal, which are
   measured but pinned by no test (partial)
 
@@ -8406,6 +8895,14 @@ to fix an unrelated live defect is how a task stops being reviewable.
       asymmetry: the runner and PHPUnit both load the autoloader **by hand**, while a real request does
       not. Corrected in place.
 
+      **Suites.** `tests/Unit/Architecture/` 11/11; `--testsuite unit` 649/649 (4 pre-existing PHPUnit
+      deprecations); `ReportAndExportControllerTest` 62/62; full `scripts/dev/phpunit` **1241 tests /
+      6433 assertions / 1 failure**. The one failure is `PurchaserFlowControllerTest::
+      testGetEvidenceContentReturns200WithStream` (`application/octet-stream` vs `application/pdf`), T318's
+      known conflict, named as pre-existing in `docs/reports/T333.md`. Re-confirmed rather than assumed by
+      moving the shim aside and running that test alone: identical failure, so the count did not move —
+      1 before, 1 after.
+
       **Not done, and recorded rather than left implied.** T346 (the `X-PettyCash-Command-ID` replay
       path) was blocked on this task because its contract test could not arrange a scenario against an
       endpoint answering 500; that endpoint now answers, so T346 is unblocked and untouched. T366/T367
@@ -9193,7 +9690,7 @@ application produces.
       nothing about who asks for it.
       Cross-references: T108, T111, T112, T302, T306, T342, T365, T361.
 
-- [ ] T367 [HIGH] Resolve rows for `resource: evidence` and `resource: audit` so the grouped evidence
+- [x] T367 [HIGH] Resolve rows for `resource: evidence` and `resource: audit` so the grouped evidence
       ZIP and the audit export produce files instead of a 422, because FR-069 and FR-066 name both and
       `POST /exports` refuses both unconditionally (FR-069, FR-066, FR-074, FR-082,
       `lib/Controller/ExportController.php`, `lib/Infrastructure/Export/EvidenceArchiveExporter.php`) (`missing`)
@@ -9238,133 +9735,510 @@ application produces.
       omission, and that distinction must be asserted at the endpoint rather than only in the exporter's
       unit tests. A mutation that passes `[]` for entries must fail, since that is the exact shape of the
       empty-manifest defect.
-      Cross-references: T110, T108, T302, T306, T342, T343, T366, T365.
 
-- [ ] T368 [MEDIUM] Carry each account's movements as data of the `accounts` report row, because FR-065
+      ---
+
+      **Delivered, and the scope was larger than the entry implies.** Four files changed plus one
+      existing test rewritten. Three findings inside it are worth keeping, because two are the kind
+      that stay invisible until something is measured over HTTP.
+
+      **The rows already existed; only the refusal was wrong.** `ReportController` already had
+      `evidenceReport()` and `auditReport()`, and `ReportQuery::SUPPORTED_TYPES` already listed
+      `evidence` and `audit`. So the fix was **not** to write two row producers — it was to stop
+      refusing them. Copying them into `ExportController` would have put one scope rule in two places,
+      which is the T307 shape this repository has been bitten by repeatedly, and which
+      `ReportController::__construct()`'s own docblock records when it moved `ReportFilterFactory`
+      out for the same reason. Both producers now live in `EvidenceSelectionQuery` and
+      `AuditSelectionQuery` (Application layer) and **both controllers call them**, so neither
+      endpoint can drift from the other.
+
+      **`EvidenceArchiveEntry` was genuinely unproducible, and that is what made the ZIP unreachable.**
+      `grep -rn "new EvidenceArchiveEntry" lib/` returned nothing before this task. The entry needs
+      four facts the evidence row does not carry — revision number, sheet public id, sheet title and
+      the uploader's display name — resolved by joining evidence → transaction → revision and
+      → sheet, plus a directory lookup. That is why the entry producer lives in the query and **not**
+      in the report: the report pages over up to `BOUND` rows and would pay those lookups per row for
+      columns FR-064 does not ask it for, whereas an export resolves a bounded set of named ids.
+
+      **A hand-written positional DI list made the first attempt fail with an empty 200, and the
+      symptom said nothing at all.** `Application.php` builds both controllers by hand —
+      `registerService(ReportController::class, fn => new ReportController(...))` — so adding two
+      constructor parameters without adding them to those lists **shifted every later argument along**:
+      position 7 received `ExpenseSheetRepository`, the container handed `ExportController` a
+      `DbExpenseSheetRepository` where it declared `EvidenceSelectionQuery`, and **every export
+      answered an empty `200`** whose only trace was a TypeError in `nextcloud.log`. Two wrong
+      diagnoses came first — a by-parameter-name container fallback, then `readonly` classes against
+      PHP 8.5 lazy ghosts — and both were refuted by reading the container's own source and by querying
+      it from inside a booted app. The lesson is this repository's own: **how the code is loaded** is a
+      correspondence no suite asserts, and here it was an argument list written by hand.
+
+      **Two defects found while verifying, both fixed.** (a) The scope predicates are
+      `callable(row, scope)` — the shape `ReportQuery::paginate()` calls them with — so handing one
+      straight to `array_filter()` raised `ArgumentCountError` from inside the closure and answered a
+      bare 500 on every evidence export; the controller now goes through `scopedRows()`. (b) More
+      seriously, filtering rows by the caller's ids **silently dropped** an id that did not resolve, so
+      a caller naming three events would have received two, with `rowCount: 2` and nothing saying the
+      third was dropped — T302's "accepted and discarded" in its row form, which is worse than a refusal
+      because the number looks measured. `narrowToNamedIds()` now accounts for every named id and
+      refuses otherwise, and a **missing id and a foreign id give the same answer** so a caller cannot
+      probe for records they may not see (FR-003).
+
+      **The empty-manifest guard is where T367 said it had to be.** `ExportService::generateZip()` now
+      refuses an empty entry list *before* building, and its comment says why the placement matters:
+      downstream of `build()`, an empty entry list and an archive whose members all failed to read are
+      the same object, so refusing there would also refuse a real selection whose files were unreadable
+      — a different answer, and the wrong one.
+
+      **Verified over HTTP on the deployed app**, authenticated as the test user:
+
+      | Request | Before | After |
+      |---|---|---|
+      | `resource=sheets, fileFormat=csv` | `200` | `200` (unchanged) |
+      | `resource=audit, fileFormat=csv` | **`422`** | **`200`** |
+      | `resource=evidence, fileFormat=csv` | **`422`** | **`200`** |
+      | `resource=evidence, fileFormat=zip` + ids | **`422`** | **`200`**, a real archive |
+      | `resource=evidence, fileFormat=zip`, no ids | `422` | `422` ("needs a selection") |
+      | `resource=report, fileFormat=csv` | `422` | `422` (still no projection) |
+
+      **The ZIP is opened and read back, not trusted from its status code** — because the failure this
+      guards against is an archive that is well-formed and empty. `PK` magic asserted, the manifest
+      member present, exactly one non-manifest member, and that member's bytes asserted to contain the
+      uploaded content. The manifest name is read from `EvidenceArchiveExporter::MANIFEST_NAME` rather
+      than hardcoded, so a rename cannot make the test count the manifest as an evidence file.
+
+      **Mutation-verified in the direction T367 names.** Replacing the entry call with a literal `[]` —
+      the exact shape of the empty-manifest defect — turns the archive test **RED** with the guard's own
+      message: *"A 'zip' export needs the evidence entries to archive; none were resolved."*
+
+      **One existing test was rewritten rather than deleted, and the narrowing is the record.**
+      `testAResourceWithNoRowSourceIsRefusedRatherThanAnsweredWithAnEmptyArtifact` asserted that
+      `report`, `audit` **and** `evidence` all refuse. Two of those three now answer, so keeping the
+      assertion would pin this task's own defect in place. It now covers `report` alone — still the one
+      resource with no projection — and a companion test asserts the other direction. Asserting symmetry
+      across all three would fail on correct work, the same mistake Phase 36 recorded for another file.
+
+      **Suites.** `ReportAndExportControllerTest` 66/66 (755 assertions). Full `scripts/dev/phpunit`
+      **1245 tests / 6469 assertions / 1 failure**, and that failure is the same single pre-existing one
+      as the baseline (`PurchaserFlowControllerTest::testGetEvidenceContentReturns200WithStream`,
+      `application/octet-stream` vs `application/pdf` — T318's known conflict, already proved unrelated
+      in T345). Baseline was 1241 tests / 1 failure; now 1245 / 1.
+
+      **Not done, and recorded rather than implied.** **T366 stays open and is untouched.** This task made
+      `generateZip()` reachable, which closes the shared root cause T366 named ("one fix — giving the
+      controller a subject→layout resolution rather than a subject→columns list — closes both"), but
+      T366's own defect is `completeSheet()` having no caller and needing six real projections per
+      sheet, and none of that was built here. **FR-074's ceiling is asserted through the exporter's real
+      constant**, and the endpoint is asserted to hand it real entries, but the oversized-file *refusal*
+      path is still covered only by T110's unit tests — this task added no endpoint-level oversized
+      fixture, which would need a >100 MB upload. **`SELECTION_BOUND` is 1000** and applies to the
+      unselected enumeration case only; a named selection is resolved id by id and is not bounded by it.
+      And the client's `audit: ['csv','xlsx','pdf']` offer from T342 is now answerable for csv/xlsx;
+      `pdf` remains refused by the pre-existing `pdfUnavailableReason` pending T109's font work.
+      Cross-references: T110, T108, T302, T306, T342, T343, T366, T365, T109, T345.
+
+- [x] T368 [MEDIUM] Carry each account's movements as data of the `accounts` report row, because FR-065
       requires "one account per row, carrying that account's balance **and its movements**" and the
       report carries only the balance (FR-065, `lib/Controller/ReportController.php`,
       `contracts/ocs-api.yaml`) (`partial`)
 
-      **Measured.** `ReportController::accountsReport()` builds each row as
-      `['id', 'currency', 'userUid', 'balanceMinor', 'active']` (`:355-360`) and declares the columns as
-      exactly that list (`:378`). The controller's constructor (`:77-93`) takes `AccountRepository` and
-      **no** `AccountMovementRepository`, so there is no path by which a movement could reach a row. The
-      movements are reachable, but only one account at a time through
-      `GET /accounts/{accountId}/movements` (`AccountController.php:217-240`), which is the *ledger*
-      endpoint rather than the report.
+      **Delivered. The entry's one open question — nested array or a `movementCount` — is settled by
+      FR-065's own wording, and the rejected alternative is recorded because it was cheaper.**
 
-      **Why the report and not the endpoint is the right reading, and why this is not a naming
-      preference.** The 2026-09-28 clarification settled the question the earlier notes left open:
-      "Should petty-cash balances and movements be their own report types, or data within the existing
-      `accounts` report? → A: Data within the existing `accounts` report; the report-type enum is not
-      extended." FR-065's text then states the shape: "one account per row, carrying that account's
-      balance and its movements." So the enum is settled and settled **against** an eighth type — this
-      task must not add one, and `ReportQuery::SUPPORTED_TYPES` is asserted as the contract's exact seven,
-      so adding one would fail T106's test as well as FR-065's sentence.
+      ---
 
-      **The shape needs a decision rather than a guess, and the decision is small.** Two readings: a
-      `movements` array nested on each row, or a `movementCount` plus the balance with the ledger
-      reached through the existing per-account endpoint. The first matches FR-065's wording ("carrying
-      … its movements") and matches how the client would render one account with its history; the second
-      is cheaper but is not what the requirement says. Note the interaction with `ReportPage.rows`, which
-      the contract types as `additionalProperties: true` (`ocs-api.yaml:1301`), so **no contract amendment
-      is needed** for either shape — which is why this is MEDIUM and not the HIGH that F3 carries.
+      **Shape: a nested `movements` array, because the requirement says "carrying … its movements".**
+      The 2026-09-28 clarification settled the bigger question against a new report type, so the
+      movements have nowhere else to live. The rejected alternative — a `movementCount` beside the
+      balance, with the ledger reached through `GET /accounts/{id}/movements` — is cheaper and is not
+      what FR-065 says. It also had a concrete failure behind it, recorded in the class docblock:
+      this controller claimed FR-065's movements "are reachable here, through the `accounts` type's
+      own rows" while the row carried none at all. The claim was true of the ledger endpoint and false
+      of the report. `ReportPage.rows` is `additionalProperties: true`, so no contract amendment is
+      needed and none is claimed.
 
-      **Acceptance criteria.** `GET /reports/accounts` returns the caller's permitted accounts each
-      carrying its movements, with the scope rules T299/T112 delivered preserved exactly — own accounts,
-      charged accounts for a finance officer, all for an administrator, and the `scope` /
-      `chargedAccountsIncluded` / `chargedAccountCount` summary left intact. A movement belonging to
-      another account, or one beyond the report page bound, must not widen the visible set — the same
-      property `ChargedAccountScope` asserts when an unresolvable account is dropped.
+      **The bound is stated rather than implied, because an unbounded promise is not available.** A
+      ledger grows for as long as an account is used, so `MOVEMENT_READ_BOUND` (200) applies and **each
+      row reports `movementsTruncated`**. A row that quietly carried fewer movements than the account
+      has, beside a balance reflecting all of them, reads as an accounting error — so the flag is the
+      difference between a partial ledger and a wrong one. `MOVEMENT_READ_BOUND + 1` rows are
+      requested, because the only way to tell "exactly at the bound" from "truncated at the bound" is to
+      read one row more than the bound allows; asking for exactly the bound would make a ledger of
+      precisely that length indistinguishable from one that continues.
+
+      **The N+1 is deliberate and is recorded with its precedent.** `AccountMovementRepository` has no
+      bulk read, so this is one paged read per candidate account. `SheetPayloadFormatter` is the
+      precedent for what to do when that stops being acceptable — it needed the same shape, and
+      `SheetSummaryQuery::expenseDateRanges()` exists precisely to stop a page becoming a page of
+      queries — and the docblock names it, so a future reader knows where the hoist belongs (a query
+      class, not the controller).
+
+      **T367's lesson applied before it could bite: the DI list is hand-written and positional.**
+      `Application.php` builds `ReportController` with an explicit 17-argument list. Two arguments
+      were added — `AccountMovementRepository` and `AccountPayloadFormatter` — and both were added
+      there, not just to the constructor. T367 recorded what happens otherwise: every later argument
+      shifts along, the container hands the controller a `TechnicalLogger` where it declares
+      `AccountPayloadFormatter`, and **every export answers an empty `200`** whose only trace is a
+      TypeError in `nextcloud.log`. A comment at the insertion point records the trap.
+
+      **Asserting the balance/ledger invariant is what surfaced a fixture defect, and that is the most
+      valuable thing here.** The new assertion states that on an untruncated row the balance must be
+      reachable from the movements the row carries. It failed on an account with `balance_minor:
+      100000` and an empty ledger — and on inspection that was **the fixture contradicting itself**:
+      `seed-contract-fixtures.php` gave the second account a non-zero balance while
+      `AccountControllerTest::testAccountWithNoMovementsIsAnEmptySuccess` and
+      `::testTheCallersOwnSecondAccountIsStillReadable` both assert its ledger is empty, so the
+      account was simultaneously *unused* and *funded*. FR-015 requires a charge's amount,
+      description and resulting balance to be recorded as a movement, so a balance with no ledger is a
+      state the application cannot produce.
+
+      **Why that mattered beyond the fixture.** A non-zero balance beside an empty ledger is exactly
+      what a charge that moved money without writing a movement would look like — and this is the
+      account every charge test funds. The fixture was therefore quietly excusing that class of defect
+      on the account most likely to exhibit it. The balance is now **0**, which is the honest value for
+      an account that has never been used; nothing asserted the old 100,000, and the two tests that
+      pinned the empty ledger still pass untouched.
+
+      **One assertion of mine was wrong before the fixture was, and the fix is the better claim.** The
+      first version said "an untruncated row carries its ledger", which fails on a *legitimately*
+      unused account — and the second account is deliberately one. The real invariant is that the
+      balance must be reachable from the row's movements, with 0 the value for an empty ledger. Stated
+      as "matches one of the row's `balanceAfter` values" rather than as a **sum**, because the
+      repository's ordering is not part of any contract and a sum would have pinned it.
+
+      **Scope-leak direction asserted explicitly.** The read is scoped by the account's own surrogate
+      key, so a movement from another account *cannot* reach a row — that is a property of the query,
+      not of a filter, and no filtering happens after the read. Asserting it is still worth doing: it
+      is the check that would fail if a row were ever assembled by querying movements without an
+      account constraint and filtering afterwards, which is indistinguishable on the happy path.
+
+      **T299/T112's scope rules are preserved exactly and were re-verified rather than assumed.** The
+      `scope` / `chargedAccountsIncluded` / `chargedAccountCount` summary members are unchanged, the
+      scope predicate is unchanged, and the existing three accounts-report tests still pass — including
+      the one asserting the report agrees with `GET /accounts` on a charged account's balance, which
+      now also has to agree about its movements.
+
+      **3 new contract tests over HTTP; `ReportAndExportControllerTest` is 69/69.** Mutation-verified:
+      replacing the row's `movements` with a literal `[]` turns both
+      `testEachAccountsReportRowCarriesThatAccountsMovements` and
+      `testTheAccountsReportStatesItsMovementReadBound` red. Full `scripts/dev/phpunit` is
+      **1271 tests / 6711 assertions / 1 failure**, and that failure is the same single pre-existing one
+      as the baseline (`PurchaserFlowControllerTest::testGetEvidenceContentReturns200WithStream`,
+      `application/octet-stream` vs `application/pdf` — T318's known conflict, proved unrelated in
+      T345). Baseline was 1245 / 6473 / 1.
+
+      **Not done, and recorded rather than implied.** The read is a per-account query, so the N+1 is
+      real and is only *documented*, not removed; hoisting it is a query-class change this task did
+      not make. **`MOVEMENT_READ_BOUND` is unexercised** — the fixtures hold at most two movements per
+      account, so `movementsTruncated` is asserted as present-and-boolean but never as `true`, and a
+      truncation bug that reported the wrong flag would not be caught. **No client-side consumer was
+      added**: `src/` still renders the report without the movements, so nothing in the UI displays a
+      ledger from this report yet, and FR-065's data reachability is now satisfied at the API rather
+      than in the interface.
       Cross-references: T106, T112, T299, T063, T361.
 
-- [ ] T369 [MEDIUM] Write a configuration-audit event for the FR-015 account-funding charge, because
+- [x] T369 [MEDIUM] Write a configuration-audit event for the FR-015 account-funding charge, because
       FR-055 derives an officer's charged accounts from "account **funding** and balance-charging"
       events and only the settlement side writes one (FR-055, FR-015, FR-017,
       `lib/Application/Account/AccountService.php`, `lib/Application/Reporting/ChargedAccountScope.php`) (`partial`)
 
-      **Measured.** `AccountService::charge()` (`lib/Application/Account/AccountService.php:226-289`)
-      performs the full FR-015 write — role gate, account lookup, `expectedVersion` guard, active check,
-      `IdempotencyService::execute()`, movement save, balance update — and writes **no configuration
-      audit event**. `grep -rn "appendConfiguration\|ConfigurationAudit\|CHARGE_EVENT_TYPE" lib/Application/Account/AccountService.php`
-      returns nothing, and `AccountService`'s constructor (`:9-18`) does not take an `AuditWriter`.
+      **Delivered, and FR-055 settled both of the design points the entry called "not this task's to
+      decide silently" — so they were decided against the requirement text rather than by preference.**
 
-      The only producer of `ACCOUNT_CHARGED` is settlement:
-      `FinanceSettlementService.php:294` writes it on approval only. `ChargedAccountScope` reads exactly
-      that constant (`:63`) and derives the whole charged-account set from it.
+      ---
 
-      **The consequence is concrete and it lands on FR-055's own wording.** FR-055 (clarified
-      2026-09-28) says an officer's charged accounts "are the distinct account subjects of that officer's
-      own **account funding and balance-charging** configuration audit events" — two event kinds, not
-      one. Only the second is written. So an officer who has **funded** an account under FR-015 and whose
-      expense has not yet been settled does not have that account in `chargedAccountDbIds()`, and it is
-      therefore absent from the `accounts` report (`ReportController::accountsReport()`, `:336-345`)
-      and from their configuration-audit visibility. The requirement's clarification anticipates exactly
-      this: "relying on the transaction-audit decision alone would leave this scope empty for every officer
-      who had actually charged an account." The settlement event closed half of that sentence; the
-      funding half is still open.
+      **Design point (a), one event type or two: FR-055's own sentence decides it, and it is two.**
+      The requirement says an officer's charged accounts are the subjects of their "account funding
+      **and** balance-charging" configuration audit events, and that "an event type outside funding
+      and charging — a rename, an activation, a deactivation — MUST NOT count toward the set, because
+      touching an account is not charging it." That sentence is drawn to separate funding from
+      charging, so one case for both would satisfy the words while erasing the distinction they are
+      there to make: FR-015 puts money **into** an account and FR-043's settlement takes it **out**, and
+      an auditor asking which happened would get one answer instead of two. `ConfigurationEventType`
+      therefore gains `AccountFunded` and `AccountCharged` as two cases.
 
-      **Two design points that are not this task's to decide silently.** (a) Whether funding and
-      settlement share one event type or get two — FR-055 says "an event type outside funding and
-      charging … MUST NOT count," which implies the set is {funding, charging}, so a second constant may
-      be needed rather than reusing `ACCOUNT_CHARGED` for a different business fact.
-      `ConfigurationEventType`'s docblock (`:25-33`) currently records that `ACCOUNT_CHARGED` is
-      deliberately outside that enum because it is reached through its own path, and says the
-      consolidation "belongs with the task that owns those writes" — this may be that task. (b) The
-      funding charge's `after` value: `AccountService::charge()` receives the account **before**
-      `save()`, so a before/after balance pair can be read honestly here, unlike the settlement case that
-      `FinanceSettlementService.php:296-299` explains at length. Do not lose that by copying the
-      settlement payload shape.
+      **The enum deferral has now been paid, and the entry predicted which task would pay it.**
+      `ConfigurationEventType`'s docblock kept `ACCOUNT_CHARGED` out on the grounds that its producer
+      named it as the literal `ChargedAccountScope::CHARGE_EVENT_TYPE` and that "a second source of
+      truth for a value another code reads" was the hazard — deferring the consolidation to "the task
+      that owns those writes". T369 owns the funding write, so this is that task: both cases moved into
+      the enum, `ChargedAccountScope` now reads `CHARGE_EVENT_TYPES` off the enum, and
+      `FinanceSettlementService` writes `ConfigurationEventType::AccountCharged->value` instead of the
+      constant. `ChargedAccountScope::CHARGE_EVENT_TYPE` is **removed**, not deprecated: leaving it
+      would have preserved the exact two-sources-of-truth hazard the deferral was about.
+      `RETENTION_POLICY_CHANGED` stays outside, and the docblock now says why the two differ —
+      nothing reads it, so there is no derivation to keep in step with the enum.
 
-      **Acceptance criteria.** After `POST /accounts/{id}/charges` succeeds, a configuration-audit event
-      names that account under the funding event type, and `ChargedAccountScope::chargedAccountDbIds()`
-      includes it **without** any settlement having occurred. The refusal direction holds too: a
-      currency rename, activation or deactivation on the same account must still not count, since that
-      is the distinction `ChargedAccountScopeTest.php:103-108` already asserts for the other event type.
-      FR-055's "an officer with no funding or charging event sees no configuration audit, which is a true
-      zero" must remain a true zero after this change.
-      Cross-references: T294, T299, T085, T086, T291, T369, T362.
+      **Design point (b), the balance pair: this method *can* read an honest one, so it does.**
+      `PettyCashAccount::charge()` assigns `balanceMinor` in place, so a "before" read taken after the
+      call would be the post-charge value wearing a "before" label — the defect
+      `FinanceSettlementService::recordConsumption()` documents at length and works around by recording
+      no pair at all. `AccountService::charge()` receives the account *before* the mutation, so
+      `$balanceBefore` is captured ahead of the charge and the event carries a real pair plus the
+      currency, the movement id and the amount. The copy warning was the right instinct and was not
+      followed: the settlement's workaround is available precisely because the settlement had lost the
+      prior value, and this method has not.
 
-- [ ] T370 [MEDIUM] Assert over HTTP that a `COMPLETED` sheet refuses add, edit and submit, because
+      **`actor_role` is resolved, not hardcoded, and not defaulted.** `AuditWriterService::toEvent()`
+      stamps `'PURCHASER'` when the payload omits it, which would have recorded a finance funding as a
+      purchase. FR-013 admits an administrator to this operation, so hardcoding `FINANCE` would
+      misattribute exactly the case FR-013 creates. `actorRoleFor()` asks the role assignments and
+      returns `Administrator` as the fallback — safe because the FR-015 actor gate has already refused
+      anyone holding neither role. An actor holding both is recorded as `Finance`, because FR-015 names
+      finance as the charging role and that is the action performed.
+
+      **`entity_id` is the public id, and that is the one field here that fails silently.**
+      `ChargedAccountScope` resolves it through `AccountRepository::findByPublicId()` and drops what it
+      cannot resolve, so a database id would produce an empty scope rather than an error — an officer
+      with a working charge and no visibility, which is exactly the defect. Asserted explicitly.
+
+      **The write sits inside `IdempotencyService::execute()`'s closure**, so a replay writes no second
+      event, matching `createTransaction()` and `updateTransaction()`. Asserted, because the alternative
+      leaves a retried charge or a double-clicked button with two funding rows for money that moved once.
+
+      **One existing test was rewritten rather than deleted, and the rewrite is the record.**
+      `ChargedAccountScopeTest::testChargesOfOtherEventTypesAreNotCounted()` asserted the **opposite**
+      of this task: it used `ACCOUNT_FUNDED` as its counter-example and expected the funding account to
+      be *excluded*. That was a faithful encoding of the one-event-type implementation, not of FR-055.
+      Its purpose is kept and its counter-example changed to what the requirement actually names — a
+      rename and a deactivation — so it still asserts that an event outside the pair must not widen
+      scope. Two further tests were added so the pair's halves are separately falsifiable: funding
+      counts with no settlement, and funding plus charging on one account yields it once. A union read
+      by two queries can return an account twice or drop one half, and that is the failure mode of a
+      change like this one.
+
+      **The new suite asserts through the production `AuditWriterService`, not a writer double, and
+      that choice is what makes it able to test FR-055 at all.** `InMemoryAuditWriter` records the
+      array it was handed; `toEvent()` is where the actor comes from `CurrentUser` — it **ignores** an
+      `actor_uid` key — and where `entity_type` is refused. So an assertion against the raw array
+      would report an actor the stored row does not have. Wiring the real writer over two in-memory
+      repositories means the event passes through that mapping, which is the only place the
+      "MUST name the charging officer" half of FR-055 is observable.
+
+      **Verified: 9 new tests in `AccountFundingAuditTest`, plus 3 amended in `ChargedAccountScopeTest`.**
+      Mutation-verified in the direction the acceptance criteria name: gating the
+      `appendConfiguration()` call behind `if (false)` turns **seven** tests red, including
+      `testAFundedAccountIsInScopeWithoutAnySettlement` — the scope assertion, which is the criterion
+      this task exists to satisfy. Full `scripts/dev/phpunit` is **1268 tests / 6678 assertions / 1
+      failure**, and that failure is the same single pre-existing one as the baseline
+      (`PurchaserFlowControllerTest::testGetEvidenceContentReturns200WithStream`, `application/octet-stream`
+      vs `application/pdf` — T318's known conflict, proved unrelated in T345). Baseline was 1245 / 6473 / 1.
+
+      **Not done, and recorded rather than implied.** This is service-layer coverage: it does not stand
+      up the real audit table, so `entity_id` → surrogate-key resolution through SQL is still
+      `RepositoryRoundTripTest`'s and T236's business, and the entry's own note that this is the layer
+      where the rule is written still stands. **No HTTP-level assertion was added**, and it could not
+      be: the contract suite's single credential is a finance officer, so an administrator funding — the
+      case this change newly distinguishes on the audit row — is unreachable over HTTP for the same
+      reason T291 is still open. **The account's lock version does not advance on a funding charge**,
+      so two sequential charges both succeed at `expectedVersion` 0; that is pre-existing behaviour
+      outside this task, and it is why the honest-pair test funds twice from a non-zero balance rather
+      than asserting the version moved.
+      Cross-references: T294, T299, T085, T086, T291, T362.
+
+- [x] T370 [MEDIUM] Assert over HTTP that a `COMPLETED` sheet refuses add, edit and submit, because
       SC-011 says 100% of completed sheets reject those and no contract test drives a completed sheet
       (FR-044, SC-011, `tests/Contract/Controller/`, `lib/Application/Expense/TransactionService.php`) (`partial`)
 
-      **Measured.** The enforcement exists in three places and none of them is a contract test:
-      `TransactionService.php:91` refuses `Cannot add transactions to a submitted sheet` on any
-      non-`Open` sheet, `:245` refuses an update that is not a correction, `:446` refuses a delete;
-      `SheetService.php:132` refuses a sheet update; and `ExpenseSheet::addTransaction()` (`:62-64`)
-      refuses at the domain level. `SheetCapabilitiesTest.php:114-123` proves the capability set denies
-      `canUpdate`/`canAddTransaction`/`canSubmit` for both `Completed` and `CompletedWithRejections`.
-      `grep -rn "COMPLETED" tests/Contract/Controller/PurchaserFlowControllerTest.php` returns **nothing**;
-      the only two references to a completed sheet anywhere in the contract suite are
-      `FinanceReviewControllerTest.php:365` (asserting the sheet *became* `COMPLETED`) and
-      `ReportAndExportControllerTest.php:985` (a status filter on it).
+      **Delivered, and the task's own fixture note turned out to be the wrong advice to follow.**
+      `tests/Contract/Fixture/seed-contract-fixtures.php:689` does seed a `COMPLETED` sheet
+      (`ledgerSheet`), but this suite does not use it — it completes both of its sheets through the
+      finance decision path the note recommended, and the note's reason for preferring that over the
+      seeded row is the whole value of the result.
 
-      **Why this is a test gap and not a code gap, stated so it is not read as a defect.** The guards are
-      written against `status !== Open`, which covers both completed states by construction — there is no
-      code path that could pass a `COMPLETED` sheet. What is unproven is that the *endpoint* refuses it
-      rather than the service being bypassed, which is the shape of assertion SC-011 actually asks for
-      ("100% of completed … sheets reject attempts"). Phase 55's lesson applies: the gap is an absence,
-      so no failing test exists to point at it.
+      ---
 
-      **There is a second, smaller half, and it is the one that makes this worth a task.** FR-044 says
-      completed sheets are locked "for viewing and reporting **only**." Nothing asserts the permissive
-      half — that a completed sheet still answers `GET /sheets/{id}` and appears in
-      `GET /reports/sheets`. A lock test that only checks refusals would pass for an implementation that
-      simply broke the read path, which is the opposite of the requirement.
+      **T370's premise was right, and measured rather than assumed.** The note claimed the capability
+      test "would not catch" a mutated guard because it exercises `SheetCapabilities::derive()`
+      rather than the service. Verified directly rather than taken on trust: with
+      `SheetService::updateSheet()`'s status guard removed, **`SheetCapabilitiesTest` is 7/7 green**
+      while two named tests in the new suite go red. A capability set is a pure function over a
+      status; nothing routes a request through it, so it cannot observe that the service stopped
+      enforcing the same rule. That asymmetry — the guard provably removable while its own test
+      suite stays green — is the finding, and it is the reason this task was a test gap rather than
+      a code gap.
 
-      **Fixture note, because it is the reason no such test exists today.**
-      `tests/Contract/Fixture/seed-contract-fixtures.php:689` does seed a `'status' => 'COMPLETED'` sheet,
-      so the state is available without new seeding work; the consumer simply does not exist. If the
-      seeder's completed sheet turns out to be reachable only by a fixture-internal route, prefer
-      settling the real one through the finance decision path the way
-      `FinanceReviewControllerTest::testFinanceApprovalFinalisesTheTransactionAndItsSheet()` already does,
-      because that proves the completion rule itself rather than assuming it.
+      **The completion is produced, not seeded.** `setUp()` records two finance decisions, one per
+      sheet, and every test asserts the arrived-at status. Each `finance` fixture owns a sheet holding
+      exactly one transaction, which is what makes both completed states reachable from a single
+      decision: approving the unmanaged-cost-centre transaction leaves its sheet with no rejection
+      among completed transactions, so `ExpenseSheet::recomputeStatus()` settles on `COMPLETED`;
+      rejecting the senior-rejected transaction leaves one, so the same rule settles the other sheet
+      on `COMPLETED_WITH_REJECTIONS`. `COMPLETED_WITH_REJECTIONS` is covered because all five guards
+      compare `!== Open` and therefore reach it by construction — it is the assertion that would fail
+      if that comparison were ever narrowed to `=== Completed`, which would admit a sheet every
+      reviewer rejected.
 
-      **Acceptance criteria.** Over HTTP against a `COMPLETED` sheet, `POST /sheets/{id}/transactions`,
-      `PATCH /sheets/{id}`, `PATCH /transactions/{id}` and `DELETE /transactions/{id}` are each refused
-      with the status the contract declares, and `GET /sheets/{id}` still answers `200`. Repeat the
-      permissive half for `COMPLETED_WITH_REJECTIONS`. Mutating a guard to accept a completed sheet must
-      fail a named test — the capability test alone would not catch it, since it exercises
-      `SheetCapabilities::derive()` rather than the service.
+      **`$this->version()` had to become two helpers, and the reason is the guard ordering.** Both
+      `SheetService::updateSheet()` and `SubmitSheet::execute()` check `lockVersion` **before**
+      `status`. The first version read the version from the fixture manifest, which the settlement
+      had just invalidated — so the request answered `Stale version`, which is *also* a 422, and two
+      of the lock tests passed without the status guard ever running. Reading the live value fixed
+      it. The version is read per resource rather than by probing `/sheets/{id}` and falling back to
+      `/transactions/{id}`: the probe form costs an extra round trip and would silently read a
+      *sheet's* version for a transaction the moment the first guess resolved.
+
+      **The message assertion is load-bearing, because the status is not.** All five guards raise
+      `InvalidArgumentException`, and `OcsErrorMapper` maps that one class to a single
+      `422 VALIDATION_FAILED` — so a bare status assertion cannot distinguish the completed-sheet
+      guard from a stale version, a missing field, or an unresolvable cost centre on the same
+      endpoint. This was not theoretical: `testASettledTransactionRefusesAnEdit` initially sent
+      `amountMinor` alone and was refused with `Required fields are missing`, a 422 that looked
+      exactly like a passing lock assertion. Each refusal now asserts the guard's own message, and
+      the test sends the three fields `TransactionController::update()` requires so the request is
+      well-formed before the sheet's status is consulted.
+
+      **A report page and a collection page are two shapes, and reading one for the other yields an
+      empty list rather than an error.** The permissive report assertion passed vacuously on its first
+      run because it read `items`; `ReportQuery::paginate()` returns the contract's `ReportPage`,
+      whose members are `rows`, `columns` and `summary`. `assertContains` on an empty array fails,
+      so it surfaced — but only because the *second* sheet id was also asserted. `reportRows()`
+      now asserts `rows` is present before reading it, so the shape mismatch fails as itself.
+
+      **The permissive half is the half that makes the suite worth having, and it was an addition.**
+      Nothing asserted that FR-044's "for viewing and reporting **only**" permits anything. A suite
+      of refusals alone passes just as happily against an implementation that broke the read path —
+      and such an implementation satisfies every refusal in the file perfectly, because a sheet that
+      cannot be read is very much a sheet that cannot be written. Three reads are asserted, all on a
+      sheet this suite's own decision completed: `GET /sheets/{id}` with its totals and transactions,
+      presence in `GET /sheets` (which scopes to the caller and applies no default status filter),
+      and presence in `GET /reports/sheets` (`ReportController::sheetsReport()` reads every sheet
+      the caller owns for a non-administrator, and `coversOwned()` admits the caller's own records
+      unconditionally). The rejected sheet gets the same treatment, because a rejection is a terminal
+      outcome and must not make a sheet unreadable — the one place where "the money was refused" and
+      "the record is gone" would be easy to conflate.
+
+      **12 tests / 79 assertions, green over HTTP on the deployed app.** Mutation-verified in the
+      direction the acceptance criteria name: disabling `SheetService::updateSheet()`'s status guard
+      turns `testACompletedSheetRefusesAnUpdate` and
+      `testACompletedWithRejectionsSheetIsLockedAgainstEveryMutation` red with `200 matches expected
+      422` — on both completed states, which is the point of covering both.
+
+      **Not done, and recorded rather than implied.** This is endpoint coverage for the lock; it does
+      not assert the *capability* half at the same time — `allowedActions` on a completed sheet is
+      T370's neighbour concern and the capability test already owns it. No endpoint-level oversized
+      or malformed-payload fixture was added, because that is T313/T314's data-integrity refusal and
+      bundling it here would have widened this task past its statement. The suite authenticates as
+      the single `PETTYCASH_TEST_USER`, which holds **no administrator role** — so the
+      administrator branch of `sheetsReport()`, which lists only `Open` sheets by design, is not
+      covered here and cannot be without a second credential.
       Cross-references: T033, T034, T281, T327, T314, T134.
+
+---
+
+## Phase 59: Convergence (the frontend still implements the pre-T312 premise)
+
+**Found by converging after T312 closed.** Every finding below is a place where the code — or a green
+test — still asserts something T312 made false, or where an approved requirement has no
+implementation at all. Nothing here was visible from `tasks.md`, because T312 is marked `[x]` and its
+own note records the server half as delivered; the client half was written against the state that
+existed while T312 was blocked.
+
+- [ ] T371 [HIGH] Correct `src/types/reporting.ts` and `ReportingExport.spec.ts`, because they assert
+      `period` is **not** a member of the accepted filter vocabulary and that the filter bar must not
+      emit it, and T312 has since made both statements false (FR-064, FR-068, `src/types/reporting.ts`,
+      `tests/Frontend/Component/ReportingExport.spec.ts`) (contradicts)
+
+      **The measured contradiction.** `src/types/reporting.ts:38-45` states that "`period` is **not** a
+      member of the server's accepted filter vocabulary (`ReportFilterFactory::ACCEPTED_FILTERS`),
+      because T312 is still blocked on an open `/speckit.clarify` question", and keeps the full V1
+      vocabulary out of the wire type while offering `REPORT_OFFERABLE_PERIODS` as a subset instead.
+      `ReportingExport.spec.ts:638` then asserts the filter bar does **not** emit `period`, commented
+      "Its absence here is T312's precondition, not an oversight."
+
+      **Both are now false, and the passing test is what keeps them false.** T312 is closed, FR-064 was
+      amended on 2026-09-30 to name `period` a member in its own right, and `ACCEPTED_FILTERS` carries
+      it. So the type models a server that does not exist and a test enforces it. This is the shape
+      `/speckit.converge` exists for: a green suite asserting an obsolete premise is worse than a red
+      one, because it is evidence that is confidently wrong.
+
+      The change is to put `period` in the wire vocabulary, delete the subset indirection and the
+      blocked-on-clarify reasoning, and **invert** the assertion so the bar must emit it. The
+      `dateFrom` and `costCenterId` halves of that same test stay as they are — those are genuinely not
+      accepted, and the test's value is that it catches the bar emitting a filter the server would
+      refuse. One half of it is now catching a filter the server **does** accept.
+
+      Cross-references: T312, T124, T309, T310.
+
+- [ ] T372 [HIGH] Give the report filter bar a control that offers FR-068's predefined periods, because
+      `ReportPeriodPreset` and `REPORT_OFFERABLE_PERIODS` exist but no component renders them, so a
+      user-facing requirement is met only in the API (FR-068, `src/components/reports/`,
+      `src/types/reporting.ts`) (missing)
+
+      **FR-068 is a user-facing requirement**: "Users MUST be able to filter … group exports by period,
+      which is the predefined Jalali period defined in FR-068." T312 delivered the server half, so the
+      capability exists and nothing can reach it.
+
+      Measured: `grep -rniE "period|jalali|preset" src/ --include=*.vue` returns **nothing**. The only
+      matches in `src/` are in `src/types/reporting.ts` — the `ReportPeriodPreset` union
+      (`month|quarter|year|custom`), the preset list, and `REPORT_OFFERABLE_PERIODS`. So the vocabulary
+      and the groundwork are already modelled and unused.
+
+      **The `custom` member is the interesting one, and it is the reason this is not a three-button
+      change.** The union includes `custom`, which is the explicit-date-range alternative, and FR-068
+      makes a period and an explicit range **mutually exclusive**. So the control has to express
+      *absence* correctly: choosing a period must clear any date range already entered, and choosing
+      custom must clear the period — otherwise the request is the `422` T312 built. That interaction is
+      the substance of this task, not the button.
+
+      Must send the disclosure through: T312 returns `period`, `resolvedFrom`, `resolvedTo` and
+      `resolvedTimeZone`, and FR-068 requires the resolved range and zone to be visible to the user.
+
+      Cross-references: T312, T371, T113, T114.
+
+- [ ] T373 [MEDIUM] Drive `period` over live HTTP, because T312's own verification clause required it and
+      the task was closed on unit coverage alone (FR-068, `tests/Contract/Controller/`) (partial)
+
+      **T312's text is explicit**: "Assertions belong on the live endpoint the way every other T306 facet
+      is asserted." It was closed with 405 reporting tests green and no HTTP assertion — so the endpoint
+      path from `filters` → `ReportFilterFactory` → response disclosure is unproven.
+
+      `grep -rn "'period'" tests/` finds no contract test; the only match is the frontend spec asserting
+      the bar does *not* emit it. Required: `period=month|quarter|year` resolving to the in-progress
+      Jalali range with `resolvedFrom`/`resolvedTo`/`resolvedTimeZone` in `GET /reports` **and**
+      `POST /exports`; the `422` for `period` with `from`, for `period` with `to`, and for all three
+      together, each naming the conflict; and a blank `period` not tripping the exclusion.
+
+      Cross-references: T312, T372, T306.
+
+- [ ] T374 [MEDIUM] Declare the closed filter vocabulary in `contracts/ocs-api.yaml`, because the
+      document permits any filter while the server refuses unknown ones, so a client generated from the
+      contract can send a filter the contract never declared a 422 for (FR-064, `contracts/ocs-api.yaml`)
+      (partial)
+
+      **Measured divergence.** `ExportRequest.filters` is `type: object` with `additionalProperties: true`
+      and **no** enumeration, while `ReportFilterFactory::ACCEPTED_FILTERS` is a closed set and an
+      unrecognised key is refused with a 422 that names the accepted list. T312 added `period` to the
+      code and to the contract as an explicit property, so `period` is declared — but every *other*
+      accepted filter still is not, and nothing in the document says unknown keys are refused.
+
+      So the generated types accept a filter the server will reject, and the contract documents no 422
+      for it. A client written against the contract can therefore send `{"dateFrom": "..."}` and receive
+      a failure the contract never described.
+
+      Enumerate the vocabulary as the contract's own closed set, add the 422 response that names it, and
+      **run `scripts/validate-openapi.sh --write`** — the T124 gate will fail otherwise, which is the
+      gate doing its job.
+
+      Cross-references: T124, T309, T310, T312.
+
+- [ ] T375 [MEDIUM] Create the third-party notice surface for the nine packages added to the
+      application, because T312 closed having recorded that it *would* create it, and no open task owns
+      its creation (plan: `morilog/jalali` dependency, T132) (missing)
+
+      **The gap is orphaned, and it is a consequence of T312 closing.** T312's entry says the repository
+      has **no** third-party-notice convention, that this task *creates* the notice surface, and that
+      **T132 must verify it**. T312 is now `[x]`, T132 is open and verifies, and **nothing owns
+      creating it** — `grep -niE "third.party notice|licence notice|LICENSES/" tasks.md` names no task,
+      and no `LICENSES/`, `third-party-notices/` or `THIRD_PARTY*` path exists.
+
+      Unnotified, all added by T312 and T124:
+      `morilog/jalali` v3.5.0 (MIT) plus six transitive PHP packages — `nesbot/carbon` (MIT),
+      `symfony/clock`, `symfony/translation`, `symfony/translation-contracts`,
+      `carbonphp/carbon-doctrine-types`, `beberlei/assert` (**BSD-2-Clause**) — and the npm
+      devDependencies `openapi-typescript` (MIT) and `yaml` (**ISC**).
+
+      **Two licences here are not MIT**, which is exactly why a blanket "MIT dependencies" note would be
+      wrong. Establish the surface, record each package with its licence and where its notice text
+      lives, and add the assertion T132 can then verify rather than merely hope for.
+
+      Cross-references: T312, T124, T125, T132.
