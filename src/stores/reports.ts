@@ -5,8 +5,10 @@ import {
 	REPORT_EXPORT_FORMATS,
 	REPORT_EXPORT_RESOURCE,
 	REPORT_TYPES,
+	readPeriodDisclosure,
 	type ExportFormat,
 	type ReportFilters,
+	type ReportPeriodDisclosure,
 	type ReportRow,
 	type ReportType,
 } from '@/types/reporting'
@@ -30,6 +32,17 @@ export interface DownloadableExport {
 	blob: Blob
 	filename: string
 	format: ExportFormat
+	/**
+	 * FR-068: the period this artifact covers, and the range and zone it resolved to — or `null` when the
+	 * request carried no period.
+	 *
+	 * **This was the discard.** `POST /exports` returns `period`, `resolvedFrom`, `resolvedTo` and
+	 * `resolvedTimeZone`, and `exportReport()` read the response for exactly one thing — the artifact bytes
+	 * — so all four were dropped here and the file reached the user naming neither the period nor the zone.
+	 * An export whose numbers cannot be reconciled against another user's is not a smaller version of the
+	 * feature, so the disclosure travels with the artifact rather than being left on the wire.
+	 */
+	disclosure: ReportPeriodDisclosure | null
 }
 
 const EXPORT_MEDIA_EXTENSION: Record<ExportFormat, string> = {
@@ -62,6 +75,15 @@ export const useReportsStore = defineStore('reports', () => {
 	 * next to its input.
 	 */
 	const exportFieldErrors = ref<Record<string, string[]>>({})
+	/**
+	 * FR-068's disclosure for the export most recently produced, or `null`.
+	 *
+	 * Held here rather than only on the returned `DownloadableExport` because the caller — `ReportView` —
+	 * triggers a download and has nothing left to render afterwards; the disclosure has to survive the
+	 * click. Reset when a new export starts, so the screen cannot pair a fresh download with a stale
+	 * period.
+	 */
+	const lastExportDisclosure = ref<ReportPeriodDisclosure | null>(null)
 
 	const reportTypes = REPORT_TYPES
 	const availableFormats = computed<ExportFormat[]>(() => [...REPORT_EXPORT_FORMATS[reportType.value]])
@@ -157,6 +179,9 @@ export const useReportsStore = defineStore('reports', () => {
 		exporting.value = true
 		exportError.value = null
 		exportFieldErrors.value = {}
+		// Cleared at the *start* of a request, not on its success: an export that fails leaves no disclosure
+		// behind, so the screen never shows the previous file's period while a new attempt is in flight.
+		lastExportDisclosure.value = null
 		try {
 			const body: ExportRequest = {
 				resource: REPORT_EXPORT_RESOURCE[reportType.value],
@@ -168,12 +193,17 @@ export const useReportsStore = defineStore('reports', () => {
 				filters: filters.value,
 			}
 			const result = await requestExport(body)
+			// Read before the artifact is unwrapped, because `exportArtifactBlob` is what consumes the
+			// base64 payload and the disclosure sits beside it in the same response.
+			const disclosure = readPeriodDisclosure(result)
+			lastExportDisclosure.value = disclosure
 			return {
 				// The artifact, decoded out of the OCS envelope and re-typed by the server's own
 				// `mediaType`. Returning the envelope bytes would save a file whose contents are JSON.
 				blob: exportArtifactBlob(result),
 				format,
-				filename: exportFilename(format),
+				filename: exportFilename(format, disclosure),
+				disclosure,
 			}
 		} catch (e: unknown) {
 			exportError.value = e instanceof Error ? e.message : 'pettycash.error.export'
@@ -186,8 +216,31 @@ export const useReportsStore = defineStore('reports', () => {
 		}
 	}
 
-	function exportFilename(format: ExportFormat): string {
-		return `pettycash-${reportType.value}-${new Date().toISOString().slice(0, 10)}.${EXPORT_MEDIA_EXTENSION[format]}`
+	/**
+	 * The filename names **what the file covers**, not when it was downloaded.
+	 *
+	 * With a period resolved, the server's own boundaries go in the name — `month-2026-07-01_2026-07-30`.
+	 * Two users exporting the same period get the same filename regardless of when they pressed the
+	 * button, which is what makes two files comparable once they are attached to the same reconciliation.
+	 *
+	 * Without a period there is nothing to state, so today's date stands in: naming a range the request
+	 * never used would be the same class of error as sending a filter the server refuses, and this one
+	 * would be *in the filename of a financial artifact*.
+	 *
+	 * **The zone is deliberately not in the filename.** A zone name contains `/` (`Asia/Tehran`), which is
+	 * a path separator — a filename carrying one either becomes a directory or is silently rewritten by the
+	 * browser's download handling. The zone travels in the disclosure rendered beside the download, where
+	 * it is readable and cannot become a path. `resolvedFrom`/`resolvedTo` are `Y-m-d` by contract, so
+	 * neither needs sanitising.
+	 */
+	function exportFilename(format: ExportFormat, disclosure: ReportPeriodDisclosure | null): string {
+		const { resolvedFrom, resolvedTo } = disclosure ?? {}
+
+		const coverage = resolvedFrom && resolvedTo
+			? `${disclosure?.period}-${resolvedFrom}_${resolvedTo}`
+			: new Date().toISOString().slice(0, 10)
+
+		return `pettycash-${reportType.value}-${coverage}.${EXPORT_MEDIA_EXTENSION[format]}`
 	}
 
 	return {
@@ -205,6 +258,7 @@ export const useReportsStore = defineStore('reports', () => {
 		exporting,
 		exportError,
 		exportFieldErrors,
+		lastExportDisclosure,
 		availableFormats,
 		hasRows,
 		isEmpty,

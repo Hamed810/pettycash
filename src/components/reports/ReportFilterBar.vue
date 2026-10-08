@@ -5,9 +5,9 @@ import NcButton from '@nextcloud/vue/components/NcButton'
 import NcSelect from '@nextcloud/vue/components/NcSelect'
 import NcTextField from '@nextcloud/vue/components/NcTextField'
 import {
-	REPORT_OFFERABLE_PERIODS,
+	REPORT_PERIOD_SELECTIONS,
 	type ReportFilters,
-	type ReportPeriodPreset,
+	type ReportPeriodSelection,
 	type ReportType,
 } from '@/types/reporting'
 import { selectOptionKey, selectOptionValue } from '@/utils/selectOption'
@@ -24,43 +24,61 @@ const emit = defineEmits<{
 }>()
 
 const draft = ref<ReportFilters>({ ...props.filters })
+delete draft.value.period
 
 /**
- * The period preset is UI state, not filter state.
+ * The picker's selection, which is a **superset** of the wire vocabulary.
  *
- * It is deliberately **not** part of `ReportFilters`: `period` is not in the server's accepted
- * vocabulary, so a draft that carried it would either be pruned away silently or sent and refused.
- * Keeping it here means the control exists without the request ever claiming a filter the server
- * cannot answer, and T312's change is to add the vocabulary member and move this into `ReportFilters`.
+ * `custom` is a choice the user makes in this control and not a value the server resolves, so it is
+ * held here rather than in `ReportFilters`; `period` is a `ReportPeriodName` and lives in the draft.
+ * The two are kept distinct deliberately: collapsing them into one type is what lets a client send
+ * `{"period": "custom"}`, which the server refuses as an unknown period.
+ *
+ * **Seeded from `props.filters.period` at construction, not only in the watcher below.** The watcher
+ * fires on *change*, so an initialiser that ignored the prop left the picker on `custom` for a report
+ * that arrived already filtered by period — the control showing an explicit-range form for a request
+ * that carried none, and the user invited to submit a second interpretation of the same view.
  */
-const period = ref<ReportPeriodPreset>('custom')
+const period = ref<ReportPeriodSelection>(props.filters.period ?? 'custom')
 
 watch(
 	() => [props.filters, props.reportType] as const,
-	() => { draft.value = { ...props.filters } },
+	() => {
+		draft.value = { ...props.filters }
+		// The picker's selection is the single place a period lives in this component. Stripping it from
+		// the draft keeps `props.filters.period` from being a second copy that `collect()` never reads —
+		// two copies of one value is how a control and the request it builds come to disagree.
+		delete draft.value.period
+		period.value = props.filters.period ?? 'custom'
+	},
 	{ deep: true }
 )
 
 const periodOptions = computed(() =>
-	REPORT_OFFERABLE_PERIODS.map((preset) => ({
+	REPORT_PERIOD_SELECTIONS.map((preset) => ({
 		label: t('pettycash', `reports.period.${preset}`),
 		value: preset,
 	}))
 )
 
-const selectedPeriod = computed<ReportPeriodPreset>({
+/**
+ * The picker reads **back** an applied period, so a filter held in the URL or restored from a store
+ * shows as the period the user actually chose rather than silently reverting to `custom` — which would
+ * display an explicit-range control for a request that carried a period, and invite the user to submit
+ * a second, conflicting interpretation of the same view.
+ */
+const selectedPeriod = computed<ReportPeriodSelection>({
 	get: () => period.value,
-	set: (value: ReportPeriodPreset) => { period.value = value },
+	set: (value: ReportPeriodSelection) => { period.value = value },
 })
 
 /**
- * A period preset is a calendar window the server resolves, so `custom` is the only preset that
- * needs an explicit range. The date fields therefore follow the preset rather than sending a range
- * the user cannot see.
+ * A period preset is a calendar window the server resolves, so only `custom` needs an explicit range.
+ * The date fields therefore follow the preset rather than sending a range the user cannot see.
  *
- * `REPORT_OFFERABLE_PERIODS` currently holds only `custom`, because the Jalali presets are T312's
- * and `period` is not in the server's accepted filter vocabulary yet. Until it is, offering them
- * would offer a filter that silently returns everything — see `ReportPeriodPreset`.
+ * This is where FR-068's mutual exclusion is expressed: `period` and `from`/`to` are alternatives, and
+ * `collect()` emits one or the other, never both — because the server refuses the combination with a
+ * 422 rather than honouring one filter while discarding the other.
  */
 const usesCustomRange = computed(() => selectedPeriod.value === 'custom')
 
@@ -91,6 +109,21 @@ function singleValue(raw: string | number | undefined): string[] {
 }
 
 /**
+ * A cleared field back to "no filter", as a **scalar**.
+ *
+ * Separate from {@link singleValue} because `createdBy` is the one facet in this group the server
+ * reads as a string rather than a list: `ReportFilterFactory` takes it as
+ * `isset($decoded['createdBy']) ? (string) $decoded['createdBy'] : null`. Sending `["alice"]` there
+ * does not error — it stringifies to `"Array"`, which is a **filter on a user called `Array`** rather
+ * than a request the server refuses. So the difference is carried in the helper rather than left to a
+ * call site to remember.
+ */
+function scalarOrUndefined(raw: string | number | undefined): string | undefined {
+	const trimmed = String(raw ?? '').trim()
+	return trimmed === '' ? undefined : trimmed
+}
+
+/**
  * Emits only the filters the user actually filled in, under the names the server accepts.
  *
  * Single-value facets become **one-element lists** because `ReportFilterFactory` refuses a non-array
@@ -112,7 +145,42 @@ function collect(): ReportFilters {
 	const eventType = publicIdOrUndefined(draft.value.eventTypes?.[0])
 	if (eventType) collected.eventTypes = [eventType]
 
-	if (usesCustomRange.value) {
+	// FR-064's four remaining user-facing facets. Each becomes a **one-element list** because
+	// `ReportFilterFactory::strings()` throws `InvalidArgumentException` on a non-array for
+	// `currencyCodes`, `actorUids` and `expenseTypeIds` — so a bare string here would earn a 422 on a
+	// filter the user filled in correctly.
+	//
+	// `expenseTypeIds` carries **public UUIDs**, never the internal integer key: `strings()` accepts a
+	// string and passes it to `IdentityResolver::expenseTypeDbIds()`, so a numeric id is either unknown
+	// or silently the wrong record, depending on what the instance happens to have.
+	//
+	// Single-select controls, one-element lists: the requirement names four facets, not multi-select.
+	// Sending a list is what the wire requires; offering several values per request is not asked for.
+	const currencyCode = publicIdOrUndefined(draft.value.currencyCodes?.[0])
+	if (currencyCode) collected.currencyCodes = [currencyCode]
+
+	const expenseTypeId = publicIdOrUndefined(draft.value.expenseTypeIds?.[0])
+	if (expenseTypeId) collected.expenseTypeIds = [expenseTypeId]
+
+	const actorUid = publicIdOrUndefined(draft.value.actorUids?.[0])
+	if (actorUid) collected.actorUids = [actorUid]
+
+	// The exception, and the only scalar in this group — see {@link scalarOrUndefined}.
+	const createdBy = scalarOrUndefined(draft.value.createdBy)
+	if (createdBy) collected.createdBy = createdBy
+
+	// FR-068: a period and an explicit range are **alternatives**, so this is one branch and not two
+	// independent emissions. `ReportFilterFactory` refuses `period` together with `from`/`to` with a 422
+	// rather than honouring one filter while discarding the other, so a client that sent both would get
+	// an error instead of a filtered answer.
+	//
+	// Branching on the value rather than on `usesCustomRange` is also what narrows `ReportPeriodSelection`
+	// to `ReportPeriodName`: `custom` has no wire representation, and the compiler is what stops it being
+	// assigned to `ReportFilters['period']` by accident.
+	const chosen = period.value
+	if (chosen !== 'custom') {
+		collected.period = chosen
+	} else {
 		const from = publicIdOrUndefined(draft.value.from)
 		if (from) collected.from = from
 		const to = publicIdOrUndefined(draft.value.to)
@@ -133,6 +201,10 @@ function apply(): void {
 
 function reset(): void {
 	draft.value = {}
+	// The picker is reset too, not just the draft: `period` lives outside the draft by design, so
+	// clearing only the draft would leave a period selected on screen while the request carried none —
+	// the control claiming a filter the next request will not send.
+	period.value = 'custom'
 	emit('reset')
 }
 </script>
@@ -218,6 +290,46 @@ function reset(): void {
 				:disabled="disabled"
 				data-testid="report-filter-event-type"
 				@update:model-value="draft.eventTypes = singleValue($event)"
+			/>
+			<!--
+				FR-064's four facets that had no control. Free-text rather than pickers, for the reason
+				the cost-centre field above gives: the configuration lists (T088) are not built in V1, and
+				an empty picker would offer the user no way to express the filter at all. What each field
+				sends is fixed in `collect()` — the wire shape the server accepts, not whatever the control
+				happens to hold.
+			-->
+			<NcTextField
+				:model-value="draft.currencyCodes?.[0] ?? ''"
+				:label="t('pettycash', 'reports.filter.currencyCode')"
+				:disabled="disabled"
+				data-testid="report-filter-currency"
+				@update:model-value="draft.currencyCodes = singleValue($event)"
+			/>
+			<NcTextField
+				:model-value="draft.expenseTypeIds?.[0] ?? ''"
+				:label="t('pettycash', 'reports.filter.expenseTypeId')"
+				:disabled="disabled"
+				data-testid="report-filter-expense-type"
+				@update:model-value="draft.expenseTypeIds = singleValue($event)"
+			/>
+			<NcTextField
+				:model-value="draft.actorUids?.[0] ?? ''"
+				:label="t('pettycash', 'reports.filter.actorUid')"
+				:disabled="disabled"
+				data-testid="report-filter-actor"
+				@update:model-value="draft.actorUids = singleValue($event)"
+			/>
+			<!--
+				The one **scalar** of the four. `createdBy` is read by the server as a string, so this field
+				is bound without the `singleValue()` list wrapper the other three use. Sending it as a list
+				would not be refused -- it would filter on a user named `Array`.
+			-->
+			<NcTextField
+				:model-value="draft.createdBy ?? ''"
+				:label="t('pettycash', 'reports.filter.createdBy')"
+				:disabled="disabled"
+				data-testid="report-filter-created-by"
+				@update:model-value="draft.createdBy = scalarOrUndefined($event)"
 			/>
 		</div>
 

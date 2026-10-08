@@ -685,6 +685,15 @@ final class CostCenterServiceUpdateTest extends TestCase
                 $this->probe[] = $this->transactions->isTransactionOpen();
                 $this->inner->appendConfiguration($event);
             }
+
+            // Present because the port declares it (FR-031's unauthenticated access event). Probing it
+            // too is the point: a spy that only watched one writer path would let the other move outside
+            // the transaction unnoticed.
+            public function appendConfigurationAsViewer(string $viewerUid, array $event): void
+            {
+                $this->probe[] = $this->transactions->isTransactionOpen();
+                $this->inner->appendConfigurationAsViewer($viewerUid, $event);
+            }
         };
 
         $service = new CostCenterService(

@@ -130,6 +130,99 @@ final class TimeZonePreferenceTest extends TestCase
         );
     }
 
+    // ===== THE ADAPTER'S WIRING (T386) =====
+
+    /**
+     * `NextcloudRequestTimeZone::forUser()` must read **both** values and pass them into
+     * `TimeZonePreference::resolve()`, in that order.
+     *
+     * ## Why this is a gap rather than a duplicate of the tests above
+     *
+     * `resolve()`'s precedence is thoroughly covered by the tests above — eleven of them, including the
+     * instance-default case. What none of them touches is the **adapter**: `resolve()` is a pure static
+     * method, so passing it two arguments proves the rule and says nothing about what the caller supplies.
+     *
+     * **The hole is demonstrable.** Replacing the adapter's
+     * `$this->config->getSystemValueString(self::SYSTEM_KEY, '')` with a literal `''` — so the instance
+     * default is never read at all — leaves **all 27 tests green** across this file and
+     * `ReportingPeriodContractTest`. Verified by mutation, not inferred:
+     *
+     * - the pure-rule tests call `resolve()` directly and never see the adapter;
+     * - T378's live-HTTP test sets a **user** `core.timezone`, which is `resolve()`'s *first* argument, so
+     *   the second one being wrong changes nothing;
+     * - the one HTTP test of the fallback **skips**, because this instance declares no `default_timezone`.
+     *
+     * So FR-068's second clause was unproven end to end, and this is where it becomes provable without an
+     * instance-level configuration change — which is what made it look unprovable.
+     *
+     * ## Why the source is read rather than reflected
+     *
+     * `tests/bootstrap.php` does not load Nextcloud's `OCP` classes, so `IConfig` cannot be implemented or
+     * stubbed here — the same constraint `RouteDispatchCompletenessTest` works under, and the reason this
+     * assertion is textual. It asserts the two facts that matter: the system value is **read**, and it is
+     * **one of the two arguments** handed to `resolve()`.
+     */
+    public function testTheAdapterReadsBothValuesAndPassesThemToResolve(): void
+    {
+        $source = @file_get_contents(
+            // `tests/Unit/Application/Reporting` -> up four levels is the repository root.
+            dirname(__DIR__, 4) . '/lib/Infrastructure/Nextcloud/NextcloudRequestTimeZone.php'
+        );
+
+        self::assertIsString($source, 'the adapter must be readable for this to mean anything');
+
+        self::assertMatchesRegularExpression(
+            "/getSystemValueString\(\s*self::SYSTEM_KEY/",
+            $source,
+            'the adapter must read the instance default from Nextcloud\'s own system value; a literal here '
+            . 'means FR-068\'s "falling back to the instance\'s configured default" clause is never supplied, '
+            . 'and every other test in this file still passes'
+        );
+
+        self::assertSame(
+            1,
+            preg_match('/return TimeZonePreference::resolve\((.*?)\);/s', $source, $call),
+            'the adapter must hand its two readings to TimeZonePreference::resolve()'
+        );
+
+        // The keys are constants, so their **values** are asserted separately: a check that only saw
+        // `self::USER_KEY` would prove the adapter passes *a* constant and not that it reads the key
+        // Nextcloud writes.
+        self::assertMatchesRegularExpression(
+            "/USER_APP\s*=\s*'core'/",
+            $source,
+            'the adapter reads the user zone from Nextcloud\'s own `core` preference'
+        );
+        self::assertMatchesRegularExpression(
+            "/USER_KEY\s*=\s*'timezone'/",
+            $source,
+            'under `timezone`, so it is the same key core\'s settings page writes'
+        );
+        self::assertMatchesRegularExpression(
+            "/SYSTEM_KEY\s*=\s*'default_timezone'/",
+            $source,
+            'and the fallback reads `default_timezone`, which is where Nextcloud keeps its instance default'
+        );
+
+        self::assertSame(
+            1,
+            preg_match('/return TimeZonePreference::resolve\((.*?)\);/s', $source, $call),
+            'the adapter must hand its two readings to TimeZonePreference::resolve()'
+        );
+
+        self::assertMatchesRegularExpression(
+            '/getUserValue\([^;]*self::USER_APP[^;]*self::USER_KEY/',
+            $call[1],
+            'the user\'s own setting is resolve()\'s first argument'
+        );
+        self::assertMatchesRegularExpression(
+            '/getSystemValueString\(/',
+            $call[1],
+            'and the instance default is the second — a single argument would leave the fallback clause '
+            . 'unreachable no matter how well resolve() itself is tested'
+        );
+    }
+
     // ===== WHY THESE KEYS =====
 
     /**

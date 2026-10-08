@@ -116,6 +116,17 @@ final class InMemoryExpenseTransactionRepository implements \OCA\PettyCash\Domai
         return array_slice(array_values($result), $offset, $limit);
     }
 
+    /**
+     * Every transaction the double holds, at every stage and in every status (T379).
+     *
+     * Wider than `findForFinanceQueue()` on purpose, so a controller still publishing that read's
+     * length under the name `totalTransactions` cannot satisfy the T379 regression test.
+     */
+    public function countAll(): int
+    {
+        return count($this->transactions);
+    }
+
     public function save(ExpenseTransaction $transaction): void
     {
         if ($transaction->dbId === null) {

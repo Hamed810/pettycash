@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { t } from '@nextcloud/l10n'
-import type { ReportRow } from '@/types/reporting'
+import PeriodDisclosure from '@/components/reports/PeriodDisclosure.vue'
+import {
+	REPORT_PERIOD_DISCLOSURE_KEYS,
+	readPeriodDisclosure,
+	type ReportRow,
+} from '@/types/reporting'
 
 const props = withDefaults(defineProps<{
 	columns: string[]
@@ -10,7 +15,25 @@ const props = withDefaults(defineProps<{
 	loading?: boolean
 }>(), { summary: () => ({}), loading: false })
 
-const summaryEntries = computed(() => Object.entries(props.summary))
+/**
+ * The totals, with FR-068's disclosure removed.
+ *
+ * The contract puts the disclosure **inside** `summary`, so without this filter a resolved period
+ * renders here as `resolvedFrom 2026-07-01` sitting beside the report's actual figures — and then again
+ * in the disclosure line, because two components read the same object. A date that reads as a sum is
+ * worse than no disclosure: it is a number in a total row that no total can be reconciled against.
+ *
+ * The key list is shared with `readPeriodDisclosure` rather than restated, so the two cannot disagree
+ * about which keys are disclosure.
+ */
+const summaryEntries = computed(() =>
+	Object.entries(props.summary).filter(([key]) => {
+		return !(REPORT_PERIOD_DISCLOSURE_KEYS as readonly string[]).includes(key)
+	})
+)
+
+/** FR-068's disclosure, read out of the totals map by the same rule the export path uses. */
+const disclosure = computed(() => readPeriodDisclosure(props.summary))
 
 /**
  * Column names arrive from the server as canonical identifiers, so they are translated, never
@@ -46,6 +69,13 @@ function formatCell(value: unknown): string {
 
 <template>
 	<div class="report-table" dir="rtl" data-testid="report-table">
+		<!--
+			Above the totals and outside the summary list: the disclosure describes the *request*, so
+			rendering it in the same row as the figures would invite a reader to reconcile a period
+			boundary against a sum.
+		-->
+		<PeriodDisclosure :disclosure="disclosure" />
+
 		<div v-if="summaryEntries.length" class="report-table__summary" data-testid="report-summary">
 			<span
 				v-for="[key, value] in summaryEntries"
@@ -89,7 +119,26 @@ function formatCell(value: unknown): string {
 				class="report-card"
 				:data-testid="`report-card-${index}`"
 			>
-				<span v-for="column in columns" :key="column" class="report-card__field">
+				<!--
+					T395: the per-field hook the desktop table already carries.
+
+					`report-cell-<column>` on line 105 exists only on the layout a narrow viewport **never
+					renders**, so before this the card's figures were unaddressable: the only coverage
+					(`ReportingExport.spec.ts:1252-1253`) asserted that a card exists and how many there are,
+					never what is in one. `ResponsiveTable` was written with this hook for the same reason, and
+					naming this component in its docblock as the gap it fixed is what left this as the last
+					surface still without one.
+
+					The `-card` suffix keeps the two layouts distinguishable, so a selector for either resolves
+					to one element per column per layout rather than doubling -- the trap T389 hit when a
+					`^=` prefix selector matched both.
+				-->
+				<span
+					v-for="column in columns"
+					:key="column"
+					class="report-card__field"
+					:data-testid="`report-card-field-${column}`"
+				>
 					<span class="report-card__label">{{ columnLabel(column) }}</span>
 					<span class="report-card__value">{{ formatCell(row[column]) }}</span>
 				</span>
@@ -127,8 +176,30 @@ function formatCell(value: unknown): string {
 	font-weight: 600;
 }
 
+/*
+ * T389: the clipping overflow is gone from here too.
+ *
+ * It was on this container while the *narrow* case was already answered by the card list below 640px, so
+ * FR-071's "no horizontal scroll at 390px" was satisfied by the media query rather than by this property.
+ * What the property actually did was answer a question nobody asked: between 640px and the table's natural
+ * width — a 641px-wide window on a tablet in portrait, say — it produced a scrollbar rather than
+ * reflowing. `table-layout: fixed` plus the wrapping below is the alternative: the columns share the
+ * container instead of the container scrolling under them.
+ *
+ * `min-width: 0` on the cells is load-bearing and not cosmetic: a table's automatic layout gives a column
+ * the width of its widest unbreakable content, so without it a long entity name still pushes the table
+ * past the container no matter what the container does.
+ */
 .report-table__desktop {
-	overflow-x: auto;
+	table-layout: fixed;
+	width: 100%;
+}
+
+.report-table__desktop :is(th, td) {
+	/* `anywhere` rather than `normal`, so a long unbroken identifier wraps instead of establishing a
+	   minimum column width. */
+	overflow-wrap: anywhere;
+	min-width: 0;
 }
 
 .report-table__caption {

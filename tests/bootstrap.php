@@ -11,18 +11,22 @@ use OCA\PettyCash\Application\Port\TransactionManager;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Application\Port\UserDirectory;
 use OCA\PettyCash\Application\Port\AuditWriter;
+use OCA\PettyCash\Application\Account\AccountAdministrationService;
+use OCA\PettyCash\Application\Configuration\CurrencyService;
 use OCA\PettyCash\Application\Port\AdministratorCheck;
 use OCA\PettyCash\Application\Port\PrivateFileStore;
 use OCA\PettyCash\Application\Command\CommandResultRepository;
 use OCA\PettyCash\Application\Command\IdempotencyService;
 use OCA\PettyCash\Application\Security\AuthorizationService;
 use OCA\PettyCash\Application\Audit\AuditWriterService;
+use OCA\PettyCash\Application\Audit\ConfigurationAuditService;
 use OCA\PettyCash\Application\Expense\SheetService;
 use OCA\PettyCash\Application\Expense\TransactionService;
 use OCA\PettyCash\Application\Evidence\EvidenceService;
 use OCA\PettyCash\Application\Workflow\SubmitSheet;
 use OCA\PettyCash\Application\Workflow\ManagementReviewService;
 use OCA\PettyCash\Application\Workflow\FinanceSettlementService;
+use OCA\PettyCash\Application\Workflow\SupersededDecisionAudit;
 use OCA\PettyCash\Domain\Configuration\Repository\CostCenterRepository;
 use OCA\PettyCash\Domain\Configuration\Repository\CurrencyRepository;
 use OCA\PettyCash\Domain\Configuration\Repository\ExpenseTypeRepository;
@@ -37,6 +41,8 @@ use OCA\PettyCash\Domain\Account\Repository\AccountMovementRepository;
 use OCA\PettyCash\Domain\Workflow\Repository\WorkflowDecisionRepository;
 use OCA\PettyCash\Domain\Shared\Clock;
 use OCA\PettyCash\Infrastructure\Nextcloud\SystemClock;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 use OCA\PettyCash\Tests\TestDoubles\InMemoryTransactionManager;
 use OCA\PettyCash\Tests\TestDoubles\InMemoryCurrentUser;
 use OCA\PettyCash\Tests\TestDoubles\InMemoryUserDirectory;
@@ -146,7 +152,9 @@ $container->register(EvidenceRepository::class, fn() => new InMemoryEvidenceRepo
 $container->register(AuditEventRepository::class, fn() => new InMemoryAuditEventRepository());
 $container->register(AccountRepository::class, fn() => new InMemoryAccountRepository());
 $container->register(AccountMovementRepository::class, fn() => new InMemoryAccountMovementRepository());
-$container->register(WorkflowDecisionRepository::class, fn() => new InMemoryWorkflowDecisionRepository());
+$container->register(WorkflowDecisionRepository::class, fn($c) => new InMemoryWorkflowDecisionRepository(
+    $c->query(TransactionRevisionRepository::class)
+));
 
 // Register IdempotencyService
 $container->register(IdempotencyService::class, fn($c) => new IdempotencyService($c->query(CommandResultRepository::class)));
@@ -160,11 +168,31 @@ $container->register(AuditWriterService::class, fn($c) => new AuditWriterService
 ));
 
 // Register Application Services
+$container->register(CurrencyService::class, fn($c) => new CurrencyService(
+    $c->query(CurrencyRepository::class),
+    $c->query(AdministratorCheck::class),
+    // FR-020's provisioning only reads (`defaultRial()`); it never writes a currency, so the audit
+    // service here is a real one rather than a throwing double that would only be a liability.
+    new ConfigurationAuditService(
+        new InMemoryAuditWriter(),
+        $c->query(TransactionManager::class)
+    )
+));
+
+// FR-020's account rule (T358): none provisions, one resolves, several refuse. `SheetService` resolves
+// an absent `accountId` through this rather than reimplementing the rule, so the idempotency and
+// concurrent-insert handling T085 wrote stays on the only path that provisions.
+$container->register(AccountAdministrationService::class, fn($c) => new AccountAdministrationService(
+    $c->query(AccountRepository::class),
+    $c->query(CurrencyService::class)
+));
+
 $container->register(SheetService::class, fn($c) => new SheetService(
     $c->query(ExpenseSheetRepository::class),
     $c->query(AccountRepository::class),
     $c->query(CurrentUser::class),
-    $c->query(TransactionManager::class)
+    $c->query(TransactionManager::class),
+    $c->query(AccountAdministrationService::class)
 ));
 
 $container->register(TransactionService::class, fn($c) => new TransactionService(
@@ -201,6 +229,17 @@ $container->register(SubmitSheet::class, fn($c) => new SubmitSheet(
     $c->query(RoleAssignmentRepository::class)
 ));
 
+// FR-085. Registered before the two decision services that consume it, and built from the same
+// AuditWriter the rest of the suite reads, so a `SUPERSEDED_ATTEMPT` event written after a rollback
+// lands in the repository a test already has a handle on.
+$container->register(SupersededDecisionAudit::class, fn($c) => new SupersededDecisionAudit(
+    $c->query(AuditWriter::class),
+    $c->query(ExpenseTransactionRepository::class),
+    $c->query(TransactionManager::class),
+    $c->query(LoggerInterface::class)
+));
+$container->register(LoggerInterface::class, fn() => new NullLogger());
+
 $container->register(ManagementReviewService::class, fn($c) => new ManagementReviewService(
     $c->query(TransactionManager::class),
     $c->query(ExpenseSheetRepository::class),
@@ -213,7 +252,8 @@ $container->register(ManagementReviewService::class, fn($c) => new ManagementRev
     $c->query(IdempotencyService::class),
     $c->query(CurrentUser::class),
     $c->query(UserDirectory::class),
-    $c->query(AuthorizationService::class)
+    $c->query(AuthorizationService::class),
+    $c->query(SupersededDecisionAudit::class)
 ));
 
 $container->register(FinanceSettlementService::class, fn($c) => new FinanceSettlementService(
@@ -230,7 +270,8 @@ $container->register(FinanceSettlementService::class, fn($c) => new FinanceSettl
     $c->query(IdempotencyService::class),
     $c->query(CurrentUser::class),
     $c->query(UserDirectory::class),
-    $c->query(AuthorizationService::class)
+    $c->query(AuthorizationService::class),
+    $c->query(SupersededDecisionAudit::class)
 ));
 
 // Helper to get container in tests

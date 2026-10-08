@@ -194,12 +194,27 @@ describe('T116: no horizontal overflow at the 390px viewport', () => {
 	it('uses a recognised media query spelling wherever it declares one', () => {
 		const offenders: string[] = []
 		for (const file of ALL_SOURCES) {
-			const css = styleSource(file)
+			// Comments are stripped before the media queries are read, exactly as the `min-width` assertion
+			// above does. This scanner reads `@media` with a regex over raw source, so a docblock that *names*
+			// a query — which a stylesheet explaining its own rules will do — is read as one. That is not
+			// hypothetical here: the focus-indicator rule's docblock cites `@media (forced-colors: active)`
+			// while explaining why it exists, and the scanner reported the explanation as a typo. The two
+			// assertions must read the same thing, or the stricter one decides what the file says.
+			const css = styleSource(file).replace(/\/\*[\s\S]*?\*\//g, '')
 			for (const query of css.matchAll(/@media([^{]*)\{/g)) {
 				const condition = query[1] ?? ''
 				const recognised = /\(\s*(?:max-width|min-width|width)\s*(?::|<=|>=|<|>|=)\s*\d+(?:\.\d+)?px\s*\)/.test(condition)
 					|| /\(\s*orientation\s*:\s*(?:portrait|landscape)\s*\)/.test(condition)
 					|| /\(\s*prefers-(?:color-scheme|contrast|reduced-motion)\s*:/.test(condition)
+					// `forced-colors` added 2026-10-07 with FR-071's focus-indicator floor. It is a standard
+					// media feature (Chrome 89+, Firefox 89+, Safari 16.4+) and it is the condition the whole
+					// high-contrast half of the keyboard criterion turns on: under it the system replaces
+					// every author colour, which is exactly how a focus indicator written as a theme variable
+					// disappears. Its absence from this list was an omission in the list, not a defect in the
+					// rule that uses it — the check exists to catch *typos*, and rejecting a valid feature
+					// would have pushed the rule away from the mode it needs to work in rather than fixing
+					// anything.
+					|| /\(\s*forced-colors\s*:/.test(condition)
 				if (!recognised) {
 					offenders.push(`${rel(file)}: @media${condition}{`)
 				}

@@ -47,11 +47,11 @@ set -euo pipefail
 # about when the entry was written, so the test cannot be defeated by a cache
 # that happens to be fresh.
 #
-# Note the scope: the cached collection is global, so *any* app's `routes.php`
-# edit invalidates it, including ones this repository does not own. The script
-# watches this app's own file because that is the one this repository can be
-# held responsible for; a change made in a sibling app in the same lab will
-# still be caught, because the next run here recomputes the bound.
+# Note the scope: the cached collection is global to the Nextcloud instance, so *any*
+# app's `routes.php` edit invalidates it, including core apps this repository does not own.
+# The script watches this app's own file because that is the one this repository can be
+# held responsible for; a change made to another app in this lab will still be caught,
+# because the next run here recomputes the bound.
 #
 # WHY CLEARING NEEDS ESCALATION, AND WHY IT IS NOT DONE AUTOMATICALLY
 #
@@ -59,9 +59,10 @@ set -euo pipefail
 # array-backed cache, so clearing there empties nothing that Apache's `mod_php`
 # is serving; Apache's local cache is APCu, per worker process. The only
 # mechanism that reaches it is recycling Apache's workers, which drops their APCu
-# contents. That is a privileged action on shared environment state — this
-# repository is a guest in a lab it does not own — and `scripts/dev/in-container`
-# is deliberately `--user www-data`, so this script cannot do it either.
+# contents. That is a privileged action on container state this repository does not
+# own — the lab is defined outside it, in ~/projects/nextcloud-lab — and
+# `scripts/dev/in-container` is deliberately `--user www-data`, so this script cannot
+# do it either.
 #
 # So `--clear` delegates to `scripts/dev/route-cache-clear`, which a human runs.
 # The clear and the marker it writes have to be one action, or the marker can
@@ -163,7 +164,10 @@ route-settle: clearing it requires one privileged command, which this repository
 route-settle: does not run on its own: recycling Apache in a container this
 route-settle: repository does not own is a human decision. One command does it,
 route-settle: and it records that it happened so this script can tell "not yet
-route-settle: cleared" from "already cleared":
+route-settle: cleared" from "already cleared". If the lab is not running at all,
+route-settle: start it first with:
+route-settle:
+route-settle:     ~/projects/nextcloud-lab/bin/lab pettycash up
 
 route-settle:     scripts/dev/route-cache-clear
 
@@ -200,7 +204,7 @@ cleared_at() {
 SHIPPED="$(shipped_ttl)" || {
   echo "route-settle: could not read the route-cache TTL from CachingRouter.php." >&2
   echo "route-settle: Without it the settle bound cannot be computed, so a run" >&2
-  echo "route-settle: cannot be called trustworthy. Start the Nextcloud container." >&2
+  echo "route-settle: cannot be called trustworthy. Start the lab: ~/projects/nextcloud-lab/bin/lab pettycash up" >&2
   exit 1
 }
 
@@ -258,7 +262,7 @@ fi
 MTIME="$(newest_routes_mtime)" || {
   echo "route-settle: could not read the mtime of $ROUTES_FILE under $APP_DIR." >&2
   echo "route-settle: Without it there is no way to know whether a stale route" >&2
-  echo "route-settle: collection can still be served. Start the Nextcloud container." >&2
+  echo "route-settle: collection can still be served. Start the lab: ~/projects/nextcloud-lab/bin/lab pettycash up" >&2
   exit 1
 }
 

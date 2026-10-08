@@ -104,6 +104,34 @@ final class PettyCashAccount
         return (string)\OCA\PettyCash\Domain\Shared\Uuid::random();
     }
 
+    /**
+     * Deactivate because the owning Nextcloud user was deleted. ADR-005.
+     *
+     * **Deactivated, never deleted, and never the same path as an administrator's deactivation.** The
+     * distinction is the whole point: an administrator deactivating an account is a business decision that
+     * FR-017 audits, whereas this is the absence of an owner. They share one `active` column, so the
+     * method is named for the reason rather than left as a bare `deactivate()` that reads as either.
+     *
+     * **Refuses an already-inactive account** rather than silently re-saving it. A second `UserDeletedEvent`
+     * — a retried deletion, or two accounts where one was deactivated earlier — would otherwise bump
+     * `lockVersion` for no change, and a version that moves without a state change is a lost-update
+     * signal: a concurrent reader holding the old version would be told its data changed when it did not.
+     *
+     * @return bool `false` when there was nothing to change, so the caller can report a count of real
+     *              transitions rather than a count of rows it visited
+     */
+    public function deactivateForDeletedOwner(): bool
+    {
+        if (!$this->active) {
+            return false;
+        }
+
+        $this->active = false;
+        $this->lockVersion++;
+
+        return true;
+    }
+
     public function balance(): Money
     {
         return Money::of($this->balanceMinor, $this->currencyCode);

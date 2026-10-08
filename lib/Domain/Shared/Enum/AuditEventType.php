@@ -15,6 +15,11 @@ namespace OCA\PettyCash\Domain\Shared\Enum;
  * rather than from the code, because the code and the previous version of this enum had drifted apart
  * and neither could be trusted as the source. See `docs/decisions/` for the ADR.
  *
+ * **One case is not an FR-051 transition.** `SUPERSEDED_ATTEMPT` was added by FR-085 on 2026-10-07
+ * and records a decision that was *refused* because the transaction had already moved on. It is the
+ * only member of this vocabulary that asserts no change to the transaction, and it is here because
+ * the audit trail is the only place a reviewer who acted against stale state can leave a trace.
+ *
  * ## Why this enum exists at all
  *
  * It used to exist without being used. The production services wrote raw strings, the five of them
@@ -75,4 +80,21 @@ enum AuditEventType: string
 
     /** FR-051 "evidence deactivations". */
     case EvidenceDeactivated = 'EVIDENCE_DEACTIVATED';
+
+    /**
+     * FR-085 (added 2026-10-07). Its own event type, and **deliberately neither an approval nor a
+     * rejection**.
+     *
+     * It records that a reviewer acted and the transaction had already moved on. The reason it is
+     * not filed under `Approved` or `Rejected` is that either of those would assert a decision that
+     * did not take effect, corrupting exactly the history Principle IV protects. The reason it is
+     * recorded at all rather than discarded is that a discarded attempt is indistinguishable from a
+     * request that never happened, so a reviewer who acted would leave no trace at all.
+     *
+     * It is deliberately **not** an FR-051 transition: FR-051 enumerates the transitions a
+     * transaction undergoes, and this records one that was refused and applied nothing. That is why
+     * `AuditEventShapeTest::testTheEnumCoversExactlyTheTransitionsFr051Names` names this case
+     * separately instead of folding it into the FR-051 list.
+     */
+    case SupersededAttempt = 'SUPERSEDED_ATTEMPT';
 }

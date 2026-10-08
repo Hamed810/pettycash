@@ -35,6 +35,16 @@ return [
         ['name' => 'evidence#links', 'url' => '/api/v1/evidence/{evidenceId}/links', 'verb' => 'POST'],
         ['name' => 'evidence#deactivateLink', 'url' => '/api/v1/evidence-links/{linkId}/deactivate', 'verb' => 'POST'],
 
+        // FR-031: the only unauthenticated data path in V1. Its action carries `#[PublicPage]` and
+        // deliberately nothing else — no `#[NoAdminRequired]`, no application-level rate limiter, no
+        // CAPTCHA. See `PublicEvidenceController::show()` for why each of those would be wrong, and for
+        // why abuse control stays with Nextcloud's brute-force limiter rather than being reimplemented.
+        //
+        // Declared without an `X-PettyCash-Command-ID` requirement, matching the contract: consumption
+        // mutates nothing business-side, so it is idempotent by the token and a command identifier would
+        // imply a replay store it has no use for.
+        ['name' => 'publicEvidence#show', 'url' => '/api/v1/public/evidence/{token}', 'verb' => 'GET'],
+
         // Workflow queue routes
         ['name' => 'review#index', 'url' => '/api/v1/queues/{stage}', 'verb' => 'GET'],
         ['name' => 'review#returns', 'url' => '/api/v1/returns', 'verb' => 'GET'],

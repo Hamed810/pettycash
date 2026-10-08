@@ -2,6 +2,31 @@ PettyCash V1 - Development Environment Context
 
 تاریخ وضعیت: شروع توسعه نسخه ۱
 
+> **اطلاع‌نامه — محیط از زمان نگارش این سند تغییر کرده است.**
+>
+> این سند وضعیت محیط را در آغاز توسعه نسخه ۱ توصیف می‌کند و محتوای آن تاریخی است؛
+> ارقام و دستورهای زیر دیگر وضعیت جاری نیستند.
+>
+> از آن زمان، آزمایشگاه مشترک به **دو آزمایشگاه مستقل** تقسیم شد. PettyCash اکنون آزمایشگاه
+> خودش را دارد: پروژه Compose برابر `pettycash-lab` روی <http://localhost:8081>. پروژه PTS
+> آزمایشگاه جداگانه `pts-lab` روی <http://localhost:8082> دارد. هیچ دیتابیس، volume،
+> شبکه، کاربر یا داده آزمایشی بین این دو مشترک نیست.
+>
+> مقصدهای امروز:
+>
+> - Nextcloud container: `pettycash-lab-nextcloud-1` (به جای `docker-nextcloud-1`)
+> - MariaDB container: `pettycash-lab-db-1` (به جای `docker-db-1`)
+> - Volume ها: `pettycash-lab_nc-data` و `pettycash-lab_nc-db` (به جای `docker_pts-nextcloud`
+>   و `docker_pts-db`)
+> - Port: `8081` (به جای `8080`)
+>
+> راه‌اندازی و بررسی: `~/projects/nextcloud-lab/bin/lab pettycash up` و
+> `~/projects/nextcloud-lab/bin/lab isolation`؛ جزئیات در
+> `~/projects/nextcloud-lab/README.md`.
+>
+> آزمایشگاه مشترک قدیمی متوقف شده اما volume های آن برای rollback حفظ شده‌اند؛ جزئیات در
+> `~/projects/nextcloud-lab/legacy/README.md`.
+
 1- محیط Host
 
 کاربر سیستم: ubuntu

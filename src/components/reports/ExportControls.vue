@@ -3,7 +3,8 @@ import { computed, ref, watch } from 'vue'
 import { t } from '@nextcloud/l10n'
 import NcButton from '@nextcloud/vue/components/NcButton'
 import NcSelect from '@nextcloud/vue/components/NcSelect'
-import type { ExportFormat } from '@/types/reporting'
+import PeriodDisclosure from '@/components/reports/PeriodDisclosure.vue'
+import type { ExportFormat, ReportPeriodDisclosure } from '@/types/reporting'
 import { selectOptionKey, selectOptionValue } from '@/utils/selectOption'
 
 const props = withDefaults(defineProps<{
@@ -11,7 +12,17 @@ const props = withDefaults(defineProps<{
 	exporting?: boolean
 	error?: string | null
 	fieldErrors?: Record<string, string[]>
-}>(), { exporting: false, error: null, fieldErrors: () => ({}) })
+	/**
+	 * FR-068: the disclosure of the export that was just produced, or `null` when none has been.
+	 *
+	 * **Rendered here so the artifact's period is visible at the moment it is handed over.** The filename
+	 * now carries the server's own boundaries too, but a filename is not a disclosure: it is truncated in a
+	 * file manager, stripped by some mail clients, and invisible to anyone reading the numbers in a
+	 * spreadsheet. The disclosure on screen is what a user checks *before* reconciling, and the filename is
+	 * what lets them identify the file afterwards.
+	 */
+	lastExportDisclosure?: ReportPeriodDisclosure | null
+}>(), { exporting: false, error: null, fieldErrors: () => ({}), lastExportDisclosure: null })
 
 const emit = defineEmits<{
 	export: [format: ExportFormat]
@@ -94,6 +105,14 @@ function run(): void {
 				{{ t('pettycash', 'reports.export.start') }}
 			</NcButton>
 		</div>
+
+		<!--
+			T377: the disclosure of the export that was just handed over. Below the action row and above the
+			failure states, because it describes the **artifact** — a successful download — and must not be
+			displaced by an error from a later attempt. It clears on a new request, so what is on screen is
+			always the disclosure of the file the user actually holds.
+		-->
+		<PeriodDisclosure :disclosure="lastExportDisclosure" />
 
 		<!--
 			T342: the reason a subject cannot be exported is stated, not left as a grey control. Only

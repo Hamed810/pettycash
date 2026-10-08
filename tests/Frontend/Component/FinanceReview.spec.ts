@@ -13,6 +13,7 @@ import { createRouter, createWebHashHistory, type Router } from 'vue-router'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import FinanceQueueView from '@/views/reviews/FinanceQueueView.vue'
+import { expectCardAgreesWithTable } from '../../Support/cardAgreement'
 import FinanceReviewView from '@/views/reviews/FinanceReviewView.vue'
 import AccountView from '@/views/accounts/AccountView.vue'
 import SettlementLabel from '@/components/review/SettlementLabel.vue'
@@ -142,6 +143,37 @@ describe('Finance Review - Vue Component Tests (US3)', () => {
       })
       return mountView(FinanceQueueView, '/reviews/finance')
     }
+
+    /**
+     * T394: the narrow card carries the same figures as the table.
+     *
+     * FR-071 requires every listed element visible **without horizontal scroll** at 390px, which this
+     * table used to answer with `overflow-x: auto`. `ResponsiveTable` renders one card per row below
+     * 640px, so a figure missing or differing there is invisible to a reader -- and every other
+     * assertion in this file reads the table, the layout jsdom renders by default.
+     *
+     * Seeded through the real OCS request rather than by writing the store directly, matching this
+     * suite's own convention: the assertions are about what the component does with a response, not
+     * about state the test handed it.
+     */
+    it('carries the same figures in the narrow card as in the table', async () => {
+      const wrapper = await mountFinanceQueue([
+        financeQueueItem('tx-1'),
+        financeQueueItem('tx-2')
+      ])
+
+      expectCardAgreesWithTable(wrapper, {
+        rows: 2,
+        // The hooks `src/components/review/queueColumns.ts` declares, plus this queue's own column and
+        // the status badge, which is the element a finance officer reads a queue by.
+        hooks: [
+          'data-testid="amount"',
+          'data-testid="transaction-id"',
+          'data-testid="senior-decision"',
+          'data-testid="view-details-btn"'
+        ]
+      })
+    })
 
     it('should render shared finance queue for all finance officers', async () => {
       // The original asked for `[data-testid="queue-item"]`, which matches nothing: the view emits

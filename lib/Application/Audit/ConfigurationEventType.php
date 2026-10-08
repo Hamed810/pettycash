@@ -146,4 +146,23 @@ enum ConfigurationEventType: string
      * accounts a finance officer may read configuration audit for.
      */
     case AccountCharged = 'ACCOUNT_CHARGED';
+
+    /**
+     * FR-031 (clarified 2026-10-07): a public evidence link was consumed.
+     *
+     * It belongs in the **configuration** stream, not the transaction one, for the reason FR-031
+     * already gives: a public link is administered configuration, and the access is recorded per
+     * FR-031 "in configuration audit". Putting it in the transaction stream would make an anonymous
+     * visit appear as a business action on a transaction by a caller who holds no role on it — which is
+     * exactly the kind of record FR-056 requires the two streams to keep separable.
+     *
+     * It is **not** `AccountCharged`, `AccountFunded`, or anything else in FR-055's charged-account
+     * pair. `ChargedAccountScope` reads that pair to derive which accounts a finance officer may read,
+     * and FR-055 says "an event type outside funding and charging MUST NOT count toward the set". A
+     * distinct case makes that automatic rather than a rule someone has to remember: a public link
+     * access is not a charge, and adding it here cannot widen anyone's configuration-audit scope.
+     *
+     * Width: 23 characters, inside the `string(48)` column this enum's docblock documents.
+     */
+    case EvidenceLinkAccessed = 'EVIDENCE_LINK_ACCESSED';
 }

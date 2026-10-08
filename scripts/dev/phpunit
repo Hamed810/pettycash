@@ -27,6 +27,27 @@ if [ -f "$ENV_FILE" ]; then
   done < "$ENV_FILE"
 fi
 
+# FR-073's error-rate measurement needs the contract suite's responses recorded.
+#
+# Forwarded, not left to the ambient environment: `in-container` execs into a container, which does not
+# inherit this shell's environment, so an exported variable silently does not arrive and the run produces
+# no log — the measurement then reports on nothing rather than failing. `scripts/dev/in-container` is the
+# documented way to pass variables in, and the wrapper owns what the container gets for a test run.
+#
+# **The log is written inside the container and copied out afterwards, because the app tree is not
+# writable by the identity PHPUnit runs as.** The bind mount is owned by uid 1000 and this wrapper execs
+# as `www-data`, so a path inside the repository fails with `Permission denied` and — because the
+# measurement is optional — produces no log and no error. `/tmp` inside the container is writable, and
+# the retrieval goes back out through `in-container` so this script never builds a raw `docker exec`.
+if [ -n "${PETTYCASH_REQUEST_LOG:-}" ]; then
+  REQUEST_LOG_DEST="$PETTYCASH_REQUEST_LOG"
+  mkdir -p "$(dirname "$REQUEST_LOG_DEST")"
+  # Truncated before the run rather than appended to: a stale log from an earlier, contaminated run would
+  # be indistinguishable from this one once merged, and the figure would then cover two sessions.
+  "$SCRIPT_DIR/in-container" sh -c ': > /tmp/pettycash-fr073-requests.ndjson' || true
+  ENV_ARGS+=(--env "PETTYCASH_REQUEST_LOG=/tmp/pettycash-fr073-requests.ndjson")
+fi
+
 # The OCS contract tests issue real HTTP requests, so `lib/` is loaded by
 # Apache's mod_php through an opcode cache that can hold the previous bytecode
 # for `opcache.revalidate_freq` seconds after an edit. PHPUnit itself runs in
@@ -83,8 +104,24 @@ if [ "$runs_contract_tests" -eq 1 ]; then
   "$SCRIPT_DIR/route-settle"
 fi
 
-exec "$SCRIPT_DIR/in-container" \
+set +e
+"$SCRIPT_DIR/in-container" \
   "${ENV_ARGS[@]+"${ENV_ARGS[@]}"}" \
   php vendor/bin/phpunit \
   --do-not-cache-result \
   "$@"
+phpunit_status=$?
+set -e
+
+# The suite's exit status is the result of this script's own job and must not be masked by whether the
+# optional measurement log could be retrieved. So the retrieval runs afterwards and its own failure is
+# reported without replacing the status.
+if [ -n "${REQUEST_LOG_DEST:-}" ]; then
+  if "$SCRIPT_DIR/in-container" cat /tmp/pettycash-fr073-requests.ndjson > "$REQUEST_LOG_DEST" 2>/dev/null; then
+    echo "phpunit: recorded $(wc -l < "$REQUEST_LOG_DEST") HTTP requests to $REQUEST_LOG_DEST (FR-073)."
+  else
+    echo "phpunit: WARNING — could not retrieve the FR-073 request log." >&2
+  fi
+fi
+
+exit "$phpunit_status"

@@ -71,25 +71,35 @@ OCS JSON contracts, and an embedded Vue single-page interface
 transactions, the design target is at least 95% of routine list, detail, history, and evidence views
 usable within 3 seconds (p95 <3s), with error rate <0.1% and zero data loss; all list/report queries
 are server-paginated and indexed. The three bounds are reported separately and are not
-interchangeable (FR-073, clarified 2026-10-02): **p95** is a design target whose measurement is deferred
+interchangeable (FR-073, clarified 2026-10-02 and 2026-10-07): **p95** is a design target whose measurement is deferred
 to post-V1; **error rate** is 5xx responses over all acceptance-suite HTTP requests — 4xx, 409 and 422
 excluded — recorded as a V1 release-readiness figure by T135; **zero data loss** is a correctness
 invariant established by the atomicity and failure-injection suites. **Verification of the p95 bound is deferred to post-V1** (SC-008,
 clarified 2026-10-02): the target governs how queries are built, but the measurement at the stated
 scale is not a V1 acceptance gate, V1 release readiness records SC-008 as *not measured* with that
-reason, and any V1 latency run is informational rather than evidence of the criterion
+reason, and any V1 latency run is informational rather than evidence of the criterion.
+**The error-rate figure has a second excluded class (FR-073, clarified 2026-10-07)**: an
+**environment-induced response** — a brute-force `429`, an infrastructure or platform `5xx`, a
+transport failure — is excluded from both numerator and denominator, the excluded count MUST be
+published beside the figure, and **if the excluded share exceeds 1% of the requests the run issued the
+figure MUST be recorded as *not measured* rather than reported**. A contended run is not evidence in
+either direction: throttled responses inflate the denominator with traffic that never exercised
+application code while suppressing the successful requests that would have exercised it. This project
+shares one Nextcloud instance with other applications by design, so a contended run is an expected
+operational condition, not a rare accident. See **research.md** Decision 17.
 
 **Constraints**: Persian RTL V1 UI with all listed elements (sheet status, transaction status, current stage, prior decisions, history, evidence) visible without horizontal scroll at 390px viewport, status color/icon meeting WCAG AA contrast, text ≥12pt Persian font; server-authoritative authorization with explicit multi-role decision matrix: self-review permitted when user holds required review role + scope + stage permission, ownership grants purchaser rights only; append-only business audit with minimum 7-year retention; immutable prior revisions; no destructive migration of historical data; atomic workflow and ledger changes; shared finance queue; no automatic escalation or mutation retry; no independent authentication, logging, backup, or file system; evidence file size capped at 100 MB per file by a ceiling PettyCash enforces itself, refusing anything larger regardless of the host file service limit, with a host limit below 100 MB still rejecting first and reported separately as a host-limit failure (FR-074, clarified 2026-10-02); zero-active-account purchasers get default rial account auto-created on first sheet creation (idempotent provisioning per FR-020); public evidence links have configurable TTL (default 30 days, max 1 year) with per-access audit logging in configuration audit per FR-031; reporting periods for group exports are **Jalali in-progress periods** (current month, quarter and year), resolved at query time to inclusive Gregorian date ranges in the requesting account's time zone, and are mutually exclusive with an explicit custom date range, per FR-068 as designed under **Jalali Reporting Periods (FR-068)**
 
-**Scale/Scope**: Eight user journeys, **84** functional requirements, five business roles, three review
+**Scale/Scope**: Eight user journeys, **85** functional requirements, five business roles, three review
 stages, **15** persistent entity families, a role-aware dashboard, reports, and Excel,
 CSV, PDF, and grouped-evidence export
 
 ## Constitution Check
 
-*GATE: Passed before Phase 0 research, re-checked after Phase 1 design, and re-checked against the
+*GATE: Passed before Phase 0 research, re-checked after Phase 1 design, re-checked against the
 Approved Compatibility Change register on 2026-09-30 after constitution v1.1.0 introduced ACC-001
-and v1.2.0 introduced ACC-002.*
+and v1.2.0 introduced ACC-002, and re-checked on 2026-10-07 after the clarification session added
+FR-085 and amended FR-031, FR-040, FR-071, FR-073 and FR-076.*
 
 - **I. Specification Before Implementation — PASS**: The finalized specification supplies
   priorities, acceptance scenarios, requirements, success criteria, assumptions, and resolved
@@ -105,7 +115,10 @@ and v1.2.0 introduced ACC-002.*
   reference material only, and no constitutional amendment is required.
 - **III. Nextcloud-Native Architecture — PASS**: Authentication, users, files, technical logging,
   routing, dependency injection, database access, localization, and security remain on supported
-  Nextcloud services. The PHP floor is **8.2**, recorded as a registered compatibility change by
+  Nextcloud services. **Extended 2026-10-07**: the one unauthenticated surface in V1 — the public
+  evidence link route — deliberately delegates brute-force protection to Nextcloud's existing limiter
+  and forbids adding a second authentication, rate-limiting, or CAPTCHA mechanism, which is affirmative
+  compliance with the principle rather than mere non-breach of it. The PHP floor is **8.2**, recorded as a registered compatibility change by
   **ACC-001**, which is the version this plan is written against; the earlier wording that raising
   the floor "narrows rather than replaces" the PHP 8.1+ declaration is withdrawn as superseded by
   that entry. ACC-001's evidence basis is the pinned platform rather than a project preference:
@@ -114,10 +127,19 @@ and v1.2.0 introduced ACC-002.*
 - **IV. Domain Integrity, Security, and Auditability — PASS**: The design centralizes state
   transitions and object authorization, snapshots historical actor context, creates immutable
   revisions and audit records with minimum 7-year retention per FR-057, scopes every query, and
-  makes finance settlement atomic and idempotent.
+  makes finance settlement atomic and idempotent. **Extended 2026-10-07**: this now also includes
+  first-write-wins conflict resolution with a recorded superseded attempt per **FR-085**, which makes
+  double-booking structurally impossible rather than merely unlikely, and refusal of finance
+  settlement when no active account matches the sheet currency per **FR-040**. Both *add* protection
+  rather than relaxing any invariant; neither amends the constitution.
 - **V. Verified and Documented Delivery — PASS**: The plan defines unit, integration, contract,
   end-to-end, performance, browser, responsive, and manual acceptance coverage. The quickstart
-  provides repeatable validation steps.
+  provides repeatable validation steps. **Extended 2026-10-07**: `quickstart.md` now carries runnable
+  validation for the five newly settled behaviours — superseded-attempt refusal (Scenario E), unsettleable
+  settlement (Scenario E), unauthenticated link consumption with byte-identical refusals and the media-type
+  policy (Scenario F), keyboard-only journey completion under all three themes (§7), and a distinct error-rate
+  procedure with its 1% contamination ceiling (§8.2). Every added criterion is a checkable step with an
+  observable outcome, and each criterion deferred to V2 is named as deferred rather than left implied.
 - **Architecture constraints — PASS**: One Nextcloud app and one database boundary are retained.
   No microservice, parallel authentication system, independent logger, or speculative distributed
   component is introduced.
@@ -174,6 +196,27 @@ in **Complexity Tracking → Jalali Reporting Periods (FR-068)**, sheet summarie
 totals as separate columns (Cost Center Approved | Senior Approved | Finance Approved) alongside
 latest effective outcome column per FR-062, and the source layout extends the existing skeleton
 without replacing its application boundary. No constitutional exception is required.
+
+**Re-checked 2026-10-07 after the clarification session.** The five settled decisions introduce no
+constitutional violation and require no exception:
+
+- **Principle III** is satisfied by Decision 18 in a stronger form than before: because public evidence
+  links now consume Nextcloud's brute-force limiter rather than a new mechanism, Principle III's
+  prohibition on a parallel authentication system is affirmatively complied with, not merely not
+  breached. The unauthenticated surface is bounded to one route, is TTL-bounded, is revocable, and is
+  fully audited.
+- **Principle IV** is satisfied by Decisions 20 and 21, both of which *add* protection: first write
+  wins makes double-booking structurally impossible, and refusing settlement when no active account
+  matches prevents approved expense from being booked against an unfunded balance. Recording a
+  superseded attempt as its own event type protects the decision history rather than polluting it.
+- **Principle V** is satisfied by Decisions 17 and 19. Decision 17 makes a criterion that was previously
+  unmeasurable into one with a stated exclusion rule and an explicit *not measured* outcome, matching the
+  principle SC-008 and SC-010 already use. Decision 19 sets a measurable UI floor and defers three
+  named items to V2 rather than leaving them ambiguous.
+- **No new compatibility target is asserted.** Decision 17 introduces no new tool; Decision 18 removes a
+  dependency rather than adding one; Decision 19 uses only capability present in the supported browsers
+  FR-072 already names; Decisions 20 and 21 are pure domain and persistence rules. The register
+  conformance table above is unchanged and remains accurate.
 
 **One new dependency is proposed by this revision** (a Jalali conversion library for FR-068, decided
 under **Complexity Tracking → Jalali Conversion Strategy**). It is a plain Composer dependency under
@@ -422,9 +465,72 @@ evidence-type-specific permissions) explicitly deferred to V2 per FR-030. V1 per
 viewers of a transaction to access all its evidence without additional restrictions.
 
 **Public Evidence Links (FR-031)**: Public evidence links are administrator-controlled with
-configurable TTL (default 30 days, maximum 1 year) and per-access audit logging (viewer UID,
-timestamp, IP) recorded in configuration audit. Links are disabled by default, require explicit
-activation, and are fully audited on create/deactivate/access.
+configurable TTL (default 30 days, maximum 1 year) and per-access audit logging recorded in
+configuration audit. Links are disabled by default, require explicit activation, and are fully audited
+on create/deactivate/access.
+
+**Amended 2026-10-07 — the token is the whole authority (`research.md` Decision 18).** The earlier
+"viewer UID" wording is withdrawn for this path, because a link is consumed without authentication and
+there is no UID to record. A link is consumed by **anyone who holds the unguessable token**, without
+signing in and without any role or responsibility scope. Four consequences bind the implementation:
+
+1. **Abuse control is delegated to Nextcloud's brute-force limiter.** PettyCash MUST NOT add a second
+   authentication, rate-limiting, or access-control mechanism for these links — the source requirement
+   §11.9 places passwords, login/logout and authentication policy in Nextcloud's hands, and a second
+   mechanism is the parallel-authentication system Principle III forbids. A link request is subject to
+   the platform limiter exactly as any other unauthenticated request.
+2. **Every access is audited with the viewer recorded as `anonymous`** plus timestamp and IP. The field
+   is never null or absent: an empty field is indistinguishable from a missing audit record during the
+   access investigation the record exists to serve.
+3. **The token is stored only as a hash** and disclosed once at creation, so a leaked database cannot be
+   replayed into evidence access.
+4. **Expired, deactivated and never-existing tokens are refused identically**, so the refusal reveals
+   neither that a link ever existed nor when it lapsed. TTL and revocation are, precisely because the
+   token is the whole authority, the only remaining controls.
+
+An administrator's own view right is **not** required to create a link, and a link created for evidence
+on a transaction the administrator cannot themselves view is permitted and audited as such.
+
+**Contract gap this creates, recorded rather than left implicit:** `contracts/ocs-api.yaml` defines
+`POST /evidence/{evidenceId}/links` and `POST /evidence-links/{linkId}/deactivate` but **no route that
+consumes a token**. That route is now required rather than optional, it is the only route in V1
+reachable without authentication, and it MUST serve evidence under FR-060's media-type policy rather than
+as a raw octet-stream, because an unauthenticated inline-rendered response is the one place where a
+stored media type becomes an attack surface against whoever holds the link. `tasks.md` T095 and T166
+remain open, so this is settled before the work rather than during it.
+
+**Superseded Decision Attempts (FR-085)**: A decision submitted against a transaction state that no
+longer accepts it applies **no** business effect, overwrites nothing, is answered `409 Conflict` naming
+that a decision is already recorded, and **is still audited as a `SUPERSEDED_ATTEMPT`** — its own event
+type, neither an approval nor a rejection — naming the transaction, its active revision, the stage, the
+actor, the time, the decision attempted, and the decision already in force. Implementation surfaces:
+the `pettycash_transaction_audit` table gains the `SUPERSEDED_ATTEMPT` event type carrying the attempted
+decision alongside the in-force one; `data-model.md`'s existing `lock_version` "optimistic checks" note
+acquires the specified outcome; and the decision service performs a **server-side** state check inside
+the same transaction that would otherwise record the decision. This is distinct from FR-084's command
+replay: a replay returns the first outcome for the same command identifier, whereas a superseded
+attempt is a *different* command against changed state, which no command identifier can detect. See
+`research.md` Decision 20.
+
+**Settlement Account Resolution (FR-040)**: At final finance approval the target account is resolved by
+the sheet's currency **at that moment**. Where no active account in that currency exists, the approval is
+**refused with `422`** naming the account, the transaction stays at the finance stage, and nothing is
+recorded. FR-020's idempotent provisioning is **create-scoped** (first sheet creation attempt) and MUST
+NOT be extended to settlement, because provisioning at approval time would book approved expense against
+a balance that was never funded or approved. This is a completeness fix rather than new behaviour: the
+account lookup already had to happen to satisfy FR-040, and its failure case simply had no specified
+outcome. See `research.md` Decision 21.
+
+**V1 Accessibility Floor (FR-071, FR-076)**: Each primary journey — those exercised by User Stories 1–7 —
+MUST be completable using the keyboard alone, with a visible focus indicator on every interactive element
+reached, across Chrome 120+, Edge 120+ and Firefox 115+ (ESR), at both viewport sizes, and under the
+host's default, dark and high-contrast themes. A focus indicator the active theme renders as absent does
+not satisfy the criterion, because theme coverage is part of it rather than an enhancement.
+**Screen-reader semantics — form control label association, error-message association with the offending
+field, and announced status for mutations — are deferred to V2** under FR-076, are struck from
+`quickstart.md`, and MUST NOT be reported as met in V1 release readiness. The criterion is deliberately
+scoped to the primary journeys rather than to every page so that the frontend work is bounded by the
+journeys acceptance actually exercises. See `research.md` Decision 19.
 
 **Default Account Provisioning (FR-014, FR-020)**: Zero-active-account purchasers receive a default
 active rial petty-cash account auto-created on first sheet creation attempt. This idempotent

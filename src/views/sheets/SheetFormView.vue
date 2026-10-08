@@ -64,10 +64,32 @@ function formatBalance(account: { balance: { amountMinor: number; currency: stri
 	return `${account.balance.currency} ${(account.balance.amountMinor / factor).toLocaleString('fa-IR')}`
 }
 
+/**
+ * Whether the caller must choose an account before a sheet can be created.
+ *
+ * FR-020 resolves the account for them when they have none to choose from: a zero-account purchaser
+ * gets the default rial account provisioned on the creation attempt. Requiring a selection in that state
+ * made FR-020 unreachable from the UI — the form refused to submit, so the request that would have
+ * provisioned never left the browser. Exactly one account is chosen automatically and several must be
+ * chosen by hand; only **zero** is the server's to decide.
+ *
+ * `accountsLoaded` is part of the condition deliberately. Before the list arrives the caller has *no
+ * account they can see*, and treating that as "provision one" would enable submit on a form whose
+ * account list is still loading — a request built before we know whether a choice is required.
+ *
+ * A failed load leaves `loadingAccounts` false with `accounts` empty, which would therefore read as
+ * "none to choose from" and offer to provision. That is the right answer for a genuine zero, and the
+ * wrong one for an outage, so `accountsError` is shown as its own state above; provisioning a rial account
+ * because a network call failed is not something a retry would forgive.
+ */
+const accountRequired = computed(() => !loadingAccounts.value && accounts.value.length > 0)
+
 function validateForm() {
 	errors.value = {}
 	if (!form.value.title.trim()) errors.value.title = t('pettycash', 'validation.required')
-	if (!form.value.accountId) errors.value.accountId = t('pettycash', 'validation.required')
+	if (accountRequired.value && !form.value.accountId) {
+		errors.value.accountId = t('pettycash', 'validation.required')
+	}
 	return Object.keys(errors.value).length === 0
 }
 
@@ -80,7 +102,9 @@ function validateForm() {
 const validationErrors = computed(() => {
 	const found: Record<string, string> = {}
 	if (!form.value.title.trim()) found.title = t('pettycash', 'validation.required')
-	if (!form.value.accountId) found.accountId = t('pettycash', 'validation.required')
+	if (accountRequired.value && !form.value.accountId) {
+		found.accountId = t('pettycash', 'validation.required')
+	}
 	return found
 })
 
@@ -102,6 +126,22 @@ async function loadSheetForEdit() {
 	await loadAccounts()
 }
 
+/**
+ * The create request, with `accountId` **omitted** rather than sent empty when none is chosen.
+ *
+ * FR-020's zero-account case is expressed by the field's absence, and `SheetService::createSheet()`
+ * treats a blank string exactly as it treats an absent field — so an empty string would also work. It is
+ * omitted anyway because `SheetCreate.required` now names only `title`, and `accountId` is a `uuid`:
+ * sending `""` is a present-but-invalid value that a client validating against the schema would reject
+ * before the request was ever sent, which would reinstate the very refusal this change removes.
+ */
+function buildCreateRequest(): SheetCreate {
+	const request: SheetCreate = { title: form.value.title }
+	if (form.value.accountId) request.accountId = form.value.accountId
+
+	return request
+}
+
 async function handleSubmit() {
 	if (!validateForm()) return
 	sheetStore.clearError()
@@ -109,7 +149,7 @@ async function handleSubmit() {
 		if (isEditing.value) {
 			await sheetStore.updateExistingSheet(sheetId.value, form.value, sheetStore.currentSheet!.version)
 		} else {
-			await sheetStore.createNewSheet(form.value)
+			await sheetStore.createNewSheet(buildCreateRequest())
 		}
 		router.push({ name: 'sheets' })
 	} catch {

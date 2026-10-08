@@ -26,7 +26,7 @@ specifications from them. Do not implement anything. Only create specs."
 - Q: What minimum browser versions should "current Chrome, Edge, and Firefox" resolve to for FR-072? → A: Chrome 120+, Edge 120+, Firefox 115+ (ESR)
 - Q: How should "separately show approved totals" (FR-062) be presented in UI? → A: separate columns (Cost Center Approved | Senior Approved | Finance Approved) alongside latest effective outcome column
 - Q: What happens when purchaser has zero active accounts in FR-020? → A: default active rial account auto-created on first sheet creation attempt (idempotent provisioning)
-- Q: What TTL/expiry and access logging should public evidence links (FR-031) enforce? → A: configurable TTL (default 30 days, max 1 year) + per-access audit logging (viewer UID, timestamp, IP) in configuration audit
+- Q: What TTL/expiry and access logging should public evidence links (FR-031) enforce? → A: configurable TTL (default 30 days, max 1 year) + per-access audit logging (viewer UID, timestamp, IP) in configuration audit. **The "viewer UID" wording is superseded by the Session 2026-10-07 answer**: link consumption is unauthenticated, so the viewer is recorded as `anonymous` rather than as a UID. The TTL, deactivation and audit-scope parts of this answer stand.
 - Q: What constitutes a "reporting period" for group exports in FR-068? → A: predefined calendar periods (month, quarter, year) plus custom date range
 
 ### Session 2026-09-25
@@ -71,7 +71,18 @@ specifications from them. Do not implement anything. Only create specs."
 - Q: When a purchaser attaches an evidence file larger than 100 MB, what should happen if the server's own upload limit would allow it? (FR-074) → A: Reject anything above 100 MB regardless of the host limit — 100 MB is PettyCash's own hard ceiling, enforced by PettyCash and stated to the user. Where the host limit is *lower* than 100 MB the host rejects first, and that rejection is reported as a host-limit failure rather than as the 100 MB refusal, so the two ceilings are never conflated. The earlier "MUST follow the host file service rather than introduce a separate PettyCash limit" clause is withdrawn as superseded; the 100 MB figure the 2026-09-22 session settled on is retained.
 - Q: Is the 3-second performance target (SC-008) verified during V1, or explicitly deferred to after V1? (SC-008, FR-073) → A: Deferred explicitly. The 3-second target remains the V1 design target governing how queries are built, but the measurement at the stated scale is not a V1 acceptance gate: V1 release readiness MUST record SC-008 as **not measured**, naming post-V1 verification as the reason, on the same principle SC-010 already uses. Any V1 latency run (T128's optimisation pass) is **informational** and MUST NOT be presented as satisfying SC-008, because a run below the stated scale or without the acceptance procedure is not the measurement the criterion describes. The 2026-09-28 answer that verification happens during V1 is superseded.
 - Q: When a sheet has one transaction returned for correction and another already at the finance stage, which rule defines the sheet's status? (FR-037, FR-028) → A: Derivation stands and `CORRECTION` is a real sheet status. Each transaction enters and leaves its queue on its own decision, no transaction blocks another, and the sheet's status is the earliest stage still outstanding over the ranking `Draft 0, CostCenter 1, Correction 2, Senior 3, Finance 4, Final 5`. Because `CORRECTION` outranks `SENIOR` and `FINANCE`, such a sheet displays `CORRECTION` even while another transaction is at finance; that is FR-028's intended reading and not a defect. FR-037 is given the gate sentence — the transactions required for the sheet-stage transition are those whose active nonterminal revisions all carry a senior decision, a senior rejection counting as a senior decision — and FR-043's completion rule is the only true gate. `data-model.md`'s derivation section is corrected: its `AWAITING_*` names were `TransactionStatus` values, not `SheetStatus` values, and `CORRECTION` was missing. Verified before asking: the code (`ExpenseSheet::recalculateStatusFrom`, `lib/Domain/Expense/ExpenseSheet.php:111-179`), three passing tests, and `DbExpenseTransactionRepository::findForFinanceQueue()` filtering per transaction rather than on sheet status.
-- Q: What counts as the "error rate <0.1%" that FR-073 requires the product to hold? (FR-073) → A: Define it precisely and own it. Error rate means **5xx responses as a share of all HTTP requests issued during V1 acceptance**, counted across the automated functional, contract and end-to-end suites rather than over a dedicated load run, and recorded as a **V1 release-readiness figure** by T135. A client-side 4xx is not an error for this purpose, because a request the application correctly refused is not a defect; the 4xx, 409 and 422 responses that contract tests deliberately provoke are excluded from both numerator and denominator. The result must be recorded whether or not it passes. This is deliberately not deferred the way the p95 bound is: it needs no dedicated load run, since it is a byproduct of the suite that "zero data loss" already requires, and it is a real defect threshold rather than a performance benchmark. Zero data loss remains a correctness invariant owned by the atomicity and failure-injection suites, and all three bounds must be reported separately rather than as one performance claim. Verified before asking: "error rate <0.1%" appears at `spec.md` (this requirement and the 2026-09-22 clarification) and `plan.md` with no denominator or window, and T128 measures latency only — no task measured error rate.
+- Q: What counts as the "error rate <0.1%" that FR-073 requires the product to hold? (FR-073) → A: Define it precisely and own it. Error rate means **5xx responses as a share of all HTTP requests issued during V1 acceptance**, counted across the automated functional, contract and end-to-end suites rather than over a dedicated load run, and recorded as a **V1 release-readiness figure** by T135. A client-side 4xx is not an error for this purpose, because a request the application correctly refused is not a defect; the 4xx, 409 and 422 responses that contract tests deliberately provoke are excluded from both numerator and denominator. The result must be recorded whether or not it passes. **The exclusion list above is extended, not
+  replaced, by the Session 2026-10-07 answer**, which adds a second excluded class — environment-induced
+  responses such as a brute-force `429` — and an excluded-count publication plus a 1% contamination
+  ceiling above which the figure is recorded as not measured. This is deliberately not deferred the way the p95 bound is: it needs no dedicated load run, since it is a byproduct of the suite that "zero data loss" already requires, and it is a real defect threshold rather than a performance benchmark. Zero data loss remains a correctness invariant owned by the atomicity and failure-injection suites, and all three bounds must be reported separately rather than as one performance claim. Verified before asking: "error rate <0.1%" appears at `spec.md` (this requirement and the 2026-09-22 clarification) and `plan.md` with no denominator or window, and T128 measures latency only — no task measured error rate.
+
+### Session 2026-10-07
+
+- Q: When PettyCash measures its "<0.1% error rate" release-readiness figure, how should responses that came from the test environment rather than from an application defect — for example Nextcloud's own brute-force limiter answering `429 Too Many Requests` — be counted? (FR-073) → A: **Excluded from both numerator and denominator, and made visible rather than absorbed.** A response the application or its platform produced for reasons unrelated to a defect — a brute-force `429`, an infrastructure or platform `5xx`, a transport failure — is an **environment-induced response** and is excluded from both the numerator and the denominator. Two further rules follow, and they exist because a contended run distorts the ratio rather than merely adding noise to it: the count of excluded requests MUST be published beside the figure, so a reader can see how much of the run was not measured; and if the excluded share of requests exceeds **1%** of the requests the run issued, the figure MUST be recorded as **not measured** rather than reported, on the same principle already applied to SC-008 and SC-010, because a run that was mostly throttled produces a ratio that looks better than reality precisely when the run is least trustworthy. A deliberate reading of this answer is that a `429` storm inflates the denominator with responses that never exercised application code while suppressing the successful requests that would have exercised it, so leaving such requests in the denominator would reward a broken run. The 2026-10-02 answer's exclusion of deliberately provoked 4xx/409/422 is **retained** and is a separate, narrower class: a provoked response is an expected assertion of the contract suite, whereas an environment-induced response is contamination the run did not intend and cannot distinguish from a defect by status code alone. Verified before asking: the 2026-10-02 answer excluded only "the 4xx, 409 and 422 responses that contract tests deliberately provoke"; `tasks.md` T313's note records four full-suite attempts yielding 2, 7, 30 and 151 failures, every one a `429` assertion, produced by two sessions sharing one instance.
+- Q: When an administrator creates a public evidence link, exactly who is allowed to open the file through that link? (FR-031) → A: **The token is the whole authority, and it is the only unauthenticated data path in V1.** Consumption of a public evidence link is **unauthenticated**: anyone who holds the unguessable token may open the linked evidence item, without signing in and without holding any role or scope right on the transaction. This is the deliberate, recorded exception to the role-scope rule FR-003 and FR-009 otherwise apply, and it is bounded by four conditions. **(1) Abuse control is delegated to Nextcloud's existing brute-force limiter, not reimplemented**: because the source requirements delegate authentication and password/login policy to Nextcloud (§11.9), PettyCash MUST NOT add a second authentication, rate-limiting, or access-control mechanism for these links, and a link consumption attempt is subject to the platform limiter exactly as any other unauthenticated request is. **(2) The per-access audit records the viewer as `anonymous`**, together with timestamp and IP, in configuration audit as FR-031 already requires — the viewer field is never left null or absent, because an anonymous visit has no UID and a nullable field would make the audit entry unusable for the access investigation it exists to serve. **(3) The token is stored only as a hash and shown once at creation**, unchanged from FR-031, so a leaked database cannot be replayed into evidence access. **(4) An administrator's own view right is not required to create a link**, and a link created for evidence on a transaction the administrator cannot themselves view is permitted and is audited as such, so an administrator's use of the capability is reconstructable rather than silent. Because the token is the entire authority, TTL and revocation are the only remaining controls, and **an expired, deactivated or unknown token MUST be refused with the same answer**, so that the refusal reveals neither whether a link ever existed nor when it lapsed. Verified before asking: `DOC/Requirements/11-...md` §11.8 authorises the public link and requires admin control, manageability, deactivation and audit but states nothing about who may consume it; §11.9 delegates authentication policy to Nextcloud; `contracts/ocs-api.yaml` defines `POST /evidence/{evidenceId}/links` and `POST /evidence-links/{linkId}/deactivate` and **no route that consumes a token**; `tasks.md` T095 and T166 are both unchecked.
+- Q: Is keyboard and screen-reader accessibility a V1 acceptance requirement, or only the contrast, font-size and no-horizontal-scroll checks that FR-071 already names? (FR-071, FR-076, SC-009) → A: **Keyboard operability and visible focus are V1 requirements; screen-reader semantics are deferred to V2.** Two criteria are added to V1 acceptance, and they are scoped to the **primary journeys** — the ones User Stories 1–7 exercise — rather than to every page: a user MUST be able to complete each primary journey **using the keyboard alone**, and every interactive element reached that way MUST show a **visible focus indicator**. "Visible" means a perceivable change to the focused element, not merely a browser default that the host theme may erase; a focus indicator the active theme makes invisible is a defect, because a keyboard user then has no indication of where they are. **Three accessibility items already present in `quickstart.md:229` are deferred to V2 and struck from that checklist**: form control label association, error-message association with the field that caused the error, and announced (live-region) status for mutations. The reason is scale rather than importance — naming every control and announcing every mutation is a compliance-sized surface to add after 71 of 276 ledger tasks are already complete, and deferring it explicitly is honest where silently leaving it unmentioned would have read as satisfied. `quickstart.md` MUST be updated to match: the keyboard-navigation and visible-focus items stay as validation steps for the primary journeys, and the three deferred items are removed from the checklist and recorded here and in FR-076 as V2. Verified before asking: `quickstart.md:229` was the only occurrence of keyboard navigation, visible focus, dialog containment, label association or error association in any feature artifact — `spec.md`, `plan.md`, `tasks.md` and `research.md` all carry no accessibility requirement, task, or success criterion beyond FR-071's contrast, font-size and no-horizontal-scroll clauses, so the project's own release checklist asserted checks that nothing owned.
+- Q: When a decision arrives for a transaction that has already moved on — for example an approve that was in flight while another actor's rejection landed — what must the application do with it? → A: **First write wins, and the losing attempt is recorded as a superseded attempt rather than dropped.** When a decision is submitted for a transaction whose current state no longer accepts it — because another decision was already recorded against the same active revision and stage, or because the active revision changed underneath the request — **the decision already recorded MUST stand and MUST NOT be overwritten**, and the later request MUST apply **no** business effect: no decision recorded, no revision created, no workflow transition, no balance movement, and no audit event representing the attempted decision as having taken effect. The attempt MUST nonetheless be recorded in audit as a **superseded attempt**, naming the transaction, its active revision, the stage, the actor, the time, the decision the caller attempted, and the decision already in force. It is recorded rather than silently discarded because a discarded attempt is indistinguishable from a request that never happened, so a reviewer who acted would leave no trace; it is recorded as its own event type rather than as an approval or a rejection because recording it as either would falsify exactly the decision history Principle IV protects. The client is answered `409 Conflict` — the state it was reasoning about no longer holds — naming that a decision is already recorded and that it must reload to see the current outcome. **First write wins is chosen over last-write-wins specifically to make double-booking structurally impossible**: accepting a second approval is the only outcome that could produce two consumption movements against one transaction and decrement the account twice, and a rejected or returned transaction could be silently promoted to approved. It is chosen over silently ignoring the loser because that discards a reviewer's real action, and over serializing server-side because a blocking lock on the decision path buys no correctness property that refusing the stale request does not already provide, at the cost of latency and of a retry rule V1 has explicitly forbidden (FR-075 forbids automatic resumption, so a transparent client-side retry would contradict it). This is **distinct from FR-084**, which covers replay of the *same* command under the *same* `X-PettyCash-Command-ID`: a replay is one command arriving twice and returns the first outcome, whereas a superseded attempt is a *different* command issued against state that had already changed, which no command identifier can detect and which therefore requires the server to check the transaction's current state. Verified before asking: `data-model.md` lines 23–24 and the `lock_version` columns on the mutable aggregates already state "for optimistic checks" and "Concurrency control", but no requirement stated the resulting behaviour; FR-084 covers only same-command replay; and `409` is already the contract's `Conflict` response on the decision endpoints (`contracts/ocs-api.yaml:84, 109, 144, 169, 306`).
+- Q: What should happen at finance settlement if the purchaser's petty-cash account for the sheet's currency has been deactivated since the sheet was created? (FR-040, FR-042, FR-020) → A: **Refuse the finance approval; never provision an account as a side effect of settlement.** Where no **active** petty-cash account in the sheet's currency exists for the purchaser at the moment of final finance approval, the approval MUST be **refused with `422`**, naming the missing or inactive account. The transaction MUST remain at the finance stage and **no** balance movement, consumption record, workflow transition or final outcome MUST be recorded, so the approval is not partially applied. Two properties follow, and both are the reason this answer was chosen over the alternatives. **FR-020's idempotent provisioning does not extend to settlement**: it is scoped to *sheet creation*, and extending it would mean a finance decision silently creates a funding object — moving approved expense against a balance nobody funded and nobody approved, which is precisely the silent financial effect FR-042 and Principle IV exist to prevent. **The remedy is an administrator's deliberate act**, not a side effect of a click: restoring or reactivating the account, or charging the intended account, is a configuration change that FR-015 and FR-017 already cover with their own audit. The refusal MUST therefore be actionable rather than merely valid — it states which account is missing or inactive and what an administrator must do — so that finance is not left holding a transaction it can never settle with no way forward. An approved-but-unsettleable expense is an acceptable and visible intermediate state; an expense booked against a balance that was conjured up at approval time is not. Verified before asking: FR-040 requires one consumption movement "against the petty-cash account matching the sheet currency" and FR-042 requires atomic completion, so with no such account the requirement has no satisfiable action; FR-020's auto-provisioning is scoped to the first sheet-creation attempt and covers only the zero-active-accounts rial case; and no requirement anywhere addressed account deactivation between sheet creation and settlement, although FR-055 confirms accounts can be deactivated.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -361,6 +372,43 @@ of all primary workflow actions.
 - A rewritten or corrected V1 baseline migration that is skipped because stale migration-state rows
   remain for the `pettycash` application ID is an environment defect to be cleared through the
   approved development reset, never a reason to reintroduce a compatibility path.
+- A test run whose requests were throttled or answered by the platform rather than by PettyCash is
+  **not evidence of an error-rate figure**, in either direction: the excluded requests inflate the
+  denominator while suppressing the successful requests that would have exercised application code, so
+  a contended run yields a ratio that looks better than a clean one. Such a run is reported as **not
+  measured** once excluded responses exceed 1% of the requests issued, with the excluded count
+  published beside the figure (FR-073).
+- A brute-force `429` or platform `5xx` appearing during an acceptance run is an
+  **environment-induced response**, not an application defect, and MUST NOT be counted toward FR-073's
+  error-rate numerator; the run's environment must instead be reported as contended, so that a real
+  5xx defect is never hidden behind, or excused by, a throttling failure.
+- A public evidence link is consumed without authentication, so a link holder's access is **not**
+  narrowed by role or scope (FR-031). An expired, deactivated, or never-existing token MUST all be
+  refused identically, because a refusal that distinguishes "you had a link, it lapsed" from "no such
+  link" turns the error itself into a confirmation that evidence exists.
+- A public evidence link access MUST be audited as viewer `anonymous` with timestamp and IP. An audit
+  entry with an empty viewer field is a defect against FR-031, not an acceptable rendering of an
+  anonymous visit, because it is indistinguishable from a missing audit record during an access
+  investigation.
+- PettyCash MUST NOT answer a public evidence link request with its own authentication challenge,
+  login form, rate limiter, or CAPTCHA; the source requirements place those in Nextcloud's hands, and
+  a second mechanism would be an undeclared authentication system.
+- Two decisions reaching the server for the same transaction and stage at the same time is a
+  **superseded attempt**, not a last-write-wins overwrite and not a silently ignored request: the
+  first recorded decision stands, the later request applies nothing, and the attempt is still audited
+  (FR-085). A response that records a superseded attempt as an approval or a rejection is itself a
+  defect, because it corrupts the history Principle IV protects.
+- A decision that arrives after the active revision changed is refused as a superseded attempt on the
+  same terms as one arriving after a decision was recorded. It MUST NOT be applied against the
+  revision it was composed for, and the client MUST be told the decision it is reasoning about is no
+  longer current rather than being left to infer it from an unchanged response body.
+- An account deactivated between sheet creation and finance approval leaves the transaction
+  **approved-in-intent but unsettleable as written**, and the finance approval is refused with `422`
+  naming the account (FR-040). Refusing is correct even though the sheet then cannot complete: a
+  transaction that visibly cannot be settled is recoverable, whereas an account conjured up at approval
+  time to make settlement succeed books real expense against a balance nobody funded. The sheet
+  remains at the finance stage and MUST NOT be completed, and the refusal MUST NOT be presented as a
+  system fault — it is a correct refusal caused by a configuration gap an administrator must close.
 
 ## Requirements *(mandatory)*
 
@@ -450,8 +498,29 @@ of all primary workflow actions.
   are explicitly deferred to V2.
 - **FR-031**: Public evidence links MAY be created only under administrator control, MUST be
   manageable and deactivatable, and MUST be audited; links have configurable TTL (default 30 days,
-  maximum 1 year) and per-access audit logging (viewer UID, timestamp, IP) recorded in configuration
-  audit.
+  maximum 1 year) and per-access audit logging recorded in configuration audit.
+  **Who may consume a link (Clarified 2026-10-07).** A public evidence link is **unauthenticated
+  access**: the unguessable token is the whole authority, so anyone who holds it may open the linked
+  evidence item without signing in and without holding any role or responsibility scope on the
+  transaction. This is a deliberate and bounded exception to the role-scope rule FR-009 otherwise
+  applies to every other read of evidence, and it is bounded as follows. **Abuse control is delegated
+  to Nextcloud's existing brute-force limiter** and PettyCash MUST NOT introduce a second
+  authentication, rate-limiting, or access-control mechanism for these links, because the source
+  requirements place authentication and login policy in Nextcloud's hands. **Every access records
+  configuration audit with the viewer recorded as `anonymous`** together with timestamp and IP — the
+  viewer field MUST NOT be left null or absent, because an anonymous visit has no user identifier and
+  an empty field would make the entry unusable for the investigation it exists to serve. The token is
+  stored only as a hash and disclosed once at creation. **The administrator's own view right is not
+  required to create a link**, and creating one for evidence on a transaction the administrator cannot
+  themselves view is permitted and is audited as such. Because TTL and revocation are the only
+  remaining controls, **an expired, deactivated or unknown token MUST be refused with the same
+  answer**, so that the refusal reveals neither that a link ever existed nor when it lapsed.
+  (Recorded 2026-10-07: this requirement previously stated that per-access audit records the "viewer
+  UID" while leaving the consumer undefined, which is unsatisfiable for an anonymous visit; and it
+  stated no access rule, so the application's only unauthenticated data path had no stated
+  authorization model. `contracts/ocs-api.yaml` defines link creation and deactivation but no
+  consumption route, and `tasks.md` T095/T166 remain open, so this settles the rule before the route
+  and service are built.)
 
 #### Review Workflow and Financial Effects
 
@@ -490,6 +559,15 @@ of all primary workflow actions.
   for correction.
 - **FR-040**: Final finance approval MUST record one consumption movement against the petty-cash
   account matching the sheet currency and decrease its balance by the approved amount.
+  **When no active account in that currency exists (Clarified 2026-10-07), the approval MUST be
+  refused with `422`, naming the missing or inactive account**, and the transaction MUST remain at the
+  finance stage with no balance movement, consumption record, workflow transition or final outcome
+  recorded. FR-020's idempotent provisioning MUST NOT be extended to settlement: provisioning at
+  approval time would book approved expense against a balance that was never funded or approved, so
+  the remedy is an administrator's deliberate action — restoring, reactivating, or charging an
+  account — which FR-015 and FR-017 already audit. (Recorded 2026-10-07: this requirement stated what
+  must happen when the account exists but not what must happen when it does not, while FR-042's
+  atomicity left an approval with no satisfiable action and no stated outcome.)
 - **FR-041**: Pending or finance-rejected transactions MUST NOT affect the actual petty-cash
   balance.
 - **FR-042**: Recording a decision, changing workflow state, creating a revision, and recording
@@ -570,7 +648,14 @@ of all primary workflow actions.
   each transaction's latest effective outcome, and MUST separately show approved totals for the
   cost center manager, senior manager, and finance stages as separate columns (Cost Center Approved | Senior Approved | Finance Approved) alongside the latest effective outcome column.
 - **FR-063**: Sheet lists and details MUST show identity, owner, currency, status, transaction count,
-  key dates, current and submitted totals, summary amounts, and the active transaction revision.
+  key dates, current and submitted totals, summary amounts, and the sheet's **latest active transaction
+  revision number** -- the highest revision number among the active revisions of the sheet's transactions.
+  **Amended 2026-10-06 (T385).** The clause previously read *"and the active transaction revision"*, which is
+  singular and cannot be rendered as written: `activeRevision` is a member of `TransactionSummary`, so a
+  sheet has one per transaction, and a list row carries no transactions at all. The reading chosen here is
+  the only non-redundant one -- a *count* of active revisions equals the `transactionCount` this same
+  clause already requires, so it would add nothing. Per-transaction `activeRevision` remains rendered on
+  the detail surface's transaction table, which is where a reader inspects an individual revision.
 - **FR-064**: Users MUST be able to filter sheets by status, date, currency, and creator;
   transactions by status, cost center, expense type, date, and amount; audit by actor, stage,
   event type, and date range; and group exports by period, which is the predefined Jalali period
@@ -663,6 +748,7 @@ of all primary workflow actions.
 #### Experience and Operational Quality
 
 - **FR-071**: The V1 interface MUST be Persian and right-to-left, with all listed elements (sheet status, transaction status, current stage, prior decisions, history, evidence) visible without horizontal scroll at 390px viewport, status color/icon meeting WCAG AA contrast, text ≥12pt Persian font, and adapt to desktop and mobile-sized screens.
+  **Keyboard operability (Clarified 2026-10-07).** In addition, a user MUST be able to complete each **primary journey** — the journeys exercised by User Stories 1–7 — **using the keyboard alone**, without a pointer, and every interactive element reached that way MUST present a **visible focus indicator**. "Visible" means a perceivable change to the focused element; a focus indicator that the active host theme renders as absent is a defect, because a keyboard user is then given no indication of where focus is. This is a usability floor, not a full accessibility conformance claim: **screen-reader semantics — form control label association, error-message association with the offending field, and announced status for mutations — are deferred to V2** under FR-076. (Recorded 2026-10-07: `quickstart.md:229` instructed testers to validate keyboard navigation, visible focus, dialog containment/return, labels, error association and live mutation feedback, but no requirement, task or success criterion covered any of them, so the checklist asserted checks that nothing owned while FR-071 promised only contrast, font size and no horizontal scroll. The two criteria V1 adopts are added here and to SC-009; the three deferred items are struck from `quickstart.md`.)
 - **FR-072**: The primary workflow MUST be usable in Chrome 120+, Edge 120+, and Firefox 115+ (ESR).
 - **FR-073**: The product MUST support the documented V1 operating scale of up to 100 active users
   and 10,000 expense transactions per year without loss of correctness, with p95 latency <3s for
@@ -675,14 +761,23 @@ of all primary workflow actions.
     than over a dedicated load run, and recorded as a **V1 release-readiness figure** by T135. A
     client-side 4xx is not an error for this purpose — a request the application correctly refused
     is not a defect — and the 4xx, 409 and 422 responses that contract tests deliberately provoke are
-    excluded from both numerator and denominator. The result MUST be recorded whether or not it
-    passes.
+    excluded from both numerator and denominator. **An environment-induced response is a second and
+    separate excluded class**: a response caused by the run's surroundings rather than by application
+    behaviour — a brute-force `429`, an infrastructure or platform `5xx`, a transport failure — is
+    excluded from both numerator and denominator, and the count of excluded requests MUST be published
+    beside the figure. **If the excluded share exceeds 1% of the requests the run issued, the figure
+    MUST be recorded as not measured rather than reported**, naming environment contamination as the
+    reason, on the same principle applied to SC-008 and SC-010. This is because a contended run
+    inflates the denominator with responses that never exercised application code while suppressing the
+    successful requests that would have exercised it, so leaving them in would make a broken run look
+    better than a clean one. The result MUST be recorded whether or not it passes.
   - **Zero data loss** is a correctness invariant established by the atomicity and failure-injection
     suites, not by the latency or error-rate measurement.
 
   (Clarified 2026-10-02: this requirement previously stated "error rate <0.1%" with no denominator and
   no measurement window, and no task measured it at all, so the bound was owned by nobody and could
   not be claimed at release readiness.)
+
 - **FR-074**: V1 MUST enforce a maximum evidence file size of **100 MB per file as its own ceiling**,
   and MUST refuse an upload above it with a message naming the limit, **regardless of what the host
   file service allows**. The 100 MB figure is PettyCash's own limit and not a mirror of the host's
@@ -696,6 +791,12 @@ of all primary workflow actions.
   automatically resume interrupted operations.
 - **FR-076**: Independent application backup and restore, active multilingual UI, a standalone
   mobile application, and advanced dashboard shortcuts MUST remain outside V1.
+  **Accessibility conformance beyond the V1 floor (Clarified 2026-10-07):** form control label
+  association, error-message association with the offending field, and announced (live-region) status
+  for mutations MUST remain outside V1, alongside full accessibility conformance auditing. V1's stated
+  accessibility floor is FR-071's keyboard operability and visible focus for the primary journeys,
+  plus its contrast, font-size and no-horizontal-scroll clauses. These items are deferred, not
+  satisfied, and MUST NOT be reported as met in V1 release readiness.
 - **FR-083**: Every read endpoint MUST answer an unreadable stored record — a broken reference, an
   incomplete row — with the same status and the same class of explanation, so that a client writes
   one handler rather than one per endpoint. `GET /sheets`, `GET /sheets/{id}`, `GET /dashboard` and
@@ -727,6 +828,24 @@ of all primary workflow actions.
   schema, persistence layer and roughly a dozen tasks implement replay, but no requirement stated the
   rule, leaving implemented business behavior untraceable to a requirement. T027, T317 and T318 are the
   delivered implementation; T134's traceability range covers it.)
+- **FR-085**: A decision submitted for a transaction whose current state no longer accepts it MUST NOT
+  overwrite the decision already recorded. **First write wins.** The later request MUST apply no
+  business effect: no decision recorded, no revision created, no workflow transition, no balance
+  movement, and no audit event representing the attempted decision as having taken effect; and the
+  client MUST be answered `409 Conflict` naming that a decision is already recorded and that it must
+  reload to see the current outcome. The attempt MUST still be recorded in audit under the canonical
+  event type **`SUPERSEDED_ATTEMPT`** — its own event type, neither an approval nor a rejection —
+  naming the transaction, its active revision, the stage, the actor, the time, the decision attempted,
+  and the decision already in force, so that a reviewer who acted leaves a trace without that trace
+  falsifying the decision history. "No longer accepts it" covers both a decision already recorded against the same active
+  revision and stage, and an active revision that changed underneath the in-flight request. This
+  requirement complements rather than overlaps FR-084: a **replay** is the same command under the same
+  `X-PettyCash-Command-ID` and returns the first outcome, whereas a **superseded attempt** is a
+  different command issued against state that had already changed, which no command identifier can
+  detect. The canonical event type is `SUPERSEDED_ATTEMPT`, and `contracts/ocs-api.yaml`'s
+  `AuditEvent.eventType` enumeration carries it as a member rather than leaving the field open. (Added 2026-10-07: `data-model.md` carries `lock_version` on the mutable aggregates expressly
+  "for optimistic checks", but no requirement stated the behaviour, so the mechanism existed with no
+  specified outcome while two correct-looking financial events could race.)
 - **FR-077**: PettyCash MUST remain database-portable across the declared V1 database backends:
   MySQL/MariaDB, PostgreSQL, and SQLite. The MariaDB development environment is not an
   application-level dependency, and behavior MUST remain equivalent across the declared backends.
@@ -805,7 +924,10 @@ of all primary workflow actions.
 - **Public Evidence Link**: A revocable, optionally-expiring share token for one evidence item,
   stored as a hash rather than in the clear, disabled by default, with per-access audit written to
   configuration audit. Required by FR-031 and FR-055/FR-056's configuration-audit scope. Added
-  2026-10-01, for the same count discrepancy as Currency.
+  2026-10-01, for the same count discrepancy as Currency. Amended 2026-10-07: the link grants
+  **unauthenticated** access — the token is the whole authority, the consumer holds no role or scope,
+  and each access records the viewer as `anonymous` with timestamp and IP, which is what FR-031's
+  "viewer UID" wording is now required to mean on this path.
 - **Command Result**: The recorded outcome of an applied mutating command, keyed by the
   client-generated command identifier, so that a repeat of an already-applied command returns the
   first outcome instead of applying a second business effect. Added 2026-10-01 for the same count
@@ -857,6 +979,12 @@ of all primary workflow actions.
   contradicted each other and V1 release readiness had no settled answer to record.)
 - **SC-009**: All primary purchaser, manager, senior manager, finance, and administrator journeys
   can be completed in Persian RTL at desktop and mobile viewport sizes in each supported browser.
+  **Each primary journey MUST additionally be completable using the keyboard alone**, with a visible
+  focus indicator on every interactive element reached, in all three browsers at both viewport sizes,
+  under the host's default, dark, and high-contrast themes — a focus indicator that the active theme
+  renders as absent does not satisfy this criterion. Screen-reader semantics are outside V1 (FR-076)
+  and MUST NOT be reported against it. (Added 2026-10-07: keyboard operability had no measurable
+  criterion while `quickstart.md` told testers to check it.)
 - **SC-010**: In moderated acceptance testing, at least 90% of representative users complete their
   primary role journey on the first attempt without facilitator intervention. The result MUST be
   measured and recorded, and this criterion MUST NOT be reported as met by default. When

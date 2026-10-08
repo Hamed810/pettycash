@@ -1,3 +1,10 @@
+// Type-only, and therefore erased at compile time: `reporting.ts` imports `ExportRequest` from this file
+// the same way, so the two reference each other without a runtime cycle. `ReportPeriodName` is imported
+// rather than restated because a period union written twice is a vocabulary that can disagree with itself —
+// and a disagreement here would let a client send `period: 'week'` past a type that no longer matches the
+// one `ReportFilters` enforces.
+import type { ReportPeriodName } from './reporting'
+
 export interface ApiErrorBody { code: string; message: string; commandId?: string; fieldErrors?: Record<string, string[]> }
 /**
  * The `ocs.data` value of every error response, as `ErrorEnvelope` declares it.
@@ -37,7 +44,20 @@ export interface TransactionFilters {
 }
 
 // Sheet types
-export interface SheetCreate { title: string; accountId: string }
+/**
+ * `POST /sheets`'s request body.
+ *
+ * **`accountId` is optional, and its absence is meaningful rather than merely unchecked** (T358). FR-020
+ * resolves the account from the caller's own active accounts: none means the default rial account is
+ * provisioned on this attempt and used, exactly one means it is used automatically, and several means the
+ * caller must send this field. A zero-account purchaser therefore has no `accountId` to send — which is why
+ * making it required made FR-020 unreachable from the interface, and why `contracts/ocs-api.yaml`'s
+ * `SheetCreate.required` now names only `title`.
+ *
+ * Kept optional here in step with the contract rather than asserted against it: the generated
+ * `src/generated/api.ts` derives the same optionality, and `check:openapi` is what holds this one to it.
+ */
+export interface SheetCreate { title: string; accountId?: string }
 
 export interface SheetSummary {
 	id: string
@@ -54,6 +74,19 @@ export interface SheetSummary {
 	firstExpenseDate: string | null
 	lastExpenseDate: string | null
 	version: number
+	/**
+	 * FR-063's latest active transaction revision number: the highest revision number among the active
+	 * revisions of this sheet's transactions, and **0** when the sheet holds none.
+	 *
+	 * Added 2026-10-06 (T385). The requirement named *"the active transaction revision"*, which is a member
+	 * of {@link TransactionSummary} — one per transaction — so a sheet has as many as it has transactions
+	 * and a list row carries none at all. A count would be redundant with {@link SheetSummary.transactionCount},
+	 * so the requirement is amended to name this value, which is a single figure both surfaces can render.
+	 *
+	 * Optional rather than required because the contract declares it `nullable`: `null` means the payload did
+	 * not carry it, while `0` is the real answer for a sheet with no transactions.
+	 */
+	activeRevisionNumber?: number | null
 }
 
 export interface SheetTotals {
@@ -74,6 +107,28 @@ export type SheetStatus =
 	| 'AWAITING_FINANCE_REVIEW'
 	| 'COMPLETED'
 	| 'COMPLETED_WITH_REJECTIONS'
+
+/**
+ * Every `SheetStatus`, for controls that must offer the whole vocabulary.
+ *
+ * **Declared from the union rather than written beside it**, and typed as
+ * `readonly SheetStatus[]`, for the same reason `ALLOWED_ACTION_KEYS` below is typed: a hand-written list
+ * beside a union is two statements of one rule, and adding a member to the union without adding it here
+ * produces a picker that is quietly missing an option — which on a filter is a *wrong answer*, because
+ * the user narrows to a status they can see and the server has one the control does not offer.
+ *
+ * The `satisfies` clause means a member that is not a `SheetStatus` is a **compile** error rather than a
+ * runtime surprise, and the element type widens the literal to the union so callers get `SheetStatus[]`
+ * rather than a six-element tuple.
+ */
+export const SHEET_STATUSES = [
+	'OPEN',
+	'AWAITING_COST_CENTER_REVIEW',
+	'AWAITING_SENIOR_REVIEW',
+	'AWAITING_FINANCE_REVIEW',
+	'COMPLETED',
+	'COMPLETED_WITH_REJECTIONS',
+] as const satisfies readonly SheetStatus[]
 
 export interface SheetDetail extends SheetSummary {
 	allowedActions: CapabilitySet
@@ -385,6 +440,22 @@ export interface ExportResult {
 	format: 'csv' | 'xlsx' | 'pdf' | 'zip'
 	byteSize: number
 	rowCount: number
+	/**
+	 * FR-068: the period this artifact covers, and the range and zone it resolved to.
+	 *
+	 * **Present only when the request resolved a predefined `period`** — the contract makes the disclosure
+	 * absent otherwise rather than present and null, so every field is optional here for that reason and not
+	 * because the values are uncertain.
+	 *
+	 * Declared because `POST /exports` sends them. Without these four fields a client could not read the
+	 * artifact's own period even if it wanted to, so the exported file's numbers would travel with no
+	 * statement of the range or zone they cover — which is exactly what two users reconcile against each
+	 * other. See `DownloadableExport.disclosure`.
+	 */
+	period?: ReportPeriodName
+	resolvedFrom?: string
+	resolvedTo?: string
+	resolvedTimeZone?: string
 	data: string
 	artifactRemoved: boolean
 }

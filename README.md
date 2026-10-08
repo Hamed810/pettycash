@@ -16,7 +16,11 @@ application. The application is implemented as one modular monolith and preserve
 
 ## Safe local workflow
 
-The project never owns the shared Nextcloud volumes or legacy `oc_pcash_*` tables. Do not reset,
+This project has its own Nextcloud development lab, Compose project `pettycash-lab`, served on
+<http://localhost:8081> (`~/projects/nextcloud-lab`). The sibling PTS application has a
+separate lab on port 8082; the two share no database, volumes, network, users or test data.
+
+The project never owns the lab's Nextcloud volumes or legacy `oc_pcash_*` tables. Do not reset,
 drop, rename, or rewrite either while developing this application.
 
 ```bash
@@ -27,9 +31,13 @@ make check
 npm run build
 ```
 
-The preflight expects `docker-nextcloud-1` and `docker-db-1`; override their names with
-`PETTYCASH_NC_CONTAINER` and `PETTYCASH_DB_CONTAINER`. Browser tests use
-`PETTYCASH_BASE_URL` and are always run explicitly with `npm run test:e2e`.
+The preflight expects this project's own lab — containers `pettycash-lab-nextcloud-1` and
+`pettycash-lab-db-1`, served on <http://localhost:8081> — and fails if they are not running.
+Start it with `~/projects/nextcloud-lab/bin/lab pettycash up`. Container names can be
+overridden with `PETTYCASH_NC_CONTAINER` and `PETTYCASH_DB_CONTAINER`, but they must still
+identify THIS project's lab: the PTS lab is a separate Nextcloud on port 8082 that does not
+carry this app. Browser tests use `PETTYCASH_BASE_URL` (default
+`http://localhost:8081`) and are always run explicitly with `npm run test:e2e`.
 
 ## Architecture
 

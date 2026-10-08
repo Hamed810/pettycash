@@ -35,6 +35,7 @@ use OCA\PettyCash\Domain\Workflow\Decision;
 use OCA\PettyCash\Domain\Workflow\FinanceDecisionPolicy;
 use OCA\PettyCash\Domain\Workflow\Repository\WorkflowDecisionRepository;
 use OCA\PettyCash\Domain\Workflow\TransactionStatus;
+use OCA\PettyCash\Domain\Workflow\WorkflowDecision;
 use OCA\PettyCash\Domain\Workflow\WorkflowStage;
 use OCA\PettyCash\Application\Audit\ConfigurationEventType;
 use OCA\PettyCash\Application\Audit\DecisionEventType;
@@ -55,7 +56,8 @@ final readonly class FinanceSettlementService
         private IdempotencyService $idempotencyService,
         private CurrentUser $currentUser,
         private UserDirectory $userDirectory,
-        private AuthorizationService $authorizationService
+        private AuthorizationService $authorizationService,
+        private SupersededDecisionAudit $supersededDecisionAudit,
     ) {}
 
     /**
@@ -82,6 +84,52 @@ final readonly class FinanceSettlementService
         $recordedMovement = null;
         $recordedAccount = null;
 
+        // FR-085. Same shape and the same reason as `ManagementReviewService`: the refusal is raised
+        // inside the transaction below, and caught here because the `SUPERSEDED_ATTEMPT` event has to
+        // be written *after* the rollback that the refusal causes.
+        try {
+            return $this->recordDecisionInTransaction(
+                $transactionPublicId,
+                $actorUid,
+                $decision,
+                $explanation,
+                $commandId,
+                $expectedVersion,
+                $recordedDecision,
+                $recordedMovement,
+                $recordedAccount
+            );
+        } catch (SupersededDecisionAttempt $superseded) {
+            $this->supersededDecisionAudit->record(
+                $superseded,
+                $actorUid,
+                $this->getUserRole($actorUid, null),
+                $commandId,
+            );
+
+            throw $superseded;
+        }
+    }
+
+    /**
+     * The body of {@see recordDecision()}, split out so the FR-085 catch sits outside the database
+     * transaction rather than inside it.
+     *
+     * @param-out WorkflowDecision|null $recordedDecision
+     * @param-out AccountMovement|null   $recordedMovement
+     * @param-out PettyCashAccount|null  $recordedAccount
+     */
+    private function recordDecisionInTransaction(
+        string $transactionPublicId,
+        string $actorUid,
+        Decision $decision,
+        string $explanation,
+        string $commandId,
+        int $expectedVersion,
+        ?WorkflowDecision &$recordedDecision,
+        ?AccountMovement &$recordedMovement,
+        ?PettyCashAccount &$recordedAccount
+    ): DecisionOutcome {
         return $this->transactionManager->transactional(function () use (
             $transactionPublicId,
             $actorUid,
@@ -133,11 +181,6 @@ final readonly class FinanceSettlementService
                     throw new InvalidArgumentException('Stale version');
                 }
 
-                // Verify transaction is at finance stage
-                if ($transaction->stage !== WorkflowStage::Finance) {
-                    throw new InvalidArgumentException('Transaction is not at finance stage');
-                }
-
                 // Authorization check - only finance role can make finance decisions
                 $context = new AuthorizationContext(
                     $actorUid,
@@ -149,6 +192,28 @@ final readonly class FinanceSettlementService
 
                 if (!$this->authorizationService->canReview($context, WorkflowStage::Finance, '')) {
                     throw new LogicException('User not authorized for finance decisions');
+                }
+
+                // FR-085: first write wins.
+                //
+                // **Before the stage guard, and before the account lookup**, for the same reason as
+                // on the management path: a decision already recorded at the finance stage is
+                // precisely why the transaction is no longer there, so a stage guard placed first
+                // makes this check unreachable and answers every losing race with "not at finance
+                // stage" instead of naming the decision that is already in force.
+                //
+                // Before the account lookup for a second reason. Two finance officers approving the
+                // same transaction is the *ordinary* case, not an exotic one. If the losing officer
+                // is answered `ACCOUNT_NOT_SETTLEABLE` because the purchaser's account was
+                // deactivated in between, finance is sent to fix a configuration problem that is not
+                // the one stopping them, while the real outcome — their colleague already settled it —
+                // is never stated. The 409 is the more informative answer about the transaction, and
+                // the account question is moot once the transaction has moved on.
+                $this->refuseIfAlreadyDecided($transaction, WorkflowStage::Finance, $decision);
+
+                // Verify transaction is at finance stage
+                if ($transaction->stage !== WorkflowStage::Finance) {
+                    throw new InvalidArgumentException('Transaction is not at finance stage');
                 }
 
                 // Validate the finance decision matrix for **this** decision.
@@ -171,7 +236,18 @@ final readonly class FinanceSettlementService
                 $currencyCode = $transaction->revision()->amount()->currency();
                 $accounts = $this->accountRepository->findActiveByUserAndCurrency($transaction->ownerUid, $currencyCode);
                 if ($accounts === []) {
-                    throw new LogicException('No active petty cash account found for transaction currency');
+                    // FR-040: an unsettleable approval is refused with an actionable 422, not a 500
+                    // and not a validation failure. See `UnsettleableAccount` for why the account is
+                    // named, and for why provisioning one here would be wrong: FR-020 scopes
+                    // auto-provisioning to sheet creation, and an approval must never fund the
+                    // balance it is charged to.
+                    //
+                    // Thrown *before* any lock is taken and before any row is written, so the
+                    // refusal leaves nothing behind: no movement, no consumption record, no workflow
+                    // transition and no sheet completion. `FR-042` requires the refusal to apply
+                    // nothing at all, and applying nothing is easiest to prove when nothing has been
+                    // touched yet.
+                    throw new UnsettleableAccount($transaction->ownerUid, $currencyCode);
                 }
                 $account = $accounts[0];
 
@@ -377,6 +453,52 @@ final readonly class FinanceSettlementService
 
             return new DecisionOutcome($transaction, $recordedDecision, $recordedMovement, $recordedAccount);
         });
+    }
+
+    /**
+     * FR-085: refuse a decision for a stage this revision has already been decided at.
+     *
+     * The settlement-specific reason this matters more here than on the management path: an accepted
+     * second `APPROVE` is the only outcome that could produce two consumption movements against one
+     * transaction and decrement the account twice. The unique index
+     * `pettycash_workflow_decisions_revision_stage_uniq` prevents that today, so the gap closed here
+     * is the *outcome* — an explained 409 naming the decision in force, plus a `SUPERSEDED_ATTEMPT`
+     * event, instead of an unexplained 500 and no record that the officer acted.
+     *
+     * The window between this read and the insert is closed by
+     * `DbWorkflowDecisionRepository::save()`, which converts the unique-index violation into the same
+     * exception rather than letting it reach the default 500 arm. FR-085 declines server-side
+     * serialisation of the decision path, so this read-and-then-write is the intended shape and the
+     * index is the backstop rather than a last resort.
+     *
+     * @throws SupersededDecisionAttempt when a decision already exists for (revision, stage)
+     */
+    private function refuseIfAlreadyDecided(
+        ExpenseTransaction $transaction,
+        WorkflowStage $stage,
+        Decision $decision
+    ): void {
+        $revisionDbId = $transaction->revision()->dbId;
+        if ($revisionDbId === null) {
+            // An unpersisted revision has no row to have been decided on, so there is nothing to be
+            // superseded by. Refusing here would be refusing on no evidence.
+            return;
+        }
+
+        $recorded = $this->decisionRepository->findByRevisionAndStage($revisionDbId, $stage);
+        if ($recorded === []) {
+            return;
+        }
+
+        // Read by `decided_at ASC`, and one row per (revision, stage) by the unique index, so the
+        // last element is the decision in force.
+        throw new SupersededDecisionAttempt(
+            $transaction->id,
+            $transaction->revision()->id(),
+            $stage,
+            $decision,
+            $recorded[count($recorded) - 1]->decision,
+        );
     }
 
     /**

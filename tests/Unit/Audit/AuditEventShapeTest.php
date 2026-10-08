@@ -6,7 +6,10 @@ namespace OCA\PettyCash\Tests\Unit\Audit;
 
 use InvalidArgumentException;
 use OCA\PettyCash\Application\Audit\AuditWriterService;
+use OCA\PettyCash\Application\Audit\DecisionEventType;
 use OCA\PettyCash\Domain\Audit\AuditEvent;
+use OCA\PettyCash\Domain\Shared\Enum\AuditEventType;
+use OCA\PettyCash\Domain\Workflow\Decision;
 use OCA\PettyCash\Tests\TestDoubles\InMemoryAuditEventRepository;
 use OCA\PettyCash\Tests\TestDoubles\InMemoryCurrentUser;
 use OCA\PettyCash\Tests\TestDoubles\InMemoryUserDirectory;
@@ -327,12 +330,21 @@ final class AuditEventShapeTest extends TestCase
     }
 
     /**
-     * The enum must cover every transition FR-051 names, and nothing that FR-051 does not.
+     * The enum must cover exactly the events the requirements name, and nothing they do not.
      *
      * Both directions are asserted. A missing case is an event kind with no vocabulary, which is how
      * routing, revision creation and transaction changes came to have no writer. An *extra* case is a
      * value no requirement asked for -- `SETTLED` was one, and it duplicated a fact the FR-055
      * `ACCOUNT_CHARGED` configuration event already recorded.
+     *
+     * **`SUPERSEDED_ATTEMPT` is listed apart from the FR-051 transitions on purpose.** It is not
+     * one: FR-051 enumerates the transitions a transaction undergoes, and this records a decision
+     * that was *refused* and applied nothing at all. FR-085 added it on 2026-10-07, and it is the
+     * only member of this vocabulary that asserts no change to the transaction.
+     *
+     * It is named here explicitly rather than folded into the FR-051 list, because folding it in
+     * would make the assertion state something false -- and this test exists precisely to catch a
+     * case no requirement asked for. Were FR-085 ever withdrawn, this line is what would fail.
      */
     public function testTheEnumCoversExactlyTheTransitionsFr051Names(): void
     {
@@ -341,6 +353,8 @@ final class AuditEventShapeTest extends TestCase
             // transaction changes, evidence additions, evidence deactivations -- FR-051, in order.
             'SUBMITTED', 'ROUTED', 'APPROVED', 'REJECTED', 'RETURNED', 'CORRECTED',
             'REVISION_CREATED', 'TRANSACTION_CHANGED', 'EVIDENCE_ADDED', 'EVIDENCE_DEACTIVATED',
+            // FR-085, not FR-051. See the method docblock.
+            'SUPERSEDED_ATTEMPT',
         ];
 
         $actual = array_map(static fn($case) => $case->value, \OCA\PettyCash\Domain\Shared\Enum\AuditEventType::cases());
@@ -348,6 +362,45 @@ final class AuditEventShapeTest extends TestCase
         sort($actual);
 
         self::assertSame($expected, $actual);
+    }
+
+    /**
+     * FR-085's event type must be its own member and must not be reachable as an outcome.
+     *
+     * The second half is the load-bearing one. FR-085 records the attempt "rather than as an approval
+     * or a rejection", because filing a refused attempt under either would assert a decision that did
+     * not take effect and corrupt the history Principle IV protects. Nothing in the type system stops
+     * a producer reaching for `DecisionEventType::for($decision)` on the refusal path — that mapper
+     * returns exactly `Approved`, `Rejected` or `Returned`, so a caller that reaches for it out of
+     * habit writes a plausible, wrong, **permanent** audit row (FR-053). So the mapping is asserted
+     * to be total over `Decision` and to have no fourth member: an outcome this vocabulary has no
+     * word for cannot be invented here.
+     */
+    public function testASupersededAttemptHasItsOwnTypeAndIsNoDecisionsOutcome(): void
+    {
+        self::assertSame(
+            'SUPERSEDED_ATTEMPT',
+            AuditEventType::SupersededAttempt->value,
+            'FR-085 names SUPERSEDED_ATTEMPT as the canonical event type, so a client can branch on it.'
+        );
+
+        $mapped = array_map(
+            static fn ($decision): string => DecisionEventType::for($decision)->value,
+            Decision::cases(),
+        );
+
+        self::assertSame(
+            ['APPROVED', 'REJECTED', 'RETURNED'],
+            array_values(array_unique($mapped)),
+            'a decision outcome must map to exactly the three FR-051 outcomes.'
+        );
+
+        self::assertNotContains(
+            AuditEventType::SupersededAttempt->value,
+            $mapped,
+            'FR-085: the superseded attempt is neither an approval nor a rejection. If this fails, '
+            . 'some path maps a refused decision onto an outcome vocabulary.'
+        );
     }
 
     /**

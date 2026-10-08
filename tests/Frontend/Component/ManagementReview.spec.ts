@@ -12,6 +12,7 @@ import DecisionForm from '@/components/review/DecisionForm.vue'
 import PriorDecisionHistory from '@/components/review/PriorDecisionHistory.vue'
 import { ALLOWED_ACTION_KEYS } from '@/types/api'
 import { useReviewsStore } from '@/stores/reviews'
+import { expectCardAgreesWithTable } from '../../Support/cardAgreement'
 import { useAuthStore } from '@/stores/auth'
 import { routes } from '@/router'
 import { readFileSync } from 'node:fs'
@@ -140,6 +141,35 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
       const pagination = wrapper.find('[data-testid="queue-pagination"]')
       expect(pagination.exists(), 'a queue spanning two pages must offer pagination').toBe(true)
       expect(pagination.find('[data-testid="page-indicator"]').text()).toContain('1')
+    })
+
+    /**
+     * T394: the narrow-viewport card carries the same figures as the table.
+     *
+     * FR-071 requires every listed element to be visible **without horizontal scroll** at 390px, which
+     * this table used to answer with `overflow-x: auto`. `ResponsiveTable` now renders one card per row
+     * below 640px, so a figure that is missing or differs there is one a reader cannot see at all -- and
+     * **every other assertion in this suite reads the table**, which is the layout jsdom renders by
+     * default. That is exactly the state the eight surfaces drifted in before T389.
+     */
+    it('should carry the same figures in the narrow card as in the table', async () => {
+      const wrapper = await mountQueue([
+        queueItem('tx-1'),
+        queueItem('tx-2', { sheetId: 'sheet-2' })
+      ])
+
+      expectCardAgreesWithTable(wrapper, {
+        rows: 2,
+        // The hooks the shared cell renderer declares (`src/components/review/queueColumns.ts`), plus
+        // this queue's own column hook. A hook absent from either layout is reported by name.
+        hooks: [
+          'data-testid="amount"',
+          'data-testid="transaction-id"',
+          'data-testid="sheet-id"',
+          'data-testid="queue-stage"',
+          'data-testid="view-details-btn"'
+        ]
+      })
     })
 
     it('should offer no pagination when the queue fits one page', async () => {
@@ -271,6 +301,40 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
     // reads. So the assertion could not have held, and the requirement it names is better checked where
     // the decision is actually taken: the senior's own three choices are offered immediately, with no
     // acknowledgment control standing between the senior and them.
+    /**
+     * T394: the narrow card carries this queue's **own** column too.
+     *
+     * Worth its own case rather than being folded into the cost-centre one, because the senior queue's
+     * distinguishing column (`advisoryDecision`) is rendered by a branch the shared cell renderer does
+     * not own -- it is the one column each queue supplies for itself. A queue that adopted the reflow and
+     * silently lost that column would still pass every test that only reads the table.
+     */
+    it('should carry the advisory decision in the narrow card as in the table', async () => {
+      const wrapper = await mountSeniorQueue([
+        {
+          id: 'tx-1', sheetId: 'sheet-1', stage: 'SENIOR', status: 'AWAITING_SENIOR_REVIEW',
+          finalOutcome: null, evidenceCount: 0, version: 0,
+          latestDecision: COST_CENTER_APPROVAL,
+          activeRevision: {
+            id: 'rev-1', number: 1, expenseDate: '2026-09-20',
+            amount: { amountMinor: 50000, currency: 'IRR', minorUnit: 0 },
+            costCenter: { id: 'cc-1', code: 'CC001', name: 'Cost Center' },
+            expenseType: { id: 'et-1', name: 'Travel' },
+            createdBy: 'u1', createdAt: '2026-09-20T10:00:00Z', active: true
+          }
+        }
+      ])
+
+      expectCardAgreesWithTable(wrapper, {
+        rows: 1,
+        hooks: [
+          'data-testid="amount"',
+          'data-testid="advisory-decision"',
+          'data-testid="view-details-btn"'
+        ]
+      })
+    })
+
     it('should allow senior to decide independently without forced acknowledgment', async () => {
       const wrapper = await mountSeniorQueue([{
         id: 'tx-1', sheetId: 'sheet-1', stage: 'SENIOR', status: 'AWAITING_SENIOR_REVIEW',

@@ -104,6 +104,7 @@ onMounted(onLoad)
 			:exporting="reports.exporting"
 			:error="reports.exportError"
 			:field-errors="reports.exportFieldErrors"
+			:last-export-disclosure="reports.lastExportDisclosure"
 			@export="onExport"
 			@dismiss="reports.clearExportError()"
 		/>

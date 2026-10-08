@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { onMounted, computed, watch } from 'vue'
+import { onMounted, computed, h, watch, type VNode } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useSheetStore } from '@/stores/sheets'
-import type { SheetStatus } from '@/types/api'
+import type { SheetStatus, TransactionSummary } from '@/types/api'
 import { NcBreadcrumbs, NcNoteCard, NcButton, NcChip, NcIconSvgWrapper } from '@nextcloud/vue'
 import { mdiPencil, mdiPlus, mdiSend, mdiEye, mdiLock } from '@mdi/js'
 import { t } from '@nextcloud/l10n'
 import { formatMoney } from '@/utils/money'
+import ResponsiveTable from '@/components/shared/ResponsiveTable.vue'
+import { formatSheetDate as formatDate, formatSheetDateRange as formatDateRange } from '@/utils/date'
 
 const route = useRoute()
 const router = useRouter()
@@ -78,6 +80,83 @@ const transactionHeaders = [
 	{ key: 'evidenceCount', label: 'pettycash.transactions.evidenceCount', sortable: false },
 	{ key: 'actions', label: 'pettycash.transactions.actions', sortable: false }
 ]
+
+/**
+ * T389: the transaction table's columns, as `ResponsiveTable` takes them.
+ *
+ * **Derived from {@link transactionHeaders} rather than restated.** The header list already names every
+ * column; a second literal would be two statements of one rule, and the failure mode is a column that
+ * appears in the table but not in the card — a narrow layout quietly missing a field, which is the defect
+ * the reflow exists to close. `sortable` is dropped because `ResponsiveTable` does not sort: it is metadata
+ * about an interactive header, and this view's headers are not interactive.
+ */
+const transactionColumns = computed(() =>
+	transactionHeaders.map((header) => ({
+		key: header.key,
+		label: t('pettycash', header.label)
+	}))
+)
+
+/** Stable per-row identity, so Vue keys rather than array indices. */
+function transactionRowKey(item: TransactionSummary, index: number): string {
+	return item.id || `sheet-transaction-${index}`
+}
+
+/**
+ * The card's own row hook, deliberately off the `sheet-transaction-row` prefix.
+ *
+ * A prefix selector such as `[data-test^="sheet-transaction-row"]` would otherwise match the card for the
+ * same record and double every row count. The exact selector the existing suites use is unaffected either
+ * way; this only keeps a prefix meaningful for whoever writes the next assertion.
+ */
+function sheetTransactionCardId(item: TransactionSummary): string {
+	return `sheet-transaction-card-${item.id}`
+}
+
+/**
+ * One transaction cell, rendered identically by the table and by the narrow-viewport card.
+ *
+ * A render function rather than markup because FR-071 requires the same figures at 390px as on a desktop,
+ * and duplicated markup is how the narrow layout becomes a second, divergent presentation of the same money
+ * and dates.
+ *
+ * The `default` branch renders the column's key rather than nothing, so a column added to
+ * {@link transactionHeaders} without a case here is visible in both layouts and assertable instead of
+ * silently blank.
+ */
+function transactionCell(item: TransactionSummary, column: { key: string }): VNode {
+	switch (column.key) {
+	case 'expenseDate':
+		// T393: through `@/utils/date`, so an absent date is a dash rather than 1 January 1970.
+		return h('span', { 'data-test': 'transaction-expense-date' }, formatDate(item.activeRevision.expenseDate))
+	case 'amount':
+		return h('span', { 'data-test': 'transaction-amount' }, formatMoney(item.activeRevision.amount))
+	case 'costCenter':
+		return h('span', null, item.activeRevision.costCenter.name)
+	case 'expenseType':
+		return h('span', null, item.activeRevision.expenseType.name)
+	case 'stage':
+		return h(NcChip, null, () => t('pettycash', 'stage.' + item.stage.toLowerCase()))
+	case 'status':
+		// The hook is `data-test`, matching the table this replaces, so every existing assertion that
+		// found the status badge keeps finding it.
+		return h(
+			NcChip,
+			{ 'data-test': 'transaction-status-badge' },
+			() => t('pettycash', 'status.' + item.status.toLowerCase().replace(/_/g, '-'))
+		)
+	case 'evidenceCount':
+		return h('span', { 'data-test': 'evidence-count' }, item.evidenceCount)
+	case 'actions':
+		return h(
+			NcButton,
+			{ variant: 'tertiary', 'data-test': 'view-transaction', onClick: () => goToTransaction(item.id) },
+			() => h(NcIconSvgWrapper, { path: mdiEye, size: 16 })
+		)
+	default:
+		return h('span', { 'data-test': `transaction-unrendered-${column.key}` }, column.key)
+	}
+}
 </script>
 
 <template>
@@ -102,7 +181,7 @@ const transactionHeaders = [
 				</NcChip>
 				<NcChip
 					v-if="isSubmitted"
- variant="secondary"
+					variant="secondary"
 
 
 					data-test="read-only-badge"
@@ -128,15 +207,15 @@ const transactionHeaders = [
 			<div class="card-header-row">
 				<h2 class="mb-0" data-test="sheet-title">{{ sheetStore.currentSheet?.title }}</h2>
 				<div class="d-flex gap-2">
-					<NcButton v-if="!isSubmitted" variant="secondary" @click="goToEdit" data-test="edit-sheet-btn">
+					<NcButton v-if="!isSubmitted" variant="secondary" data-test="edit-sheet-btn" @click="goToEdit">
 						<NcIconSvgWrapper :path="mdiPencil" :size="16" class="mr-2" />
 						{{ t('pettycash', 'common.edit') }}
 					</NcButton>
-					<NcButton v-if="!isSubmitted" variant="primary" @click="goToCreateTransaction" data-test="create-transaction-btn">
+					<NcButton v-if="!isSubmitted" variant="primary" data-test="create-transaction-btn" @click="goToCreateTransaction">
 						<NcIconSvgWrapper :path="mdiPlus" :size="16" class="mr-2" />
 						{{ t('pettycash', 'transactions.add') }}
 					</NcButton>
-					<NcButton v-if="sheetStore.canSubmit" variant="primary" @click="handleSubmit" data-test="submit-sheet-button">
+					<NcButton v-if="sheetStore.canSubmit" variant="primary" data-test="submit-sheet-button" @click="handleSubmit">
 						<NcIconSvgWrapper :path="mdiSend" :size="16" class="mr-2" />
 						{{ t('pettycash', 'sheets.submit') }}
 					</NcButton>
@@ -157,6 +236,59 @@ const transactionHeaders = [
 						`''` (T340).
 					-->
 					<div data-testid="sheet-owner">{{ sheetStore.currentSheet?.ownerDisplayName }}</div>
+				</div>
+			</div>
+
+			<!--
+				FR-063's "key dates", which this view rendered **nowhere** before T384: `createdAt`,
+				`submittedAt`, `completedAt` and the `firstExpenseDate`/`lastExpenseDate` range were all
+				absent from the whole component, and its only date was a *transaction's*
+				`activeRevision.expenseDate` inside the transaction table. T381 delivered the same four for
+				the sheet **list**, so this is the second half of a requirement about two surfaces.
+
+				**Inside the existing `sheet-header` card rather than a card of its own.** `.card-details` is
+				a grid of one column below 600px and three above, so four more items grow the card vertically
+				and reflow on a narrow viewport — FR-071 requires everything visible without horizontal
+				scroll at 390px, and a separate card with its own heading would add width for something that
+				reads as part of the sheet's identity.
+
+				**One shared renderer for both surfaces.** `formatSheetDate` / `formatSheetDateRange` live in
+				`@/utils/date` rather than here, because the list already needed the identical rule and a
+				second copy is how a convention drifts — a null date becoming 1970 on one surface and a dash
+				on the other is precisely the kind of split this repository keeps finding.
+			-->
+			<div class="card-details key-dates" data-test="sheet-key-dates">
+				<div class="detail-item">
+					<strong>{{ t('pettycash', 'sheets.createdAt') }}</strong>
+					<div data-test="sheet-created-at">{{ formatDate(sheetStore.currentSheet?.createdAt) }}</div>
+				</div>
+				<div class="detail-item">
+					<strong>{{ t('pettycash', 'sheets.submittedAt') }}</strong>
+					<div data-test="sheet-submitted-at">{{ formatDate(sheetStore.currentSheet?.submittedAt) }}</div>
+				</div>
+				<div class="detail-item">
+					<strong>{{ t('pettycash', 'sheets.completedAt') }}</strong>
+					<div data-test="sheet-completed-at">{{ formatDate(sheetStore.currentSheet?.completedAt) }}</div>
+				</div>
+				<div class="detail-item">
+					<strong>{{ t('pettycash', 'sheets.activeRevision') }}</strong>
+					<!--
+						FR-063's latest active revision number (T385), the same value the list shows. `0` for a
+						sheet holding no transactions is a real answer, so it is printed rather than replaced with
+						the absent-marker the dates use.
+					-->
+					<div data-test="sheet-active-revision">
+						{{ sheetStore.currentSheet?.activeRevisionNumber ?? 0 }}
+					</div>
+				</div>
+				<div class="detail-item">
+					<strong>{{ t('pettycash', 'sheets.expenseRange') }}</strong>
+					<!--
+						Read through a `{}` default so the cell renders the absent-marker rather than throwing
+						while `currentSheet` is still null on a slow load. Both bounds missing reads as absent,
+						which is the same answer an unloaded sheet deserves.
+					-->
+					<div data-test="sheet-expense-range">{{ formatDateRange(sheetStore.currentSheet ?? {}) }}</div>
 				</div>
 			</div>
 		</NcNoteCard>
@@ -206,48 +338,29 @@ const transactionHeaders = [
 		</NcNoteCard>
 
 		<NcNoteCard :heading="`${t('pettycash', 'transactions.list')} (${sheetTransactions.length})`" data-test="transaction-list">
-			<div class="table-container">
-				<table class="nc-table" data-test="transaction-table">
-					<thead>
-						<tr>
-							<th v-for="header in transactionHeaders" :key="header.key" scope="col">{{ t('pettycash', header.label) }}</th>
-						</tr>
-					</thead>
-					<tbody v-if="!sheetStore.loading">
-						<!-- Only this sheet's transactions: they arrive on the sheet payload for the
-						     route's own sheet, so a row here belongs to the sheet the purchaser opened. -->
-						<tr v-for="item in sheetTransactions" :key="item.id" data-test="sheet-transaction-row">
-							<td>{{ new Date(item.activeRevision.expenseDate).toLocaleDateString('fa-IR') }}</td>
-							<td>{{ formatMoney(item.activeRevision.amount) }}</td>
-							<td>{{ item.activeRevision.costCenter.name }}</td>
-							<td>{{ item.activeRevision.expenseType.name }}</td>
-							<td>
-								<NcChip>
-									{{ t('pettycash', 'stage.' + item.stage.toLowerCase()) }}
-								</NcChip>
-							</td>
-							<td>
-								<NcChip data-test="transaction-status-badge">
-									{{ t('pettycash', 'status.' + item.status.toLowerCase().replace(/_/g, '-')) }}
-								</NcChip>
-							</td>
-							<td data-test="evidence-count">{{ item.evidenceCount }}</td>
-							<td>
-								<NcButton variant="tertiary" @click="goToTransaction(item.id)" data-test="view-transaction">
-									<NcIconSvgWrapper :path="mdiEye" :size="16" />
-								</NcButton>
-							</td>
-						</tr>
-					</tbody>
-					<tbody v-else>
-						<tr>
-							<td :colspan="transactionHeaders.length" class="text-center">
-								<div class="loading-row">Loading...</div>
-							</td>
-						</tr>
-					</tbody>
-				</table>
-			</div>
+			<!--
+					FR-071 (T389): this table sat in `overflow-x: auto`, which produces a horizontal scrollbar
+					at 390px rather than satisfying the requirement -- exactly what `src/styles/app.scss`
+					says must not be done. `ResponsiveTable` renders these same rows as a `<table>` above
+					640px and as one card per row below it, from one column list and one cell renderer, so the
+					narrow layout cannot become a second presentation of the same figures.
+				-->
+			<p v-if="sheetStore.loading" class="loading-row" data-test="transaction-loading">
+				{{ t('pettycash', 'common.loading') }}
+			</p>
+			<ResponsiveTable
+				v-else
+				:columns="transactionColumns"
+				:rows="sheetTransactions"
+				:cell="transactionCell"
+				:row-key="transactionRowKey"
+				:caption="t('pettycash', 'sheets.transactions')"
+				:loading="sheetStore.loading"
+				test-id="transaction-table"
+				test-id-prefix="sheet-transaction"
+				row-test-id="sheet-transaction-row"
+				:card-row-test-id="sheetTransactionCardId"
+			/>
 		</NcNoteCard>
 
 		<!--
@@ -279,7 +392,7 @@ const transactionHeaders = [
 			data-test="submission-errors"
 		>
 			<span data-test="submission-error-message">{{ sheetStore.error }}</span>
-			<button type="button" @click="sheetStore.clearError" :aria-label="t('pettycash', 'common.dismiss')">×</button>
+			<button type="button" :aria-label="t('pettycash', 'common.dismiss')" @click="sheetStore.clearError">×</button>
 		</div>
 	</div>
 </template>
@@ -407,10 +520,6 @@ const transactionHeaders = [
 	font-size: var(--font-size-floor);
 	font-weight: 600;
 	color: var(--nc-color-on-surface, #212121);
-}
-
-.table-container {
-	overflow-x: auto;
 }
 
 .nc-table {

@@ -42,9 +42,15 @@ class SheetController extends OCSController
         if ($title === null || trim($title) === '') {
             $fieldErrors['title'] = ['title is required'];
         }
-        if ($accountId === null || trim($accountId) === '') {
-            $fieldErrors['accountId'] = ['accountId is required'];
-        }
+
+        // `accountId` is **not** required, and its absence is not an error (T358). It used to be, and
+        // that made FR-020 unreachable: a purchaser with zero accounts has no `accountId` to send, so the
+        // attempt was refused one step before the provisioning that would have given them one could run.
+        // The sheet service resolves it from FR-020's rule instead — none provisions, one resolves, and
+        // several is refused *there*, naming `accountId` as the thing the caller must now choose.
+        //
+        // So the only `fieldErrors` this method produces is `title`, and a refusal that does name
+        // `accountId` comes from the service with a message that tells the caller what to do about it.
         if ($fieldErrors !== []) {
             return $this->ocsErrorMapper->validation(
                 'Required fields are missing',

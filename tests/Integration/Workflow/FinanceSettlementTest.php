@@ -15,6 +15,7 @@ use OCA\PettyCash\Application\Port\TransactionManager;
 use OCA\PettyCash\Application\Port\UserDirectory;
 use OCA\PettyCash\Application\Security\AuthorizationService;
 use OCA\PettyCash\Application\Workflow\FinanceSettlementService;
+use OCA\PettyCash\Application\Workflow\UnsettleableAccount;
 use OCA\PettyCash\Domain\Account\AccountMovement;
 use OCA\PettyCash\Domain\Account\PettyCashAccount;
 use OCA\PettyCash\Domain\Account\Repository\AccountMovementRepository;
@@ -509,7 +510,205 @@ final class FinanceSettlementTest extends TestCase
         );
     }
 
-    // --- FR-039 and the reachability of finance approval -----------------------
+    // --- FR-040 (clarified 2026-10-07): an unsettleable approval is refused, not auto-provisioned ---
+
+/**
+ * The defect this section exists for: no active account answered `500`, with its message withheld.
+ *
+ * The path is reachable, not hypothetical — `AccountAdministrationService::deactivateAccountsOfDeletedUser`
+ * deactivates a user's accounts, and FR-055 confirms accounts can be deactivated at any time, so a
+ * sheet created while an account was active can reach finance approval with that account gone. The
+ * `LogicException` this used to throw has no arm in `OcsErrorMapper` — deliberately — so it fell to the
+ * default `500 UNEXPECTED_FAILURE`, telling finance the server was broken for a request that was
+ * entirely correct and withholding the one sentence that named the cause.
+ */
+public function testAnUnsettleableApprovalIsRefusedWithAReasonThatCanBeActedOn(): void
+{
+    $tx = $this->seniorApprovedTransaction('tx-040-1');
+    $this->deactivateSeededAccount();
+
+    $refusal = $this->captureUnsettleable(
+        fn () => $this->service()->recordDecision($tx->id, Decision::Approve, '', $this->commandId(), $tx->lockVersion)
+    );
+
+    self::assertSame('ACCOUNT_NOT_SETTLEABLE', $refusal->errorCode());
+    self::assertStringContainsString(
+        self::PURCHASER,
+        $refusal->getMessage(),
+        'FR-040: the refusal must name the account, or an administrator has to go looking for it.'
+    );
+    self::assertStringContainsString('IRR', $refusal->getMessage(), 'FR-040: the refusal must name the currency.');
+    self::assertStringContainsString(
+        'administrator',
+        $refusal->getMessage(),
+        'FR-040: the refusal must say what an administrator has to do. A refusal that is merely valid '
+        . 'leaves finance holding a transaction they can never settle with no way forward.'
+    );
+}
+
+/**
+ * FR-040's "applies nothing", asserted against every side effect rather than inferred from the throw.
+ *
+ * Each post-condition is checked separately because a refusal that moved the money but skipped the
+ * transition, or completed the sheet while leaving the transaction open, would each pass a single
+ * check. FR-042 requires the whole thing or none of it.
+ */
+public function testAnUnsettleableApprovalAppliesNothing(): void
+{
+    $tx = $this->seniorApprovedTransaction('tx-040-2');
+    $this->deactivateSeededAccount();
+
+    $balanceBefore = $this->accounts->findByPublicId('acc-finance')?->balanceMinor;
+    $movementsBefore = count($this->movements->all());
+    $sheetBefore = $this->container->query(ExpenseSheetRepository::class)->findByPublicId('sheet-1')?->status;
+    $commandId = $this->commandId();
+
+    $this->captureUnsettleable(
+        fn () => $this->service()->recordDecision($tx->id, Decision::Approve, '', $commandId, $tx->lockVersion)
+    );
+
+    self::assertCount(
+        $movementsBefore,
+        $this->movements->all(),
+        'FR-040: no consumption record. An unsettled approval must not leave a ledger row.'
+    );
+    self::assertSame(
+        $balanceBefore,
+        $this->accounts->findByPublicId('acc-finance')?->balanceMinor,
+        'FR-040: no balance movement.'
+    );
+
+    $after = $this->container->query(ExpenseTransactionRepository::class)->findByPublicId($tx->id);
+    self::assertNotNull($after);
+    self::assertSame(
+        WorkflowStage::Finance,
+        $after->stage,
+        'FR-040: the transaction must remain at the finance stage so it can be settled once the '
+        . 'account is restored.'
+    );
+    self::assertSame(TransactionStatus::SeniorApproved, $after->status, 'FR-040: no workflow transition.');
+    self::assertNull($after->finalOutcome, 'FR-040: no final outcome is recorded.');
+
+    self::assertSame(
+        $sheetBefore,
+        $this->container->query(ExpenseSheetRepository::class)->findByPublicId('sheet-1')?->status,
+        'FR-040: the sheet must not complete while a transaction remains unsettled.'
+    );
+
+    self::assertNull(
+        $this->container->query(CommandResultRepository::class)->find($commandId),
+        'A stored command result for a refused settlement would make the retry a no-op — the client '
+        . 'would be told its approval was applied when it was not.'
+    );
+}
+
+/**
+ * The load-bearing half of FR-040, and the one a "helpful" fix would break.
+ *
+ * FR-020 provisions a default rial account on the **first sheet-creation attempt**. Reading that as
+ * a general rule and provisioning here would mean a finance officer's click silently creates a funding
+ * object: approved expense moves against a balance nobody funded and nobody approved. FR-042 and
+ * Principle IV exist to prevent exactly that class of silent financial effect, so this asserts the
+ * *absence* of an account rather than the refusal.
+ */
+public function testNoAccountIsProvisionedAsASideEffectOfSettlement(): void
+{
+    $tx = $this->seniorApprovedTransaction('tx-040-3');
+    $this->deactivateSeededAccount();
+
+    $accountsBefore = $this->accounts->countAll();
+
+    $this->captureUnsettleable(
+        fn () => $this->service()->recordDecision($tx->id, Decision::Approve, '', $this->commandId(), $tx->lockVersion)
+    );
+
+    self::assertSame(
+        $accountsBefore,
+        $this->accounts->countAll(),
+        'FR-040: settlement MUST NOT auto-provision an account. FR-020 scopes that to sheet creation, '
+        . 'and extending it here would book approved expense against a balance that was never funded.'
+    );
+    self::assertSame(
+        [],
+        $this->accounts->findActiveByUserAndCurrency(self::PURCHASER, CurrencyCode::fromString('IRR')),
+        'and no *active* account may exist afterwards either, which is the half a count alone would miss.'
+    );
+}
+
+/**
+ * The reverse path, so the refusal cannot be satisfied by refusing everything.
+ *
+ * A refusal that no configuration change can clear would be indistinguishable from an endpoint that is
+ * simply broken, and finance would have no way forward.
+ */
+public function testRestoringTheAccountMakesTheSameApprovalSucceed(): void
+{
+    $tx = $this->seniorApprovedTransaction('tx-040-4');
+    $this->deactivateSeededAccount();
+
+    $this->captureUnsettleable(
+        fn () => $this->service()->recordDecision($tx->id, Decision::Approve, '', $this->commandId('refused'), $tx->lockVersion)
+    );
+
+    $account = $this->accounts->findByPublicId('acc-finance');
+    self::assertNotNull($account);
+    $account->active = true;
+
+    $settled = $this->service()
+        ->recordDecision($tx->id, Decision::Approve, '', $this->commandId('retried'), $this->lockVersionOf($tx->id))
+        ->transaction;
+
+    self::assertSame(
+        TransactionStatus::CompletedApproved,
+        $settled->status,
+        'FR-040: once an administrator restores the account, the same approval must settle.'
+    );
+    self::assertSame(WorkflowStage::Final, $settled->stage);
+}
+
+// --- FR-040 helpers -------------------------------------------------------
+
+/**
+ * Deactivate the seeded account the way the production path does.
+ *
+ * `deactivateForDeletedOwner()` rather than setting `$active` directly, because that is the method a
+ * deleted user actually goes through — and the reason FR-040 needed clarifying is precisely that this
+ * path can run between sheet creation and settlement.
+ */
+private function deactivateSeededAccount(): void
+{
+    $account = $this->accounts->findByPublicId('acc-finance');
+    self::assertNotNull($account, 'the fixture account must exist to be deactivated');
+    $account->deactivateForDeletedOwner();
+
+    self::assertSame(
+        [],
+        $this->accounts->findActiveByUserAndCurrency(self::PURCHASER, CurrencyCode::fromString('IRR')),
+        'the fixture must really be unsettleable, or these tests assert nothing.'
+    );
+}
+
+/** @param callable():mixed $operation */
+private function captureUnsettleable(callable $operation): UnsettleableAccount
+{
+    try {
+        $operation();
+    } catch (UnsettleableAccount $refusal) {
+        return $refusal;
+    }
+
+    self::fail('FR-040: an approval with no active account was not refused.');
+}
+
+private function lockVersionOf(string $transactionId): int
+{
+    $transaction = $this->container->query(ExpenseTransactionRepository::class)->findByPublicId($transactionId);
+    self::assertNotNull($transaction);
+
+    return $transaction->lockVersion;
+}
+
+// --- FR-039 and the reachability of finance approval -----------------------
 
     public function testASeniorApprovedTransactionCanBeApprovedByFinance(): void
     {
@@ -830,7 +1029,8 @@ final class FinanceSettlementTest extends TestCase
             $this->container->query(\OCA\PettyCash\Application\Command\IdempotencyService::class),
             $this->container->query(CurrentUser::class),
             $this->container->query(UserDirectory::class),
-            new AuthorizationService()
+            new AuthorizationService(),
+            $this->container->query(\OCA\PettyCash\Application\Workflow\SupersededDecisionAudit::class)
         );
     }
 
@@ -862,13 +1062,17 @@ final class FinanceSettlementTest extends TestCase
             $this->container->query(\OCA\PettyCash\Application\Command\IdempotencyService::class),
             $this->container->query(CurrentUser::class),
             $this->container->query(UserDirectory::class),
-            new AuthorizationService()
+            new AuthorizationService(),
+            $this->container->query(\OCA\PettyCash\Application\Workflow\SupersededDecisionAudit::class)
         );
     }
 
-    private function commandId(): string
+    private function commandId(string $label = ''): string
     {
-        return (string) Uuid::random();
+        // The label only makes a failing command id recognisable in a report; the id itself is a
+        // fresh UUID either way. Callers that issue two commands in one test must pass distinct
+        // labels so the two ids are distinguishable when a failure names one.
+        return $label === '' ? (string) Uuid::random() : 'cmd-' . $label . '-' . Uuid::random();
     }
 
     private function account(): PettyCashAccount

@@ -194,6 +194,22 @@ final class DbExpenseTransactionRepository implements ExpenseTransactionReposito
         return $row === false ? null : (int) $row['lock_version'];
     }
 
+    /**
+     * Every transaction on the instance, at every stage and in every status.
+     *
+     * Deliberately wider than `findForFinanceQueue()`, which is the read T379 found publishing this
+     * figure under the name `totalTransactions`. A `COUNT` rather than a read, so the answer is the
+     * instance's size and not the depth of whatever window was opened to learn it.
+     */
+    public function countAll(): int
+    {
+        $qb = $this->connection->getQueryBuilder();
+        $qb->select($qb->func()->count('id', 'pettycash_transaction_count'))
+            ->from('pettycash_transactions');
+
+        return (int) $qb->executeQuery()->fetchOne();
+    }
+
     public function save(ExpenseTransaction $transaction): void
     {
         $qb = $this->connection->getQueryBuilder();

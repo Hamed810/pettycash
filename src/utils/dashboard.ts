@@ -33,11 +33,27 @@ export const DASHBOARD_FIGURES_KEY = 'figures'
  * The bucket keys that are identity or caveat rather than a figure.
  *
  * `userId` names whose card this is. `figuresBoundedBy` and `figuresTruncated` qualify the figures
- * they sit beside: every repository read behind them is paged and no domain repository has a count
- * query, so the numbers are window sizes and the card has to say so. All three are stated on the
- * card; none of them is a measurement, so none of them is rendered as one.
+ * they sit beside: the reads behind them are paged windows, so the numbers are window sizes and the
+ * card has to say so. All are stated on the card; none of them is a measurement, so none of them is
+ * rendered as one.
+ *
+ * **`figuresExact` exists because "bounded" and "exact" are different claims (T379).** The
+ * administrator card's three figures are `COUNT`s — no window, so nothing to truncate — and a card
+ * that rendered `figuresBoundedBy: 100` beside them would assert a bound those numbers never had,
+ * which is the same defect as the `totalAccounts: 0` that prompted it. `figuresBoundedBy` is `null`
+ * on such a card and `figuresExact: true` is the note that replaces it.
+ *
+ * **An older version of this comment claimed no domain repository had a count query at all.** That
+ * was true and is now false: T379 added `countAll()` to the sheet, transaction and account
+ * repositories. The rule that survives is the narrower one above — a figure read from a *window* is
+ * a window size, whatever the repository offers.
  */
-export const DASHBOARD_NOTE_KEYS = ['userId', 'figuresBoundedBy', 'figuresTruncated'] as const
+export const DASHBOARD_NOTE_KEYS = [
+	'userId',
+	'figuresBoundedBy',
+	'figuresTruncated',
+	'figuresExact',
+] as const
 
 /** Whether a bucket key is part of the envelope rather than a figure. */
 export function isDashboardNoteKey(key: string): boolean {

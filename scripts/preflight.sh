@@ -1,9 +1,21 @@
 #!/usr/bin/env sh
 set -eu
 
+# Which lab this checks.
+#
+# This repository develops against its OWN lab, `pettycash-lab`, served on
+# http://localhost:8081. It previously shared one Nextcloud with PTS under the Compose
+# project name `docker`; that lab is stopped and preserved, see
+# ~/projects/nextcloud-lab/legacy. The container names below are prefixed `pettycash-lab-`
+# because Compose prefixes every container with COMPOSE_PROJECT_NAME, which
+# ~/projects/nextcloud-lab/env/pettycash.env sets to `pettycash-lab`.
+#
+# A preflight that could pass against the OTHER project's lab would be worse than no
+# preflight: it would report this app as healthy while testing it against a runtime that
+# does not carry it. That is why the names are specific rather than discovered at run time.
 APP_ID="pettycash"
-NC_CONTAINER="${PETTYCASH_NC_CONTAINER:-docker-nextcloud-1}"
-DB_CONTAINER="${PETTYCASH_DB_CONTAINER:-docker-db-1}"
+NC_CONTAINER="${PETTYCASH_NC_CONTAINER:-pettycash-lab-nextcloud-1}"
+DB_CONTAINER="${PETTYCASH_DB_CONTAINER:-pettycash-lab-db-1}"
 
 fail() { printf 'preflight: %s\n' "$1" >&2; exit 1; }
 command -v docker >/dev/null 2>&1 || fail "docker is required"

@@ -83,6 +83,19 @@ final readonly class SheetPayloadFormatter
             'firstExpenseDate' => $dates['first'],
             'lastExpenseDate' => $dates['last'],
             'version' => $sheet->lockVersion,
+            // FR-063's latest active transaction revision number (T385).
+            //
+            // The requirement named *"the active transaction revision"*, which cannot be rendered on a
+            // sheet: `activeRevision` belongs to `TransactionSummary`, so a sheet has one per
+            // transaction and a list row carries none at all. A *count* would also be useless -- it equals
+            // the `transactionCount` two lines above -- so the field is the **highest revision number**
+            // among the sheet's transactions' active revisions: a single value both surfaces can show,
+            // and not one already on the row.
+            //
+            // 0 rather than null for a sheet with no transactions: an empty sheet has no revisions, and 0
+            // is a value a reader comparing two sheets can order by. `null` is reserved for "not
+            // computed", which this formatter never produces.
+            'activeRevisionNumber' => $this->latestActiveRevisionNumber($sheet),
         ];
     }
 
@@ -91,6 +104,36 @@ final readonly class SheetPayloadFormatter
  *
  * @see self::summary() for why the fallback is the uid rather than an empty string
  */
+    /**
+     * FR-063's latest active transaction revision number for one sheet (T385).
+     *
+     * The highest `number()` across the sheet's transactions' active revisions, and **0** when the sheet
+     * holds no transactions.
+     *
+     * **Why 0 and not null.** An empty sheet genuinely has no revisions, and two sheets being compared is
+     * the reason the number is on the row at all; a reader ordering by it needs a value, and `null` would
+     * mean "not computed" rather than "none". The formatter always computes it, so `null` would be a lie
+     * about work that was never skipped.
+     *
+     * **Read through `findBySheetId()`, which is the same read `transactionCount` is derived from**, so
+     * the two figures on a row are computed from one snapshot of the sheet's transactions and cannot
+     * disagree — which matters because a correction arriving between the two would otherwise show a count
+     * and a revision number describing different moments.
+     */
+    private function latestActiveRevisionNumber(ExpenseSheet $sheet): int
+    {
+        if ($sheet->dbId === null) {
+            return 0;
+        }
+
+        $highest = 0;
+        foreach ($this->transactionRepository->findBySheetId($sheet->dbId) as $transaction) {
+            $highest = max($highest, $transaction->revision()->number());
+        }
+
+        return $highest;
+    }
+
     private function displayNameOf(string $uid): string
     {
         if ($uid === '') {

@@ -103,6 +103,7 @@ use OCA\PettyCash\Infrastructure\Persistence\Command\DbCommandResultRepository;
 use OCA\PettyCash\Infrastructure\Persistence\Configuration\DbCostCenterRepository;
 use OCA\PettyCash\Infrastructure\Persistence\Configuration\DbCurrencyRepository;
 use OCA\PettyCash\Application\Configuration\CostCenterService;
+use OCA\PettyCash\Application\Account\AccountAdministrationService;
 use OCA\PettyCash\Application\Configuration\CurrencyService;
 use OCA\PettyCash\Application\Configuration\ExpenseTypeService;
 use OCA\PettyCash\Application\Expense\SheetService;
@@ -160,8 +161,33 @@ const PROBE_OWNER_UID = 't332-sheet-list-probe';
  */
 const T333_FILTER_PROBE_UID = 't333-sheet-filter-probe';
 
+/**
+ * The owner T379's `dashboardcounts` rows belong to.
+ *
+ * A probe owner for the same reason as {@see PROBE_OWNER_UID}: `employee1` is seeded by the
+ * contract fixtures, so any figure scoped to a real user's rows would depend on which fixtures existed
+ * when the suite ran. Here the point is sharper still -- the account row has to be **deactivated**,
+ * and no seeded user's accounts may be disturbed to achieve that.
+ *
+ * Declared above the dispatch, beside its siblings. PHP runs a top-level `const` in file order, so a
+ * constant written below the `$scenario` dispatch is undefined when the scenario reads it.
+ */
+const T379_COUNT_PROBE_UID = 't379-dashboard-count-probe';
+
+/**
+ * The owner T388's provisioning rows belong to (T358/T388).
+ *
+ * A dedicated uid for the same reason as {@see PROBE_OWNER_UID} and {@see T379_COUNT_PROBE_UID}: FR-020's
+ * precondition is **zero active accounts**, so the scenario cannot run against a seeded user -- and
+ * `employee1`, the user the contract fixtures populate, holds accounts.
+ *
+ * This uid belongs to no real Nextcloud account. It is only ever written into `owner_uid`, and the rows are
+ * removed by the shared fingerprint sweep like every other row this runner writes.
+ */
+const T388_PROVISIONING_PROBE_UID = 't388-provisioning-probe';
+
 $scenario = $argv[1] ?? '';
-$scenarios = ['configuration', 'account', 'expense', 'command', 'retention', 'appdata', 'exportservice', 'sheetlist'];
+$scenarios = ['configuration', 'account', 'expense', 'command', 'retention', 'appdata', 'exportservice', 'sheetlist', 'dashboardcounts', 'provisioning'];
 if (!in_array($scenario, $scenarios, true)) {
     fwrite(STDERR, 'Unknown scenario ' . var_export($scenario, true) . '; expected one of ' . implode(', ', $scenarios) . ".\n");
     exit(1);
@@ -356,6 +382,23 @@ $surrogateIdOfCurrency = static function (string $code) use ($db): int {
  * both halves of the same defect wrong in the same way, which is precisely what the original
  * `count($sheets)` estimate was.
  */
+/**
+ * The number of rows in one of PettyCash's own tables, read by plain SQL (T379).
+ *
+ * The expectation a repository count has to meet. Asserting `countAll()` against another repository
+ * method would be satisfied by two halves of the same predicate agreeing with each other, which is
+ * the shape `count($sheets)` had; asserting it against the table cannot be.
+ *
+ * `$table` is one of this application's own `pettycash_*` names and is never built from user input,
+ * so it is concatenated rather than bound -- every call site passes a literal.
+ */
+$rawCount = static function (string $table) use ($db): int {
+    $qb = $db->getQueryBuilder();
+    $qb->select($qb->func()->count('*', 'raw_count'))->from($table);
+
+    return (int) $qb->executeQuery()->fetchOne();
+};
+
 $rawOwnerSheetCount = static function (string $ownerUid) use ($db): int {
     $qb = $db->getQueryBuilder();
     $qb->select($qb->func()->count('*', 'raw_sheet_count'))
@@ -487,7 +530,16 @@ try {
             $currencies,
             $accounts,
             $sheets,
-            (new SheetService($sheets, $accounts, new InMemoryCurrentUser(PROBE_OWNER_UID), $transactionManager)),
+            (new SheetService(
+                $sheets,
+                $accounts,
+                new InMemoryCurrentUser(PROBE_OWNER_UID),
+                $transactionManager,
+                // FR-020's rule (T358). The sheet-list scenario always passes an explicit `accountId`, so
+                // this dependency is never exercised here -- it is wired because the constructor requires
+                // it and a sheet list that cannot construct its service tests nothing.
+                new AccountAdministrationService($accounts, (new CurrencyService($currencies, $administrators, $configurationAudit)))
+            )),
             // T333's date facet compares a `created_at` written by `save()` (always `now()`) against a
             // back-dated one, so the scenario needs the same instant the dispatch stamped. Passing it
             // explicitly, as every other scenario does, is what keeps the two dates on one clock: read
@@ -514,8 +566,38 @@ try {
                 $sheets,
                 $accounts,
                 new InMemoryCurrentUser($ownerUid),
-                $transactionManager
+                $transactionManager,
+                new AccountAdministrationService($accounts, (new CurrencyService($currencies, $administrators, $configurationAudit)))
             )
+        ),
+        // T388: FR-020's observable outcome, over the real repositories. T358 delivered the trigger and
+        // proved the wiring; nothing had observed the criterion's own words -- that a purchaser with no
+        // accounts creates a first sheet and `GET /accounts` then reports **exactly one** active `IRR`
+        // account, and that repeating the attempt provisions nothing further.
+        'provisioning' => scenarioProvisioning(
+            $currencies,
+            $accounts,
+            $sheets,
+            (new CurrencyService($currencies, $administrators, $configurationAudit)),
+            $transactionManager,
+            $track,
+            $surrogateIdOfCurrency
+        ),
+        // T379: the administrator card published two filtered reads and one literal `0` under the
+        // names `totalSheets`, `totalTransactions` and `totalAccounts`. This compares each
+        // `countAll()` against the table, and against the narrower read it replaced, over real SQL.
+        // Both comparisons are needed: "equals the table" alone would be satisfied by a `countAll()`
+        // that quietly kept the old predicate, and only "strictly wider than the old read" fails then.
+        'dashboardcounts' => scenarioDashboardCounts(
+            $currencies,
+            $accounts,
+            $sheets,
+            $transactions,
+            $now,
+            $track,
+            $surrogateIdOfCurrency,
+            $currencyCode,
+            $rawCount
         ),
     };
 } catch (Throwable $e) {
@@ -2609,6 +2691,245 @@ function scenarioExportService(): array
  * measured by the contract suite. This block answers the narrower question of what the repository does
  * with a filter once it has one.
  */
+/**
+ * T379: the three instance-wide counts the administrator card publishes, against the table.
+ *
+ * ## Why this is a round-trip scenario and not a unit test
+ *
+ * T379's defect was a figure that was wrong on **every** instance, and it was wrong in a way no
+ * in-memory double could catch: `DashboardController` passed a literal `0` for `totalAccounts`,
+ * and published `count(findByStatus(Open, ...))` and `count(findForFinanceQueue(...))` under the
+ * names `totalSheets` and `totalTransactions`. A double whose `countAll()` agreed with those
+ * reads would have made every assertion pass against the bug -- which is exactly what happened
+ * across nine repositories before T236.
+ *
+ * So the expectation here is **the table itself**, read by plain SQL, and the scenario also asserts
+ * the property that makes the comparison decisive: each `countAll()` is strictly **wider** than the
+ * filtered read that used to stand in for it. A `countAll()` that quietly kept the old predicate
+ * would satisfy the first assertion and fail the second, and neither can be satisfied by a
+ * repository that agrees with itself.
+ */
+function scenarioDashboardCounts(
+    DbCurrencyRepository $currencies,
+    DbAccountRepository $accounts,
+    DbExpenseSheetRepository $sheets,
+    DbExpenseTransactionRepository $transactions,
+    DateTimeImmutable $now,
+    callable $track,
+    callable $surrogateIdOfCurrency,
+    callable $currencyCode,
+    callable $rawCount
+): array {
+    $code = $currencyCode();
+    $currencies->save(Currency::create($code, 'Round Trip Dashboard Count Currency', 0));
+    $track('pettycash_currencies', $surrogateIdOfCurrency($code));
+    $currency = $currencies->findByCode($code);
+
+    // A second currency, because `pettycash_accounts_user_currency_uniq` holds one account per (user,
+    // currency) and the probe user needs two rows to have one active and one deactivated. The first
+    // version of this scenario wrote both in one currency and the insert failed on that index — which
+    // is the constraint doing its job, not a fixture problem.
+    $secondCode = $currencyCode();
+    while ($secondCode === $code) {
+        $secondCode = $currencyCode();
+    }
+    $currencies->save(Currency::create($secondCode, 'Round Trip Dashboard Count Currency II', 0));
+    $track('pettycash_currencies', $surrogateIdOfCurrency($secondCode));
+    $secondCurrency = $currencies->findByCode($secondCode);
+
+    // Two accounts: one active, one **deactivated**. The inactive one is the load-bearing row --
+    // every read `AccountRepository` offered was either user-scoped or filtered on `active`, so an
+    // account in this state was invisible to all of them and `countAll()` is the first read that
+    // can see it.
+    $activeAccount = PettyCashAccount::create((string) Uuid::random(), T379_COUNT_PROBE_UID, $currency);
+    $accounts->save($activeAccount);
+    $track('pettycash_accounts', (int) $activeAccount->dbId);
+
+    $inactiveAccount = PettyCashAccount::create((string) Uuid::random(), T379_COUNT_PROBE_UID, $secondCurrency);
+    $inactiveAccount->active = false;
+    $accounts->save($inactiveAccount);
+    $track('pettycash_accounts', (int) $inactiveAccount->dbId);
+
+    // Two sheets in **different statuses**. `findByStatus()` takes one status, so a count built from
+    // it can only ever see one of these -- which is the defect, made into a row rather than argued.
+    $openSheet = new ExpenseSheet(
+        (string) Uuid::random(),
+        T379_COUNT_PROBE_UID,
+        $activeAccount->id,
+        $activeAccount->currencyCode(),
+        SheetStatus::Open,
+        title: LeakedRows::ROUND_TRIP_SHEET_TITLE
+    );
+    $sheets->save($openSheet);
+    $track('pettycash_sheets', (int) $openSheet->dbId);
+
+    $closedSheet = new ExpenseSheet(
+        (string) Uuid::random(),
+        T379_COUNT_PROBE_UID,
+        $activeAccount->id,
+        $activeAccount->currencyCode(),
+        SheetStatus::Completed,
+        title: LeakedRows::ROUND_TRIP_SHEET_TITLE
+    );
+    $sheets->save($closedSheet);
+    $track('pettycash_sheets', (int) $closedSheet->dbId);
+
+    // One transaction at the **draft** stage, so `findForFinanceQueue()` cannot see it either.
+    $revision = new TransactionRevision(
+        (string) Uuid::random(),
+        1,
+        $now,
+        Money::of(1000, $activeAccount->currencyCode())
+    );
+    $transaction = new ExpenseTransaction((string) Uuid::random(), T379_COUNT_PROBE_UID, $revision);
+    $transaction->sheetId = (int) $openSheet->dbId;
+    $transactions->save($transaction);
+    $track('pettycash_transactions', (int) $transaction->dbId);
+
+    $sheetCount = $sheets->countAll();
+    $transactionCount = $transactions->countAll();
+    $accountCount = $accounts->countAll();
+
+    return [
+        'totalSheets' => $sheetCount,
+        'totalTransactions' => $transactionCount,
+        'totalAccounts' => $accountCount,
+        // The table, read directly. `countAll()` must equal this exactly -- not approximately, and
+        // not "at least", because a count that disagrees with `COUNT(*)` on its own table is a
+        // repository defect whatever the number happens to be.
+        'rawSheets' => $rawCount('pettycash_sheets'),
+        'rawTransactions' => $rawCount('pettycash_transactions'),
+        'rawAccounts' => $rawCount('pettycash_accounts'),
+        // What the old, wrong reads would have answered. Each is strictly smaller than the count
+        // above, and that inequality is what fails if a predicate is ever reintroduced.
+        'openSheetsOnly' => count($sheets->findByStatus(SheetStatus::Open, 0, 1000)),
+        'financeQueueOnly' => count($transactions->findForFinanceQueue(0, 1000)),
+        // One active and one deactivated, so the active-scoped read is strictly narrower than
+        // the instance count by at least the one row this scenario deactivated.
+        'activeAccountsForProbe' => count($accounts->findActiveByUserUid(T379_COUNT_PROBE_UID)),
+        'inactiveAccountWritten' => $inactiveAccount->active ? 0 : 1,
+    ];
+}
+
+/**
+ * T388: FR-020's observable outcome, over the real repositories and real MariaDB.
+ *
+ * ## What this proves that T358 did not
+ *
+ * T358 delivered the trigger and proved the *wiring* — the frontend sends no `accountId`, the controller
+ * stops refusing one, and `SheetService` resolves it through `resolveAccountForNewSheet()`. The criterion's
+ * own words are about the **outcome**: a purchaser with no accounts creates a first sheet, `GET /accounts`
+ * then reports exactly one active `IRR` account, and repeating the attempt provisions nothing further.
+ *
+ * That outcome was observable nowhere. `ensureDefaultRialAccount()` has eleven unit tests covering
+ * idempotency and the duplicate-key race, all against in-memory doubles — so a duplicate-key race losing on
+ * a different index, or a resolution returning an account `GET /accounts` cannot see, satisfied every test
+ * that existed.
+ *
+ * ## Why it is not a live-HTTP test
+ *
+ * `OcsTestClient::create()` authenticates with one credential, `PETTYCASH_TEST_USER`, which holds accounts
+ * and so is never in FR-020's precondition. Proving this over HTTP therefore needs a **fresh Nextcloud
+ * account** — an authentication principal — on an instance shared with other applications. That is an
+ * environment decision rather than a test decision, so the criterion is verified at the service boundary
+ * against real persistence here and the HTTP variant is recorded as not established rather than assumed.
+ *
+ * ## The three claims, and what would break each
+ *
+ * 1. the first create provisions exactly one active `IRR` account;
+ * 2. the second provisions **nothing further** — not a second account, and not a second row for the same
+ *    currency, which is what `pettycash_accounts_user_currency_uniq` exists to prevent;
+ * 3. a third attempt, made after other sheets exist, still provisions nothing, so idempotency is not an
+ *    artefact of the sheet count happening to be zero.
+ *
+ * The rial is **found or created, never assumed**: `defaultRial()` refuses a missing `IRR` and refuses one
+ * configured with a minor unit, and the report says which state this instance was in rather than papering
+ * over either.
+ */
+function scenarioProvisioning(
+    DbCurrencyRepository $currencies,
+    DbAccountRepository $accounts,
+    DbExpenseSheetRepository $sheets,
+    CurrencyService $currencyService,
+    \OCA\PettyCash\Application\Port\TransactionManager $transactionManager,
+    callable $track,
+    callable $surrogateIdOfCurrency
+): array {
+    $probe = T388_PROVISIONING_PROBE_UID;
+
+    // Find or create the rial `defaultRial()` requires. Creating one is tracked so the shared sweep removes
+    // it; an existing `IRR` is left exactly as found, because other scenarios and the contract fixtures
+    // resolve currencies by code.
+    $rialExistedBefore = $currencies->findByCode('IRR') !== null;
+    $rial = $currencies->findByCode('IRR');
+    if ($rial === null) {
+        $currencies->save(Currency::create('IRR', 'Iranian Rial (provisioning probe)', 0));
+        $track('pettycash_currencies', $surrogateIdOfCurrency('IRR'));
+        $rial = $currencies->findByCode('IRR');
+    }
+
+    $accountAdministration = new AccountAdministrationService($accounts, $currencyService);
+    $sheetService = new SheetService(
+        $sheets,
+        $accounts,
+        new InMemoryCurrentUser($probe),
+        $transactionManager,
+        $accountAdministration
+    );
+
+    $before = $accounts->findActiveByUserUid($probe);
+
+    // 1. The precondition FR-020 describes: zero active accounts.
+    $preconditionAccounts = count($before);
+
+    // 2. The first creation, with no `accountId` — the shape T358 made legal.
+    $firstSheet = $sheetService->createSheet('Round trip provisioning probe one', null);
+    $track('pettycash_sheets', (int) $firstSheet->dbId);
+
+    $afterFirst = $accounts->findActiveByUserUid($probe);
+    foreach ($afterFirst as $provisioned) {
+        $track('pettycash_accounts', (int) $provisioned->dbId);
+    }
+
+    $first = $afterFirst[0] ?? null;
+
+    // 3. Repeating the attempt must provision nothing further.
+    $secondSheet = $sheetService->createSheet('Round trip provisioning probe two', null);
+    $track('pettycash_sheets', (int) $secondSheet->dbId);
+
+    $afterSecond = $accounts->findActiveByUserUid($probe);
+    foreach ($afterSecond as $provisioned) {
+        $track('pettycash_accounts', (int) $provisioned->dbId);
+    }
+
+    // 4. And a third, so idempotency is not an artefact of the sheet count happening to be zero.
+    $thirdSheet = $sheetService->createSheet('Round trip provisioning probe three', null);
+    $track('pettycash_sheets', (int) $thirdSheet->dbId);
+
+    $afterThird = $accounts->findActiveByUserUid($probe);
+    foreach ($afterThird as $provisioned) {
+        $track('pettycash_accounts', (int) $provisioned->dbId);
+    }
+
+    return [
+        'preconditionAccounts' => $preconditionAccounts,
+        'accountsAfterFirst' => count($afterFirst),
+        'accountsAfterSecond' => count($afterSecond),
+        'accountsAfterThird' => count($afterThird),
+        'provisionedCurrencyCode' => $first === null ? null : (string) $first->currencyCode(),
+        'provisionedIsActive' => $first === null ? null : $first->active,
+        // The sheet's own currency is the provisioned account's, which is what makes the sheet usable at all.
+        'firstSheetCurrency' => (string) $firstSheet->currency,
+        'firstSheetAccountId' => $firstSheet->accountId,
+        'provisionedAccountId' => $first?->id,
+        'sheetsCreated' => 3,
+        'rialExistedBefore' => $rialExistedBefore,
+        'rialMinorUnit' => $rial?->minorUnit,
+        // A precondition that no longer holds must report "nothing to provision" rather than create again.
+        'secondProvisionCallReturnedNull' => $accountAdministration->ensureDefaultRialAccount($probe) === null,
+    ];
+}
+
 function scenarioSheetList(
     DbCurrencyRepository $currencies,
     DbAccountRepository $accounts,

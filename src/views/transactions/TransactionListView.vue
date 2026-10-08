@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, computed } from 'vue'
+import { onMounted, computed, h, type VNode } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useSheetStore } from '@/stores/sheets'
 import NcButton from '@nextcloud/vue/components/NcButton'
@@ -10,6 +10,9 @@ import StatusBadge from '@/components/shared/StatusBadge.vue'
 import { mdiPlus, mdiEye } from '@mdi/js'
 import { t } from '@nextcloud/l10n'
 import { formatMoney } from '@/utils/money'
+import { formatSheetDate as formatDate } from '@/utils/date'
+import ResponsiveTable from '@/components/shared/ResponsiveTable.vue'
+import type { TransactionSummary } from '@/types/api'
 
 const route = useRoute()
 const router = useRouter()
@@ -37,6 +40,91 @@ onMounted(() => {
 	// an unhandled promise rejection in the user's console.
 	sheetStore.loadSheet(sheetId.value).catch(() => undefined)
 })
+
+/**
+ * T389: this table's nine columns, as `ResponsiveTable` takes them.
+ *
+ * Declared once here rather than restated per cell so the `<th>` and the narrow-viewport card cannot
+ * disagree about what a column is called — the defect the reflow exists to close.
+ */
+const transactionColumns = computed(() => [
+	{ key: 'expenseDate', label: t('pettycash', 'transactions.expenseDate') },
+	{ key: 'amount', label: t('pettycash', 'transactions.amount') },
+	{ key: 'costCenter', label: t('pettycash', 'transactions.costCenter') },
+	{ key: 'expenseType', label: t('pettycash', 'transactions.expenseType') },
+	{ key: 'stage', label: t('pettycash', 'transactions.stage') },
+	{ key: 'status', label: t('pettycash', 'transactions.status') },
+	// The latest decision is what tells a purchaser why a transaction is where it is. The field arrives on
+	// every row and was never rendered, so a sheet in review could only be understood by opening each
+	// transaction.
+	{ key: 'latestDecision', label: t('pettycash', 'transactions.latestDecision') },
+	{ key: 'evidenceCount', label: t('pettycash', 'transactions.evidenceCount') },
+	{ key: 'actions', label: t('pettycash', 'transactions.actions') }
+])
+
+function transactionRowKey(item: TransactionSummary, index: number): string {
+	return item.id || `transaction-${index}`
+}
+
+/** The card's own row hook, off the `transaction-row` prefix so a prefix selector stays a row count. */
+function transactionCardRowId(item: TransactionSummary): string {
+	return `transaction-card-${item.id}`
+}
+
+/**
+ * One transaction cell, rendered identically by the table and by the narrow-viewport card.
+ *
+ * The `latest-decision` branch keeps FR-052's actor snapshot: the name shown is the one the decision was
+ * made under, not the account's current name.
+ *
+ * Every `data-test` the table carried is preserved verbatim, because seven suites across this repository
+ * locate these cells by them and renaming one would be a silent loss of the only handle a test has.
+ */
+function transactionCell(item: TransactionSummary, column: { key: string }): VNode {
+	switch (column.key) {
+	case 'expenseDate':
+		return h('span', { 'data-test': 'transaction-expense-date' }, formatDate(item.activeRevision.expenseDate))
+	case 'amount':
+		return h('span', { 'data-test': 'transaction-amount' }, formatMoney(item.activeRevision.amount))
+	case 'costCenter':
+		return h('span', null, item.activeRevision.costCenter.name)
+	case 'expenseType':
+		return h('span', null, item.activeRevision.expenseType.name)
+	case 'stage':
+		return h(NcChip, { 'data-test': 'transaction-stage' }, () => t('pettycash', 'stage.' + item.stage.toLowerCase()))
+	case 'status':
+		return h(StatusBadge, { status: item.status })
+	case 'latestDecision':
+		// FR-052: the actor is a snapshot, so the name shown is the one the decision was made under.
+		return item.latestDecision
+			? h('div', { 'data-test': 'latest-decision' }, [
+				h('span', { class: 'latest-decision__decision' }, t('pettycash', 'decision.' + item.latestDecision.decision.toLowerCase())),
+				h('small', { class: 'latest-decision__actor' }, [
+					`${item.latestDecision.actor.displayName} (`,
+					t('pettycash', 'stage.' + item.latestDecision.stage.toLowerCase()),
+					')'
+				])
+			])
+			: h('div', { 'data-test': 'latest-decision' }, [
+				h('small', { class: 'latest-decision__actor' }, t('pettycash', 'transactions.noDecision'))
+			])
+	case 'evidenceCount':
+		return h('span', { 'data-test': 'evidence-count' }, item.evidenceCount)
+	case 'actions':
+		return h(
+			NcButton,
+			{
+				variant: 'tertiary',
+				'aria-label': t('pettycash', 'transactions.viewDetails'),
+				'data-test': 'view-transaction',
+				onClick: () => goToDetail(item.id)
+			},
+			() => h(NcIconSvgWrapper, { path: mdiEye, size: 16 })
+		)
+	default:
+		return h('span', { 'data-test': `transaction-unrendered-${column.key}` }, column.key)
+	}
+}
 </script>
 
 <template>
@@ -51,8 +139,8 @@ onMounted(() => {
 			<NcButton
 				variant="primary"
 				:aria-label="t('pettycash', 'transactions.add')"
-				@click="goToCreate"
 				data-test="create-transaction-btn"
+				@click="goToCreate"
 			>
 				<NcIconSvgWrapper :path="mdiPlus" :size="16" class="mr-2" />
 				{{ t('pettycash', 'transactions.add') }}
@@ -60,79 +148,32 @@ onMounted(() => {
 		</div>
 
 		<NcNoteCard data-test="transaction-list">
-			<div class="table-container">
-				<table class="nc-table" data-test="transaction-table">
-					<thead>
-						<tr>
-							<th scope="col">{{ t('pettycash', 'transactions.expenseDate') }}</th>
-							<th scope="col">{{ t('pettycash', 'transactions.amount') }}</th>
-							<th scope="col">{{ t('pettycash', 'transactions.costCenter') }}</th>
-							<th scope="col">{{ t('pettycash', 'transactions.expenseType') }}</th>
-							<th scope="col">{{ t('pettycash', 'transactions.stage') }}</th>
-							<th scope="col">{{ t('pettycash', 'transactions.status') }}</th>
-							<!-- The latest decision is what tells a purchaser why a transaction is where
-							     it is. The field arrives on every row and was never rendered, so a sheet
-							     in review could only be understood by opening each transaction. -->
-							<th scope="col">{{ t('pettycash', 'transactions.latestDecision') }}</th>
-							<th scope="col">{{ t('pettycash', 'transactions.evidenceCount') }}</th>
-							<th scope="col">{{ t('pettycash', 'transactions.actions') }}</th>
-						</tr>
-					</thead>
-					<tbody v-if="!sheetStore.loading">
-						<tr v-for="item in transactions" :key="item.id" data-test="transaction-row">
-							<td>{{ new Date(item.activeRevision.expenseDate).toLocaleDateString('fa-IR') }}</td>
-							<td>{{ formatMoney(item.activeRevision.amount) }}</td>
-							<td>{{ item.activeRevision.costCenter.name }}</td>
-							<td>{{ item.activeRevision.expenseType.name }}</td>
-							<td data-test="transaction-stage">
-								<NcChip>
-									{{ t('pettycash', 'stage.' + item.stage.toLowerCase()) }}
-								</NcChip>
-							</td>
-							<td>
-								<StatusBadge :status="item.status" />
-							</td>
-							<td data-test="latest-decision">
-								<template v-if="item.latestDecision">
-									<span class="latest-decision__decision">
-										{{ t('pettycash', 'decision.' + item.latestDecision.decision.toLowerCase()) }}
-									</span>
-									<!-- FR-052: the actor is a snapshot, so the name shown is the one the
-									     decision was made under, not the account's current name. -->
-									<small class="latest-decision__actor">
-										{{ item.latestDecision.actor.displayName }}
-										({{ t('pettycash', 'stage.' + item.latestDecision.stage.toLowerCase()) }})
-									</small>
-								</template>
-								<small v-else class="latest-decision__actor">
-									{{ t('pettycash', 'transactions.noDecision') }}
-								</small>
-							</td>
-							<td data-test="evidence-count">{{ item.evidenceCount }}</td>
-							<td>
-								<NcButton
-									variant="tertiary"
-									:aria-label="t('pettycash', 'transactions.viewDetails')"
-									@click="goToDetail(item.id)"
-									data-test="view-transaction"
-								>
-									<NcIconSvgWrapper :path="mdiEye" :size="16" />
-								</NcButton>
-							</td>
-						</tr>
-					</tbody>
-					<tbody v-else>
-						<tr>
-							<td :colspan="9" class="text-center py-8">Loading...</td>
-						</tr>
-					</tbody>
-				</table>
-			</div>
+			<!--
+				FR-071 (T389): this table sat in `overflow-x: auto`, producing a horizontal scrollbar at
+				390px rather than satisfying the requirement. `ResponsiveTable` renders these same rows as a
+				`<table>` above 640px and one card per row below, from one column list and one cell renderer.
+			-->
+			<p v-if="sheetStore.loading" class="text-center py-8" data-test="transaction-loading">
+				{{ t('pettycash', 'common.loading') }}
+			</p>
+			<ResponsiveTable
+				v-else
+				:columns="transactionColumns"
+				:rows="transactions"
+				:cell="transactionCell"
+				:row-key="transactionRowKey"
+				:caption="t('pettycash', 'transactions.list')"
+				:loading="sheetStore.loading"
+				test-id="transaction-table"
+				test-id-prefix="transaction"
+				row-test-id="transaction-row"
+				:card-row-test-id="transactionCardRowId"
+			/>
 		</NcNoteCard>
 
 		<div v-if="sheetStore.error" class="alert alert--error" role="alert">
 			<span>{{ sheetStore.error }}</span>
-			<button type="button" @click="sheetStore.clearError" aria-label="Dismiss">×</button>
+			<button type="button" aria-label="Dismiss" @click="sheetStore.clearError">×</button>
 		</div>
 	</div>
 </template>
@@ -150,10 +191,6 @@ onMounted(() => {
 	align-items: center;
 	flex-wrap: wrap;
 	gap: 0.5rem;
-}
-
-.table-container {
-	overflow-x: auto;
 }
 
 .nc-table {

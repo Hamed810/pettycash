@@ -42,6 +42,69 @@
 }
 
 /**
+ * The keyboard-operability floor (FR-071, clarified 2026-10-07; SC-009).
+ *
+ * ## What this rule is and why it is one rule
+ *
+ * FR-071 requires that every interactive element reached by keyboard shows a **visible focus
+ * indicator**, and adds the part that decides how it must be built: "'visible' means a perceivable
+ * change to the focused element, not merely a browser default that the host theme may erase; a focus
+ * indicator the active theme makes invisible is a defect, because a keyboard user then has no
+ * indication of where they are."
+ *
+ * So the indicator cannot be left to `outline: auto` and it cannot be a `box-shadow` alone. Three
+ * properties do the work, each for a different way a naive implementation fails:
+ *
+ * - **`outline-style` and `outline-width` are set explicitly.** A theme's `*:focus { outline: none }`
+ *   is the single most common way an indicator disappears, and a bare `outline-color` leaves the
+ *   *style* at whatever the cascade happened to produce — commonly `none`. Declaring both means the
+ *   indicator cannot vanish by inheriting `none`.
+ * - **`outline-offset: 2px`.** Without an offset the ring is drawn on the element's own border and
+ *   reads as a border change, which is invisible against any element that already has a border — and
+ *   every row, card and input in this app does.
+ * - **`outline` rather than `box-shadow`.** `box-shadow` is one of the first things a high-contrast or
+ *   forced-colours mode discards, because it carries no semantic meaning to the system palette.
+ *
+ * ## Why `:focus-visible` and not `:focus`
+ *
+ * `:focus` on every focusable element puts a ring under the mouse as well, which is the behaviour
+ * that made focus styling a thing apps turn off. `:focus-visible` shows the ring for keyboard and
+ * assistive-technology interaction and not for pointer interaction, which is what "reached that way"
+ * means in FR-071. The plain `:focus` arm below it exists for the browsers that do not implement
+ * `:focus-visible`, and is scoped to `:focus:not(:focus-visible)` so the two cannot both apply.
+ *
+ * ## Forced colours
+ *
+ * Under `forced-colors: active` the system replaces every colour an author declares, and `outline-color`
+ * is among them — so the `@media` block re-states the indicator in system colour keywords
+ * (`Highlight`), which is the only way an indicator survives that mode at all. `CanvasText` carries the
+ * same meaning where `Highlight` is unavailable.
+ *
+ * **This block is not optional polish.** FR-071's "a perceivable change" and SC-009's theme coverage
+ * both fail in exactly this mode, and a rule that only works when colours are under author control is
+ * a rule that fails for the users who asked for it.
+ */
+.pettycash-shell :focus-visible,
+.pettycash-shell :focus:not(:focus-visible) {
+	outline-style: solid;
+	outline-width: 2px;
+	outline-offset: 2px;
+	outline-color: var(--color-primary-element, currentColor);
+}
+
+@media (forced-colors: active) {
+	.pettycash-shell :focus-visible,
+	.pettycash-shell :focus:not(:focus-visible) {
+		// `Highlight` is the system "selected/emphasised" colour and is what a forced-colours mode
+		// expects a focus ring to be drawn with. `CanvasText` is the fallback for the reduced palettes
+		// that do not define it.
+		outline-color: Highlight;
+		outline-color: Highlight;
+		outline-width: 3px;
+	}
+}
+
+/**
  * The app's scroll container, and the reason this rule exists at all.
  *
  * Nextcloud 34 makes `#content` — the element the app is mounted into — a **`position: fixed`,

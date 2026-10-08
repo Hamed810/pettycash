@@ -70,40 +70,53 @@ const SOURCES = [
  *
  * These keys and values are the ones the server emits, read off the controller and pinned by
  * `tests/Contract/Controller/DashboardControllerTest.php` (`figures` present, `figuresBoundedBy`
- * exactly 100, `figuresTruncated` a bool, every figure an int). Where a hand-written key such as
- * `queueItems` or `balance` appeared before, the server's own key appears now — `awaitingReview` for
- * the three review queues, and `DashboardQuery::administrativeSummary()`'s three counts for admin.
+ * exactly 100 on a bounded card, `figuresExact` a bool, `figuresTruncated` a bool, every figure an
+ * int). Where a hand-written key such as `queueItems` or `balance` appeared before, the server's own
+ * key appears now — `awaitingReview` for the three review queues, and
+ * `DashboardQuery::administrativeSummary()`'s three counts for admin.
+ *
+ * **The `admin` card is the one exact envelope, and the fixture used to get it wrong (T379).** It
+ * carried `figuresBoundedBy: 100` beside three `COUNT`s, which is a claim those numbers never had —
+ * the same defect as the `totalAccounts: 0` T379 removed, in the form of an invented window. The
+ * server now answers `figuresBoundedBy: null` and `figuresExact: true` for it, and this fixture says
+ * so. A fixture that disagrees with the controller does not fail loudly; it makes every assertion
+ * below test a shape the server stopped sending.
  */
 const PROJECTION = {
 	purchaser: {
 		userId: 'u-1',
 		figures: { openSheets: 2, returnedToMe: 1 },
 		figuresBoundedBy: 100,
-		figuresTruncated: false
+		figuresTruncated: false,
+		figuresExact: false
 	},
 	costCenter: {
 		userId: 'u-1',
 		figures: { awaitingReview: 7 },
 		figuresBoundedBy: 100,
-		figuresTruncated: false
+		figuresTruncated: false,
+		figuresExact: false
 	},
 	senior: {
 		userId: 'u-1',
 		figures: { awaitingReview: 4 },
 		figuresBoundedBy: 100,
-		figuresTruncated: false
+		figuresTruncated: false,
+		figuresExact: false
 	},
 	finance: {
 		userId: 'u-1',
 		figures: { awaitingReview: 9 },
 		figuresBoundedBy: 100,
-		figuresTruncated: true
+		figuresTruncated: true,
+		figuresExact: false
 	},
 	admin: {
 		userId: 'u-1',
 		figures: { totalSheets: 12, totalTransactions: 34, totalAccounts: 2 },
-		figuresBoundedBy: 100,
-		figuresTruncated: false
+		figuresBoundedBy: null,
+		figuresTruncated: false,
+		figuresExact: true
 	}
 }
 
@@ -401,7 +414,28 @@ describe('US7 Role-aware Dashboard — Vue Component Tests', () => {
 
 			it('states the identity and the bound as notes', () => {
 				expect(dashboardNotes(PROJECTION.purchaser).map((note) => note.key))
-					.toEqual(['userId', 'figuresBoundedBy', 'figuresTruncated'])
+					.toEqual(['userId', 'figuresBoundedBy', 'figuresTruncated', 'figuresExact'])
+			})
+
+			it('states an exact card as exact, and does not invent a bound for it', () => {
+				// The admin card's three figures are COUNTs (T379). `figuresBoundedBy` is `null` there
+				// because a COUNT has no window, and `figuresExact: true` is the note that says so.
+				// Both halves are asserted: a client that printed a bound beside these numbers would be
+				// asserting a limit they never had.
+				expect(metric(dashboardNotes(PROJECTION.admin), 'figuresExact')).toEqual({
+					key: 'figuresExact',
+					kind: 'boolean',
+					text: '',
+					boolean: true
+				})
+				expect(metric(dashboardNotes(PROJECTION.admin), 'figuresBoundedBy')?.text).not.toContain('۱۰۰')
+			})
+
+			it('keeps `figuresExact` out of the headline figures on a bounded card too', () => {
+				// It is an envelope key whatever its value, so a card must not promote the flag to a
+				// metric simply because this card happens to answer `false`.
+				const keys = dashboardMetrics(PROJECTION.senior).map((entry) => entry.key)
+				expect(keys).not.toContain('figuresExact')
 			})
 
 			it('resolves the truncation flag through the catalog instead of printing true or false', () => {
@@ -472,9 +506,24 @@ describe('US7 Role-aware Dashboard — Vue Component Tests', () => {
 				// would be the largest number on the card, which is what the requirement forbids.
 				expect(wrapper.find('[data-testid="dashboard-notes"]').exists()).toBe(true)
 				expect(wrapper.findAll('[data-testid^="dashboard-note-"]').map((note) => note.attributes('data-testid')))
-					.toEqual(['dashboard-note-userId', 'dashboard-note-figuresBoundedBy', 'dashboard-note-figuresTruncated'])
+					.toEqual([
+						'dashboard-note-userId',
+						'dashboard-note-figuresBoundedBy',
+						'dashboard-note-figuresTruncated',
+						'dashboard-note-figuresExact'
+					])
 				expect(wrapper.find('[data-testid="dashboard-note-figuresBoundedBy"]').text()).toContain('۱۰۰')
 				expect(wrapper.find('[data-testid="dashboard-metric-figuresBoundedBy"]').exists()).toBe(false)
+			})
+
+			it('draws no bound beside an exact card, so no window is implied where none exists', () => {
+				// The admin card renders three COUNTs. A `100` beside them would be a limit those
+				// numbers never had, so the rendered envelope must carry the exactness flag and the
+				// bound must not print a number at all.
+				const wrapper = mountCard(PROJECTION.admin)
+
+				expect(wrapper.find('[data-testid="dashboard-note-figuresExact"]').exists()).toBe(true)
+				expect(wrapper.find('[data-testid="dashboard-note-figuresBoundedBy"]').text()).not.toContain('۱۰۰')
 			})
 
 			it('states that a role has nothing to do once the envelope stops counting as content', () => {
@@ -502,7 +551,17 @@ describe('US7 Role-aware Dashboard — Vue Component Tests', () => {
 					['purchaser', ['openSheets', 'returnedToMe']],
 					['admin', ['totalSheets', 'totalTransactions', 'totalAccounts']]
 				])
-				expect(store.cards.every((card) => card.notes.length === 3)).toBe(true)
+				// Asserted per card against the envelope it was actually sent, not against a fixed
+				// count. `3` was every card's answer while `figuresExact` did not exist; a constant
+				// here would have kept passing while the two cards genuinely differ — the purchaser's
+				// figures are a window, the administrator's are COUNTs (T379).
+				expect(store.cards.map((card) => [
+					card.role,
+					card.notes.map((note) => note.key)
+				])).toEqual([
+					['purchaser', ['userId', 'figuresBoundedBy', 'figuresTruncated', 'figuresExact']],
+					['admin', ['userId', 'figuresBoundedBy', 'figuresTruncated', 'figuresExact']]
+				])
 			})
 
 			it('reports a role whose figures are empty as having nothing to show', async () => {

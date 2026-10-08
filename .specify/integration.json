@@ -2,20 +2,11 @@
   "version": "1.0.8",
   "integration_state_schema": 1,
   "installed_integrations": [
-    "opencode",
-    "generic"
+    "opencode"
   ],
   "integration_settings": {
     "opencode": {
       "script": "sh",
-      "invoke_separator": "."
-    },
-    "generic": {
-      "script": "sh",
-      "raw_options": "--commands-dir .agents/skills",
-      "parsed_options": {
-        "commands_dir": ".agents/skills"
-      },
       "invoke_separator": "."
     }
   },

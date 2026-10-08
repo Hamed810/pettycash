@@ -37,7 +37,8 @@ export const DASHBOARD_ROLE_FOR_SESSION_ROLE: Record<Role, DashboardRole> = {
  * the bucket is read as the open object the contract declares and every key it carries is rendered.
  *
  * The bucket is an *envelope* around those figures, not a flat map of them:
- * `DashboardController::card()` returns `{ userId, figures, figuresBoundedBy, figuresTruncated }`.
+ * `DashboardController::card()` returns
+ * `{ userId, figures, figuresBoundedBy, figuresTruncated, figuresExact }`.
  * `DASHBOARD_FIGURES_KEY` names where the figures sit and `DASHBOARD_NOTE_KEYS` names the keys around
  * them, both read off the controller rather than guessed from the contract's silence.
  */
@@ -73,9 +74,10 @@ export interface DashboardMetric {
  *
  * `DashboardController::card()` answers each bucket as an envelope around the figures: the acting
  * `userId`, a `figures` object, the read-window `figuresBoundedBy` the figures were computed under,
- * and whether `figuresTruncated` says there may be more behind that window. The last three are
- * identity and caveat, not measurements, and giving them a figure's presentation made the bound —
- * 100, on every card — the largest number on it.
+ * whether `figuresTruncated` says there may be more behind that window, and `figuresExact` — which
+ * is `true` when the figures are `COUNT`s and therefore have no window at all, so `figuresBoundedBy`
+ * is `null` there (T379). The last four are identity and caveat, not measurements, and giving them a
+ * figure's presentation made the bound — 100, on every bounded card — the largest number on it.
  *
  * A note carries the same value-type discrimination a metric does, because `figuresBoundedBy` is a
  * number and `figuresTruncated` a boolean and both have to obey the rendering rules. What it does not

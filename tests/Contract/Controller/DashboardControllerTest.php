@@ -139,20 +139,95 @@ final class DashboardControllerTest extends TestCase
 
     // ===== Figures, and the bound they were computed under =====
 
+    /**
+     * Every card states how its figures were derived, and the statement is consistent with them.
+     *
+     * **Two envelopes exist, and this used to assert only one of them.** A card whose figures come
+     * from a paged read is a *window*: it states `figuresBoundedBy: 100` and whether the window filled
+     * up. A card whose figures are `COUNT`s has no window at all, so it states
+     * `figuresBoundedBy: null` and `figuresExact: true` (T379).
+     *
+     * Asserting `100` unconditionally was true of every card this suite could reach and is **false of
+     * the administrator card**, which T379 rebuilt on `countAll()`. It stayed green only because the
+     * single OCS credential is a finance officer, so `admin` never appears here — a test whose subject
+     * it cannot see. The assertion below therefore checks the envelope against the flag rather than
+     * against a constant, so it is correct for a bounded card and an exact card alike, and will still
+     * be checking the right thing if an administrator credential is ever added.
+     */
     public function testEveryCardCarriesFiguresAndTheBoundTheyWereComputedUnder(): void
     {
         foreach ($this->cards() as $key => $card) {
             $this->assertArrayHasKey('figures', $card, "the {$key} card must carry figures");
             $this->assertIsArray($card['figures']);
 
-            // Every repository read behind these figures is paged and no domain repository has a count
-            // query, so a figure is a window size. The response states the bound instead of letting a
-            // window size pose as an instance total.
             $this->assertArrayHasKey('figuresBoundedBy', $card, "the {$key} card must state its bound");
-            $this->assertSame(100, $card['figuresBoundedBy']);
+            $this->assertArrayHasKey('figuresExact', $card, "the {$key} card must state whether its figures are exact");
+            $this->assertIsBool($card['figuresExact'], "the {$key}.figuresExact flag must be a boolean");
             $this->assertArrayHasKey('figuresTruncated', $card);
             $this->assertIsBool($card['figuresTruncated']);
+
+            if ($card['figuresExact'] === true) {
+                // A COUNT cannot be truncated, because there is no window for one to fall out of. Both
+                // halves matter: stating a bound beside an exact figure asserts a limit the figure
+                // never had, which is the `totalAccounts: 0` defect in its second form.
+                $this->assertNull(
+                    $card['figuresBoundedBy'],
+                    "the {$key} card's figures are exact, so it must not claim a bound"
+                );
+                $this->assertFalse(
+                    $card['figuresTruncated'],
+                    "the {$key} card's figures are exact, so truncation cannot apply to them"
+                );
+
+                continue;
+            }
+
+            // The narrow claim this test actually makes: a bounded window is stated, and a figure read
+            // from a window is a window size rather than an instance total.
+            $this->assertSame(100, $card['figuresBoundedBy'], "the {$key} card's figures are window sizes");
         }
+    }
+
+    /**
+     * The administrator card's three figures cannot be asserted from here, and this records why.
+     *
+     * T379's acceptance criteria ask for "a contract test [that] asserts each admin figure against an
+     * independently computed expectation … so a constant cannot pass". `GET /accounts?active=false`
+     * aside, that is **not deliverable over HTTP in this suite**, and the reason is structural rather
+     * than a gap someone left: `OcsTestClient::create()` authenticates with exactly one credential,
+     * `PETTYCASH_TEST_USER`, and that user is a finance officer rather than an administrator. The
+     * union rule above (`testTheCardsAreExactlyTheRolesTheUserHolds`) keys `admin` off administrator
+     * status, so the admin card is simply not in the response here — which is also why the previous
+     * version of `testEveryCardCarriesFiguresAndTheBoundTheyWereComputedUnder` could assert
+     * `figuresBoundedBy === 100` for "every card" and stay green while the admin card contradicted it.
+     *
+     * **So the assertions live where the credential can reach the subject.** They are in
+     * `tests/Integration/Persistence/RepositoryRoundTripTest.php`
+     * (`testEachInstanceCountEqualsTheTableItCounts`, `testEachInstanceCountIsWiderThanTheFilteredReadItReplaced`),
+     * which drives the real repositories over real SQL: each `countAll()` is compared against
+     * `COUNT(*)` on its own table, and against the narrower read it replaced, on an instance seeded
+     * with sheets in two statuses, a transaction outside the finance stage and a deactivated account.
+     * `totalAccounts: 0` cannot satisfy either comparison, which is the constant the criterion names.
+     *
+     * This test asserts the *precondition* rather than skipping silently: if an administrator
+     * credential is ever added to `.env.testing`, it fails and says what has become possible, instead
+     * of continuing to report the admin figures as verified from a card it cannot see.
+     */
+    public function testTheAdministratorCardIsUnreachableFromThisCredential(): void
+    {
+        if (isset($this->cards()['admin'])) {
+            $this->fail(
+                'the acting credential now receives the admin card, so this file must assert the '
+                . "administrator's figures rather than record that they cannot be asserted"
+            );
+        }
+
+        $this->markTestSkipped(
+            'the single OCS credential holds no administrator role, so `admin` is not in the response '
+            . 'and its three figures cannot be asserted over HTTP here; they are asserted against '
+            . '`COUNT(*)` and against the filtered read they replaced in '
+            . 'tests/Integration/Persistence/RepositoryRoundTripTest.php'
+        );
     }
 
     public function testThePurchaserCardCountsOpenSheetsAndReturnedTransactions(): void

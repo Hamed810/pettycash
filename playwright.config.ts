@@ -11,7 +11,14 @@ export default defineConfig({
 	// a dedicated `pettycash-e2e` account rather than from `employee1`.
 	globalSetup: './tests/E2E/global-setup.ts',
 	use: {
-		baseURL: process.env.PETTYCASH_BASE_URL ?? 'http://localhost:8080',
+		// This repository's own lab: `pettycash-lab`, published on port 8081.
+		//
+		// It used to be 8080, the single shared Nextcloud both apps pointed at. That lab is
+		// stopped and preserved (see ~/projects/nextcloud-lab/legacy), so leaving 8080 here
+		// would send the suite at a dead port — or, worse, at anything else that later binds
+		// 8080. Override with PETTYCASH_BASE_URL only to point at a genuinely different
+		// instance; the default must name this project's lab.
+		baseURL: process.env.PETTYCASH_BASE_URL ?? 'http://localhost:8081',
 		trace: 'retain-on-failure',
 		storageState: 'test-results/.auth/e2e-storage-state.json',
 	},

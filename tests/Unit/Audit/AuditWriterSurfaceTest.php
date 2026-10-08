@@ -47,12 +47,16 @@ final class AuditWriterSurfaceTest extends TestCase
         );
         sort($methods);
 
-        // `__construct` plus exactly the port's two paths. T296 deleted `appendConfiguration()` and
+        // `__construct` plus exactly the port's paths. T296 deleted `appendConfiguration()` and
         // this assertion is why that was safe; T294 restored it *through the port*, so the rule this
         // test guards is unchanged: a writer path exists only because the port declares it, and a
         // second definition of "what an audit event contains" cannot start as a public method that
-        // the container never sees.
-        self::assertSame(['__construct', 'append', 'appendConfiguration'], $methods);
+        // the container never sees. T399 added `appendConfigurationAsViewer()` the same way, for
+        // FR-031's unauthenticated access event, which the session-resolving path cannot write.
+        self::assertSame(
+            ['__construct', 'append', 'appendConfiguration', 'appendConfigurationAsViewer'],
+            $methods,
+        );
 
         $portMethods = array_map(
             static fn (ReflectionMethod $m): string => $m->getName(),

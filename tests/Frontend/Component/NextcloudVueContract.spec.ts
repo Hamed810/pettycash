@@ -83,7 +83,11 @@ vi.mock('@nextcloud/router', () => ({
 	linkToRemote: (service: string, file: string) => `/${service}/${file}`,
 	getRootUrl: () => '',
 	getBaseUrl: () => '',
-	getHost: () => 'localhost:8080',
+	// This repository's own lab port. The value is inert here — nothing in this file asserts
+	// on it, and `@nextcloud/router` is mocked rather than real — but it is kept pointing at
+	// the lab that actually exists, so a stale port cannot mislead the next reader into
+	// thinking port 8080 is still a live target. See ~/projects/nextcloud-lab/README.md.
+	getHost: () => 'localhost:8081',
 	getProtocol: () => 'http',
 	getRequestToken: () => 'test-request-token',
 	isUserAdmin: () => false,

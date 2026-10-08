@@ -39,5 +39,24 @@ interface ExpenseSheetRepository
     public function countByOwnerUid(string $ownerUid, ?SheetListFilter $filter = null): int;
     /** @return list<ExpenseSheet> */
     public function findByStatus(SheetStatus $status, int $offset = 0, int $limit = 100): array;
+
+    /**
+     * How many sheets exist instance-wide, across every status.
+     *
+     * Added for T379. `DashboardController` published `count(findByStatus(Open, ...))` under the
+     * key `totalSheets`, so the administrator's dashboard reported how many sheets were *open* while
+     * naming them a total — a figure that was wrong in the one direction an administrator cannot
+     * detect, because an instance with nothing open and an instance with fifty completed sheets both
+     * answered `0`.
+     *
+     * It is a count rather than an unbounded read for the same reason `countByOwnerUid()` is: a
+     * dashboard figure derived from a bounded read is a window size wearing a total's name, which is
+     * exactly what `figuresBoundedBy` cannot catch because the *bound* would be honest while the
+     * *predicate* was not.
+     *
+     * Zero, not an exception, when there are none.
+     */
+    public function countAll(): int;
+
     public function save(ExpenseSheet $sheet): void;
 }

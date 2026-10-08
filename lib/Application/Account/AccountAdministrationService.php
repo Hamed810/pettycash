@@ -153,6 +153,41 @@ final readonly class AccountAdministrationService
     }
 
     /**
+     * T391 (ADR-005): close every account a deleted user held. Returns how many accounts **changed**.
+     *
+     * **Deactivates; never deletes.** FR-054 and Constitution IV forbid removing a deleted user's
+     * records, and FR-053/FR-057 forbid removing financial history, so a balance with a movement ledger
+     * is not disposable. The balance stays readable and the account stops being spendable, which is the
+     * distinction ADR-005 records.
+     *
+     * **The return value counts transitions, not rows visited.** `deactivateForDeletedOwner()` answers
+     * `false` for an account that was already inactive, and those are excluded — so a caller can report
+     * "deactivated 2 of 5 held" honestly instead of a number that cannot be reconciled with the
+     * database. A retried `UserDeletedEvent` returns 0, which is the correct answer rather than a
+     * silent re-write.
+     *
+     * **Uses `findAllByUserUid()`, not `findActiveByUserUid()`.** The active-only read would skip an
+     * account deactivated by an earlier event, which is precisely the account this must not re-touch.
+     *
+     * @return int the number of accounts transitioned from active to inactive
+     */
+    public function deactivateAccountsOfDeletedUser(string $userUid): int
+    {
+        $deactivated = 0;
+
+        foreach ($this->accounts->findAllByUserUid($userUid) as $account) {
+            if (!$account->deactivateForDeletedOwner()) {
+                continue;
+            }
+
+            $this->accounts->save($account);
+            $deactivated++;
+        }
+
+        return $deactivated;
+    }
+
+    /**
      * Whether a driver error is a unique-index violation.
      *
      * Matched on the SQLSTATE rather than the driver's message, which differs between the SAPI and the

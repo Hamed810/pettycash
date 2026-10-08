@@ -138,6 +138,63 @@ final class SheetSummaryConformanceTest extends TestCase
 
         $this->assertSame(min($dates), $detail['firstExpenseDate'], 'the range starts at the earliest expense date');
         $this->assertSame(max($dates), $detail['lastExpenseDate'], 'the range ends at the latest expense date');
+    }
+
+    /**
+     * T385: FR-063's latest active revision number, tied to the transactions in the same response.
+     *
+     * The requirement named *"the active transaction revision"*, which belongs to `TransactionSummary` and so
+     * exists once per transaction; the requirement was amended to name the sheet's **highest** active
+     * revision number, because a count would be identical to the `transactionCount` the same clause already
+     * requires.
+     *
+     * **Computed from the response's own transactions rather than from a literal**, for the reason the date
+     * range above gives: a formatter that emitted `1`, or the count, or another sheet's number would satisfy
+     * any assertion about the field being present, and this one reads it back out of the data the same
+     * response already carries.
+     */
+    public function testTheLatestActiveRevisionNumberMatchesTheSheetTransactions(): void
+    {
+        $detail = $this->detail(ContractFixtures::sheetId());
+        $transactions = $detail['transactions'] ?? [];
+        $this->assertNotEmpty($transactions, 'the fixture sheet has transactions to compute a revision number from');
+
+        $numbers = array_map(
+            static fn (array $transaction): int => (int) $transaction['activeRevision']['number'],
+            $transactions
+        );
+
+        $this->assertArrayHasKey(
+            'activeRevisionNumber',
+            $detail,
+            'FR-063 names the latest active revision number, so the projection must carry it'
+        );
+        $this->assertSame(
+            max($numbers),
+            (int) $detail['activeRevisionNumber'],
+            'the emitted number is the highest active revision number among the sheet\'s transactions'
+        );
+        // Why the amended clause is a revision *number* rather than a count: a count would restate the
+        // `transactionCount` the same clause already requires. **That distinction is not observable on this
+        // fixture**, which holds one transaction at revision 1, so both readings produce `1` -- the first
+        // version of this test asserted they differ and failed for that reason alone.
+        //
+        // Stated as a skip rather than dropped or forced, because a sheet whose only transaction has been
+        // corrected once is what separates the two, and building that fixture is a data change rather than an
+        // assertion. The `max($numbers)` equality above is the load-bearing half and it does run.
+        if (count($transactions) === 1 && max($numbers) === 1) {
+            $this->markTestSkipped(
+                'This fixture sheet holds a single transaction at revision 1, so "highest revision number" and '
+                . '"active revision count" are the same value and the distinction the amendment is about cannot '
+                . 'be observed here. The emitted number is still proved equal to max($numbers) above.'
+            );
+        }
+
+        $this->assertNotSame(
+            count($transactions),
+            (int) $detail['activeRevisionNumber'],
+            'it must not be the transaction count'
+        );
         $this->assertLessThanOrEqual(
             (string) $detail['lastExpenseDate'],
             (string) $detail['firstExpenseDate'],

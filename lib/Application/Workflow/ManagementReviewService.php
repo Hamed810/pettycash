@@ -44,7 +44,8 @@ final readonly class ManagementReviewService
         private IdempotencyService $idempotencyService,
         private CurrentUser $currentUser,
         private UserDirectory $userDirectory,
-        private AuthorizationService $authorizationService
+        private AuthorizationService $authorizationService,
+        private SupersededDecisionAudit $supersededDecisionAudit,
     ) {}
 
     /**
@@ -71,6 +72,52 @@ final readonly class ManagementReviewService
         // Carried out of the idempotency callback, which does not run at all on a replay.
         $recordedDecision = null;
 
+        // FR-085. The refusal is raised inside the transaction below so that the read and the
+        // attempted write are one unit, and caught here because the business transaction has to roll
+        // back *before* the `SUPERSEDED_ATTEMPT` event is written — an event written before the
+        // rollback would be discarded with it, and a reviewer who acted would leave no trace.
+        //
+        // Re-thrown unchanged: the caller is answered 409 by `OcsErrorMapper`'s existing `Conflict`
+        // arm, which is where FR-085's status comes from.
+        try {
+            return $this->recordDecisionInTransaction(
+                $transactionPublicId,
+                $actorUid,
+                $stage,
+                $decision,
+                $explanation,
+                $commandId,
+                $expectedVersion,
+                $recordedDecision
+            );
+        } catch (SupersededDecisionAttempt $superseded) {
+            $this->supersededDecisionAudit->record(
+                $superseded,
+                $actorUid,
+                $this->getUserRole($actorUid, null),
+                $commandId,
+            );
+
+            throw $superseded;
+        }
+    }
+
+    /**
+     * The body of {@see recordDecision()}, split out so the FR-085 catch sits outside the database
+     * transaction rather than inside it.
+     *
+     * @param-out DecisionOutcome $recordedDecision
+     */
+    private function recordDecisionInTransaction(
+        string $transactionPublicId,
+        string $actorUid,
+        WorkflowStage $stage,
+        Decision $decision,
+        string $explanation,
+        string $commandId,
+        int $expectedVersion,
+        ?WorkflowDecision &$recordedDecision
+    ): DecisionOutcome {
         return $this->transactionManager->transactional(function () use (
             $transactionPublicId,
             $actorUid,
@@ -115,11 +162,6 @@ final readonly class ManagementReviewService
                     throw new InvalidArgumentException('Stale version');
                 }
 
-                // Verify transaction is at the expected stage
-                if ($transaction->stage !== $stage) {
-                    throw new InvalidArgumentException("Transaction is not at {$stage->value} stage");
-                }
-
                 // Authorization check.
                 //
                 // The scope in the context must be the cost centers the *actor* is
@@ -143,6 +185,32 @@ final readonly class ManagementReviewService
 
                 if (!$this->authorizationService->canReview($context, $stage, $costCenterCode ?? '')) {
                     throw new LogicException('User not authorized for this review stage');
+                }
+
+                // FR-085: first write wins.
+                //
+                // **Placed before the stage guard, and that ordering is the whole point.** A decision
+                // already recorded at this stage *is* the reason the transaction is no longer at this
+                // stage — the first approval advanced it. So with the stage guard first, this check was
+                // unreachable: every superseded attempt was answered `422 "Transaction is not at
+                // COST_CENTER stage"`, which names a stage mismatch and never mentions that a decision
+                // is already in force. FR-085 requires the caller to be told *that*, because that is
+                // what tells it to reload rather than to correct its request.
+                //
+                // **Placed after authorization, deliberately.** Moving it earlier would answer an
+                // out-of-scope manager with `409` and, in doing so, confirm that a decision exists on
+                // a transaction they may not be able to see. A refusal that carries information is a
+                // disclosure, which is the defect T029 was raised for.
+                //
+                // **Placed after the version guard, also deliberately.** `Stale version` is the
+                // optimistic check `data-model.md` describes, it answers 422, and six other call
+                // sites depend on that behaviour. FR-085 does not ask for it to change, and widening
+                // it would silently reclassify every concurrent edit as a superseded attempt.
+                $this->refuseIfAlreadyDecided($transaction, $stage, $decision);
+
+                // Verify transaction is at the expected stage
+                if ($transaction->stage !== $stage) {
+                    throw new InvalidArgumentException("Transaction is not at {$stage->value} stage");
                 }
 
                 // Validate explanation required for reject/return
@@ -241,6 +309,48 @@ final readonly class ManagementReviewService
 
             return new DecisionOutcome($transaction, $recordedDecision);
         });
+    }
+
+    /**
+     * FR-085: refuse a decision for a stage this revision has already been decided at.
+     *
+     * The unique index `pettycash_workflow_decisions_revision_stage_uniq` makes a second row
+     * impossible, so no double-booking is possible today — the gap this closes is the *outcome*: a
+     * stale second decision used to be answered "Transaction is not at COST_CENTER stage", which
+     * names a stage mismatch and never mentions that a decision is already in force, and the reviewer
+     * who tried it left no record. Reading first converts that into an explained 409 plus a
+     * `SUPERSEDED_ATTEMPT` event; `DbWorkflowDecisionRepository::save()` closes the remaining window
+     * between this read and that insert, for a race that arrives in exactly between them.
+     *
+     * @throws SupersededDecisionAttempt when a decision already exists for (revision, stage)
+     */
+    private function refuseIfAlreadyDecided(
+        ExpenseTransaction $transaction,
+        WorkflowStage $stage,
+        Decision $decision
+    ): void {
+        $revisionDbId = $transaction->revision()->dbId;
+        if ($revisionDbId === null) {
+            // An unpersisted revision has no row to have been decided on, so there is nothing to be
+            // superseded by. Refusing here would be refusing on no evidence.
+            return;
+        }
+
+        $recorded = $this->decisionRepository->findByRevisionAndStage($revisionDbId, $stage);
+        if ($recorded === []) {
+            return;
+        }
+
+        // FR-053 makes decisions immutable and the unique index admits one per (revision, stage), so
+        // the list holds exactly the decision in force. It is read by `decided_at ASC`, hence the
+        // last element rather than the first.
+        throw new SupersededDecisionAttempt(
+            $transaction->id,
+            $transaction->revision()->id(),
+            $stage,
+            $decision,
+            $recorded[count($recorded) - 1]->decision,
+        );
     }
 
     /**

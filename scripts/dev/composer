@@ -3,15 +3,16 @@ set -euo pipefail
 
 # Run Composer as an EXTERNAL DEVELOPMENT TOOL, outside the Nextcloud runtime container.
 #
-# WHY NOT docker-nextcloud-1
+# WHY NOT pettycash-lab-nextcloud-1
 #
-# That container is the shared application runtime — one Nextcloud instance used by two
-# applications. It is the right place to run `occ`, `php -l` and PHPUnit, because those have
-# to behave like the app. It is the wrong place to run a dependency installer:
+# That container is this application's runtime. It is the right place to run `occ`, `php -l`
+# and PHPUnit, because those have to behave like the app. It is the wrong place to run a
+# dependency installer:
 #
-#   * Composer would have to be installed into `docker_pts-nextcloud`, the volume holding the
+#   * Composer would have to be installed into `pettycash-lab_nc-data`, the volume holding the
 #     entire Nextcloud installation and all user data, for a tool that is not part of the app;
-#   * a dependency operation would become a mutation of shared environment state;
+#   * a dependency operation would become a mutation of lab state that this repository does
+#     not own;
 #   * it produces the wrong owner for a host repository. Historically Composer ran HERE, as
 #     `www-data`: the committed `scripts/dev/composer` delegated to `scripts/dev/in-container`,
 #     which hardcoded `--user www-data` (verified in the committed source of both files, at
@@ -58,8 +59,8 @@ set -euo pipefail
 # `zip` extension is present. `--prefer-source` would need a git-capable image.
 #
 # The container used here mounts only this repository and the Composer cache. It does not
-# mount `/var/www/html`, shares no volume with the shared lab, and is removed on exit
-# (`--rm`), so the shared Nextcloud state is untouched.
+# mount `/var/www/html`, shares no volume with the lab, and is removed on exit
+# (`--rm`), so the lab's Nextcloud state is untouched.
 #
 # `--tmpfs /var/www/html` is passed because this image declares `VOLUME /var/www/html`.
 # Without it Docker silently creates an anonymous volume for every invocation. `--rm`
@@ -232,7 +233,8 @@ fi
 #
 # This is a drift guard, not a diagnosis of a fixed historical state. The tree's Composer files
 # were owned by uid/gid 33 (`www-data`) — 8334 entries under `vendor/` — because Composer used
-# to run in `docker-nextcloud-1` through this repository's `scripts/dev/in-container`, which
+# to run in the lab's Nextcloud container through this repository's `scripts/dev/in-container`,
+# which
 # hardcoded `--user www-data`. It was never run as root. That ownership was migrated to the host
 # user on 2026-10-02 (docs/development/composer-ownership-migration.md), so this warning no
 # longer fires there. It stays because ownership can drift again — a restore from a backup, a

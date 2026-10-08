@@ -20,6 +20,8 @@ import { createRouter, createWebHashHistory, type Router } from 'vue-router'
 import TransactionDetailView from '@/views/transactions/TransactionDetailView.vue'
 import TransactionFormView from '@/views/transactions/TransactionFormView.vue'
 import ReturnsQueueView from '@/views/reviews/ReturnsQueueView.vue'
+import { useReviewsStore } from '@/stores/reviews'
+import { expectCardAgreesWithTable } from '../../Support/cardAgreement'
 import { useTransactionStore } from '@/stores/transactions'
 import { routes } from '@/router'
 import type { Revision, TransactionDetail } from '@/types/api'
@@ -509,6 +511,52 @@ describe('Transaction Correction - Vue Component Tests (RED: behavior not implem
 
 			return { wrapper, leaked }
 		}
+
+		/**
+		 * T394: the narrow card carries the returns queue's **own** column too.
+		 *
+		 * `returnedFromStage` reads `latestDecision?.stage`, which is optional and falls back to
+		 * `'unknown'` -- so it is the one queue column whose value can differ between a row with a
+		 * decision and one without. If the card and the table resolved it separately they could
+		 * disagree, and nothing else in this suite would notice, because every other assertion here reads
+		 * the table.
+		 */
+		it('carries the returned-from-stage column in the narrow card as in the table', async () => {
+			const reviewsStore = useReviewsStore()
+			reviewsStore.returnsQueue = {
+				items: [
+					{
+						id: 'tx-1', sheetId: 'sheet-1', stage: 'COST_CENTER', status: 'AWAITING_COST_CENTER_REVIEW',
+						finalOutcome: null, evidenceCount: 0, version: 0,
+						latestDecision: {
+							id: 'd-1', stage: 'SENIOR', decision: 'REJECT',
+							actor: { userId: 'u1', displayName: 'User 1', role: 'SENIOR_MANAGER' },
+							decidedAt: '2026-09-20T10:00:00Z'
+						},
+						activeRevision: {
+							id: 'rev-1', number: 1, expenseDate: '2026-09-20',
+							amount: { amountMinor: 50000, currency: 'IRR', minorUnit: 0 },
+							costCenter: { id: 'cc-1', code: 'CC001', name: 'Cost Center' },
+							expenseType: { id: 'et-1', name: 'Travel' },
+							createdBy: 'u1', createdAt: '2026-09-20T10:00:00Z', active: true
+						}
+					}
+				],
+				total: 1, page: 1, pageSize: 25
+			} as never
+			reviewsStore.fetchReturnsQueue = vi.fn().mockResolvedValue(undefined) as never
+
+			const wrapper = await mountView(ReturnsQueueView, '/reviews/returns')
+
+			expectCardAgreesWithTable(wrapper, {
+				rows: 1,
+				hooks: [
+					'data-testid="amount"',
+					'data-testid="returned-from-stage"',
+					'data-testid="view-details-btn"'
+				]
+			})
+		})
 
 		it('does not leave the failed load as an unhandled rejection', async () => {
 			ocsRequest.mockImplementation(() => Promise.reject(new Error('boom')))

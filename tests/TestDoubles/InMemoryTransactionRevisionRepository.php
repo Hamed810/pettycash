@@ -65,6 +65,14 @@ final class InMemoryTransactionRevisionRepository implements \OCA\PettyCash\Doma
         if ($revision->dbId === null) {
             $revision->dbId = count($this->revisions) + 1;
         }
+
+        // Mirrors `DbTransactionRevisionRepository::save()` line 123. Without it the aggregate's
+        // `publicId` mirror stays `null` after a save, so `findByPublicId()` cannot resolve the row
+        // that `save()` just wrote. The real adapter fixed exactly this and recorded why; the double
+        // kept the defect, which made it disagree with the adapter on the one thing it exists to
+        // stand in for.
+        $revision->publicId ??= $revision->id();
+
         $this->revisions[$revision->dbId] = $revision;
     }
 

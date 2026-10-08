@@ -52,9 +52,17 @@ The sections below provide repository detail. They reference this contract; they
 - Repository: `/home/ubuntu/projects/pettycash`
 - Canonical container mount: `/var/www/html/custom_apps/pettycash`
 - App id: `pettycash`
-- Shared Nextcloud container: `docker-nextcloud-1`
-- Shared Docker lab: `/home/ubuntu/projects/nextcloud-lab`
-- Compose project name: `docker`
+- Nextcloud container: `pettycash-lab-nextcloud-1`
+- Database container: `pettycash-lab-db-1`
+- Docker lab: `/home/ubuntu/projects/nextcloud-lab`
+- Lab interface: `/home/ubuntu/projects/nextcloud-lab/bin/lab pettycash <command>`
+- Compose project name: `pettycash-lab`
+- Lab URL: `http://localhost:8081`
+
+This repository has its OWN Nextcloud lab. PTS has a separate one (`pts-lab`, port 8082),
+with its own database, volumes, network, users and test data. Nothing is shared. A runtime
+that carries both apps is the retired shared lab; see
+`/home/ubuntu/projects/nextcloud-lab/legacy/README.md`.
 
 ---
 
@@ -183,11 +191,26 @@ Never:
 - create a replacement Docker environment
 - recreate unrelated containers
 - change the Compose project name
-- modify shared Docker configuration without explicit instruction
+- modify lab Docker configuration without explicit instruction
 
-Shared resources to protect: `docker-nextcloud-1`, `docker-db-1`, `docker_default`, `docker_pts-nextcloud`, `docker_pts-db`.
+Lab resources owned by this project: `pettycash-lab-nextcloud-1`, `pettycash-lab-db-1`,
+`pettycash-lab-volume-init` container, `pettycash-lab_default`, `pettycash-lab_nc-data`,
+`pettycash-lab_nc-db`.
 
-For runtime recovery, use the existing lab at `/home/ubuntu/projects/nextcloud-lab`. Do not run Docker Compose from this repository.
+The PTS lab (`pts-lab-*`) belongs to the sibling repository. Never stop, start, reconfigure
+or inspect its volumes as part of work here — except with `bin/lab isolation`, which only
+reads. A change that makes this app appear in the PTS lab, or vice versa, is a defect, not a
+configuration choice.
+
+For runtime recovery, use the lab at `/home/ubuntu/projects/nextcloud-lab`. Do not run
+Docker Compose from this repository:
+
+```bash
+/home/ubuntu/projects/nextcloud-lab/bin/lab pettycash up
+```
+
+Inspect first with `docker ps -a`. Do not create a new environment because the existing one
+is stopped.
 
 ---
 

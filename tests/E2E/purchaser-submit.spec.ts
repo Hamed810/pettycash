@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
+import { recordResponses } from './record-responses'
 
 /**
  * Choose the first option of an open `@nextcloud/vue` `NcSelect`.
@@ -143,6 +144,12 @@ test.describe('Purchaser Capture and Submission', () => {
 	 */
 
 	test.beforeEach(async ({ page }) => {
+		// FR-073: count every response this spec's browser sees, so the error-rate figure covers the
+		// end-to-end suite and not only the PHP contract suite. Attached here rather than in
+		// `global-setup` so it is visible at the call site; a global listener would be invisible in every
+		// spec and would silently stop counting the day one of them opened its own context.
+		recordResponses(page)
+
 		// Navigate to the app's sheet list.
 		//
 		// **The hash fragment is the fix, and the bare path was a stale assumption.** This suite had

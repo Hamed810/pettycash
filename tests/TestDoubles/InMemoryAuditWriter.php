@@ -29,6 +29,18 @@ final class InMemoryAuditWriter implements AuditWriter
         $this->configurationEvents[] = $event;
     }
 
+    /**
+     * FR-031's unauthenticated access event.
+     *
+     * The viewer is recorded on the event rather than resolved from a session, exactly as the real writer
+     * does — the double has no session and the case under test has none either.
+     */
+    public function appendConfigurationAsViewer(string $viewerUid, array $event): void
+    {
+        $event['actor_uid'] = $viewerUid;
+        $this->configurationEvents[] = $event;
+    }
+
     public function getEvents(): array
     {
         return $this->events;

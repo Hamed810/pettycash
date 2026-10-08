@@ -7,6 +7,7 @@ namespace OCA\PettyCash\Application\Expense;
 use DateTimeImmutable;
 use DateTimeZone;
 use InvalidArgumentException;
+use OCA\PettyCash\Application\Account\AccountAdministrationService;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Application\Port\TransactionManager;
 use OCA\PettyCash\Application\Port\UserDirectory;
@@ -24,24 +25,63 @@ final readonly class SheetService
         private ExpenseSheetRepository $sheetRepository,
         private AccountRepository $accountRepository,
         private CurrentUser $currentUser,
-        private TransactionManager $transactionManager
+        private TransactionManager $transactionManager,
+        /**
+         * FR-020's rule, injected rather than reimplemented here.
+         *
+         * The three clauses — none provisions, one resolves, several refuse — live in
+         * `AccountAdministrationService::resolveAccountForNewSheet()` because T085 wrote them there with
+         * their idempotency and concurrent-insert handling. Re-deriving the rule in the sheet path would
+         * give provisioning two homes, and the one without the duplicate-key handling would lose a race
+         * the other one survives.
+         */
+        private AccountAdministrationService $accountAdministration
     ) {}
 
     /**
-     * Create a new open sheet
+     * Create a new open sheet.
+     *
+     * ## Why `accountId` is nullable, and what its absence means
+     *
+     * FR-020 resolves the account from the caller's own active accounts: none means the default rial
+     * account is **provisioned on this attempt** and used, exactly one means that account is used
+     * automatically, and several means the caller must choose. The third case is the only one that is an
+     * error, and it is an error *for the caller to fix* by sending `accountId` — which is why it is
+     * refused rather than guessed.
+     *
+     * A purchaser with zero accounts has no `accountId` to send, so a contract that made the field
+     * required made FR-020 unreachable: the creation attempt could never reach the code that would
+     * provision, because it was refused one step earlier for the missing field. `SheetCreate.required` no
+     * longer names `accountId`, and that amendment is the whole of the fix — the provisioning itself was
+     * already implemented and idempotent.
      *
      * @param string $title
-     * @param string $accountId
+     * @param string|null $accountId the caller's choice, or null to have it resolved from FR-020's rule
+     * @throws InvalidArgumentException when the account is unknown, not the caller's, inactive, or the
+     *         caller holds several and so must choose
      * @return ExpenseSheet
      */
-    public function createSheet(string $title, string $accountId): ExpenseSheet
+    public function createSheet(string $title, ?string $accountId = null): ExpenseSheet
     {
         $ownerUid = $this->currentUser->uid();
 
-        // Verify account exists and get its currency
-        $account = $this->accountRepository->findByPublicId($accountId);
+        $account = ($accountId === null || trim($accountId) === '')
+            // No choice offered, so FR-020 decides. A blank string is treated as "none" rather than as a
+            // public id, because `trim($accountId) === ''` is exactly how an omitted field arrives from a
+            // client that sent an empty input.
+            ? $this->accountAdministration->resolveAccountForNewSheet($ownerUid)
+            : $this->accountRepository->findByPublicId($accountId);
+
         if ($account === null || $account->userUid !== $ownerUid) {
-            throw new InvalidArgumentException('Account not found or access denied');
+            // `resolveAccountForNewSheet()` returns null for a caller holding **several** active accounts,
+            // which is not the same as an unknown id and deserves the different message: this one is fixed
+            // by choosing, not by correcting a typo. Telling a caller with three accounts that their
+            // "account not found" would send them looking for a typo that does not exist.
+            throw new InvalidArgumentException(
+                ($accountId === null || trim($accountId) === '')
+                    ? 'Several active accounts: send accountId to choose which one this sheet draws on'
+                    : 'Account not found or access denied'
+            );
         }
         if (!$account->active) {
             throw new InvalidArgumentException('Cannot create sheet with inactive account');
@@ -50,7 +90,7 @@ final readonly class SheetService
         $currency = $account->currencyCode();
 
         $sheetId = (string)Uuid::random();
-        $sheet = ExpenseSheet::open($sheetId, $ownerUid, $accountId, $currency, $title);
+        $sheet = ExpenseSheet::open($sheetId, $ownerUid, $account->id, $currency, $title);
 
         return $this->transactionManager->transactional(function () use ($sheet): ExpenseSheet {
             $this->sheetRepository->save($sheet);

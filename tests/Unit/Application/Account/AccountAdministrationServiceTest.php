@@ -325,4 +325,124 @@ final class AccountAdministrationServiceTest extends TestCase
             'The account resolves to the same currency the sheet will inherit'
         );
     }
+
+    /**
+     * T391 / ADR-005: every account a deleted user held is closed, and none is removed.
+     *
+     * **Deactivated rather than deleted** is the assertion that matters, and it is asserted two ways
+     * because either alone is weak: `active` must be false, *and* the row must still be readable with
+     * its balance. A delete would satisfy the first check and fail the second.
+     */
+    public function testDeletingAUserDeactivatesEveryAccountTheyHeldAndRemovesNothing(): void
+    {
+        $this->service->ensureDefaultRialAccount('departing-user');
+        $second = new PettyCashAccount(
+            '22222222-2222-4222-8222-222222222222',
+            'departing-user',
+            CurrencyCode::fromString('IRR'),
+            Currency::create('IRR', 'Iranian Rial', 0),
+            5000,
+            true
+        );
+        $this->accounts->save($second);
+
+        $deactivated = $this->service->deactivateAccountsOfDeletedUser('departing-user');
+
+        self::assertSame(2, $deactivated, 'both of the user accounts transition exactly once');
+
+        $survivors = $this->accounts->findAllByUserUid('departing-user');
+        self::assertCount(2, $survivors, 'FR-054: nothing may be deleted -- the rows must remain');
+        foreach ($survivors as $account) {
+            self::assertFalse($account->active, 'a deleted user account must not read as spendable');
+        }
+
+        // The balance is financial history, not incidental state: FR-053 and FR-057 forbid removing it.
+        $kept = array_values(array_filter(
+            $survivors,
+            static fn (PettyCashAccount $a): bool => $a->balanceMinor === 5000
+        ));
+        self::assertCount(1, $kept, 'a balance with movements behind it must survive its owner');
+    }
+
+    /**
+     * A deactivated account stops being offered by FR-020's resolve branch.
+     *
+     * Without this the account would be unreachable yet still handed to the next sheet creation, which
+     * is the precise failure ADR-005 exists to end. `resolveAccountForNewSheet()` reads
+     * `findActiveByUserUid()`, so this is a consequence rather than a new rule -- but it is the
+     * consequence that makes the deactivation meaningful, so it is asserted directly.
+     */
+    public function testADeactivatedAccountIsNoLongerOfferedForANewSheet(): void
+    {
+        $account = $this->service->ensureDefaultRialAccount('departing-user');
+        self::assertNotNull($account);
+        self::assertCount(1, $this->accounts->findActiveByUserUid('departing-user'));
+
+        $this->service->deactivateAccountsOfDeletedUser('departing-user');
+
+        self::assertCount(
+            0,
+            $this->accounts->findActiveByUserUid('departing-user'),
+            'FR-020 resolves from *active* accounts, so a deactivated one must not be offered'
+        );
+    }
+
+    /**
+     * A second deletion event is a no-op, and says so.
+     *
+     * **The count is of transitions, not rows visited**, which is what makes a retried
+     * `UserDeletedEvent` reconcilable: reporting "5 deactivated" for five already-inactive rows would
+     * be a figure no reader could check against the database.
+     *
+     * It also guards the version bump. `deactivateForDeletedOwner()` refuses rather than re-saving, so
+     * `lockVersion` must not move on the second pass -- a version that changes without a state change
+     * tells a concurrent holder of the old version that its data moved when it did not.
+     */
+    public function testASecondDeletionEventDeactivatesNothingAndDoesNotBumpTheVersion(): void
+    {
+        $this->service->ensureDefaultRialAccount('departing-user');
+
+        self::assertSame(1, $this->service->deactivateAccountsOfDeletedUser('departing-user'));
+
+        $afterFirst = $this->accounts->findAllByUserUid('departing-user')[0]->lockVersion;
+
+        // **The first transition must move the version.** Asserted here rather than left implicit, because
+        // an earlier version of this test only checked the *second* call and a mutation that dropped the
+        // increment entirely survived it: "the version does not move on a no-op" is satisfied just as well
+        // by "the version never moves". Both halves are needed — the first is what lets a concurrent reader
+        // holding the old version notice that this row changed under them.
+        self::assertSame(
+            1,
+            $afterFirst,
+            'deactivating must bump lockVersion, or a concurrent holder of version 0 cannot detect the change'
+        );
+
+        self::assertSame(
+            0,
+            $this->service->deactivateAccountsOfDeletedUser('departing-user'),
+            'a retried event changed nothing, so it must not claim it deactivated something'
+        );
+
+        self::assertSame(
+            $afterFirst,
+            $this->accounts->findAllByUserUid('departing-user')[0]->lockVersion,
+            'lockVersion must not move for a no-op: a changed version implies changed data'
+        );
+    }
+
+    /**
+     * Another user's accounts are untouched.
+     *
+     * A delete event carries one uid. Reading the wrong scope would close the whole instance, so the
+     * boundary is asserted rather than assumed.
+     */
+    public function testOneUsersDeletionDoesNotDeactivateAnotherUsersAccount(): void
+    {
+        $this->service->ensureDefaultRialAccount('departing-user');
+        $staying = $this->service->ensureDefaultRialAccount('staying-user');
+
+        $this->service->deactivateAccountsOfDeletedUser('departing-user');
+
+        self::assertTrue($this->accounts->findAllByUserUid('staying-user')[0]->active);
+    }
 }

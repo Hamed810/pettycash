@@ -1099,6 +1099,270 @@ final class RepositoryRoundTripTest extends TestCase
         );
     }
 
+    // ===== T379: the instance-wide counts, against the table =====
+
+    /**
+     * Each `countAll()` equals `COUNT(*)` on its own table.
+     *
+     * **T379's defect was not a wrong number, it was a name that did not describe the read.** The
+     * administrator card published `count(findByStatus(Open, ...))` as `totalSheets`,
+     * `count(findForFinanceQueue(...))` as `totalTransactions`, and a literal `0` as `totalAccounts`
+     * — so two subsets and one constant were presented as three instance totals. `0` in particular
+     * was wrong on every instance, always, and rendered as a headline metric.
+     *
+     * The expectation here is the table. Asserting `countAll()` against a repository method would be
+     * satisfied by two halves of the same predicate agreeing with each other, which is precisely how
+     * this defect survived; only the table can disagree with the repository.
+     */
+    public function testEachInstanceCountEqualsTheTableItCounts(): void
+    {
+        $counts = $this->dashboardCounts();
+
+        $this->assertSame(
+            $counts['rawSheets'],
+            $counts['totalSheets'],
+            '`totalSheets` is a COUNT over `pettycash_sheets`, not the length of a status-filtered read'
+        );
+        $this->assertSame(
+            $counts['rawTransactions'],
+            $counts['totalTransactions'],
+            '`totalTransactions` is a COUNT over `pettycash_transactions`, not the depth of the '
+            . 'finance queue'
+        );
+        $this->assertSame(
+            $counts['rawAccounts'],
+            $counts['totalAccounts'],
+            '`totalAccounts` must be counted, not passed as the literal `0` the controller used to send; '
+            . 'an instance with accounts must never answer zero here'
+        );
+    }
+
+    /**
+     * Each `countAll()` is strictly wider than the read it replaced.
+     *
+     * The assertion above alone would pass for a `countAll()` that kept the old predicate, because on
+     * a populated instance a status-filtered count can coincide with the table by accident. This one
+     * cannot: the scenario wrote a sheet in a second status, a transaction outside the finance stage
+     * and a **deactivated** account, so a count that reused any of the three old reads is strictly
+     * smaller than the table and fails here.
+     */
+    public function testEachInstanceCountIsWiderThanTheFilteredReadItReplaced(): void
+    {
+        $counts = $this->dashboardCounts();
+
+        $this->assertSame(
+            1,
+            $counts['inactiveAccountWritten'],
+            'the scenario must write a deactivated account, or the account assertion below measures '
+            . 'nothing: no read `AccountRepository` offered could see that row'
+        );
+        $this->assertGreaterThan(
+            $counts['openSheetsOnly'],
+            $counts['totalSheets'],
+            '`totalSheets` must count every status; `findByStatus(Open, ...)` is one status and the '
+            . 'scenario wrote a completed sheet as well as an open one'
+        );
+        $this->assertGreaterThan(
+            $counts['financeQueueOnly'],
+            $counts['totalTransactions'],
+            '`totalTransactions` must count every stage; `findForFinanceQueue()` is one stage and the '
+            . 'scenario wrote a draft transaction as well'
+        );
+        $this->assertGreaterThan(
+            $counts['activeAccountsForProbe'],
+            $counts['totalAccounts'],
+            '`totalAccounts` must count inactive accounts too, or the name is wrong in the same way the '
+            . 'other two names were'
+        );
+    }
+
+    /**
+     * The `dashboardcounts` payload, with its keys proved present before any of them is read.
+     *
+     * **Why this exists.** Both tests above index the scenario report, and `report()` returns
+     * `$report = match ($scenario) { ... }` — the scenario's **own** return value, not a map keyed by
+     * scenario name. Indexing it a second time as `['dashboardcounts']['totalSheets']` reads `null`,
+     * and `assertSame(null, null)` **passes**. So a wrong key was one of these tests' two halves
+     * satisfying each other while measuring nothing: the "equals the table" test was green against a
+     * payload it never read, and only the `assertSame(1, ...)` below it exposed the mistake.
+     *
+     * A guard here rather than a comment, because the failure this protects against is invisible in
+     * the output — a vacuous pass looks exactly like a real one. Every key is checked, so a renamed
+     * scenario key fails at the point of the rename instead of quietly becoming `null`.
+     *
+     * @return array<string, int>
+     */
+    private function dashboardCounts(): array
+    {
+        $counts = $this->report('dashboardcounts');
+        $required = [
+            'totalSheets',
+            'totalTransactions',
+            'totalAccounts',
+            'rawSheets',
+            'rawTransactions',
+            'rawAccounts',
+            'openSheetsOnly',
+            'financeQueueOnly',
+            'activeAccountsForProbe',
+            'inactiveAccountWritten',
+        ];
+
+        $missing = array_values(array_filter(
+            $required,
+            static fn (string $key): bool => !is_int($counts[$key] ?? null)
+        ));
+
+        $this->assertSame(
+            [],
+            $missing,
+            'the `dashboardcounts` scenario must report every integer this file compares, or the '
+            . 'comparisons above compare `null` with `null` and pass while measuring nothing; '
+            . 'reported keys were: ' . implode(', ', array_keys($counts))
+        );
+
+        return $counts;
+    }
+
+    /**
+     * T388: FR-020's observable outcome, over real MariaDB.
+     *
+     * **What T358 delivered and what was still unobserved.** T358 delivered the trigger -- the frontend
+     * sends no `accountId`, the controller stopped refusing one, and `SheetService` resolves it through
+     * `resolveAccountForNewSheet()` -- and proved that wiring. The criterion's own words are about the
+     * *outcome*: a purchaser with no accounts creates a first sheet, `GET /accounts` then reports exactly
+     * one active `IRR` account, and repeating the attempt provisions nothing further. Nothing observed that.
+     *
+     * `ensureDefaultRialAccount()` has extensive unit coverage of idempotency and the duplicate-key race,
+     * every one of it against in-memory doubles. So a race that lost on a different index, or a resolution
+     * that returned an account no list could see, satisfied every test that existed.
+     *
+     * **Why this is not a live-HTTP test, stated rather than assumed.** `OcsTestClient::create()`
+     * authenticates with one credential, `PETTYCASH_TEST_USER`, which holds accounts and so is never in
+     * FR-020's precondition. Proving this over HTTP needs a **fresh Nextcloud account** — an authentication
+     * principal — on an instance shared with other applications, which is an environment decision and not a
+     * test one. The criterion is therefore verified here at the service boundary against real persistence,
+     * and the HTTP variant is recorded as **not established** rather than implied by this passing.
+     */
+    public function testAFirstSheetCreationProvisionsExactlyOneActiveRialAccount(): void
+    {
+        // `report()` returns the scenario's **own** payload -- `$report = match ($scenario) { … }` -- so it is
+        // NOT nested under the scenario name. Indexing it a second time yields an empty array and every key
+        // reads `null`, which is the trap T383 recorded for `dashboardcounts` and the reason this scenario's
+        // report goes through a guard rather than a bare index.
+        $report = $this->provisioningReport();
+
+        $this->assertSame(
+            0,
+            $report['preconditionAccounts'],
+            'FR-020\'s precondition is zero active accounts; a scenario that did not start there is not '
+            . 'testing provisioning, it is testing an ordinary sheet creation'
+        );
+
+        $this->assertSame(
+            1,
+            $report['accountsAfterFirst'],
+            'the first creation provisions exactly one account, not none and not one per sheet'
+        );
+        $this->assertSame('IRR', $report['provisionedCurrencyCode'], 'and it is the default rial');
+        $this->assertTrue($report['provisionedIsActive'], 'FR-014 requires it to be active');
+    }
+
+    /**
+     * Repeating the attempt provisions **nothing further** — twice, so idempotency is not an artefact of
+     * the sheet count happening to be zero on the second call.
+     *
+     * `assertSame(1, …)` rather than `assertLessThanOrEqual`: a second account would make every sheet's
+     * currency ambiguous, which is the whole reason FR-020 provisions exactly one.
+     */
+    public function testRepeatingTheCreationProvisionsNothingFurther(): void
+    {
+        // `report()` returns the scenario's **own** payload -- `$report = match ($scenario) { … }` -- so it is
+        // NOT nested under the scenario name. Indexing it a second time yields an empty array and every key
+        // reads `null`, which is the trap T383 recorded for `dashboardcounts` and the reason this scenario's
+        // report goes through a guard rather than a bare index.
+        $report = $this->provisioningReport();
+
+        $this->assertSame(1, $report['accountsAfterSecond'], 'a second creation must not provision a second account');
+        $this->assertSame(
+            1,
+            $report['accountsAfterThird'],
+            'and neither must a third -- proving idempotency is not an artefact of a zero sheet count'
+        );
+        $this->assertTrue(
+            $report['secondProvisionCallReturnedNull'],
+            'once an active account exists, the precondition no longer holds and provisioning must report '
+            . 'that it did nothing rather than create again'
+        );
+    }
+
+    /**
+     * The provisioned account is the one the sheet actually draws on, and the sheet inherits its currency.
+     *
+     * Tied to the same response rather than asserted as a literal, so a resolution that returned an account
+     * the sheet did not use — which would leave the sheet with a currency no account backs — fails here.
+     */
+    public function testTheSheetDrawsOnTheProvisionedAccountAndInheritsItsCurrency(): void
+    {
+        // `report()` returns the scenario's **own** payload -- `$report = match ($scenario) { … }` -- so it is
+        // NOT nested under the scenario name. Indexing it a second time yields an empty array and every key
+        // reads `null`, which is the trap T383 recorded for `dashboardcounts` and the reason this scenario's
+        // report goes through a guard rather than a bare index.
+        $report = $this->provisioningReport();
+
+        $this->assertSame(
+            $report['provisionedAccountId'],
+            $report['firstSheetAccountId'],
+            'the sheet must draw on the account provisioning created, not on one that existed already'
+        );
+        $this->assertSame(
+            $report['provisionedCurrencyCode'],
+            $report['firstSheetCurrency'],
+            'FR-021: the sheet currency is the selected account\'s currency'
+        );
+    }
+
+    /**
+     * The `provisioning` scenario's report, with its keys proved present before any is read.
+     *
+     * The same guard `dashboardCounts()` carries, for the same reason: `report()` returns the scenario's
+     * own payload, so an extra `[scenario]` index reads `null` for every key and `assertSame(null, …)` passes.
+     * T383 shipped that bug in `dashboardcounts` and found it only because one assertion compared against a
+     * literal; this one has three, and a silent null would have read as "provisioning did nothing".
+     *
+     * @return array<string, mixed>
+     */
+    private function provisioningReport(): array
+    {
+        $report = $this->report('provisioning');
+        $required = [
+            'preconditionAccounts',
+            'accountsAfterFirst',
+            'accountsAfterSecond',
+            'accountsAfterThird',
+            'provisionedCurrencyCode',
+            'provisionedIsActive',
+            'firstSheetCurrency',
+            'firstSheetAccountId',
+            'provisionedAccountId',
+        ];
+
+        $missing = array_values(array_filter(
+            $required,
+            static fn (string $key): bool => !array_key_exists($key, $report)
+        ));
+
+        $this->assertSame(
+            [],
+            $missing,
+            'the `provisioning` scenario must report every key this file reads, or the assertions below '
+            . 'compare `null` with a literal and pass while measuring nothing; reported keys were: '
+            . implode(', ', array_keys($report))
+        );
+
+        return $report;
+    }
+
     // ===== HARNESS =====
 
     /**

@@ -37,57 +37,37 @@
 				v-else-if="!hasItems"
 				:name="t('pettycash', 'reviews.returnsQueue')"
 				:description="t('pettycash', 'reviews.noReturnedTransactions')"
-				data-testid="empty-queue" />
+				data-testid="empty-queue"
+			/>
 
 			<div v-else class="queue-view__content">
-				<table class="queue-table" data-testid="queue-table">
-					<thead>
-						<tr>
-							<th scope="col">{{ t('pettycash', 'reviews.transactionId') }}</th>
-							<th scope="col">{{ t('pettycash', 'reviews.sheetId') }}</th>
-							<th scope="col">{{ t('pettycash', 'reviews.costCenter') }}</th>
-							<th scope="col">{{ t('pettycash', 'reviews.amount') }}</th>
-							<th scope="col">{{ t('pettycash', 'reviews.returnedFromStage') }}</th>
-							<th scope="col">{{ t('pettycash', 'reviews.status') }}</th>
-							<th scope="col">{{ t('pettycash', 'common.actions') }}</th>
-						</tr>
-					</thead>
-					<tbody>
-						<tr v-for="item in queue.items" :key="item.id" :data-testid="`queue-row-${item.id}`">
-							<td>{{ item.id }}</td>
-							<td>{{ item.sheetId }}</td>
-							<td>{{ item.activeRevision.costCenter.name }}</td>
-							<td class="money" data-testid="amount">{{ formatMoney(item.activeRevision.amount) }}</td>
-							<td data-testid="returned-from-stage">
-								{{ t('pettycash', `reviews.stage.${item.latestDecision?.stage.toLowerCase() ?? 'unknown'}`) }}
-							</td>
-							<td>
-								<StatusBadge :status="item.status" />
-							</td>
-							<td>
-								<NcButton
-									variant="tertiary"
-									data-testid="view-details-btn"
-									@click="openTransactionDetail(item.id)">
-									{{ t('pettycash', 'common.view') }}
-								</NcButton>
-							</td>
-						</tr>
-					</tbody>
-				</table>
+				<ResponsiveTable
+					:columns="queueColumns"
+					:rows="queue.items"
+					:cell="queueCell"
+					:row-key="queueRowKey"
+					:caption="queueCaption"
+					test-id="queue-table"
+					test-id-prefix="returns-queue"
+					:row-test-id="queueRowTestId"
+					:card-row-test-id="queueCardRowTestId"
+					:loading="loading"
+				/>
 
 				<nav v-if="pageCount > 1" class="queue-pagination" data-testid="queue-pagination">
 					<NcButton
 						:disabled="currentPage <= 1"
 						data-testid="prev-page-btn"
-						@click="fetchQueue(currentPage - 1)">
+						@click="fetchQueue(currentPage - 1)"
+					>
 						{{ t('pettycash', 'common.previous') }}
 					</NcButton>
 					<span data-testid="page-indicator">{{ currentPage }} / {{ pageCount }}</span>
 					<NcButton
 						:disabled="currentPage >= pageCount"
 						data-testid="next-page-btn"
-						@click="fetchQueue(currentPage + 1)">
+						@click="fetchQueue(currentPage + 1)"
+					>
 						{{ t('pettycash', 'common.next') }}
 					</NcButton>
 				</nav>
@@ -97,7 +77,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, h, onMounted, type VNode } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { t } from '@nextcloud/l10n'
 import { mdiAlertCircle, mdiRefresh } from '@mdi/js'
@@ -105,7 +85,16 @@ import NcButton from '@nextcloud/vue/components/NcButton'
 import NcEmptyContent from '@nextcloud/vue/components/NcEmptyContent'
 import NcIconSvgWrapper from '@nextcloud/vue/components/NcIconSvgWrapper'
 import NcLoadingIcon from '@nextcloud/vue/components/NcLoadingIcon'
-import StatusBadge from '@/components/shared/StatusBadge.vue'
+import ResponsiveTable from '@/components/shared/ResponsiveTable.vue'
+import {
+	queueColumns as queueColumnsAround,
+	queueCardRowTestId,
+	queueRowKey,
+	queueRowTestId,
+	sharedQueueCell,
+	type QueueColumn
+} from '@/components/review/queueColumns'
+import type { TransactionSummary } from '@/types/api'
 import { useReviewsStore } from '@/stores/reviews'
 
 const router = useRouter()
@@ -117,15 +106,6 @@ const error = computed(() => reviewsStore.error)
 const hasItems = computed(() => queue.value.items.length > 0)
 const currentPage = computed(() => queue.value.page)
 const pageCount = computed(() => Math.max(1, Math.ceil(queue.value.total / queue.value.pageSize)))
-
-function formatMoney(money: { amountMinor: number; currency: string; minorUnit: number }): string {
-	const divisor = 10 ** money.minorUnit
-	const formatted = (money.amountMinor / divisor).toLocaleString('fa-IR', {
-		minimumFractionDigits: money.minorUnit,
-		maximumFractionDigits: money.minorUnit,
-	})
-	return `${formatted} ${money.currency}`
-}
 
 async function fetchQueue(page = 1): Promise<void> {
 	await reviewsStore.fetchReturnsQueue({
@@ -148,6 +128,23 @@ onMounted(() => {
 	// application, and `loadData()` there absorbs each of its three calls for the same reason.
 	fetchQueue().catch(() => undefined)
 })
+const QUEUE_OWN_COLUMN: QueueColumn = {
+	key: 'returnedFromStage',
+	label: t('pettycash', 'reviews.returnedFromStage')
+}
+
+const queueColumns = computed(() => queueColumnsAround(QUEUE_OWN_COLUMN, 4))
+
+const queueCaption = computed(() => t('pettycash', 'reviews.returnsQueue'))
+
+function queueCell(item: TransactionSummary, column: QueueColumn): VNode | string | number {
+	if (column.key === QUEUE_OWN_COLUMN.key) {
+		return h('span', { 'data-testid': 'returned-from-stage' }, t('pettycash', `reviews.stage.${item.latestDecision?.stage.toLowerCase() ?? 'unknown'}`))
+	}
+
+	return sharedQueueCell(item, column, openTransactionDetail)
+}
+
 </script>
 
 <style scoped>
@@ -234,14 +231,14 @@ onMounted(() => {
 	margin-block-start: 16px;
 }
 
+/*
+ * T389: the `.queue-table` rule that stood here answered a narrow viewport with
+ * `display: block; overflow-x: auto; white-space: nowrap` -- which is a scrollbar, not a reflow, and
+ * `nowrap` makes it worse by refusing to wrap even if there were room. The table markup is now
+ * `ResponsiveTable`, whose narrow-viewport answer is one card per row. The header rule is kept: it is a
+ * genuine layout adjustment and has nothing to do with clipping.
+ */
 @media (width <= 390px) {
-	.queue-table {
-		display: block;
-		overflow-x: auto;
-		white-space: nowrap;
-		font-size: var(--font-size-floor);
-	}
-
 	.queue-view__header {
 		flex-direction: column;
 		align-items: stretch;

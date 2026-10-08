@@ -145,6 +145,22 @@ final class DbExpenseSheetRepository implements ExpenseSheetRepository
         return array_map([$this, 'mapRow'], $rows);
     }
 
+    /**
+     * Every sheet on the instance, across every status.
+     *
+     * No `WHERE` on purpose: the whole point of this count is that it is not the open-sheet read
+     * wearing a total's name (T379). `COUNT(*)` arrives as a `BIGINT`, which some drivers hand back
+     * as a string, so it is cast rather than trusted -- the same rule `countByOwnerUid()` states.
+     */
+    public function countAll(): int
+    {
+        $qb = $this->connection->getQueryBuilder();
+        $qb->select($qb->func()->count('id', 'pettycash_sheet_count'))
+            ->from('pettycash_sheets');
+
+        return (int) $qb->executeQuery()->fetchOne();
+    }
+
     public function save(ExpenseSheet $sheet): void
     {
         $qb = $this->connection->getQueryBuilder();

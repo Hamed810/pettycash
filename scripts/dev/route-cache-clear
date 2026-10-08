@@ -59,11 +59,16 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# The canonical container name, and load-bearing: the lab's compose project is
-# pinned to `docker`, so every container carries that prefix. `nextcloud` does not
-# exist here, and guessing it produced a clean "No such container" failure on the
-# first run -- which is the right failure, from the wrong hardcoding.
-readonly CONTAINER=docker-nextcloud-1
+# The canonical container name, and load-bearing: the lab's Compose project is named
+# `pettycash-lab`, so every container in it carries that prefix. A container called
+# `nextcloud` does not exist here, and guessing it produced a clean "No such container"
+# failure on the first run -- which is the right failure, from the wrong hardcoding.
+#
+# The prefix is not a guess: COMPOSE_PROJECT_NAME=pettycash-lab in
+# ~/projects/nextcloud-lab/env/pettycash.env is what Compose prefixes container names
+# with. It matches the default in scripts/dev/in-container; the override exists so a lab
+# rename is one value rather than a search across the repository.
+readonly CONTAINER="${PETTYCASH_LAB_CONTAINER:-pettycash-lab-nextcloud-1}"
 readonly MARKER=/tmp/pettycash-route-cache-cleared
 
 # Apache recycles its workers asynchronously, so the master can accept the request a

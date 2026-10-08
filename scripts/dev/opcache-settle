@@ -27,8 +27,9 @@ set -euo pipefail
 # nothing, and Apache's document root is a front-controller config
 # (`RewriteRule . index.php` in `/var/www/html/.htaccess`) that will not execute
 # a dropped script. Reaching the real SAPI would mean restarting Apache, which is
-# shared environment state and not this repository's to disturb. Waiting needs
-# no permission and is provably sufficient, which is why this is a wait.
+# container state this repository does not own: the lab is defined outside it, in
+# ~/projects/nextcloud-lab. Waiting needs no permission and is provably sufficient,
+# which is why this is a wait rather than a restart.
 #
 # WHY WAITING IS SUFFICIENT
 #
@@ -141,7 +142,7 @@ scan_failed() {
 SETTINGS="$(settings)" || {
   echo "opcache-settle: could not read opcache settings from the container." >&2
   echo "opcache-settle: without them the wait cannot be computed, and an unverified" >&2
-  echo "opcache-settle: PHP run is not evidence. Start the Nextcloud container." >&2
+  echo "opcache-settle: PHP run is not evidence. Start the lab: ~/projects/nextcloud-lab/bin/lab pettycash up" >&2
   exit 1
 }
 
@@ -158,8 +159,8 @@ fi
 
 if [ "$(read_setting opcache.validate_timestamps)" != "1" ]; then
   # Without timestamp validation opcache never notices an edit at all, and
-  # waiting cannot help. This would need a container configuration change, which
-  # is shared environment state and is deliberately not made from here.
+  # waiting cannot help. This would need a container configuration change, which is
+  # lab state and is deliberately not made from here — see AGENTS.md, Docker Safety.
   echo "opcache-settle: opcache.validate_timestamps is not 1; a wait cannot make a" >&2
   echo "opcache-settle: PHP run trustworthy. This is a container configuration problem." >&2
   exit 1

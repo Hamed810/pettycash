@@ -166,7 +166,10 @@ exposing physical paths, and keeps access tied to transaction permissions.
 
 **Decision**: Model administrator-created, revocable public-link records with hashed opaque tokens,
 optional expiry, and audit events. Implement this after authenticated evidence flows and keep it
-disabled until its security tests pass.
+disabled until its security tests pass. **Amended 2026-10-07 (Decision 19):** *disabled by default*
+governs **creation**, not consumption. A link that an administrator creates is consumed
+unauthenticated — see **Decision 19**, which is the settled rule and supersedes any reading of this
+entry that treats a link as inheriting the requester's role scope.
 
 **Rationale**: The specification permits rather than requires public links. Deferring their
 activation reduces early exposure while preserving the approved capability.
@@ -174,7 +177,11 @@ activation reduces early exposure while preserving the approved capability.
 **Alternatives considered**:
 
 - Exposing AppData paths was rejected because they are not public resources.
-- Enabling anonymous links by default was rejected due to financial-document sensitivity.
+- Enabling anonymous links by default was rejected due to financial-document sensitivity. **This
+  rejection stands for *default creation*.** It was not a rejection of anonymous *consumption* of an
+  explicitly created link, which is what the source requirement §11.8 contemplates and what Decision
+  19 settles. The two must not be conflated again: a link is never created implicitly, and once one
+  exists deliberately, it is consumed without authentication.
 
 ## Decision 10: Use a Vue 3 Source Tree and Generated Nextcloud Assets
 
@@ -377,8 +384,171 @@ migration is added in anticipation of it.
 - Because the `mysql` Nextcloud type covers two distinct concrete engines, CI must exercise MySQL
   and MariaDB as separate jobs rather than treating a passing MariaDB run as evidence for MySQL.
 
+## Decisions 17–21: Settled by the 2026-10-07 Clarification Session
+
+Decisions 1–16 above resolve the Technical Context unknowns of the original Phase 0 pass.
+**Decisions 17–21** resolve the five ambiguities the clarification session of 2026-10-07 settled
+after that pass, each recorded with the alternatives weighed so implementation does not re-open them.
+They are appended rather than interleaved so the original pass's reasoning stays readable in order.
+
+## Decision 17: Exclude Environment-Induced Responses from the Error-Rate Figure
+
+**Decision**: An **environment-induced response** — a brute-force `429`, an infrastructure or platform
+`5xx`, a transport failure — is excluded from both the numerator and the denominator of FR-073's error
+rate, the excluded count is published beside the figure, and **if the excluded share exceeds 1% of the
+requests the run issued the figure is recorded as *not measured*** rather than reported. Deliberately
+provoked 4xx/409/422 remain excluded as a separate, narrower class already settled on 2026-10-02.
+
+**Rationale**: A contended run does not merely add noise to the ratio, it **inverts** it. Throttled
+responses inflate the denominator with traffic that never exercised application code while suppressing
+the successful requests that would have exercised it, so an unusable run yields a number that looks
+better than a clean one. A single contamination ceiling is needed because publishing the excluded count
+alone still invites a reader to compute a ratio from a run that was mostly throttled.
+
+**Alternatives considered**:
+
+- Counting every request the suite issued was rejected: it makes the metric sensitive to the test
+  harness's environment rather than to the application, which is not what a defect threshold is for.
+- Keeping the 2026-10-02 rule verbatim and merely noting contamination as a caveat was rejected: a
+  caveat beside a number does not stop the number being quoted.
+- Replacing the measurement with a dedicated quiet run was rejected as the *sole* remedy because it
+  makes the figure unobtainable whenever the shared instance is imperfect, and this project shares one
+  instance with other applications by design.
+
+**Consequence**: This is the first rule in the feature that makes a **contended** run explicitly
+non-evidence rather than merely noisy. `tasks.md` T313's record of four full-suite attempts producing
+2, 7, 30 and 151 failures — every one a `429` assertion, from two concurrent sessions on one shared
+instance — is exactly the case this decides.
+
+## Decision 18: Treat a Public Evidence Link as Unauthenticated Access
+
+**Decision**: The unguessable token is the **whole authority**. A link is consumed without signing in
+and without any role or responsibility scope; abuse control is delegated to Nextcloud's existing
+brute-force limiter and PettyCash MUST NOT add a second authentication, rate-limiting, or access-control
+mechanism; every access records configuration audit with the viewer as `anonymous` plus timestamp and
+IP; and **expired, deactivated and never-existing tokens are refused identically**. FR-031 governs the
+capability, and this decision supplies the access rule it previously lacked.
+
+**Rationale**: The source requirement §11.8 authorises a *public* link and constrains only its creation;
+§11.9 places passwords, login/logout and authentication policy in Nextcloud's hands. Inventing a
+PettyCash-side authorization layer for links would therefore create the second authentication system
+Principle III forbids, while requiring a signed-in holder would silently narrow a capability the
+requirement grants. Recording the viewer as `anonymous` rather than leaving the UID field empty is
+required for the audit to serve the access investigation it exists for.
+
+**Alternatives considered**:
+
+- Requiring a signed-in holder with independent view rights was rejected as the recommendation because
+  it makes the link a convenience for a user who could already open the file, which is a narrower
+  capability than §11.8 grants.
+- A per-link administrator choice between anonymous and authenticated access was rejected as the
+  recommendation: two security paths to implement, test and audit, chosen before any link exists.
+- Token-only access with no throttle and no per-access identity was rejected outright; it discards the
+  audit FR-031 requires.
+
+**Consequence**: `contracts/ocs-api.yaml` has **no route that consumes a token** — it defines
+`POST /evidence/{evidenceId}/links` and `POST /evidence-links/{linkId}/deactivate` only. That route is
+now required, not optional, and it is the one place in V1 reachable without authentication.
+
+## Decision 19: Adopt Keyboard Operability as the V1 Accessibility Floor
+
+**Decision**: Each **primary journey** (the journeys exercised by User Stories 1–7) MUST be completable
+**using the keyboard alone**, with a visible focus indicator on every interactive element reached,
+including under dark and high-contrast themes. **Screen-reader semantics — label association, error
+association, and announced status for mutations — are deferred to V2** under FR-076 and struck from
+`quickstart.md`.
+
+**Rationale**: The keyboard floor is what makes the workflow usable without a pointer and is the
+accessibility promise the team had already written into its own release checklist; a focus indicator
+the active theme erases leaves a keyboard user with no indication of position, so theme coverage is
+part of the criterion rather than a nicety. The three semantic items were deferred on **scale, not
+importance**: naming every control and announcing every mutation is a compliance-sized surface to add
+after 71 of 276 ledger tasks are complete, and deferring it explicitly is honest where silence would
+have read as satisfied.
+
+**Alternatives considered**:
+
+- Adopting the full `quickstart.md` list including semantics was rejected on the same scale argument.
+- Scoping V1 to contrast, font size and no-horizontal-scroll only was rejected because it would delete
+  a check the project had already committed to, losing real usability for no saving.
+- Leaving the quickstart items advisory was rejected because an advisory check that testers record is
+  indistinguishable from one nobody reads.
+
+**Consequence**: FR-071 and SC-009 now state the criterion; the removed items must not be reported as
+met in V1 release readiness.
+
+## Decision 20: Resolve a Concurrent Decision First-Write-Wins with a Superseded Attempt
+
+**Decision**: A decision submitted against state that no longer accepts it applies **no** business
+effect, **overwrites nothing**, is answered `409 Conflict` naming that a decision is already recorded,
+and **is still audited as a `SUPERSEDED_ATTEMPT`** — its own event type, neither an approval nor a
+rejection — naming the transaction, its active revision, the stage, the actor, the time, the decision
+attempted, and the decision already in force.
+
+**Rationale**: First write wins is chosen over last-write-wins specifically to make **double-booking
+structurally impossible**: accepting a second approval is the only outcome that could produce two
+consumption movements against one transaction and decrement the account twice, and a rejected or
+returned transaction could be silently promoted to approved. Recording the loser is what distinguishes
+a reviewer's real action from a request that never happened; recording it *as* an approval or rejection
+would falsify the very decision history Principle IV protects. This completes, rather than repeats,
+Decision 7: `lock_version` was designed in for optimistic checks but no behaviour was ever specified
+for what happens when the check fails.
+
+**Alternatives considered**:
+
+- Last-write-wins was rejected on double-booking grounds.
+- Silently ignoring the loser was rejected because it is indistinguishable from a request that never
+  happened.
+- Server-side serialization with transparent client retry was rejected because a blocking lock buys no
+  correctness property refusal does not already provide, and the retry it implies contradicts FR-075's
+  prohibition on automatic resumption.
+
+**Consequence**: Distinct from FR-084. A **replay** is one command arriving twice under the same
+`X-PettyCash-Command-ID` and returns the first outcome; a **superseded attempt** is a *different*
+command issued against changed state, which no command identifier can detect and which therefore
+requires a server-side state check. The `AuditEvent.eventType` field in the contract is an open string
+and MUST gain the `SUPERSEDED_ATTEMPT` value.
+
+## Decision 21: Refuse Finance Settlement When No Active Account Matches the Sheet Currency
+
+**Decision**: At final finance approval, if no **active** petty-cash account in the sheet's currency
+exists for the purchaser, the approval is **refused with `422`** naming the missing or inactive account;
+the transaction stays at the finance stage and no balance movement, consumption record, workflow
+transition or final outcome is recorded. **FR-020's idempotent provisioning does not extend to
+settlement.**
+
+**Rationale**: FR-040 requires one consumption movement against the account matching the sheet currency
+and FR-042 requires atomic completion, so with no such account the requirement had no satisfiable
+action and no stated outcome. Extending FR-020 into settlement would mean a finance decision silently
+creates a funding object — booking approved expense against a balance that was never funded or
+approved, which is exactly the silent financial effect FR-042 and Principle IV exist to prevent. The
+remedy is instead an administrator's deliberate, audited act (restore, reactivate, or charge an
+account under FR-015/FR-017), so the refusal must be actionable rather than merely valid. An
+approved-but-unsettleable expense is an acceptable and **visible** intermediate state; an expense
+booked against a balance conjured up at approval time is not.
+
+**Alternatives considered**:
+
+- Auto-provisioning a new account at settlement was rejected as the recommendation for the reason
+  above — it makes money movement a side effect of a decision click.
+- Settling against the purchaser's most recent account regardless of currency was rejected outright:
+  it books an amount against a balance denominated in something else.
+- Refusing the sheet earlier, at submission or at each stage transition, was rejected as the
+  *sole* rule because it cannot cover an account deactivated **after** submission, which is the case
+  that actually strands an approved expense.
+
+**Consequence**: T095/T166 aside, this makes the settlement path fail **loudly and specifically** in a
+case where it previously would have failed ambiguously. The refusal is not a system fault and must not
+be presented as one; it is a correct refusal caused by a configuration gap.
+
 ## Primary Sources Consulted
 
+- `DOC/Requirements/11-PettyCash_Requirements_Document_Section_11_RTL.md` §11.8 (public link, admin
+  control, manageability, deactivation, audit) and §11.9 (authentication and login policy belong to
+  Nextcloud) — the source for Decision 18
+- `DOC/Requirements/` Sections 1–13 generally, as the business-domain baseline the constitution names
+- `specs/001-pettycash-v1-core/checklists/requirements.md` (quickstart accessibility items) and
+  `tasks.md` T313 (the `429`-contended full-suite record) — the sources for Decisions 17 and 19
 - Nextcloud 34 Developer Manual: app architecture, routing, controllers, security, database,
   migrations, files, translations, and upgrade guidance
 - Official Nextcloud app-template and Nextcloud Vue, Vite config, Axios, router, localization, and
@@ -396,3 +566,12 @@ migration is added in anticipation of it.
 - Load-test XLSX/PDF memory behavior and Persian PDF rendering at the 10,000-transaction fixture.
 - Test concurrent decisions and finance approvals with real MariaDB locking.
 - Clearly label latest-effective totals versus financially final totals in UI and exports.
+- **Settled 2026-10-07 — no longer open.** The risk that concurrent decisions could duplicate a
+  financial effect is now decided: **Decision 20** (first write wins, `SUPERSEDED_ATTEMPT`, `409`).
+  The risk that public-link behaviour needed an early integration spike is now partly decided:
+  **Decision 18** settles the access rule, though the consumption route still needs the spike.
+- **New, settled 2026-10-07 — recorded so it is not rediscovered as a gap.** An acceptance run
+  degraded by Nextcloud's brute-force limiter is **not evidence of an error-rate figure in either
+  direction** (**Decision 17**). Because this project shares one Nextcloud instance with other
+  applications, contended runs are an expected operational condition rather than a rare accident, and
+  the full-suite evidence in `tasks.md` T313 is currently unverified for exactly this reason.

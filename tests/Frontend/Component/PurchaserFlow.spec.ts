@@ -287,6 +287,8 @@ import EvidenceUploader from '@/components/evidence/EvidenceUploader.vue'
 import EvidenceList from '@/components/evidence/EvidenceList.vue'
 import * as evidenceApi from '@/services/evidenceApi'
 import { useSheetStore } from '@/stores/sheets'
+import { ABSENT_MARKER, formatSheetDate } from '@/utils/date'
+import { expectCardAgreesWithTable } from '../../Support/cardAgreement'
 import { useTransactionStore } from '@/stores/transactions'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import { routes } from '@/router'
@@ -297,12 +299,14 @@ import type {
 	Revision,
 	SheetDetail,
 	SheetStatus,
+	SheetSummary,
 	SheetTotals,
 	TransactionDetail,
 	TransactionStatus,
 	TransactionSummary
 } from '@/types/api'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { SHEET_STATUSES } from '@/types/api'
 import { join, relative, extname } from 'node:path'
 
 function createTestRouter(): Router {
@@ -320,6 +324,22 @@ function createTestRouter(): Router {
 	//
 	// Deriving the table from `@/router` is what makes that class of defect fail here instead: a view
 	// that links to a name the application does not declare now fails to mount.
+		// **The hash is reset here, and that is load-bearing (T387).** `createWebHashHistory()` reads
+	// `window.location.hash`, and jsdom gives this whole file **one** document -- so the location is shared
+	// state between tests. Any test that navigates (the correction journeys push `transaction-edit`, the
+	// shell tests walk routes) left its URL behind, and every later `createTestRouter()` started *there*
+	// rather than at `/`.
+	//
+	// It surfaced as a test that could not fail. `SheetFormView`'s `isEditing` is `!!route.params.id`, so a
+	// create-mode test mounted after a navigating one took the **update** branch and submitted an update:
+	// accounts empty, title filled, button enabled, validation clean, and the create request simply never
+	// made. That reads as "the form did not submit" rather than as "this was mounted on the wrong route".
+	//
+	// Resetting it exposed one test that had been depending on the leak for its timing
+	// (`should disable form when transaction is in submitted state`), which is fixed below by seeding its
+	// store before it interacts with the view.
+	window.location.hash = ''
+
 	return createRouter({
 		history: createWebHashHistory(),
 		routes: routes.map(({ path, name, props }) => ({
@@ -665,6 +685,497 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 		})
 	})
 
+	/**
+	 * FR-063 names nine things a sheet list must show. This mounts the list with a fixture carrying
+	 * **every one of them** and asserts each is displayed, so a payload key added without a column fails
+	 * here rather than passing unnoticed.
+	 *
+	 * The assertion is per-field presence with a value, not "the table got wider": the list already
+	 * rendered six of the nine, and a test that counted columns would have been satisfied by the list it
+	 * started from.
+	 */
+/**
+ * A `SheetSummary` carrying every FR-063 field with a distinct value, so no two cells can pass on the
+ * same text.
+ *
+ * At module scope rather than inside the describe that first needed it: T389's narrow-viewport
+ * assertions mount the same list, and a second copy of this fixture would let the two suites disagree
+ * about what a fully-populated sheet looks like.
+ */
+/** A `SheetSummary` with distinct values, so no two cells can pass on the same text. */
+		function fullSheetFixture(): SheetSummary {
+			const money = (amountMinor: number): Money => ({ amountMinor, currency: 'IRR', minorUnit: 0 })
+
+			return {
+				id: 'sh-full',
+				title: 'Mordad travel',
+				ownerId: 'employee7',
+				ownerDisplayName: 'Employee Seven',
+				currency: 'IRR',
+				status: 'AWAITING_SENIOR_REVIEW',
+				transactionCount: 4,
+				totals: {
+					current: money(1_000_000),
+					submitted: money(900_000),
+					effectiveApproved: money(800_000),
+					effectiveRejected: money(50_000),
+					effectivePending: money(70_000),
+					// Distinct and non-zero **on purpose**: the three stage-approved figures are T365's and
+					// must not be on this list, and only a distinctive value can prove their absence. Three
+					// zeroes would render as a bare zero and the assertion below could not tell an absent
+					// column from a column full of zeroes.
+					costCenterApproved: money(11_111),
+					seniorApproved: money(22_222),
+					financeApproved: money(33_333),
+				},
+				createdAt: '2026-06-10T00:00:00+00:00',
+				submittedAt: '2026-07-02T00:00:00+00:00',
+				completedAt: null,
+				firstExpenseDate: '2026-07-01',
+				lastExpenseDate: '2026-07-28',
+				version: 3,
+				// Distinct from `transactionCount` (4) on purpose: the amended FR-063 clause names a revision
+				// number precisely because a count would restate a figure the same clause already requires,
+				// and a fixture where the two coincide cannot show which one a row is rendering.
+				activeRevisionNumber: 7,
+			}
+		}
+
+
+	describe('FR-063 sheet list completeness', () => {
+		async function mountWithFullSheet() {
+			setSheetList([fullSheetFixture()])
+			const wrapper = createWrapper(SheetListView)
+			await flushPromises()
+
+			return wrapper
+		}
+
+		it('shows the owner the payload carries', async () => {
+			const wrapper = await mountWithFullSheet()
+
+			expect(wrapper.find('[data-test="sheet-list-owner"]').text()).toBe('Employee Seven')
+		})
+
+		/**
+		 * The submitted total beside the current one, because they answer different questions.
+		 *
+		 * `submitted_total_minor` is a snapshot at first submission and does not move on correction
+		 * (`data-model.md`), so this fixture gives the two different amounts and each cell must render its
+		 * own. Asserted as *two non-empty cells that differ* rather than against a literal formatted string:
+		 * the grouping separator and the digits belong to `Intl`, and a hardcoded Persian string would fail
+		 * on an ICU version that groups differently without the behaviour having changed.
+		 */
+		it('shows the submitted total beside the current one', async () => {
+			const wrapper = await mountWithFullSheet()
+
+			const current = wrapper.find('[data-test="sheet-list-current-total"]').text()
+			const submitted = wrapper.find('[data-test="sheet-list-submitted-total"]').text()
+
+			expect(current).not.toBe('')
+			expect(submitted).not.toBe('')
+			expect(current).not.toBe(submitted)
+		})
+
+		/**
+		 * T385: the same latest active revision number on the **list**, printed as `0` for an empty sheet.
+		 *
+		 * The two surfaces are required to show the same value by the amended FR-063 clause, so the list
+		 * asserts it rather than being left to follow the detail view. `0` is a real answer rather than an
+		 * absence — unlike the dates, which use the absent-marker — so the assertion pins the literal.
+		 */
+		it('shows the latest active revision number on the list too', async () => {
+			setSheetList([fullSheetFixture()])
+			const wrapper = createWrapper(SheetListView)
+			await flushPromises()
+
+			// The fixture's value is 7 while its `transactionCount` is 4, so this distinguishes the two
+			// readings the amended clause is about — a count would render 4.
+			expect(wrapper.find('[data-test="sheet-list-active-revision"]').text().trim()).toBe('7')
+			// The zero case is asserted on the detail surface above; mounting the list twice in one test
+			// reads the first wrapper's store and silently reports its value for the second.
+		})
+
+		it('shows the three summary amounts of the latest effective outcome', async () => {
+			const wrapper = await mountWithFullSheet()
+
+			const group = wrapper.find('[data-test="sheet-list-effective-outcome"]')
+			expect(group.find('[data-test="sheet-list-effective-approved"]').text()).not.toBe('')
+			expect(group.find('[data-test="sheet-list-effective-rejected"]').text()).not.toBe('')
+			expect(group.find('[data-test="sheet-list-effective-pending"]').text()).not.toBe('')
+		})
+
+		it('shows every key date the payload carries, each in its own hook', async () => {
+			const wrapper = await mountWithFullSheet()
+
+			// Four dates, four hooks. Asserted as a set rather than as "the dates cell is not empty",
+			// because one missing date and four rendered dates produce an equally non-empty cell.
+			for (const hook of [
+				'sheet-list-created-at',
+				'sheet-list-submitted-at',
+				'sheet-list-completed-at',
+				'sheet-list-expense-range'
+			]) {
+				expect(wrapper.find(`[data-test="${hook}"]`).exists(), `${hook} must be rendered`).toBe(true)
+			}
+
+			// The three this fixture populates carry a date rather than the absent-marker.
+			expect(wrapper.find('[data-test="sheet-list-created-at"]').text()).not.toBe('—')
+			expect(wrapper.find('[data-test="sheet-list-submitted-at"]').text()).not.toBe('—')
+			expect(wrapper.find('[data-test="sheet-list-expense-range"]').text()).not.toBe('—')
+		})
+
+		/**
+		 * A nullable date renders as a dash, **not** as 1 January 1970.
+		 *
+		 * `new Date(null).toLocaleDateString('fa-IR')` is 1970, so a sheet that was never completed would
+		 * carry a confident date beside it. `completedAt` is null on this fixture, and FR-063's "key dates"
+		 * must not fill that cell with a date the sheet never had.
+		 */
+		it('renders a null date as a dash rather than the Unix epoch', async () => {
+			const wrapper = await mountWithFullSheet()
+
+			expect(wrapper.find('[data-test="sheet-list-completed-at"]').text()).toBe('—')
+			expect(wrapper.text()).not.toContain('۱۹۷۰')
+			expect(wrapper.text()).not.toContain('1970')
+		})
+
+		/**
+		 * FR-062's three stage-approved figures are **T365's**, and this list must not carry them.
+		 *
+		 * Proven by *value* rather than by a missing `data-test` hook: the fixture gives the three distinctive
+		 * amounts, so any column rendering them puts those strings into the row and this fails. A hook-based
+		 * absence check would pass for a column that used a different attribute name entirely.
+		 *
+		 * **This test is expected to fail when T365 lands**, and that is the point: T365 owns those columns
+		 * on this file, so its delivery must update this assertion rather than find it inconvenient.
+		 */
+		it('carries no figure from FR-062’s three stage-approved columns, which are T365’s', async () => {
+			const wrapper = await mountWithFullSheet()
+
+			const rows = wrapper.findAll('[data-test="sheet-row"]')
+			expect(rows).toHaveLength(1)
+			// Narrowed explicitly rather than with `!`: under `noUncheckedIndexedAccess` the index is
+			// `T | undefined`, and an assertion here would otherwise be made on `undefined` while
+			// type-checking clean — which is the same shape as the vacuous assertions this file already
+			// had to be reopened for.
+			const row = rows[0]
+			expect(row).toBeDefined()
+			for (const amountMinor of [11_111, 22_222, 33_333]) {
+				expect(row?.text()).not.toContain(amountMinor.toLocaleString('fa-IR'))
+			}
+			// The latest-effective group this task *does* own is present, so the guard above is about the
+			// three stage figures specifically rather than about totals vanishing from the list.
+			expect(row?.find('[data-test="sheet-list-effective-outcome"]').exists()).toBe(true)
+		})
+	})
+	/**
+	 * T382: FR-064's four sheet facets and a pager, both of which the surface had no control for.
+	 *
+	 * T333 delivered the server half and recorded the client half as a limitation. These are that half,
+	 * and the pager closes the more consequential gap: a sheet past the first page is a sheet whose
+	 * **status** the caller cannot see, so a returned transaction they must correct and a sheet they must
+	 * submit are both potentially invisible.
+	 */
+	/**
+	 * T389: FR-071 requires the listed elements to be visible **without horizontal scroll** at 390px.
+	 *
+	 * This list answered that with `overflow-x: auto`, which produces a scrollbar rather than satisfying the
+	 * requirement -- precisely what `src/styles/app.scss` says must not be done. It now uses
+	 * `ResponsiveTable`, which renders the same rows as a `<table>` above 640px and one card per row below.
+	 */
+	describe('FR-071 narrow-viewport reflow', () => {
+		async function mountWithSheet() {
+			setSheetList([fullSheetFixture()])
+			const wrapper = createWrapper(SheetListView)
+			await flushPromises()
+
+			return wrapper
+		}
+
+		it('renders both layouts, so a narrow viewport is answered rather than clipped', async () => {
+			const wrapper = await mountWithSheet()
+
+			// Both are always in the document; CSS chooses between them. Asserting their presence catches a
+			// conversion that replaced the table with cards instead of adding cards beside it.
+			expect(wrapper.find('[data-test="sheet-list-table"]').exists()).toBe(true)
+			expect(wrapper.findAll('[data-test="sheet-row"]').length).toBe(1)
+			expect(wrapper.findAll('[data-test="sheet-row-card"]').length).toBe(1)
+		})
+
+		/**
+		 * Every card field carries its own hook, so a narrow-only defect is assertable at all.
+		 *
+		 * `ReportTable.vue`'s card fields have no hooks, which is why its figures are only assertable through
+		 * the desktop table a narrow viewport never renders. These do.
+		 */
+		it('gives every card field its own hook, so a narrow-only defect is assertable', async () => {
+			const wrapper = await mountWithSheet()
+			const card = wrapper.find('[data-test="sheet-row-card"]')
+
+			for (const key of [
+				'title',
+				'owner',
+				'currency',
+				'status',
+				'transactionCount',
+				'activeRevision',
+				'totals',
+				'latestEffective',
+				'keyDates',
+				'actions'
+			]) {
+				expect(
+					card.find(`[data-test="sheet-list-card-field-${key}"]`).exists(),
+					`the card must have a labelled field for '${key}'`
+				).toBe(true)
+			}
+		})
+
+		/**
+		 * The figures **agree** between the two layouts.
+		 *
+		 * The reason `ResponsiveTable` takes a `cell` render function is that the two layouts cannot become two
+		 * presentations of the same money. A card missing a field the table shows is exactly that, and it
+		 * would be invisible to a test that only ever looked at one layout.
+		 */
+		it('renders the same figures in the table and in the card', async () => {
+			const wrapper = await mountWithSheet()
+			const card = wrapper.find('[data-test="sheet-row-card"]')
+
+			for (const name of [
+				'owner',
+				'current-total',
+				'submitted-total',
+				'active-revision',
+				'created-at',
+				'submitted-at',
+				'completed-at',
+				'expense-range'
+			]) {
+				const fromTable = wrapper.find(`[data-test="sheet-list-${name}"]`).text()
+				const fromCard = card.find(`[data-test="sheet-list-${name}"]`).text()
+
+				expect(fromCard, `'${name}' must be present in the card layout`).not.toBe('')
+				expect(fromCard, `'${name}' must agree between the two layouts`).toBe(fromTable)
+			}
+		})
+
+		/**
+		 * The narrow-viewport **switch** exists in the stylesheet.
+		 *
+		 * **This is a declaration assertion, and it is labelled as one.** jsdom does not evaluate media
+		 * queries, so a test cannot observe that the card list is actually *shown* at 390px -- and that limit
+		 * is real: deleting the whole `@media` block leaves every test in this file green, which was measured
+		 * rather than assumed. So the assertions above prove the narrow layout is **rendered** and carries
+		 * the same figures, and this one proves the rule that reveals it is **declared**. T122's browser
+		 * measurement is still what confirms it is seen; this is the same proxy T116 documents for
+		 * `min-width`, and it is recorded here rather than presented as a rendering.
+		 */
+		it('declares the narrow-viewport rule that hides the table and reveals the cards', () => {
+			const source = readFileSync(
+				join(process.cwd(), 'src/components/shared/ResponsiveTable.vue'),
+				'utf8'
+			)
+			const narrow = source.match(/@media \(width <= 640px\) \{([\s\S]*?)\n\}/)
+
+			expect(narrow, 'the component must declare a narrow-viewport breakpoint').not.toBeNull()
+			expect(narrow?.[1], 'the table must be hidden at that width').toMatch(
+				/responsive-table__desktop[\s\S]*display:\s*none/
+			)
+			expect(narrow?.[1], 'and the cards shown in its place').toMatch(
+				/responsive-table__cards[\s\S]*display:\s*flex/
+			)
+		})
+
+		it('no longer declares a clipping overflow on its table container', async () => {
+			const source = readFileSync(
+				join(process.cwd(), 'src/views/sheets/SheetListView.vue'),
+				'utf8'
+			)
+
+			// **The declaration, not any mention.** Anchored at the start of a line so the explanatory comment
+			// naming `overflow-x: auto` does not satisfy -- or trip -- the check; a first version matched the
+			// prose and failed on the comment that records why the property is gone.
+			expect(
+				source,
+				'FR-071 is not satisfied by clipping, so this view must not answer a narrow viewport with '
+					+ '`overflow-x: auto`'
+			).not.toMatch(/^\s*overflow-x:\s*auto/m)
+		})
+	})
+
+	describe('sheet list filters and pager', () => {
+		/**
+		 * Mounts the list with a server page of `total` rows at the default size of 25.
+		 *
+		 * The page response is built per call rather than returned from a constant, so the `total` under
+		 * test is the one the pager reads -- a fixed fixture with `total: 0` and a pager test asserting on
+		 * `pagination.total` is the shape of an assertion that cannot fail.
+		 */
+		function mountWithTotal(total: number, items: SheetSummary[] = []) {
+			ocsRequest.mockImplementation(() => Promise.resolve({
+				status: 200,
+				data: { ocs: { meta: { status: 'ok', statuscode: 200 }, data: { ...EMPTY_PAGE, items, total } } }
+			}))
+			return createWrapper(SheetListView)
+		}
+
+		it('offers a control for each of the four FR-064 sheet facets', async () => {
+			const wrapper = mountWithTotal(0)
+			await flushPromises()
+
+			for (const hook of [
+				'sheet-filter-status',
+				'sheet-filter-currency',
+				'sheet-filter-from',
+				'sheet-filter-to',
+				'sheet-filter-creator'
+			]) {
+				expect(wrapper.find(`[data-test="${hook}"]`).exists(), `${hook} must exist`).toBe(true)
+			}
+		})
+
+		/**
+		 * A status the server does not accept earns a 422, not a filtered list -- so the control offers
+		 * exactly the server's vocabulary and no more. The list is read from the shared `SheetStatus` type,
+		 * which is what makes a newly added member a compile-time obligation here.
+		 */
+		it('offers the status picker options of the server’s vocabulary', async () => {
+			const wrapper = mountWithTotal(0)
+			await flushPromises()
+
+			const select = wrapper.findComponent({ name: 'NcSelect' })
+			const options = select.props('options') as { value: string }[]
+
+			expect(options.map((option) => option.value).sort()).toEqual([...SHEET_STATUSES].sort())
+		})
+
+		/**
+		 * The facet names the control sends are the ones the server accepts.
+		 *
+		 * Read out of `SheetListFilterFactory::ACCEPTED_FILTERS` rather than a hand-written list, for the
+		 * same reason T376’s report-side equivalent reads `ReportFilterFactory`: the vocabulary is closed,
+		 * so a name the UI sends that the server does not accept is a guaranteed 422 for a user who filled
+		 * the filter in correctly.
+		 */
+		it('sends only filter names SheetListFilterFactory accepts', () => {
+			const source = readFileSync(
+				join(process.cwd(), 'lib/Application/Expense/SheetListFilterFactory.php'),
+				'utf8'
+			)
+			const block = source.match(/ACCEPTED_FILTERS\s*=\s*\[([^\]]*)\]/)
+			expect(block).not.toBeNull()
+
+			const accepted = [...(block?.[1] ?? '').matchAll(/'([A-Za-z][A-Za-z0-9]*)'/g)].map((m) => m[1])
+			expect(accepted.length).toBeGreaterThan(0)
+
+			// The four facets this view sends, plus the derived `ownerId` it displays.
+			for (const name of ['status', 'currency', 'from', 'to', 'ownerId']) {
+				expect(accepted, `'${name}' must be accepted by the server`).toContain(name)
+			}
+		})
+
+		it('shows no pager when everything fits on one page', async () => {
+			const wrapper = mountWithTotal(25)
+			await flushPromises()
+
+			expect(wrapper.find('[data-test="sheet-pager"]').exists()).toBe(false)
+		})
+
+		/**
+		 * The acceptance criterion: `total: 40` at the default `pageSize: 25` must reach page 2.
+		 *
+		 * Asserted as a **request**, not as a rendering: the point is that the control reaches the server
+		 * with `page=2`, and a test that only checked the pager appeared would pass for a pager wired to
+		 * nothing -- which is the state this surface was in.
+		 */
+		it('reaches page 2 when the server reports 40 rows at the default page size', async () => {
+			const wrapper = mountWithTotal(40)
+			await flushPromises()
+
+			const pager = wrapper.find('[data-test="sheet-pager"]')
+			expect(pager.exists()).toBe(true)
+
+			// Previous is unavailable on page 1 and next is available: one control in each direction.
+			expect(wrapper.find('[data-test="sheet-page-previous"]').attributes('disabled')).toBeDefined()
+			expect(wrapper.find('[data-test="sheet-page-next"]').attributes('disabled')).toBeUndefined()
+
+			await wrapper.find('[data-test="sheet-page-next"]').trigger('click')
+			await flushPromises()
+
+			expect(ocsRequest).toHaveBeenCalledWith(
+				expect.objectContaining({ url: expect.stringContaining('page=2') })
+			)
+		})
+
+		it('disables the next control on the last page', async () => {
+			const wrapper = mountWithTotal(40)
+			await flushPromises()
+
+			await wrapper.find('[data-test="sheet-page-next"]').trigger('click')
+			await flushPromises()
+
+			// 40 rows at 25 per page is two pages, so page 2 is the last and both directions are now closed.
+			expect(wrapper.find('[data-test="sheet-page-next"]').attributes('disabled')).toBeDefined()
+			expect(wrapper.find('[data-test="sheet-page-previous"]').attributes('disabled')).toBeUndefined()
+		})
+
+		/**
+		 * Applying a filter resets to page 1.
+		 *
+		 * The failure this prevents is silent rather than loud: applying a narrower filter while sitting on
+		 * page 3 asks for rows 51-75 of a set that may now hold six sheets, so the user sees an empty list
+		 * beside a pager reading "page 3 of 1" -- a correct request and a useless answer.
+		 */
+		it('returns to page 1 when a filter is applied', async () => {
+			const wrapper = mountWithTotal(40)
+			await flushPromises()
+
+			await wrapper.find('[data-test="sheet-page-next"]').trigger('click')
+			await flushPromises()
+
+			await wrapper.find('[data-test="sheet-filter-currency"]').setValue('IRR')
+			await wrapper.find('[data-test="sheet-filters"]').trigger('submit')
+			await flushPromises()
+
+			expect(ocsRequest).toHaveBeenCalledWith(
+				expect.objectContaining({ url: expect.stringContaining('page=1') })
+			)
+		})
+
+		it('sends the currency upper-cased, because the server requires three uppercase letters', async () => {
+			const wrapper = mountWithTotal(0)
+			await flushPromises()
+
+			await wrapper.find('[data-test="sheet-filter-currency"]').setValue('irr')
+			await wrapper.find('[data-test="sheet-filters"]').trigger('submit')
+			await flushPromises()
+
+			expect(ocsRequest).toHaveBeenCalledWith(
+				expect.objectContaining({ url: expect.stringContaining('IRR') })
+			)
+		})
+
+		/**
+		 * The creator facet is shown, and is **not** an editable field.
+		 *
+		 * `SheetController::index` accepts `ownerId` only when it names the caller and answers anything else
+		 * with a 403, so a text box here could only ever invite that refusal. Asserted as the absence of an
+		 * input, which is the property that matters -- asserting the presence of some label would pass for
+		 * a box the user can type another uid into.
+		 */
+		it('shows the creator facet without offering an input the server would refuse', async () => {
+			const wrapper = mountWithTotal(0)
+			await flushPromises()
+
+			const creator = wrapper.find('[data-test="sheet-filter-creator"]')
+			expect(creator.exists()).toBe(true)
+			expect(creator.find('input').exists()).toBe(false)
+			expect(creator.find('[data-test="sheet-filter-creator-value"]').text()).not.toBe('')
+		})
+	})
+
 	describe('Sheet Forms', () => {
 		it('should render sheet creation form with title and account selection fields', () => {
 			const wrapper = createWrapper(SheetFormView)
@@ -839,6 +1350,224 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 		// existed, so it passed or failed for reasons unrelated to submission — it never submitted and
 		// never produced an error. The store's `error` is set explicitly instead, which is the state a
 		// refused submission leaves behind, and the region is required to be absent without it.
+		/**
+		 * T384: FR-063's **key dates** on the sheet detail view.
+		 *
+		 * The view rendered none of them. `grep -cE "createdAt|submittedAt|completedAt|firstExpenseDate|
+		 * lastExpenseDate" src/views/sheets/SheetDetailView.vue` was **0** before this change, and its only
+		 * date was a *transaction's* `activeRevision.expenseDate` inside the transaction table. T381 had
+		 * delivered the same four for the sheet **list**, so FR-063 — one sentence about two surfaces — was
+		 * half-satisfied and the half that was missing was the one nobody had tested for.
+		 *
+		 * Each field is asserted **with a value**, from one fixture carrying all of them, rather than by
+		 * counting rendered dates: a cell that rendered the right number of rows while reading the wrong
+		 * field would satisfy a count.
+		 */
+		/**
+		 * T394: the sheet detail view's transaction table reflows with the same figures.
+		 *
+		 * The detail view's table is the one T389 converted last and carries **eight** columns, built from
+		 * a derived column list rather than a hand-written header. A column added to `transactionHeaders`
+		 * without a case in `transactionCell` renders its key in **both** layouts -- T396's subject -- and
+		 * this asserts the columns that do have cases are identical on both sides.
+		 */
+		it('carries the same figures in the narrow card as in the table', async () => {
+			setSheetDetail(
+				sheetFixture('IRR', {
+					id: 'sh-1',
+					transactions: [
+						transactionSummaryFixture({
+							id: 'tx-a',
+							activeRevision: revisionFixture({ expenseDate: '2026-07-15' })
+						}),
+						transactionSummaryFixture({
+							id: 'tx-b',
+							activeRevision: revisionFixture({ expenseDate: '2026-08-02' })
+						})
+					],
+					transactionCount: 2
+				})
+			)
+			const wrapper = await createWrapperAtRoute(SheetDetailView, '/sheets/sh-1')
+
+			expectCardAgreesWithTable(wrapper, {
+				rows: 2,
+				hooks: [
+					'data-test="transaction-expense-date"',
+					'data-test="transaction-amount"',
+					'data-test="transaction-status-badge"',
+					'data-test="evidence-count"',
+					'data-test="view-transaction"'
+				]
+			})
+		})
+
+		describe('FR-063 key dates on the detail view', () => {
+			/** A `SheetDetail` with distinct dates, so no two cells can pass on the same text. */
+			function datedSheet(overrides: Partial<SheetDetail> = {}): SheetDetail {
+				return sheetFixture('IRR', {
+					createdAt: '2026-06-10T00:00:00+00:00',
+					submittedAt: '2026-07-02T00:00:00+00:00',
+					// Null on purpose: this is the case a naive render turns into 1 January 1970, and a
+					// fixture that populated every date could not see it.
+					completedAt: null,
+					firstExpenseDate: '2026-07-01',
+					lastExpenseDate: '2026-07-28',
+					...overrides
+				})
+			}
+
+			async function mountWithSheet(sheet: SheetDetail) {
+				const wrapper = createWrapper(SheetDetailView)
+				useSheetStore().currentSheet = sheet
+				await wrapper.vm.$nextTick()
+
+				return wrapper
+			}
+
+			it('renders each of the four key dates, each with its own hook', async () => {
+				const wrapper = await mountWithSheet(datedSheet())
+
+				// Asserted as a set of hooks rather than "the card is not empty", because one missing date
+				// and four rendered ones produce an equally non-empty card.
+				for (const hook of [
+					'sheet-created-at',
+					'sheet-submitted-at',
+					'sheet-completed-at',
+					'sheet-expense-range'
+				]) {
+					expect(wrapper.find(`[data-test="${hook}"]`).exists(), `${hook} must be rendered`).toBe(true)
+				}
+
+				expect(wrapper.find('[data-test="sheet-created-at"]').text()).not.toBe(ABSENT_MARKER)
+				expect(wrapper.find('[data-test="sheet-submitted-at"]').text()).not.toBe(ABSENT_MARKER)
+				expect(wrapper.find('[data-test="sheet-expense-range"]').text()).not.toBe(ABSENT_MARKER)
+			})
+
+			/**
+			 * A null date renders as a dash, **not** as 1 January 1970.
+			 *
+			 * `new Date(null).toLocaleDateString('fa-IR')` is 1970, so a sheet that has never been completed
+			 * would carry a confident date beside it. All four fields are nullable and null for most sheets
+			 * in the application, so this is the common case rather than an edge one.
+			 *
+			 * Asserted against the specific cell and not by scanning the whole view for "1970": a view that
+			 * printed an epoch somewhere else would satisfy the looser check and leave this cell wrong.
+			 */
+			/**
+			 * T385: FR-063's **latest active transaction revision number**, which the requirement named
+			 * "the active transaction revision" and no surface could render.
+			 *
+			 * `activeRevision` belongs to `TransactionSummary`, so a sheet has one per transaction and a list
+			 * row carries none at all — a *count* would also be redundant with the `transactionCount` the same
+			 * clause already requires. The requirement was amended to name this value and the field was added.
+			 *
+			 * **0 is a real answer here, not a missing value**, so it is printed rather than replaced with the
+			 * absent-marker the dates use. Asserting `0` explicitly is what pins that distinction.
+			 */
+			it('shows the sheet’s latest active revision number, printing 0 for an empty sheet', async () => {
+				const populated = await mountWithSheet(datedSheet({ activeRevisionNumber: 3 }))
+				expect(populated.find('[data-test="sheet-active-revision"]').text().trim()).toBe('3')
+
+				const empty = await mountWithSheet(datedSheet({ activeRevisionNumber: 0 }))
+				expect(
+					empty.find('[data-test="sheet-active-revision"]').text().trim(),
+					'a sheet holding no transactions has 0 revisions, which is an answer and not an absence'
+				).toBe('0')
+			})
+
+			/**
+			 * The payload key is carried, and the client type declares it — so a projection that dropped it
+			 * fails a test rather than rendering `0` for every sheet and looking plausible.
+			 */
+			it('carries the field on the wire and declares it in the client type', () => {
+				const contract = readFileSync(
+					join(process.cwd(), 'specs/001-pettycash-v1-core/contracts/ocs-api.yaml'),
+					'utf8'
+				)
+				expect(contract, 'the contract must declare the field').toMatch(/activeRevisionNumber:/)
+
+				const types = readFileSync(join(process.cwd(), 'src/types/api.ts'), 'utf8')
+				expect(types, 'SheetSummary must declare the field').toMatch(/activeRevisionNumber\?:/)
+			})
+
+			it('renders a null date as a dash rather than the Unix epoch', async () => {
+				const wrapper = await mountWithSheet(datedSheet())
+
+				expect(wrapper.find('[data-test="sheet-completed-at"]').text().trim()).toBe(ABSENT_MARKER)
+				expect(wrapper.text()).not.toContain('۱۹۷۰')
+				expect(wrapper.text()).not.toContain('1970')
+			})
+
+			/**
+			 * Both bounds when both exist, an ellipsis only where one is missing.
+			 *
+			 * A single date cannot distinguish "the sheet's first expense fell on this day" from "this sheet
+			 * covers only this day", so the two-present case joins its bounds and the one-present case marks
+			 * the gap. Asserted in **both** directions because the first version of this test expected the
+			 * ellipsis for a range with both bounds — it failed against a correct implementation, and had it
+			 * passed it would have pinned a rule the range was never meant to follow.
+			 */
+			it('joins both bounds when both exist, and marks the gap when one is missing', async () => {
+				const both = await mountWithSheet(datedSheet())
+				const joined = both.find('[data-test="sheet-expense-range"]').text()
+
+				expect(joined, 'two real bounds are joined by an en dash').toContain('–')
+				expect(joined, 'nothing is missing, so no gap marker appears').not.toContain('…')
+
+				const onlyFirst = await mountWithSheet(datedSheet({ lastExpenseDate: null }))
+				const leading = onlyFirst.find('[data-test="sheet-expense-range"]').text()
+
+				expect(leading, 'a missing trailing bound is marked, not silently dropped').toContain('…')
+
+				const onlyLast = await mountWithSheet(datedSheet({ firstExpenseDate: null }))
+				expect(
+					onlyLast.find('[data-test="sheet-expense-range"]').text(),
+					'a missing leading bound is marked too'
+				).toContain('…')
+			})
+
+			/**
+			 * An unloaded sheet renders the absent-marker rather than throwing.
+			 *
+			 * `currentSheet` is `null` until the payload arrives, and the range cell is the one place that
+			 * reads an object rather than one optional field — a bare `currentSheet` there would throw
+			 * inside the render and blank the whole card.
+			 */
+			it('renders the absent-marker before the sheet has loaded', async () => {
+				const wrapper = createWrapper(SheetDetailView)
+				useSheetStore().currentSheet = null
+				await wrapper.vm.$nextTick()
+
+				expect(wrapper.find('[data-test="sheet-key-dates"]').exists()).toBe(true)
+				expect(wrapper.find('[data-test="sheet-expense-range"]').text().trim()).toBe(ABSENT_MARKER)
+			})
+
+			/**
+			 * The two surfaces render the same rule from **one** helper.
+			 *
+			 * T381 put `formatDate` / `formatDateRange` in the list view, and T384 needed the identical
+			 * behaviour in the detail view. Copying them would be two copies of one rule, which is how a
+			 * convention drifts — a null date becoming 1970 on one surface and a dash on the other is exactly
+			 * the split this repository keeps finding, and it would be invisible because each surface's own
+			 * tests would still pass.
+			 *
+			 * Asserted structurally: neither view may declare its own copy of the rule, so the third
+			 * surface that needs it cannot re-introduce the split.
+			 */
+			it('reads the date rule from one shared module, not a per-view copy', () => {
+				for (const view of ['src/views/sheets/SheetListView.vue', 'src/views/sheets/SheetDetailView.vue']) {
+					const source = readFileSync(join(process.cwd(), view), 'utf8')
+
+					expect(source, `${view} must import the shared date helpers`).toMatch(/from '@\/utils\/date'/)
+					expect(
+						source,
+						`${view} must not declare its own copy of the absent-date rule`
+					).not.toMatch(/function formatDate\s*\(/)
+				}
+			})
+		})
+
 		it('should display submission validation errors when submitting incomplete sheet', async () => {
 			const wrapper = createWrapper(SheetDetailView)
 			expect(wrapper.find('[data-test="submission-errors"]').exists()).toBe(false)
@@ -1103,14 +1832,18 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 		// The original test passed a `transactionStatus` *prop* the view never declared, so it asserted
 		// against a contract that did not exist; the status lives on the loaded transaction.
 		it('should disable form when transaction is in submitted state', async () => {
+			// **The fixture is driven through the request mock, not seeded into the store after mount.**
+			// The view loads its own transaction on mount (`loadTransactionForEdit`), so a store seed
+			// written afterwards is a race the mount-time load can win -- and it did: with the router fixed
+			// (see `createTestRouter`), this test failed while the store probe showed the seeded status and
+			// the view still rendered the editable branch. Setting the detail fixture first makes the load
+			// itself produce the submitted status, so there is no ordering to depend on.
+			setTransactionDetail(transactionFixture({ status: 'AWAITING_COST_CENTER_REVIEW' }))
 			const wrapper = await createWrapperAtRoute(TransactionFormView, '/transactions/tx-1/edit')
+
 			await wrapper.find('[data-test="expense-date-input"]').setValue('2026-01-15')
 			await wrapper.find('[data-test="amount-input"]').setValue('1000')
-
-			const transactionStore = useTransactionStore()
-			transactionStore.currentTransaction = transactionFixture({ status: 'AWAITING_COST_CENTER_REVIEW' })
 			await wrapper.vm.$nextTick()
-
 			for (const control of ['expense-date-input', 'amount-input', 'description-input']) {
 				expect(wrapper.find(`[data-test="${control}"]`).attributes('disabled'), `${control} must be locked`).toBeDefined()
 			}
@@ -1219,18 +1952,58 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 			expect(wrapper.find('[data-test="transaction-list"]').exists()).toBe(true)
 		})
 
+		/**
+		 * T394: the narrow card carries the same figures as the table.
+		 *
+		 * FR-071 requires every listed element visible **without horizontal scroll** at 390px, which this
+		 * nine-column table used to answer with `overflow-x: auto`. `ResponsiveTable` renders one card per
+		 * row below 640px.
+		 *
+		 * **This is the view where it mattered most.** Nine columns is the widest table in the application,
+		 * so it was the one most likely to need per-column treatment, and it carries the money figure and
+		 * the decision history together -- the two things a purchaser opens this list for.
+		 */
+		it('carries the same figures in the narrow card as in the table', async () => {
+			const wrapper = await mountList([DRAFT_TX, REVIEWED_TX])
+
+			expectCardAgreesWithTable(wrapper, {
+				rows: 2,
+				hooks: [
+					'data-test="transaction-expense-date"',
+					'data-test="transaction-amount"',
+					'data-test="transaction-stage"',
+					'data-test="latest-decision"',
+					'data-test="evidence-count"',
+					'data-test="view-transaction"'
+				]
+			})
+		})
+
 		it('should show transaction stage and latest decision', async () => {
 			const wrapper = await mountList([DRAFT_TX, REVIEWED_TX])
 
-			const stages = wrapper.findAll('[data-test="transaction-stage"]')
+			// **Scoped to the desktop table (T389).** `ResponsiveTable` renders the table *and* a card per
+			// row, and each cell's own hook appears in both, so an unscoped count returns 4 for two rows.
+			// A two-layout component makes a cell count layout-specific; saying which layout is what keeps
+			// the assertion about the table rather than about the component's internals.
+			const desktop = wrapper.find('.responsive-table__desktop')
+			expect(desktop.exists(), 'the wide-viewport table must still render').toBe(true)
+
+			const stages = desktop.findAll('[data-test="transaction-stage"]')
 			expect(stages).toHaveLength(2)
 			expect(stages[0]?.text()).toContain('stage.draft')
 			expect(stages[1]?.text()).toContain('stage.senior')
 
+			// The same row must be readable in the narrow layout, carrying the same figures -- which is the
+			// whole point of the reflow, and would not follow from the desktop assertions alone.
+			const cards = wrapper.findAll('.responsive-table__card')
+			expect(cards).toHaveLength(2)
+			expect(cards[0]?.find('[data-test="transaction-stage"]').text()).toContain('stage.draft')
+
 			// The latest decision is a field on every row the store already holds, and the view fetched
 			// it and then never rendered it. A row with no decision says so rather than showing a blank
 			// cell that reads as a rendering fault.
-			const decisions = wrapper.findAll('[data-test="latest-decision"]')
+			const decisions = wrapper.findAll('.responsive-table__desktop [data-test="latest-decision"]')
 			expect(decisions).toHaveLength(2)
 			expect(decisions[1]?.text()).toContain('decision.approve')
 			// FR-052: the actor travels with the decision, so the name shown is the one at the time.
@@ -1240,7 +2013,8 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 
 		it('should show evidence count per transaction', async () => {
 			const wrapper = await mountList([DRAFT_TX, REVIEWED_TX])
-			const counts = wrapper.findAll('[data-test="evidence-count"]')
+			// Desktop layout only, for the same reason as the stage and decision cells above.
+			const counts = wrapper.findAll('.responsive-table__desktop [data-test="evidence-count"]')
 			expect(counts).toHaveLength(2)
 			expect(counts[0]?.text()).toBe('0')
 			expect(counts[1]?.text()).toBe('3')
@@ -1872,7 +2646,12 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 			const open = wrapper.find('[data-test="open-sheets"]')
 			expect(open.exists()).toBe(true)
 			// Both open sheets, and only those: the one under review belongs to the other region.
-			expect(open.findAll('[data-test="sheet-row"]')).toHaveLength(2)
+			//
+			// `open-sheet-row`, not `sheet-row`: T389 gave each region its own hook when both became
+			// `ResponsiveTable`s, because the two regions render overlapping sheets and a shared row hook
+			// makes any global row count double. This assertion was already scoped to `[data-test="open-sheets"]`,
+			// so the region-specific hook is the more precise selector, not a workaround.
+			expect(open.findAll('[data-test="open-sheet-row"]')).toHaveLength(2)
 			expect(open.text()).toContain('March travel')
 			expect(open.text()).toContain('April supplies')
 			expect(open.text()).not.toContain('February review')
@@ -1920,6 +2699,66 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 		})
 	})
 
+	/**
+	 * T393: the detail view's transaction expense date goes through the shared date formatter.
+	 *
+	 * ## Why this is worth a test when the behaviour is identical today
+	 *
+	 * `Revision.expenseDate` is `required` in the contract, so the old inline
+	 * `new Date(...).toLocaleDateString('fa-IR')` rendered correctly. The defect was that the file carried
+	 * **two** date rules — line 10 imports `formatSheetDate`, the transaction cell did not use it — and
+	 * `src/utils/date.ts` documents the exact failure the unused rule would produce if the field ever became
+	 * nullable: `new Date(null)` is 1 January 1970, which "reads as data".
+	 *
+	 * So this asserts the *absence of the inline rule* rather than the presence of an output, because the
+	 * output is already correct and asserting it proves nothing about which renderer produced it.
+	 */
+	describe('T393 shared date rendering on the detail view', () => {
+		it('renders no inline date formatting anywhere in the view', () => {
+			const source = readFileSync(
+				join(process.cwd(), 'src/views/sheets/SheetDetailView.vue'),
+				'utf8'
+			)
+
+			// **Comments are stripped first, and the template is matched as markup rather than by line.**
+			// Two earlier attempts were wrong: one matched `toLocaleDateString` anywhere and tripped on the
+			// comment recording why the inline form was removed; the next anchored the interpolation at the
+			// start of a line, which never matched because a cell reads `<td>{{ … }}</td>` — so restoring the
+			// inline renderer left all 125 tests green. Stripping comments and then requiring the call to
+			// appear **inside** an interpolation is what makes both failures impossible.
+			const withoutComments = source.replace(/<!--[\s\S]*?-->/g, '')
+			const inline = withoutComments.match(/\{\{[^}]*toLocale(?:Date|Time)?String[^}]*\}\}/g)
+
+			expect(
+				inline,
+				'FR-063\'s dates must be rendered by @/utils/date, which treats an absent date as a dash '
+					+ 'rather than as 1 January 1970'
+			).toBeNull()
+		})
+
+		it('renders the transaction expense date through the shared formatter', async () => {
+			setSheetDetail(
+				sheetFixture('IRR', {
+					id: 'sh-1',
+					transactions: [
+						transactionSummaryFixture({
+							id: 'tx-a',
+							activeRevision: revisionFixture({ expenseDate: '2026-07-15' })
+						})
+					],
+					transactionCount: 1
+				})
+			)
+			const wrapper = await createWrapperAtRoute(SheetDetailView, '/sheets/sh-1')
+			const row = wrapper.find('[data-test="sheet-transaction-row"]')
+
+			expect(row.exists()).toBe(true)
+			// Compared against the formatter itself rather than a literal: the assertion is about *which*
+			// renderer ran, and re-stating the expected text would let a second renderer pass.
+			expect(row.text()).toContain(formatSheetDate('2026-07-15'))
+		})
+	})
+
 	describe('Balance-Independent Submission', () => {
 		// FR-027: "Account balance MUST NOT prevent sheet creation or submission, and negative balances
 		// MUST be permitted after valid approved consumption." The two tests here passed an
@@ -1958,14 +2797,87 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 		it('should offer sheet creation with no account at all', async () => {
 			// FR-020: a purchaser with no active account gets a rial account provisioned on the first
 			// creation attempt, so having none is a normal state and must not remove the affordance.
+			//
+			// **This assertion used to contradict the sentence above it.** It checked that `sheet-create-submit`
+			// was `disabled`, which is the affordance *removed* — the defect T358 records. It was green,
+			// and green against its own stated requirement, which is the shape of failure a passing test
+			// is worst at hiding. The whole requirement is unreachable while the form refuses to submit,
+			// because the request that would provision never leaves the browser.
 			setAccounts([])
+			// On the **default** router, deliberately. T358 mounted this through `createWrapperAtRoute()`
+			// because `createTestRouter()` leaked `window.location.hash` between tests and a form mounted
+			// after a navigating one silently took the update branch. T387 fixed the factory, so the
+			// workaround is gone and the default means what it says: these three tests now prove it, because
+			// they run after the correction and shell suites in this same file.
 			const wrapper = createWrapper(SheetFormView)
 			await flushPromises()
+
 			expect(wrapper.find('[data-test="no-accounts-hint"]').exists()).toBe(true)
 			expect(wrapper.find('[data-test="account-balance"]').exists()).toBe(false)
-			// The form is still reachable and says what is missing; only the account choice and the
-			// submission it depends on are unavailable.
 			expect(wrapper.find('[data-test="sheet-form"]').exists()).toBe(true)
+
+			// **The title is filled first, and that is the part that makes this assertion able to fail.**
+			// The form disables submit for a blank title as well as a missing account, so the previous
+			// version of this test — which asserted `disabled` with an empty title — was green for a reason
+			// that had nothing to do with accounts. It would have stayed green with the account rule
+			// removed, which is why it never noticed the affordance being taken away.
+			await wrapper.find('[data-test="sheet-title-input"]').setValue('First sheet')
+
+			// Enabled, because the server is the party that resolves the account here.
+			const submit = wrapper.find('[data-test="sheet-create-submit"]')
+			expect(submit.attributes('disabled')).toBeUndefined()
+		})
+
+		/**
+		 * The request carries **no** `accountId` when none is chosen.
+		 *
+		 * Sent as an absent field rather than `""`, because `accountId` is a `uuid` in the contract: an empty
+		 * string is a present-but-invalid value, so a client validating against the schema would refuse it
+		 * before the request was sent — reinstating exactly the refusal this change removes.
+		 */
+		it('sends no accountId at all when the caller has none to choose from', async () => {
+			// Asserted at the **transport**, and the reason is worth recording because two more specific
+			// choices both read as a missing request rather than a wrong one: `vi.spyOn(sheetsApi,
+			// 'createSheet')` does not intercept, because `src/stores/sheets.ts` holds its own ESM binding
+			// from the module; and `vi.spyOn(store, 'createNewSheet')` records `wrappedAction`, Pinia's
+			// action wrapper, which the component does not call. Both reported zero calls for a request that
+			// was genuinely made. The mocked axios is the last point before the wire, so what it receives is
+			// what would be sent.
+			setAccounts([])
+			// The default router, for the reason the test above records.
+			const wrapper = createWrapper(SheetFormView)
+			await flushPromises()
+
+			await wrapper.find('[data-test="sheet-title-input"]').setValue('First sheet')
+			await wrapper.find('[data-test="sheet-form"]').trigger('submit.prevent')
+			await flushPromises()
+
+			const post = ocsRequest.mock.calls
+				.map((call) => call[0] as { url?: string; method?: string; data?: unknown })
+				.find((config) => config.method === 'POST' && String(config.url).endsWith('/sheets'))
+
+			expect(post, 'the form must actually issue the create request').toBeDefined()
+			// The whole point: the field is **absent**, not empty. `accountId` is a `uuid` in the contract, so
+			// an empty string is a present-but-invalid value a client would refuse before sending.
+			expect(post?.data).toEqual({ title: 'First sheet' })
+			expect(post?.data).not.toHaveProperty('accountId')
+		})
+
+		/**
+		 * A caller who *has* accounts to choose from still must choose.
+		 *
+		 * The amendment made `accountId` optional, and the failure mode of an over-broad amendment is
+		 * letting the server pick for a purchaser with three accounts — which FR-020 forbids in as many
+		 * words, because the server's choice would become the sheet's currency.
+		 */
+		it('still requires a choice when the caller holds several accounts', async () => {
+			setAccounts([
+				{ ...RIAL_ACCOUNT, id: 'a-1' },
+				{ ...RIAL_ACCOUNT, id: 'a-2', balance: { ...RIAL_ACCOUNT.balance, amountMinor: 5_000_000 } }
+			])
+			const wrapper = createWrapper(SheetFormView)
+			await flushPromises()
+
 			expect(wrapper.find('[data-test="sheet-create-submit"]').attributes('disabled')).toBeDefined()
 		})
 	})

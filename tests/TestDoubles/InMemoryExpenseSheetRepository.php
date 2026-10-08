@@ -52,6 +52,19 @@ final class InMemoryExpenseSheetRepository implements ExpenseSheetRepository
     }
 
     /**
+     * Every sheet the double holds, across every status (T379).
+     *
+     * Every stored row, which is the property a suite needs in order to be able to *catch* the defect:
+     * a double that returned only open sheets would satisfy a controller still reading
+     * `findByStatus(Open, ...)` under the name `totalSheets`, and the T379 regression test would pass
+     * against a double that agreed with the bug.
+     */
+    public function countAll(): int
+    {
+        return count($this->sheets);
+    }
+
+    /**
      * Every facet of {@see SheetListFilter}, matched the way the persistence layer matches it.
      *
      * The currency and the date bounds are compared the same way the SQL compares them -- string equality

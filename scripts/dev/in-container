@@ -13,13 +13,49 @@ set -euo pipefail
 # genuinely need another user — Composer operations that must write into the bind mount
 # (owned by uid 1000, so www-data/uid 33 cannot write it), and privileged maintenance.
 # Pass it deliberately, not to make a permission problem disappear.
+#
+# ---------------------------------------------------------------------------
+# WHICH LAB THIS REACHES
+# ---------------------------------------------------------------------------
+#
+# This repository develops against its OWN lab, `pettycash-lab`, served on
+# http://localhost:8081. It used to share one Nextcloud with PTS under the Compose project
+# name `docker`; that lab is stopped and preserved, see ~/projects/nextcloud-lab/legacy.
+#
+# The container name is `pettycash-lab-nextcloud-1`. It is not hardcoded blindly: the lab's
+# Compose project name comes from `COMPOSE_PROJECT_NAME` in
+# ~/projects/nextcloud-lab/env/pettycash.env, and Compose prefixes every container with it.
+# The name below is a deliberately redundant constant so a rename cannot silently leave
+# this wrapper pointing at an environment that is not ours — PETTYCASH_LAB_CONTAINER exists
+# so a lab rename is a one-value change rather than a search across this repository.
+#
+# The name is verified before use below, so a stale value fails with an instruction instead
+# of an OCI error.
+# ---------------------------------------------------------------------------
+
+readonly DEFAULT_CONTAINER=pettycash-lab-nextcloud-1
+readonly APP_DIR=/var/www/html/custom_apps/pettycash
+readonly LAB_DIR=/home/ubuntu/projects/nextcloud-lab
 
 declare -a DOCKER_ENV=()
 declare -a CMD=()
 
 USER_ARG=www-data
+CONTAINER_ARG="${PETTYCASH_LAB_CONTAINER:-$DEFAULT_CONTAINER}"
 while [ $# -gt 0 ]; do
   case "$1" in
+    --container)
+      if [ $# -lt 2 ]; then
+        echo "in-container: --container requires a container name" >&2
+        exit 2
+      fi
+      CONTAINER_ARG="$2"
+      shift 2
+      ;;
+    --container=*)
+      CONTAINER_ARG="${1#--container=}"
+      shift
+      ;;
     --env)
       if [ $# -lt 2 ]; then
         echo "in-container: --env requires KEY=VALUE" >&2
@@ -56,9 +92,24 @@ if [ ${#CMD[@]} -eq 0 ]; then
   exit 2
 fi
 
+# Fail with the recovery instruction rather than an OCI error, and never name a
+# replacement environment: a missing lab is a state to report, not something to work
+# around by improvising a different Compose project (AGENTS.md, Docker Safety).
+running="$(docker inspect --format '{{.State.Running}}' "$CONTAINER_ARG" 2>/dev/null || true)"
+if [ "$running" != "true" ]; then
+  echo "in-container: container '${CONTAINER_ARG}' is not running." >&2
+  echo "in-container: This is the PettyCash lab, which owns this repository's only" >&2
+  echo "in-container: Nextcloud runtime. Do not point this at another lab or project:" >&2
+  echo "in-container: PTS has its own, and sharing a runtime is exactly what the split" >&2
+  echo "in-container: removed. Start it with:" >&2
+  echo "in-container:     ${LAB_DIR}/bin/lab pettycash up" >&2
+  echo "in-container: and confirm with 'docker ps -a'." >&2
+  exit 1
+fi
+
 exec docker exec \
   "${DOCKER_ENV[@]+"${DOCKER_ENV[@]}"}" \
   --user "$USER_ARG" \
-  --workdir /var/www/html/custom_apps/pettycash \
-  docker-nextcloud-1 \
+  --workdir "$APP_DIR" \
+  "$CONTAINER_ARG" \
   "${CMD[@]}"

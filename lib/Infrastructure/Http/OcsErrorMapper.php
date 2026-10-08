@@ -8,6 +8,7 @@ use InvalidArgumentException;
 use OCA\PettyCash\Application\Command\CommandConflict;
 use OCA\PettyCash\Application\Conflict;
 use OCA\PettyCash\Application\DataIntegrity\UnreadableRecordData;
+use OCA\PettyCash\Application\Refusal;
 use OCP\AppFramework\Http;
 use OCA\PettyCash\Infrastructure\Nextcloud\TechnicalLogger;
 use OCP\AppFramework\Http\DataResponse;
@@ -64,6 +65,23 @@ final class OcsErrorMapper
             // silently swallowed every validation failure and answered 422 where the contract
             // requires a 409.
             $error instanceof Conflict => [Http::STATUS_CONFLICT, $error->errorCode()],
+            // FR-040: a correct request the server is not in a state to serve.
+            //
+            // Added because the third answer had nowhere to go. It is neither a validation failure
+            // (the request is right) nor a conflict (nothing has moved — there is nothing to reload),
+            // and it used to be a bare `LogicException`, which this class deliberately does not arm,
+            // so a finance approval that could not be settled because the purchaser's account had
+            // been deactivated answered `500 UNEXPECTED_FAILURE` with its message withheld. The
+            // message withheld part was the worst of it: the sentence naming the missing account is
+            // the only actionable thing in the whole response, and it was being suppressed.
+            //
+            // Placed **before** the `UnreadableRecordData` arm deliberately. That type extends
+            // `LogicException` for the same reason this one does — to keep itself out of the
+            // `InvalidArgumentException` arm — and the two are disjoint types, so the order is not
+            // load-bearing today. It is stated anyway, because the day one of them implements the
+            // other's interface the silent arm-shadowing that T063 was raised for becomes possible
+            // and nothing would report it.
+            $error instanceof Refusal => [Http::STATUS_UNPROCESSABLE_ENTITY, $error->errorCode()],
             // FR-083, and the reason this arm is here rather than in four controllers.
             //
             // A stored record whose reference no longer resolves is a fault in the *data* — not in the

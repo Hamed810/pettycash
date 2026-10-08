@@ -186,6 +186,19 @@ users and 10,000 annual transactions.
 7. Force a failure between decision and movement persistence and verify no partial effect commits.
 8. Submit simultaneous approvals and verify one succeeds while the other safely conflicts or
    replays.
+9. **FR-085 — superseded attempt.** Record an approval, then submit a *second, differently-identified*
+   rejection against the same transaction. Verify: the approval still stands; **no** second decision,
+   revision, workflow transition, or balance movement is created; the response is `409` naming that a
+   decision is already recorded; and exactly one `SUPERSEDED_ATTEMPT` audit event exists, carrying both
+   the attempted rejection and the approval in force. Verify the event is **not** typed as a rejection.
+10. **FR-085 — revision changed underneath.** Return a transaction, correct it, and submit a decision
+    composed against the pre-correction revision. Verify it is refused on the same terms and that the
+    active revision in the audit event is the current one.
+11. **FR-040 — unsettleable settlement.** Deactivate the purchaser's active account in the sheet's
+    currency, then attempt final finance approval. Verify the approval is refused `422` **naming the
+    account**, the transaction remains at the finance stage, no balance movement or consumption record
+    is created, **no account is auto-provisioned as a side effect**, and the sheet does not complete.
+    Restore the account and verify the approval then succeeds normally.
 
 ### Scenario F: Evidence, Audit, and Disabled Users
 
@@ -196,8 +209,22 @@ users and 10,000 annual transactions.
 4. Disable a historical actor and verify the stored UID, display name, role, decisions, and events
    remain unchanged.
 5. Attempt to edit/delete audit events as administrator and verify no supported operation exists.
-6. If public links are enabled, verify only administrators create/deactivate them, expired or
-   inactive tokens fail, and create/deactivate events are audited.
+6. If public links are enabled, verify only administrators create/deactivate them, and create/deactivate
+   events are audited.
+7. **FR-031 — the token is the whole authority.** Request `GET /public/evidence/{token}` with **no
+   session and no credentials**. Verify the evidence is returned, and that the holder holds **no** role
+   or scope on the transaction — the link grants access without a session.
+8. **Uniform refusal.** Compare three responses byte-for-byte: an unknown token, a **deactivated**
+   token, and an **expired** token. All three must be identical `404`s, disclosing neither that a link
+   ever existed nor when it lapsed.
+9. **Anonymous audit.** Verify each access wrote a configuration-audit event whose viewer is recorded as
+   `anonymous` with timestamp and IP, and that the viewer field is neither null nor absent.
+10. **Media-type policy holds on the public path.** Upload inline-safe media (an image, a PDF, plain
+    text) and verify each renders inline; upload a scriptable type and verify it is served as
+    `application/octet-stream` with `attachment`, never rendered inline. FR-060 must not be relaxed here
+    — this is the only route reachable by a viewer who never authenticated.
+11. **No second mechanism.** Verify the public route serves no login challenge, no CAPTCHA, and no
+    application-level rate limiter, and that brute-force protection comes from the platform limiter.
 
 ### Scenario G: Reports and Exports
 
@@ -226,15 +253,39 @@ Validate:
 - logical alignment of navigation, tables/cards, dialogs, filters, and actions;
 - no page-level horizontal scrolling or clipped primary action;
 - readable mixed-direction IDs, filenames, currencies, and numbers;
-- keyboard navigation, visible focus, dialog containment/return, labels, error association, and
-  live mutation feedback;
-- light, dark, and high-contrast host themes;
+- keyboard-only completion of each primary journey (User Stories 1–7), driven without a pointer, with a
+  visible focus indicator on every interactive element reached. A focus indicator the active theme
+  renders as absent **fails** this check — the journey must be repeated under dark and high-contrast,
+  not only under the default theme;
 - prohibited actions are absent in the UI and rejected by direct API calls.
 
-Record browser/version, viewport, role, dataset, result, and failure evidence. Automated Playwright
+Run the keyboard-only pass under light, dark, and high-contrast host themes.
+
+**What enforces it.** The indicator is declared once in `src/styles/app.scss` (`:focus-visible`, with an
+explicit `outline-style`/`outline-width`/`outline-offset`, restated in system colour keywords under
+`@media (forced-colors: active)`), and is verified in two places:
+
+- `tests/E2E/keyboard-accessibility.spec.ts` — the real check. Drives the journey with `Tab`/`Enter` only,
+  reads the computed `outline-style`/`outline-width`/`outline-color` of every element reached, and runs the
+  whole thing once per theme. The theme is set on the **context** (`colorScheme` / `forcedColors`), which
+  is why each theme is its own `describe` block rather than a loop: a loop would measure whichever theme
+  happened to be active and name no theme in the failure.
+- `tests/Frontend/keyboard-accessibility.spec.ts` — the floor under it, in `npm run check`. Asserts the
+  declaration exists with an explicit style and width, is scoped to `:focus-visible`, restates itself for
+  forced colours, and that no component removes it. A declaration is not a rendering and this file does
+  not claim to be one; it exists so deleting the rule fails `npm run check` rather than waiting for a
+  manual pass, which is how this suite's Playwright projects went unused in the first place.
+
+Record browser/version, viewport, role, dataset, theme, result, and failure evidence. Automated Playwright
 Firefox results do not replace the final manual smoke in the current installed Firefox browser.
 
+**Out of scope for V1 (FR-076, clarified 2026-10-07):** form control label association, error-message
+association with the offending field, and announced (live-region) status for mutations are deferred to
+V2. Do not record these as met, and do not report them in V1 release readiness.
+
 ## 8. Performance Validation
+
+### 8.1 Latency (SC-008 — informational in V1, not an acceptance gate)
 
 Using the target-volume fixture:
 
@@ -246,6 +297,71 @@ Using the target-volume fixture:
    operating conditions.
 5. Profile any failure before adding caches; first verify query scope, indexes, bounded pages, and
    avoidance of per-row queries.
+
+**Record the result as informational, not as SC-008 satisfied.** Verification of SC-008 at the stated
+scale is deferred to post-V1, so V1 release readiness records the criterion as **not measured** with
+that reason, and a run below the stated scale does not become acceptance evidence by being reported.
+A usable view is one that has finished loading and is showing the rows the user is entitled to see,
+with no error or empty state standing in for them — measured end to end as a user sees it.
+
+### 8.2 Error rate (FR-073 — a V1 release-readiness figure owned by T135)
+
+**Producer**: `scripts/measure-error-rate.mjs`. The arithmetic and the two excluded classes are
+`scripts/lib/error-rate.mjs`; `npm run check:error-rate` verifies the classification and the aggregation
+(21 cases) so the figure's *definition* is gated even when the figure is not measured.
+
+```bash
+# One session, no concurrent traffic, and nothing else hitting the instance.
+PETTYCASH_REQUEST_LOG=test-results/fr073-php.ndjson   scripts/dev/phpunit tests/Contract
+PETTYCASH_REQUEST_LOG=test-results/fr073-e2e.ndjson   npm run test:e2e
+npm run measure:error-rate -- test-results/fr073-php.ndjson test-results/fr073-e2e.ndjson
+```
+
+Both suites record every response to the log — the PHP half through `OcsTestClient`'s `on_stats`, the
+browser half through `page.on('response')` in `tests/E2E/record-responses.ts`. The unit and integration
+suites issue no HTTP requests and so contribute nothing; that is stated by the script rather than assumed.
+`scripts/dev/phpunit` writes the log inside the container and copies it out, because the app tree is not
+writable by the identity PHPUnit runs as.
+
+1. The figure is **5xx over all requests issued**, excluding two classes that are not defects.
+2. **Exclude deliberately provoked 4xx/409/422** from both numerator and denominator: a request the
+   application correctly refused is not a defect. These are still **published**, because their share
+   measures how thorough the suite is rather than how healthy the instance is.
+3. **Exclude environment-induced responses** from both — a Nextcloud brute-force `429`, an
+   infrastructure or platform `5xx`, a transport failure.
+4. The figure must be **published with the excluded count**.
+5. **If environment-induced responses exceed 1% of all requests issued, record the figure as *not
+   measured*,** naming environment contamination as the reason.
+
+**The 1% ceiling applies to the environment-induced class alone, not to both classes together.** A
+contract suite whose job is asserting refusals provokes 4xx constantly — a threshold over the combined
+share would make the figure unproducible for any real contract run, and would penalise the more thorough
+suite. This was not a theoretical concern: the first implementation applied it to both and its own
+self-test failed on the very first scenario.
+
+**Two environment facts that decide whether a run is evidence at all**, both found on 2026-10-07:
+
+- **The measurement run throttles itself.** `OcsTestClient` authenticates with HTTP basic auth, so every
+  contract request performs a login attempt, and Nextcloud's brute-force limiter is IP-scoped. A full
+  contract suite is hundreds of requests. On this shared instance the limiter answers `429` partway
+  through, after which every remaining response is contamination. Measured: 387 requests issued, 0 counted,
+  100% environment-induced, figure **not measured**.
+- **The probe must run from the same vantage point as the run.** The suites reach the app on
+  `http://localhost` *inside* the container; a host-side script reaches it on a different port. The script
+  uses `PETTYCASH_BASE_URL` (or `--base-url=`) and prints what it probed, so a wrong address reads as an
+  address rather than as a dead instance.
+
+Run the measurement in **one session with no concurrent traffic**, and let the limiter's window lapse
+first. This project shares one Nextcloud instance with other applications, so a contended run is an
+expected operational condition, not a rare accident.
+
+**Why step 5 exists.** A contended run is not evidence *in either direction*: throttled responses
+inflate the denominator with traffic that never exercised application code while suppressing the
+successful requests that would have exercised it, so a mostly-throttled run yields a ratio that looks
+better than a clean one. Treat `429`-stormed full-suite output as **not evidence**, not as a noisy pass.
+
+**Zero data loss** is a separate claim, established by the atomicity and failure-injection suites and
+never inferred from either figure above.
 
 ## 9. Recovery and Non-Destructive Operations
 

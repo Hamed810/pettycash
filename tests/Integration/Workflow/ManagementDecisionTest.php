@@ -272,7 +272,8 @@ final class ManagementDecisionTest extends TestCase
             $this->container->query(IdempotencyService::class),
             $this->container->query(CurrentUser::class),
             $this->container->query(UserDirectory::class),
-            $this->container->query(AuthorizationService::class)
+            $this->container->query(AuthorizationService::class),
+            $this->container->query(\OCA\PettyCash\Application\Workflow\SupersededDecisionAudit::class)
         );
 
         $commandId = 'cmd-senior-approve-' . Uuid::random();
@@ -327,7 +328,8 @@ final class ManagementDecisionTest extends TestCase
             $this->container->query(IdempotencyService::class),
             $this->container->query(CurrentUser::class),
             $this->container->query(UserDirectory::class),
-            $this->container->query(AuthorizationService::class)
+            $this->container->query(AuthorizationService::class),
+            $this->container->query(\OCA\PettyCash\Application\Workflow\SupersededDecisionAudit::class)
         );
 
         $commandId = 'cmd-senior-approve-' . Uuid::random();
@@ -389,7 +391,8 @@ final class ManagementDecisionTest extends TestCase
             $this->container->query(IdempotencyService::class),
             $this->container->query(CurrentUser::class),
             $this->container->query(UserDirectory::class),
-            $this->container->query(AuthorizationService::class)
+            $this->container->query(AuthorizationService::class),
+            $this->container->query(\OCA\PettyCash\Application\Workflow\SupersededDecisionAudit::class)
         );
 
         $commandId = 'cmd-multi-role-' . Uuid::random();
@@ -435,7 +438,8 @@ final class ManagementDecisionTest extends TestCase
             $this->container->query(IdempotencyService::class),
             $this->container->query(CurrentUser::class),
             $this->container->query(UserDirectory::class),
-            $this->container->query(AuthorizationService::class)
+            $this->container->query(AuthorizationService::class),
+            $this->container->query(\OCA\PettyCash\Application\Workflow\SupersededDecisionAudit::class)
         );
         $commandId = 'cmd-senior-' . Uuid::random();
         $tx = $managementReview->recordDecision($tx->id, WorkflowStage::Senior, Decision::Approve, 'OK', $commandId, $tx->lockVersion)->transaction;
@@ -454,7 +458,8 @@ final class ManagementDecisionTest extends TestCase
             $this->container->query(IdempotencyService::class),
             $this->container->query(CurrentUser::class),
             $this->container->query(UserDirectory::class),
-            $this->container->query(AuthorizationService::class)
+            $this->container->query(AuthorizationService::class),
+            $this->container->query(\OCA\PettyCash\Application\Workflow\SupersededDecisionAudit::class)
         );
         // Note: InMemoryCurrentUser doesn't simulate admin check, this would need proper setup
 
@@ -545,7 +550,8 @@ final class ManagementDecisionTest extends TestCase
                 $this->container->query(IdempotencyService::class),
                 $this->container->query(CurrentUser::class),
                 $this->container->query(UserDirectory::class),
-                $this->container->query(\OCA\PettyCash\Application\Security\AuthorizationService::class)
+                $this->container->query(\OCA\PettyCash\Application\Security\AuthorizationService::class),
+                $this->container->query(\OCA\PettyCash\Application\Workflow\SupersededDecisionAudit::class)
             );
 
             $service->recordDecision(

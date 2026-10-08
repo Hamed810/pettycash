@@ -43,13 +43,56 @@ final class AuditWriterService implements AuditWriter
         $this->configurationAuditRepository->save($this->toEvent($event));
     }
 
-    /** @param array<string,mixed> $event */
-    private function toEvent(array $event): AuditEvent
+    /**
+     * FR-031 (clarified 2026-10-07): a configuration event whose viewer is **not** the signed-in user.
+     *
+     * ## Why this method exists rather than an `actor_uid` key on the payload
+     *
+     * `toEvent()` resolves the actor from the session, and `NextcloudCurrentUser::uid()` **throws** for
+     * an unauthenticated request — which is exactly the case this records. There is no signed-in user to
+     * read, so the viewer has to be supplied.
+     *
+     * It is a named method rather than a payload key because every other caller *already* passes
+     * `actor_uid` in its payload and `toEvent()` deliberately ignores it. Making the override a key would
+     * silently give every producer the ability to attribute an event to somebody other than the session,
+     * which is the one property an audit trail must not have. A method that must be called by name keeps
+     * that decision visible in review.
+     *
+     * FR-031 requires the viewer field to be `anonymous` and "never null or absent, because an anonymous
+     * visit has no UID and a nullable field would make the audit entry unusable for the access
+     * investigation it exists to serve" — so an empty viewer is refused rather than stored.
+     *
+     * @param array<string,mixed> $event
+     */
+    public function appendConfigurationAsViewer(string $viewerUid, array $event): void
+    {
+        if (trim($viewerUid) === '') {
+            throw new \InvalidArgumentException(
+                'FR-031: an access recorded on behalf of a viewer must name the viewer. Use '
+                . "'anonymous' for an unauthenticated request. A null or empty viewer makes the entry "
+                . 'indistinguishable from a missing audit record during an access investigation.'
+            );
+        }
+        if (($event['entity_type'] ?? '') === '') {
+            throw new \InvalidArgumentException(
+                'A configuration audit event must name its subject with entity_type.'
+            );
+        }
+
+        $this->configurationAuditRepository->save($this->toEvent($event, $viewerUid));
+    }
+
+    /**
+     * @param array<string,mixed> $event
+     * @param string|null $viewerUid the actor to record instead of the session's, or null to read the
+     *                              session. Only {@see self::appendConfigurationAsViewer()} passes it.
+     */
+    private function toEvent(array $event, ?string $viewerUid = null): AuditEvent
     {
         $this->rejectPreEncodedSnapshots($event);
 
-        $actorUid = $this->currentUser->uid();
-        $actorName = $this->userDirectory->displayName($actorUid);
+        $actorUid = $viewerUid ?? $this->currentUser->uid();
+        $actorName = $viewerUid === null ? $this->userDirectory->displayName($actorUid) : $viewerUid;
         $actorRole = $event['actor_role'] ?? 'PURCHASER';
 
         return new AuditEvent(

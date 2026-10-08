@@ -116,9 +116,6 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/PageSize'
-        - name: active
-          in: query
-          schema: { type: boolean }
       responses:
         '200':
           $ref: '#/components/responses/CostCenterPage'
@@ -263,9 +260,6 @@ paths:
         - name: userId
           in: query
           schema: { type: string }
-        - name: active
-          in: query
-          schema: { type: boolean }
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/PageSize'
       responses:
@@ -745,6 +739,74 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/EvidenceLink' }
 
+  # FR-031 (**clarified 2026-10-07**). This is the **only route in V1 reachable without
+  # authentication**, and it exists because the token *is* the authority: anyone holding the unguessable
+  # token may open the evidence, without a session and without any role or responsibility scope.
+  #
+  # Three properties are load-bearing and each is a defect if violated:
+  #
+  # 1. **No `CommandId` parameter and no `security` requirement.** Consumption is idempotent by the
+  #    token itself and mutates nothing business-side; requiring a command identifier would be
+  #    incoherent, and declaring an authenticated security scheme would contradict the decision.
+  # 2. **`404` for unknown, deactivated, and expired alike.** A response that distinguishes "you had a
+  #    link, it lapsed" from "no such link" turns the error itself into a confirmation that evidence
+  #    exists, so all three MUST produce one identical response.
+  # 3. **FR-060's media-type policy applies here too.** Content is inline only for the inline-safe
+  #    stored media types and `application/octet-stream` + `attachment` otherwise. This is the one place
+  #    where an attacker-supplied stored type would be rendered against a viewer who never authenticated,
+  #    so the same policy cannot be relaxed for public links.
+  #
+  # Abuse control is delegated to Nextcloud's brute-force limiter (the source requirements place
+  # authentication policy in Nextcloud's hands), so this route MUST NOT gain an application-level rate
+  # limiter, login challenge, or CAPTCHA -- that would be the parallel authentication system the
+  # constitution forbids.
+  /public/evidence/{token}:
+    get:
+      tags: [Evidence]
+      summary: Retrieve evidence through an unguessable public link token (unauthenticated)
+      operationId: getPublicEvidenceByToken
+      security: [] # unauthenticated by design; see the notes above
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema: { type: string, minLength: 32, maxLength: 256 }
+        - name: disposition
+          in: query
+          required: false
+          description: >-
+            FR-060. `inline` renders inline-safe media types (images, PDF, plain text) and downloads
+            everything else; `attachment` always downloads.
+          schema: { type: string, enum: [inline, attachment], default: inline }
+      responses:
+        '200':
+          description: >-
+            Evidence content. `Content-Type` is the stored media type when it is inline-safe and
+            `application/octet-stream` otherwise; `Content-Disposition` follows `disposition`.
+          content:
+            'application/octet-stream':
+              schema: { type: string, format: binary }
+            'application/pdf':
+              schema: { type: string, format: binary }
+            'image/png':
+              schema: { type: string, format: binary }
+            'image/jpeg':
+              schema: { type: string, format: binary }
+            'image/gif':
+              schema: { type: string, format: binary }
+            'image/webp':
+              schema: { type: string, format: binary }
+            'image/bmp':
+              schema: { type: string, format: binary }
+            'text/plain':
+              schema: { type: string, format: binary }
+        '404':
+          # FR-031: unknown, deactivated and expired tokens are **indistinguishable by design**.
+          # The generic `NotFound` response is the correct shape here precisely because it carries no
+          # detail beyond the resource being absent -- a bespoke body would tempt an implementation into
+          # disclosing *which* of the three cases applied, which would confirm that a link once existed.
+          $ref: '#/components/responses/NotFound'
+
   /reports/{reportType}:
     get:
       tags: [Reports]
@@ -758,7 +820,17 @@ paths:
             enum: [sheets, transactions, cost-centers, accounts, process, evidence, audit]
         - name: filters
           in: query
-          description: Report-specific filter object encoded as query parameters by the client
+          # `type: string`, not an object, because a query parameter is a string: the filter object is
+          # JSON-encoded into this **one** parameter. The description previously said "encoded as query
+          # parameters by the client", which is a different wire shape -- one parameter per facet -- and
+          # would have led a generated client to send `?statuses[]=OPEN`, which the server cannot read.
+          # Each controller owns how its own transport encodes the value and hands the decoded object to one
+          # `ReportFilterFactory`; the vocabulary is shared, the encoding is not.
+          description: >-
+            The report filter object, JSON-encoded into this single query parameter. The accepted keys are
+            `ReportFilters`; an unrecognised key is refused with `422` rather than ignored. A `filters` value
+            that is not decodable JSON, or that decodes to a list rather than an object, is refused with
+            `422` too -- treating it as no filter at all would answer with the unfiltered report.
           schema: { type: string }
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/PageSize'
@@ -768,6 +840,13 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ReportPage' }
+        # T374. Declared because the filter object is a **closed** vocabulary: the server refuses an
+        # unrecognised, wrongly-typed, or mutually exclusive filter with a 422, and a client reading this
+        # document had no way to know that. The message names the offending key and, for an unknown one, the
+        # accepted list -- so the caller learns which filter to change rather than only that something was
+        # wrong.
+        '422':
+          $ref: '#/components/responses/FilterRejected'
 
   /exports:
     post:
@@ -791,7 +870,10 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ExportResult' }
         '422':
-          $ref: '#/components/responses/ValidationError'
+          # T374: the export reads the same closed `ReportFilters` vocabulary as `GET /reports`, decoded
+          # from the JSON body rather than from a query parameter. It gets the same declared refusal
+          # because it is the same rule -- not because the two endpoints happen to agree today.
+          $ref: '#/components/responses/FilterRejected'
 
 components:
   securitySchemes:
@@ -880,6 +962,21 @@ components:
           schema: { $ref: '#/components/schemas/ErrorEnvelope' }
     ValidationError:
       description: Business validation failed
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    # T374. Separate from the generic `ValidationError` because the *reason* is documented rather than the
+    # status: the filter vocabulary is closed, so a 422 here specifically means the request named a filter
+    # the server does not accept, gave one the wrong shape, or combined two that are mutually exclusive --
+    # and the message names the offending key so the caller can correct it. A client that only knew
+    # "validation failed" would not know that an unknown filter is refused rather than dropped, which is
+    # precisely the assumption that produces a silently unfiltered report.
+    FilterRejected:
+      description: >-
+        The filter object was refused: an unrecognised key (naming the accepted list), a key of the wrong
+        shape, or `period` together with `from`/`to`. Refused rather than ignored, because ignoring an
+        unrecognised filter returns the unfiltered report and the caller cannot tell that apart from a
+        filter that matched everything.
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorEnvelope' }
@@ -1154,10 +1251,19 @@ components:
       enum: [OPEN, AWAITING_COST_CENTER_REVIEW, AWAITING_SENIOR_REVIEW, AWAITING_FINANCE_REVIEW, COMPLETED, COMPLETED_WITH_REJECTIONS]
     SheetCreate:
       type: object
-      required: [title, accountId]
+      required: [title]
       properties:
         title: { type: string, minLength: 1, maxLength: 255 }
-        accountId: { type: string, format: uuid }
+        accountId:
+          type: string
+          format: uuid
+          description: >
+            Optional, and its absence is meaningful rather than merely unchecked. FR-020 resolves the
+            account for a new sheet from the caller's own active accounts: none means the default rial
+            account is provisioned on this attempt and used; exactly one means that account is used
+            automatically; several means the caller must send this field and the request is refused
+            naming it. A purchaser with zero accounts therefore has no `accountId` to send, which is
+            why it cannot be required -- FR-020 and a required `accountId` cannot both hold.
     SheetTotals:
       type: object
       properties:
@@ -1187,6 +1293,15 @@ components:
         firstExpenseDate: { type: string, format: date, nullable: true }
         lastExpenseDate: { type: string, format: date, nullable: true }
         version: { type: integer }
+        activeRevisionNumber:
+          type: integer
+          minimum: 0
+          nullable: true
+          description: >
+            FR-063's latest active transaction revision number: the highest revision number among the
+            active revisions of this sheet's transactions, and 0 when the sheet holds none. Added
+            2026-10-06 (T385), because the requirement named "the active transaction revision", which is a
+            member of TransactionSummary and therefore one per transaction rather than one per sheet.
     SheetDetail:
       allOf:
         - $ref: '#/components/schemas/SheetSummary'
@@ -1322,14 +1437,154 @@ components:
       required: [id, eventType, actor, occurredAt]
       properties:
         id: { type: string, format: uuid }
-        eventType: { type: string }
+        # FR-051 plus **FR-085**. `SUPERSEDED_ATTEMPT` is a real member of this vocabulary, not an
+        # `after` payload: it is the record of a decision that was refused because the transaction had
+        # already moved on. It is deliberately **neither an approval nor a rejection** -- recording it
+        # as either would falsify the decision history -- and it is deliberately not omitted either,
+        # because a discarded attempt is indistinguishable from a request that never happened and would
+        # leave a reviewer who acted with no trace.
+        eventType:
+          type: string
+          enum:
+            - SHEET_SUBMITTED
+            - TRANSACTION_ROUTED
+            - DECISION_APPROVED
+            - DECISION_REJECTED
+            - TRANSACTION_RETURNED
+            - CORRECTION_SUBMITTED
+            - REVISION_CREATED
+            - TRANSACTION_CHANGED
+            - EVIDENCE_ADDED
+            - EVIDENCE_DEACTIVATED
+            - SETTLEMENT_RECORDED
+            - SUPERSEDED_ATTEMPT
         stage: { type: string, nullable: true }
         decision: { type: string, nullable: true }
         explanation: { type: string, nullable: true }
         actor: { $ref: '#/components/schemas/ActorSnapshot' }
         before: { type: object, nullable: true, additionalProperties: true }
         after: { type: object, nullable: true, additionalProperties: true }
+        # FR-085: on `SUPERSEDED_ATTEMPT`, `before` carries the decision already in force and `after`
+        # carries the decision the caller attempted, so one read reconstructs the race without needing
+        # a second query.
         occurredAt: { type: string, format: date-time }
+    # FR-064/FR-065/FR-068: the accepted filter vocabulary, as a **closed** set.
+    #
+    # `additionalProperties: false` is the load-bearing line, and it is the whole of T374. This object
+    # used to be `type: object` with `additionalProperties: true` and no enumeration, so a client
+    # generated from this document could send any key at all -- while the server refuses an unrecognised
+    # filter with a `422` rather than ignoring it. The generated client and the server therefore disagreed
+    # about what a legal request was, and the `422` that disagreement produces was nowhere declared here,
+    # so a client had no documented way to learn which filters exist or that unknown ones are refused
+    # rather than dropped.
+    #
+    # Declaring the closure here also means the 15 names are stated once. `ReportFilterFactory::ACCEPTED_FILTERS`
+    # is the server's copy and this is the contract's; a filter added to one and not the other is drift in
+    # whichever direction is worse -- a client that can send what the server refuses, or a filter the
+    # contract never mentioned.
+    #
+    # Ignoring an unknown filter is what makes closure necessary rather than pedantic: silently discarding
+    # it returns the *unfiltered* answer, and the caller cannot tell that apart from a filter that matched
+    # everything. A refusal the caller can see is the only way the two are distinguishable.
+    ReportFilters:
+      type: object
+      additionalProperties: false
+      description: >-
+        FR-064/FR-065 report filters in the server's vocabulary. The set is **closed**: an unrecognised
+        key is refused with `422` naming it and the accepted list, never ignored, because ignoring it
+        returns the unfiltered report and the caller cannot tell the difference. Both endpoints read the
+        same object -- `GET /reports` as a JSON-encoded query parameter, `POST /exports` as a JSON body
+        member -- so the vocabulary is one set, not one per transport.
+      properties:
+        # --- Date and period ---
+        # Typed `string` rather than `format: date-time` on purpose: the server hands the value to
+        # `new DateTimeImmutable()`, which also accepts a bare `YYYY-MM-DD`, and declaring the narrower
+        # format would be a stricter promise than the implementation keeps. T373 sends the bare date form
+        # and it is accepted.
+        from:
+          type: string
+          description: >-
+            Inclusive lower bound, ISO-8601. A date or a date-time; anything `DateTimeImmutable` parses is
+            accepted. Mutually exclusive with `period`.
+        to:
+          type: string
+          description: Inclusive upper bound, ISO-8601. Mutually exclusive with `period`.
+        period:
+          type: string
+          enum: [month, quarter, year]
+          description: >-
+            A predefined Jalali period in progress, resolved at query time in the requesting user's own time
+            zone (their account setting, else the instance default). Each names the period **in progress at
+            request time**, first day through last inclusive: `month`/`quarter`/`year` are Jalali (Solar
+            Hijri), a year spans Farvardin to Esfand, and a quarter begins at Farvardin. A previous or
+            trailing period is requested with `from`/`to` instead.
+            Mutually exclusive with `from`/`to` within one request: supplying both is refused with `422`
+            naming the conflict and stating which to remove. Neither is honoured while the other is
+            discarded, and they are never intersected. FR-068 was amended on 2026-09-30 to state that
+            `period` is a member in its own right rather than a parameterisation of `from`/`to`; before
+            that this document's own closed-vocabulary rule forbade a filter FR-068 required.
+        # --- Facet lists ---
+        # Every facet below is a **list on the wire**, because the server refuses a non-array for each of
+        # them. A single-select control sends a one-element list, not a bare string; a bare string is a 422
+        # on a filter the user filled in correctly.
+        statuses:
+          type: array
+          items: { type: string }
+          description: Sheet/transaction workflow statuses. A list even for one value.
+        stages:
+          type: array
+          items: { type: string }
+          description: Workflow stages.
+        currencyCodes:
+          type: array
+          items: { type: string }
+          description: ISO currency codes.
+        eventTypes:
+          type: array
+          items: { type: string }
+          description: Configuration/audit event types.
+        actorUids:
+          type: array
+          items: { type: string }
+          description: Nextcloud user ids of actors.
+        # --- Two id spaces per facet, unioned ---
+        # `costCenterIds`/`expenseTypeIds` name **public UUIDs**; `costCenterDbIds`/`expenseTypeDbIds` name
+        # internal integer join keys. Both spellings name members of one facet, so a request naming both
+        # means the **union** of the two sets -- not a precedence rule, which would silently discard
+        # whichever the caller happened to spell differently. The UUID forms are the ones a client should
+        # send; the integer forms exist so a server-side caller need not resolve a public id first.
+        costCenterIds:
+          type: array
+          items: { type: string, format: uuid }
+          description: Cost centres by **public UUID**.
+        costCenterDbIds:
+          type: array
+          items: { type: integer }
+          description: >-
+            Cost centres by internal database id. An internal join key, unioned with `costCenterIds` rather
+            than preferred over it.
+        expenseTypeIds:
+          type: array
+          items: { type: string, format: uuid }
+          description: Expense types by **public UUID**.
+        expenseTypeDbIds:
+          type: array
+          items: { type: integer }
+          description: Expense types by internal database id, unioned with `expenseTypeIds`.
+        # --- Scalars ---
+        createdBy:
+          type: string
+          description: Nextcloud user id of the creator.
+        amountMinMinor:
+          type: integer
+          description: >-
+            Inclusive lower amount bound in the **minor units of the row's own currency**. A whole number,
+            not a major-unit decimal: there is no fiscal or display rounding on this path, so a bound that
+            silently multiplied or divided by 1000 would be a wrong financial answer rather than a wrong
+            display.
+        amountMaxMinor:
+          type: integer
+          description: Inclusive upper amount bound, in minor units. See `amountMinMinor`.
     ReportPage:
       allOf:
         - $ref: '#/components/schemas/PageMeta'
@@ -1389,26 +1644,9 @@ components:
           type: string
           nullable: true
         filters:
-          type: object
-          # FR-068. `period` is a member of the accepted filter vocabulary in its own right -- **not** a
-          # parameterisation of `from`/`to`. FR-068 presents a predefined Jalali period and an explicit
-          # custom date range as alternatives and makes them mutually exclusive, which a
-          # parameterisation and the filter it parameterises cannot be. FR-064 was amended on 2026-09-30
-          # to say so; before that this contract's closed-vocabulary rule forbade a filter FR-068 required.
-          #
-          # Each names the period **in progress at request time**, first day through last inclusive:
-          # `month`/`quarter`/`year` are Jalali (Solar Hijri), a year spans Farvardin to Esfand, and a
-          # quarter begins at Farvardin. A previous or trailing period is requested with `from`/`to`.
-          #
-          # Supplying `period` together with `from` or `to` is refused with `422` naming the conflict and
-          # stating which to remove. Neither is honoured while the other is discarded, and they are never
-          # intersected.
-          additionalProperties: true
-          properties:
-            period:
-              type: string
-              enum: [month, quarter, year]
-              description: >-
-                A predefined Jalali period in progress, resolved at query time in the requesting user's
-                own time zone (their account setting, else the instance default). Mutually exclusive with
-                `from`/`to` within one request.
+          # T374: the vocabulary is declared once, in `ReportFilters`, and referenced here. This used to
+          # be an open `type: object` with `additionalProperties: true` that declared only `period` -- so a
+          # client generated from this document could send a filter the server refuses with a `422` the
+          # document never described. One referenced schema also means the export and report endpoints
+          # cannot drift into declaring different vocabularies.
+          $ref: '#/components/schemas/ReportFilters'

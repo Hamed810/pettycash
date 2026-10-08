@@ -38,6 +38,15 @@ final class OcsTestClient
             ],
             'http_errors' => false,
             'verify' => false,
+            // FR-073's error-rate producer needs every response the suite saw, and Guzzle only offers a
+            // stack of them. Recording the stack, rather than each request inside a middleware, keeps the
+            // measurement observational: a suite cannot influence the figure by how it makes a request,
+            // because nothing in the suite participates.
+            //
+            // Appended, never truncated, so the PHP and Playwright halves of one run share a file.
+            'on_stats' => static function (\GuzzleHttp\TransferStats $stats): void {
+                RequestLog::record($stats->getResponse()?->getStatusCode(), $stats->getHandlerErrorData());
+            },
         ]);
     }
 

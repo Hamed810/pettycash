@@ -57,12 +57,17 @@ vi.mock('@nextcloud/vue/components/NcTextField', () => ({
 }))
 
 import axios from '@nextcloud/axios'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import ReportFilterBar from '@/components/reports/ReportFilterBar.vue'
 import ReportTable from '@/components/reports/ReportTable.vue'
+import PeriodDisclosure from '@/components/reports/PeriodDisclosure.vue'
 import ExportControls from '@/components/reports/ExportControls.vue'
 import ReportView from '@/views/reports/ReportView.vue'
 import { routes } from '@/router'
 import { REPORT_PAGE_SIZE_MAX, fetchReport, pruneFilters, reportQuery } from '@/services/reportsApi'
+import { readPeriodDisclosure } from '@/types/reporting'
+import { ApiError } from '@/types/api'
 import { useReportsStore } from '@/stores/reports'
 import type { ReportFilters, ReportPage, ReportRow } from '@/types/reporting'
 
@@ -126,7 +131,7 @@ function requestedUrl(call = 0): string {
  */
 const ARTIFACT_BYTES = 'id,status\n1,COMPLETED\n'
 
-function exportResultBody(): unknown {
+function exportResultBody(disclosure: Record<string, unknown> = {}): unknown {
 	return {
 		ocs: {
 			meta: { status: 'ok', statuscode: 200 },
@@ -138,9 +143,92 @@ function exportResultBody(): unknown {
 				rowCount: 1,
 				data: btoa(ARTIFACT_BYTES),
 				artifactRemoved: true,
+				// FR-068: present only when the request resolved a period. Spread last so a test can add it
+				// without restating the artifact fields, and so the default really is "absent" rather than
+				// four undefined keys -- which would read as a disclosure the server never sent.
+				...disclosure,
 			},
 		},
 	}
+}
+
+/** The disclosure `POST /exports` answers for `period=month`, exactly as the server sends it. */
+const RESOLVED_MONTH = {
+	period: 'month',
+	resolvedFrom: '2026-07-01',
+	resolvedTo: '2026-07-30',
+	resolvedTimeZone: 'Asia/Tehran',
+}
+
+/**
+ * A report `summary` shaped exactly as `ReportTable.vue` receives it.
+ *
+ * FR-068 puts the four disclosure keys **inside** `summary`, beside the report's real totals — so the
+ * report carrier is one object holding both, and the reader must reach the disclosure without being
+ * handed the response root. Typed as the component's own prop (`Record<string, unknown>`) rather than
+ * as an inline literal: TypeScript's excess-property check rejects an object literal carrying keys
+ * `PeriodDisclosureSource` does not declare, and the fix for that is to hold the value in a typed
+ * variable — which is what production does — rather than to weaken the type so a test literal
+ * compiles.
+ *
+ * `ReportSummary` is `ReportTable.vue`'s own `summary?: Record<string, unknown>` prop, restated rather
+ * than imported: deriving it needs `vue-component-type-helpers`, and adding a dependency to name one
+ * type is a worse trade than restating the shape this file is testing against. If the prop's declared
+ * type changes, `readPeriodDisclosure(summary)` stops compiling here, which is the coupling worth
+ * having.
+ */
+type ReportSummary = Record<string, unknown>
+
+function reportSummary(summary: ReportSummary): ReportSummary {
+	return summary
+}
+
+/**
+ * `ReportFilterFactory::ACCEPTED_FILTERS`, read out of the PHP source.
+ *
+ * The filter vocabulary is **closed**, so this list is the only set of names a client may send: anything
+ * else is a 422 naming an unknown filter, not an ignored key. Reading it from the server's own source is
+ * what makes a front-end vocabulary assertion meaningful — comparing against `src/types/reporting.ts`
+ * would only prove the client agrees with itself, which is the failure mode this repository's contract
+ * gates exist to prevent.
+ *
+ * Parsed as text rather than evaluated, because PHP cannot be loaded in a jsdom test. Two details, both
+ * found by getting them wrong first:
+ *
+ * - **Several names share a line.** `'from', 'to', 'statuses', …` is two lines for six entries, so an
+ *   anchor requiring a trailing comma at end-of-line matched only `'period'` — the one entry that happens
+ *   to sit alone on its line. The result was a one-element list that still satisfied a non-emptiness check,
+ *   which is the worst failure shape: it looked parsed and silently agreed with nothing.
+ * - **Comments are dropped before matching.** The constant carries prose explaining why `period` is a
+ *   member in its own right, and that prose names filters. Those names are backtick-quoted, so stripping
+ *   `//` lines is what keeps the explanation from reading as a second, invented entry.
+ */
+function acceptedFilterNames(): string[] {
+	const path = join(process.cwd(), 'lib/Application/Reporting/ReportFilterFactory.php')
+	const source = readFileSync(path, 'utf8')
+	const block = source.match(/ACCEPTED_FILTERS\s*=\s*\[([^\]]*)\]/)
+
+	if (block === null) {
+		throw new Error(`ReportFilterFactory::ACCEPTED_FILTERS was not found in ${path}`)
+	}
+
+	// The one capture group is the array body: this pattern has exactly one, so `match[1]` is it rather
+	// than an optional one. Said rather than assumed with `!`, because under
+	// `noUncheckedIndexedAccess` the index is typed `string | undefined` whatever the pattern is, and an
+	// assumed non-null assertion here would hide a pattern change that added a second group.
+	const body = block.slice(1).join('')
+
+	const entries = body
+		.split('\n')
+		.filter((line) => !line.trimStart().startsWith('//'))
+		.join('\n')
+
+	// `matchAll` yields a `RegExpExecArray`, whose first element is the whole match rather than a group,
+	// so the name is at index 1 — narrowed here rather than at each use, since `RegExpMatchArray`'s
+	// element type stays optional under `noUncheckedIndexedAccess`.
+	return [...entries.matchAll(/'([A-Za-z][A-Za-z0-9]*)'/g)]
+		.map((match) => match[1])
+		.filter((name): name is string => name !== undefined)
 }
 
 /**
@@ -395,7 +483,176 @@ describe('US7 Reporting and Export — Vue Component Tests', () => {
 			expect(Array.from(await blobBytes(payload.blob))).toEqual([0xD8, 0xA7, 0xD8, 0xB3, 0x0A])
 		})
 
-		it('offers the grouped evidence archive only for the evidence report', async () => {
+		/**
+		 * T377: the export carries FR-068's disclosure instead of dropping it at the store boundary.
+		 *
+		 * The server has always answered `POST /exports` with `period`, `resolvedFrom`, `resolvedTo` and
+		 * `resolvedTimeZone` — T373 proved over live HTTP that they are byte-identical to the report path's
+		 * — and `exportReport()` read the response for exactly one thing, the artifact bytes. So the file
+		 * reached the user naming neither the period nor the zone it covered.
+		 *
+		 * Asserted against the values the server sent, not against a shape: a disclosure of the right
+		 * *type* carrying the wrong range would satisfy anything looser.
+		 */
+		it('carries the resolved period onto the export rather than discarding it', async () => {
+			postMock.mockResolvedValue({ data: exportResultBody(RESOLVED_MONTH) })
+
+			const store = useReportsStore()
+			await store.applyFilters({ period: 'month' })
+			const payload = await store.exportReport('csv')
+
+			expect(payload.disclosure).toEqual(RESOLVED_MONTH)
+			expect(store.lastExportDisclosure).toEqual(RESOLVED_MONTH)
+		})
+
+		/**
+		 * The filename states **what the file covers**, not when it was downloaded.
+		 *
+		 * It previously stamped `new Date().toISOString()` — the client's UTC clock — so a report covering
+		 * 1–30 Mordad downloaded as a file named for the day the button was pressed. Two users exporting
+		 * the same period got different names for the same numbers, which is the opposite of what makes two
+		 * exports comparable once they are attached to the same reconciliation.
+		 */
+		it('names the file after the period it resolved, not the day it was downloaded', async () => {
+			postMock.mockResolvedValue({ data: exportResultBody(RESOLVED_MONTH) })
+
+			const store = useReportsStore()
+			await store.applyFilters({ period: 'month' })
+			const payload = await store.exportReport('csv')
+
+			expect(payload.filename).toBe('pettycash-sheets-month-2026-07-01_2026-07-30.csv')
+			// The download date must not leak in alongside the period: a name carrying both says the file
+			// covers a day it does not.
+			expect(payload.filename).not.toMatch(new Date().toISOString().slice(0, 10))
+		})
+
+		/**
+		 * **The zone is deliberately not in the filename, and this is why.**
+		 *
+		 * A zone name contains `/` (`Asia/Tehran`), which is a path separator: a filename carrying one
+		 * either becomes a directory or is silently rewritten by the browser's download handling. Asserted
+		 * directly, because "we remembered not to add it" is exactly the kind of decision that gets undone
+		 * by a later change that helpfully includes everything.
+		 */
+		it('keeps the path separator out of the filename', async () => {
+			postMock.mockResolvedValue({ data: exportResultBody(RESOLVED_MONTH) })
+
+			const store = useReportsStore()
+			await store.applyFilters({ period: 'month' })
+			const payload = await store.exportReport('csv')
+
+			expect(payload.filename).not.toContain('/')
+			expect(payload.filename).not.toContain(RESOLVED_MONTH.resolvedTimeZone)
+			// The zone still travels — in the disclosure, where it is readable.
+			expect(payload.disclosure?.resolvedTimeZone).toBe(RESOLVED_MONTH.resolvedTimeZone)
+		})
+
+		/**
+		 * With no period there is nothing to state, so today's date stands in.
+		 *
+		 * Asserted because naming a range the request never used would be the same class of error as sending
+		 * a filter the server refuses — except this one would be in the filename of a financial artifact,
+		 * where nobody is going to query it.
+		 */
+		it('falls back to the download date when the request carried no period', async () => {
+			const store = useReportsStore()
+			await store.applyFilters({ from: '2026-01-01' })
+			const payload = await store.exportReport('csv')
+
+			expect(payload.disclosure).toBeNull()
+			expect(payload.filename).toMatch(
+				new RegExp(`^pettycash-sheets-${new Date().toISOString().slice(0, 10)}\\.csv$`)
+			)
+		})
+
+		/**
+		 * A failed export must not leave the previous file's period on screen.
+		 *
+		 * `lastExportDisclosure` is cleared when a request *starts*, not when it succeeds, so a refusal
+		 * cannot leave a disclosure describing a file the user does not hold while the new attempt is in
+		 * flight or has failed.
+		 */
+		it('clears the disclosure when a new export starts, so a failure cannot strand it', async () => {
+			postMock.mockResolvedValueOnce({ data: exportResultBody(RESOLVED_MONTH) })
+			const store = useReportsStore()
+			await store.applyFilters({ period: 'month' })
+			await store.exportReport('csv')
+			expect(store.lastExportDisclosure).toEqual(RESOLVED_MONTH)
+
+			// `ApiError`'s signature is `(status, body)` and `body.message` is what `super()` receives, so
+			// the arguments are given in the order the class declares. The earlier three-argument form
+			// put the message where the status belongs and did not compile — `vue-tsc` caught it, but
+			// only because this test happens to run in the same file as the typed export path.
+			postMock.mockRejectedValueOnce(new ApiError(422, { code: 'refused', message: 'refused' }))
+			await expect(store.exportReport('csv')).rejects.toBeTruthy()
+
+			expect(store.lastExportDisclosure).toBeNull()
+		})
+
+	/**
+	 * T377: one reader, two carriers.
+	 *
+	 * `GET /reports` nests the four keys inside `summary`; `POST /exports` returns them at the response
+	 * root. The reader is handed whichever object carries them, so the extraction rule exists once — a
+	 * component that had to know which endpoint produced it would be a second place for that knowledge to
+	 * drift, and the two would eventually disagree about what "the disclosure" means.
+	 */
+	describe('readPeriodDisclosure', () => {
+		it('reads the export carrier, where the keys sit at the response root', () => {
+			expect(readPeriodDisclosure(RESOLVED_MONTH)).toEqual(RESOLVED_MONTH)
+		})
+
+		it('reads the report carrier, where the same keys sit inside `summary`', () => {
+			// The report path nests the disclosure **inside** `summary`, beside the report's real
+			// totals, so the object the reader is handed carries both. Asserted separately from the
+			// export carrier because "it worked for the export shape" would still pass if the reader
+			// reached one level too deep for the other — and the extra `totalMinor` is what makes this
+			// the report's shape rather than the export's.
+			const summary = reportSummary({ totalMinor: 1000, ...RESOLVED_MONTH })
+			expect(readPeriodDisclosure(summary)).toEqual(RESOLVED_MONTH)
+		})
+
+		it('does not reach past `summary` for a disclosure the response did not resolve', () => {
+			// The sibling of the case above, and the one that would fail if the reader descended a
+			// level it should not: a summary carrying only totals has no period, so nothing is
+			// disclosed. A reader that dug into a nested object to find one would invent a disclosure
+			// the server never sent.
+			const summary = reportSummary({ totalMinor: 1000 })
+			expect(readPeriodDisclosure(summary)).toBeNull()
+		})
+
+		/**
+		 * Absent means `null`, and `null` is not the same as empty.
+		 *
+		 * The contract makes the disclosure **absent** when no period was resolved, rather than present and
+		 * null, because a key describing a request the response did not use is a claim about the request
+		 * rather than about the answer. A reader that returned an empty disclosure here would put "no period
+		 * resolved" on screen over a report filtered by an explicit range.
+		 */
+		it('returns null when no period was resolved', () => {
+			expect(readPeriodDisclosure(reportSummary({ totalMinor: 1000 }))).toBeNull()
+			expect(readPeriodDisclosure({})).toBeNull()
+			expect(readPeriodDisclosure(undefined)).toBeNull()
+			expect(readPeriodDisclosure(null)).toBeNull()
+			// Present-and-null is the shape the contract deliberately avoids; treat it as absent.
+			expect(readPeriodDisclosure({ period: null })).toBeNull()
+		})
+
+		/**
+		 * A partial disclosure is read as partial, not completed.
+		 *
+		 * FR-068 requires the zone so two users' exports can be reconciled. A disclosure that arrived
+		 * without one must stay without one, so the component can say so — a reader that filled in a
+		 * default zone would make two users' exports look reconcilable when they are not.
+		 */
+		it('preserves a partial disclosure rather than completing it', () => {
+			expect(
+				readPeriodDisclosure({ period: 'year', resolvedFrom: '2026-01-01', resolvedTo: '2026-12-30' })
+			).toEqual({ period: 'year', resolvedFrom: '2026-01-01', resolvedTo: '2026-12-30', resolvedTimeZone: undefined })
+		})
+	})
+
+	it('offers the grouped evidence archive only for the evidence report', async () => {
 			const store = useReportsStore()
 			expect(store.availableFormats).toEqual(['csv', 'xlsx', 'pdf'])
 			await store.selectReportType('evidence')
@@ -622,6 +879,107 @@ describe('US7 Reporting and Export — Vue Component Tests', () => {
 			})
 		})
 
+		/**
+		 * T376: FR-064's four facets that no control could reach — currency, creator, expense type and
+		 * actor — now have one each.
+		 *
+		 * The requirement's own wording is *"sheets by status, date, currency, and creator; transactions by
+		 * status, cost center, expense type, date, and amount; audit by actor, stage, event type, and date
+		 * range"*. Currency, creator, expense type and actor were unreachable, and the clarifications log
+		 * answers "Keep all twelve; they are V1 requirements, not deferred" — so a requirement the
+		 * specification declines to defer with no task implementing it is a gap rather than a plan.
+		 */
+		it('emits all four of the facets that had no control', async () => {
+			const wrapper = mountBar()
+			await wrapper.find('[data-testid="report-filter-currency"]').setValue('IRR')
+			await wrapper.find('[data-testid="report-filter-expense-type"]').setValue('33333333-3333-4333-8333-333333333333')
+			await wrapper.find('[data-testid="report-filter-actor"]').setValue('employee1')
+			await wrapper.find('[data-testid="report-filter-created-by"]').setValue('employee2')
+			await wrapper.find('[data-testid="report-filter-bar"]').trigger('submit')
+
+			expect(wrapper.emitted('apply')?.[0]?.[0]).toEqual({
+				currencyCodes: ['IRR'],
+				expenseTypeIds: ['33333333-3333-4333-8333-333333333333'],
+				actorUids: ['employee1'],
+				createdBy: 'employee2',
+			})
+		})
+
+		/**
+		 * `createdBy` is the one **scalar** among the four, and getting it wrong is silent.
+		 *
+		 * `ReportFilterFactory` reads it as `isset($decoded['createdBy']) ? (string) $decoded['createdBy'] : null`,
+		 * so sending `['employee2']` does not earn a 422 — it stringifies to `"Array"`, which is a filter
+		 * on a user called **`Array`**. The request succeeds and returns the wrong rows, which is why this
+		 * asserts the absence of a list rather than merely the presence of the value: both spellings contain
+		 * the uid somewhere.
+		 */
+		it('sends `createdBy` as a scalar, because the server casts it to a string', async () => {
+			const wrapper = mountBar()
+			await wrapper.find('[data-testid="report-filter-created-by"]').setValue('employee2')
+			await wrapper.find('[data-testid="report-filter-bar"]').trigger('submit')
+
+			const filters = wrapper.emitted('apply')?.[0]?.[0] as ReportFilters
+			expect(filters.createdBy).toBe('employee2')
+			expect(Array.isArray(filters.createdBy)).toBe(false)
+		})
+
+		/**
+		 * A field the user cleared emits **nothing**, not an empty value.
+		 *
+		 * The four new controls are bound through helpers that return `undefined` for a blank, so an
+		 * untouched field is absent from the payload. Emitting `currencyCodes: []` instead would be a
+		 * filter the server accepts and reads as "no currency matches" — an empty answer presented as a
+		 * filtered one, rather than the unfiltered report the user asked for.
+		 */
+		it('emits no filter for a facet the user left blank', async () => {
+			const wrapper = mountBar()
+			await wrapper.find('[data-testid="report-filter-currency"]').setValue('IRR')
+			await wrapper.find('[data-testid="report-filter-created-by"]').setValue('')
+			await wrapper.find('[data-testid="report-filter-bar"]').trigger('submit')
+
+			const filters = wrapper.emitted('apply')?.[0]?.[0] as ReportFilters
+			expect(filters.currencyCodes).toEqual(['IRR'])
+			expect('createdBy' in filters).toBe(false)
+			expect('actorUids' in filters).toBe(false)
+			expect('expenseTypeIds' in filters).toBe(false)
+		})
+
+		/**
+		 * The bar cannot send a name the server refuses — checked against the server's own list.
+		 *
+		 * This is the rule T309 established on the report side and T382 inherits for the sheet list: the
+		 * filter vocabulary is **closed**, so an unrecognised key is a 422 rather than an ignored filter.
+		 * A control added here with a plausible-looking name (`creator`, `expenseType`) would type-check
+		 * against `ReportFilters` only if `ReportFilters` also carried it, and the failure the user would
+		 * see is a refused request. So the assertion reads `ReportFilterFactory::ACCEPTED_FILTERS` out of
+		 * the PHP source and requires every name the bar can emit to be in it.
+		 *
+		 * Parsed from source rather than generated from the contract, because the accepted list is the
+		 * server's own statement; `ReportFilterVocabularyTest` already holds the contract to it, so
+		 * comparing to the contract here would only re-derive what that test proves.
+		 */
+		it('sends only names the server accepts, so no control can earn a 422', () => {
+			const emitted = [
+				'period', 'from', 'to', 'statuses', 'currencyCodes', 'costCenterIds', 'expenseTypeIds',
+				'actorUids', 'eventTypes', 'createdBy', 'stages', 'amountMinMinor', 'amountMaxMinor',
+			]
+			const accepted = acceptedFilterNames()
+
+			// The parse itself is asserted before it is relied on. An earlier version of this helper
+			// anchored on a trailing comma at end-of-line, which matched only `'period'` — one entry, on
+			// its own line — and every name the bar can emit therefore looked unaccepted. `length > 0`
+			// still passed, so the failure arrived as a list of thirteen refused filters rather than as a
+			// parse error. Asserting the two ends and the size catches a partial parse where a size check
+			// does not.
+			expect(accepted).toContain('from')
+			expect(accepted).toContain('period')
+			expect(accepted).toContain('amountMaxMinor')
+			expect(accepted.length).toBeGreaterThanOrEqual(emitted.length)
+
+			expect(emitted.filter((name) => !accepted.includes(name))).toEqual([])
+		})
+
 		it('emits the date range under `from`/`to`, the names the factory accepts', async () => {
 			const wrapper = mountBar({ from: '2026-01-01', to: '2026-01-31' })
 			await wrapper.find('[data-testid="report-filter-bar"]').trigger('submit')
@@ -629,33 +987,238 @@ describe('US7 Reporting and Export — Vue Component Tests', () => {
 			expect(wrapper.emitted('apply')?.[0]?.[0]).toEqual({ from: '2026-01-01', to: '2026-01-31' })
 		})
 
+		/**
+		 * FR-068: a period is a member of the accepted vocabulary in its own right, so choosing one must
+		 * put it on the wire under its own name.
+		 *
+		 * This is the assertion the previous version of this suite got backwards. It asserted `period`
+		 * was absent while T312 was pending, and it stayed green after T312 landed — a passing test
+		 * holding a premise the server had stopped having.
+		 */
+		it.each(['month', 'quarter', 'year'] as const)('emits `period: %s` when that preset is chosen', async (preset) => {
+			const wrapper = mountBar()
+			await wrapper.findComponent({ name: 'NcSelect' }).setValue(preset)
+			await wrapper.find('[data-testid="report-filter-bar"]').trigger('submit')
+
+			expect(wrapper.emitted('apply')?.[0]?.[0]).toEqual({ period: preset })
+		})
+
+		/**
+		 * FR-068 makes a period and a custom range **mutually exclusive**, and
+		 * `ReportFilterFactory` refuses the combination with a 422 rather than honouring one filter while
+		 * discarding the other.
+		 *
+		 * So this is not a formatting assertion — it is the assertion that the control cannot build a
+		 * request the server will reject, which is the whole reason the date fields are gated on the
+		 * preset. Both directions are checked because "whichever arrived first wins" is precisely the
+		 * silent discard the server refuses to perform.
+		 */
+		it('never sends `period` together with an explicit range', async () => {
+			const withRangeThenPreset = mountBar({ from: '2026-01-01', to: '2026-01-31' })
+			await withRangeThenPreset.findComponent({ name: 'NcSelect' }).setValue('month')
+			await withRangeThenPreset.find('[data-testid="report-filter-bar"]').trigger('submit')
+
+			const presetFirst = withRangeThenPreset.emitted('apply')?.[0]?.[0] as Record<string, unknown>
+			expect(presetFirst).toEqual({ period: 'month' })
+			expect(Object.keys(presetFirst)).not.toContain('from')
+			expect(Object.keys(presetFirst)).not.toContain('to')
+
+			// And the reverse: a draft that arrives carrying a period, then switched to `custom`, sends
+			// the range alone.
+			const withPeriodThenRange = mountBar({ period: 'quarter' })
+			await withPeriodThenRange.findComponent({ name: 'NcSelect' }).setValue('custom')
+			await withPeriodThenRange.find('[data-testid="report-filter-date-from"]').setValue('2026-02-01')
+			await withPeriodThenRange.find('[data-testid="report-filter-bar"]').trigger('submit')
+
+			const rangeFirst = withPeriodThenRange.emitted('apply')?.[0]?.[0] as Record<string, unknown>
+			expect(rangeFirst).toEqual({ from: '2026-02-01' })
+			expect(Object.keys(rangeFirst)).not.toContain('period')
+		})
+
+		/**
+		 * An applied `period` must read back into the picker.
+		 *
+		 * If it did not, a report filtered by period would render an explicit-range control instead —
+		 * inviting the user to submit a second, different interpretation of the view they are looking at,
+		 * while the screen showed no trace of the filter that produced it.
+		 */
+		it('reads an applied period back into the picker', () => {
+			const wrapper = mountBar({ period: 'year' })
+			const select = wrapper.findComponent({ name: 'NcSelect' })
+
+			expect(select.props('modelValue')).toBe('year')
+			// The date fields belong to `custom`, so a period view must not offer them.
+			expect(wrapper.find('[data-testid="report-filter-date-from"]').exists()).toBe(false)
+		})
+
+		it('clears the period on reset rather than leaving it claimed on screen', async () => {
+			const wrapper = mountBar({ period: 'month' })
+			await wrapper.find('[data-testid="report-filter-reset"]').trigger('click')
+			await wrapper.find('[data-testid="report-filter-bar"]').trigger('submit')
+
+			expect(wrapper.emitted('reset')).toBeTruthy()
+			expect(wrapper.emitted('apply')?.[0]?.[0]).toEqual({})
+		})
 		it('emits no filter the server would refuse as unknown', async () => {
 			const wrapper = mountBar()
 			await wrapper.find('[data-testid="report-filter-bar"]').trigger('submit')
 
 			const emitted = wrapper.emitted('apply')?.[0]?.[0] as Record<string, unknown>
-			// `period` in particular: it is not a member of the accepted vocabulary, and sending it is a
-			// 422. Its absence here is T312's precondition, not an oversight.
-			expect(Object.keys(emitted)).not.toContain('period')
+			// `dateFrom` and `costCenterId` are still refused: they are not in `ACCEPTED_FILTERS`, and an
+			// unrecognised filter is rejected rather than ignored — which is why this half of the test
+			// survives. `period` was removed from it deliberately: it *is* accepted, so asserting its
+			// absence pinned a server that no longer exists.
 			expect(Object.keys(emitted)).not.toContain('dateFrom')
 			expect(Object.keys(emitted)).not.toContain('costCenterId')
 		})
 
-		/**
-		 * The Jalali presets are T312's, and `period` is not in the accepted vocabulary, so the control
-		 * must not offer a filter that would return the unfiltered report.
-		 */
-		it('offers only the period presets the server can currently answer', () => {
+		it('offers every period the server can resolve, plus the custom range', () => {
 			const wrapper = mountBar()
 			const options = wrapper.findComponent({ name: 'NcSelect' }).props('options') as { value: string }[]
 
-			expect(options.map((option) => option.value)).toEqual(['custom'])
+			expect(options.map((option) => option.value)).toEqual(['month', 'quarter', 'year', 'custom'])
 		})
 
 		it('resets without carrying any filter into the request', async () => {
 			const wrapper = mountBar({ statuses: ['COMPLETED'] })
 			await wrapper.find('[data-testid="report-filter-reset"]').trigger('click')
 			expect(wrapper.emitted('reset')).toBeTruthy()
+		})
+	})
+
+	/**
+	 * FR-068's disclosure: "the application MUST disclose the resolved period, including its resolved
+	 * date range and timezone."
+	 *
+	 * The requirement is a **disclosure**, so these assert that the range and the zone reach the screen
+	 * at all. A report filtered by `period` that renders no indication of which period it covers is not
+	 * a smaller version of the feature — it is a financial answer with no stated period, which is the
+	 * thing two users cannot reconcile against each other.
+	 */
+	describe('PeriodDisclosure', () => {
+		// Mounted through the same reader the two carriers use, so the test exercises the extraction and not
+		// just the markup -- `GET /reports` nests the keys in `summary`, `POST /exports` returns them at the
+		// root, and `readPeriodDisclosure` is the single rule for both.
+		function mountDisclosure(source: Record<string, unknown>) {
+			return mount(PeriodDisclosure, { props: { disclosure: readPeriodDisclosure(source) } })
+		}
+
+		/** A complete disclosure, exactly as `ReportFilter::periodDisclosure()` returns it. */
+		const resolved = {
+			period: 'month',
+			resolvedFrom: '2026-07-01',
+			resolvedTo: '2026-07-30',
+			resolvedTimeZone: 'Asia/Tehran',
+		}
+
+		it('states the period, its resolved range and the zone it was resolved in', () => {
+			const wrapper = mountDisclosure(resolved)
+
+			expect(wrapper.find('[data-testid="report-period-resolved-period"]').text()).toBe(
+				'reports.period.month'
+			)
+			// The two endpoints in **one** span: two separate fields read as two separate figures.
+			expect(wrapper.find('[data-testid="report-period-resolved-range"]').text()).toBe(
+				'2026-07-01 – 2026-07-30'
+			)
+			expect(wrapper.find('[data-testid="report-period-resolved-zone"]').text()).toBe('Asia/Tehran')
+			expect(wrapper.find('[data-testid="report-period-disclosure-incomplete"]').exists()).toBe(false)
+		})
+
+		/**
+		 * The endpoints are the server's own strings, never reformatted here.
+		 *
+		 * A client that re-rendered the range — into a locale date, or a Jalali date computed from the
+		 * wrong zone — would put a second, derived answer beside the authoritative one, and the two would
+		 * disagree by a day at the boundary. FR-068 resolves the period server-side for exactly this
+		 * reason; the client repeating the computation would reintroduce the bug the resolution avoids.
+		 */
+		it('reproduces the server dates verbatim rather than reformatting them', () => {
+			const wrapper = mountDisclosure({ ...resolved, resolvedFrom: '2026-12-21', resolvedTo: '2027-03-20' })
+
+			expect(wrapper.find('[data-testid="report-period-resolved-range"]').text()).toBe(
+				'2026-12-21 – 2027-03-20'
+			)
+			// A Jalali rendering would have produced Persian numerals or a 1405/1406 date here.
+			expect(wrapper.text()).not.toMatch(/[۰-۹]/)
+			expect(wrapper.text()).not.toMatch(/14\d\d/)
+		})
+
+		it('renders nothing when no period was resolved', () => {
+			// The contract makes the disclosure **absent** otherwise, so an unfiltered report — or one
+			// filtered by an explicit range — must not carry a "no period resolved" line. That would be a
+			// claim about the request the server never made.
+			expect(mountDisclosure({ totalMinor: 1000 }).find('[data-testid="report-period-disclosure"]').exists()).toBe(false)
+			expect(mountDisclosure({}).find('[data-testid="report-period-disclosure"]').exists()).toBe(false)
+			expect(mountDisclosure({ period: null }).find('[data-testid="report-period-disclosure"]').exists()).toBe(false)
+		})
+
+		it('announces itself as a state change, since it arrives after the request completes', () => {
+			const node = mountDisclosure(resolved).find('[data-testid="report-period-disclosure"]')
+
+			expect(node.attributes('role')).toBe('status')
+			expect(node.attributes('aria-live')).toBe('polite')
+		})
+
+		/**
+		 * A partial disclosure still discloses — and says that it is partial.
+		 *
+		 * FR-068 requires the zone so two users' exports can be reconciled. A disclosure missing the
+		 * zone, rendered as though complete, produces numbers that cannot be reconciled and give no
+		 * hint why.
+		 */
+		it('marks a disclosure that arrived without its zone as incomplete', () => {
+			const wrapper = mountDisclosure({ period: 'year', resolvedFrom: '2026-01-01', resolvedTo: '2026-12-30' })
+
+			expect(wrapper.find('[data-testid="report-period-disclosure-incomplete"]').exists()).toBe(true)
+			expect(wrapper.find('[data-testid="report-period-resolved-zone"]').exists()).toBe(false)
+		})
+	})
+
+	/**
+	 * The disclosure rides **inside** `summary`, so this is the assertion that it is not also counted as
+	 * a total.
+	 *
+	 * Without the filter, a resolved period renders `resolvedFrom 2026-07-01` in the totals row — a date
+	 * among the sums — and then again in the disclosure line above it. A date that reads as a total is
+	 * worse than a missing disclosure, because it looks like a figure somebody can reconcile.
+	 */
+	describe('ReportTable summary', () => {
+		function mountTable(summary: Record<string, unknown>) {
+			return mount(ReportTable, {
+				props: {
+					columns: ['sheetId'],
+					rows: [{ sheetId: 'SHEET-1' }],
+					summary,
+					loading: false,
+				},
+			})
+		}
+
+		it('keeps the disclosure out of the totals while leaving real totals alone', () => {
+			const wrapper = mountTable({
+				totalMinor: 1000,
+				count: 3,
+				period: 'month',
+				resolvedFrom: '2026-07-01',
+				resolvedTo: '2026-07-30',
+				resolvedTimeZone: 'Asia/Tehran',
+			})
+
+			const totalKeys = wrapper.findAll('[data-testid^="report-summary-"]').map((node) =>
+				node.attributes('data-testid')
+			)
+			expect(totalKeys).toEqual(['report-summary-totalMinor', 'report-summary-count'])
+			// And the disclosure itself is present, once, above the totals.
+			expect(wrapper.findAll('[data-testid="report-period-disclosure"]')).toHaveLength(1)
+		})
+
+		it('shows every total untouched when no period was resolved', () => {
+			const wrapper = mountTable({ totalMinor: 1000, count: 3 })
+
+			expect(wrapper.find('[data-testid="report-summary-totalMinor"]').exists()).toBe(true)
+			expect(wrapper.find('[data-testid="report-summary-count"]').exists()).toBe(true)
+			expect(wrapper.find('[data-testid="report-period-disclosure"]').exists()).toBe(false)
 		})
 	})
 
@@ -688,6 +1251,43 @@ describe('US7 Reporting and Export — Vue Component Tests', () => {
 			const wrapper = mount(ReportTable, { props: { columns: ['title'], rows } })
 			expect(wrapper.find('[data-testid="report-card-0"]').exists()).toBe(true)
 			expect(wrapper.findAll('.report-card')).toHaveLength(2)
+		})
+
+		/**
+		 * T395: a specific column's value is reachable **inside the card**.
+		 *
+		 * The assertion above proves a card exists and how many there are -- never what is in one. Combined
+		 * with `report-cell-<column>` existing only on the layout a narrow viewport never renders, that left
+		 * every figure on this component unassertable in the layout a phone actually gets.
+		 *
+		 * **Per column, and compared against the desktop cell**, so the test fails if either side loses the
+		 * hook and if the two ever disagree. `status: null` is in the fixture deliberately: it is the row
+		 * where the two layouts would diverge if one rendered a blank where the other rendered the absent
+		 * marker.
+		 */
+		it('addresses a specific column\'s value inside the narrow card, matching the table cell', () => {
+			const wrapper = mount(ReportTable, {
+				props: { columns: ['title', 'status', 'currentTotal'], rows }
+			})
+
+			for (const column of ['title', 'status', 'currentTotal']) {
+				const inTable = wrapper.find(`[data-testid="report-cell-${column}"]`)
+				const inCard = wrapper.find(`[data-testid="report-card-field-${column}"]`)
+
+				expect(
+					inTable.exists(),
+					`the table must still carry report-cell-${column}`
+				).toBe(true)
+				expect(
+					inCard.exists(),
+					`the card must carry report-card-field-${column} -- otherwise a figure that differs only at `
+						+ `a narrow viewport has no handle at all`
+				).toBe(true)
+				expect(
+					inCard.text().replace(inCard.find('.report-card__label').text(), '').trim(),
+					`${column} must say the same thing in the card as in the table`
+				).toBe(inTable.text().trim())
+			}
 		})
 	})
 

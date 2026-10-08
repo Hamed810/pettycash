@@ -66,7 +66,8 @@ class DashboardController extends OCSController
         private DashboardQuery $dashboard,
         private ExpenseSheetRepository $sheets,
         private ExpenseTransactionRepository $transactions,
-        private OcsErrorMapper $ocsErrorMapper
+        private OcsErrorMapper $ocsErrorMapper,
+        private \OCA\PettyCash\Domain\Account\Repository\AccountRepository $accounts
     ) {
         parent::__construct('pettycash', $request);
     }
@@ -124,18 +125,20 @@ class DashboardController extends OCSController
             }
 
             if ($scope->administrator) {
+                // T379. All three figures are exact COUNTs, so this card is built with
+                // `$exact` rather than a window: `figuresBoundedBy` is a claim about how a figure was
+                // derived, and stating 100 beside a COUNT(*) would be untrue in exactly the way
+                // `totalAccounts: 0` was. `figuresExact` says what is actually true.
                 $cards['admin'] = $this->card(
                     $uid,
                     $this->dashboard->administrativeSummary(
                         $scope,
                         $counts['totalSheets'],
                         $counts['totalTransactions'],
-                        0
+                        $counts['totalAccounts']
                     ),
-                    [
-                        'totalSheets' => $truncated['totalSheets'],
-                        'totalTransactions' => $truncated['totalTransactions'],
-                    ]
+                    [],
+                    exact: true
                 );
             }
 
@@ -150,13 +153,16 @@ class DashboardController extends OCSController
      * @param array<string, bool> $truncated
      * @return array<string, mixed>
      */
-    private function card(string $uid, array $figures, array $truncated): array
+    private function card(string $uid, array $figures, array $truncated, bool $exact = false): array
     {
         return [
             'userId' => $uid,
             'figures' => $figures,
-            // Stated rather than implied: these are window sizes, not instance totals.
-            'figuresBoundedBy' => self::BOUND,
+            // Stated rather than implied: these are window sizes, not instance totals -- except when
+            // the figures are COUNTs, which have no window, where the envelope says so rather than
+            // borrowing a bound it never had (T379).
+            'figuresBoundedBy' => $exact ? null : self::BOUND,
+            'figuresExact' => $exact,
             // Computed, not assumed. A read that returned exactly BOUND rows may have more behind it,
             // so `true` here means "at least this many" rather than "this many". Hardcoding `false`
             // would have been the more comfortable value and the untrue one.
@@ -214,8 +220,13 @@ class DashboardController extends OCSController
             'awaitingCostCenterReview' => count($costCenterQueue),
             'awaitingSeniorReview' => count($seniorQueue),
             'awaitingFinanceReview' => count($financeQueue),
-            'totalSheets' => count($this->sheets->findByStatus(SheetStatus::Open, 0, self::BOUND)),
-            'totalTransactions' => count($this->transactions->findForFinanceQueue(0, self::BOUND)),
+            // T379: instance-wide COUNTs rather than the length of a filtered window.
+            // `totalSheets` was `findByStatus(Open, ...)` and `totalTransactions` the finance queue,
+            // so the administrator's card named two subsets as totals; `totalAccounts` had no source
+            // at all and was passed as a literal 0.
+            'totalSheets' => $this->sheets->countAll(),
+            'totalTransactions' => $this->transactions->countAll(),
+            'totalAccounts' => $this->accounts->countAll(),
         ];
 
         // Truncation is a property of the *read*, not of the scope filter, so it is judged before
@@ -226,8 +237,9 @@ class DashboardController extends OCSController
             'awaitingCostCenterReview' => count($costCenterQueue) === self::BOUND,
             'awaitingSeniorReview' => count($seniorQueue) === self::BOUND,
             'awaitingFinanceReview' => count($financeQueue) === self::BOUND,
-            'totalSheets' => $counts['totalSheets'] === self::BOUND,
-            'totalTransactions' => $counts['totalTransactions'] === self::BOUND,
+            // `totalSheets`, `totalTransactions` and `totalAccounts` are deliberately absent: a COUNT
+            // cannot be truncated, because there is no window for one to fall out of. Restoring them
+            // as `=== self::BOUND` would reintroduce the false claim T379 removed.
         ];
 
         return ['counts' => $counts, 'truncated' => $truncated];

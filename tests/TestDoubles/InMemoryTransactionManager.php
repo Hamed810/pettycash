@@ -60,6 +60,21 @@ final class InMemoryTransactionManager implements TransactionManager
         return $this->depth > 0;
     }
 
+    /**
+     * How many transactions are open right now, as opposed to merely whether any is.
+     *
+     * Added for FR-085's audit-ordering property. `isTransactionOpen()` cannot answer that question:
+     * the superseded-attempt recorder legitimately opens a transaction of its own to write the event,
+     * so an observer inside `append()` always sees an open transaction and cannot tell whether it is
+     * the recorder's or one the business operation is still holding. Depth separates the two — a
+     * writer called at depth 1 is in the recorder's transaction alone, and one called at depth 2 is
+     * nested inside a business transaction that will roll it back with itself.
+     */
+    public function transactionDepth(): int
+    {
+        return $this->depth;
+    }
+
     public function runInTransaction(callable $callback): mixed
     {
         return $this->transactional($callback);

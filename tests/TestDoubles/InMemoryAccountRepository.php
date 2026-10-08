@@ -48,11 +48,37 @@ final class InMemoryAccountRepository implements \OCA\PettyCash\Domain\Account\R
     }
 
     /**
+     * T391: every account the uid holds, active or not.
+     *
+     * The `active` filter is absent on purpose and is the only difference from
+     * `findActiveByUserUid()`. A test double that quietly applied the same filter would make the
+     * listener look correct while proving nothing — the already-deactivated account it must skip would
+     * simply never be handed to it, and the "refuses a no-op" behaviour would never run.
+     *
+     * @return list<PettyCashAccount>
+     */
+    public function findAllByUserUid(string $userUid): array
+    {
+        return array_values(array_filter($this->accounts, fn($a) => $a->userUid === $userUid));
+    }
+
+    /**
      * @return list<PettyCashAccount>
      */
     public function findActiveByUserAndCurrency(string $userUid, CurrencyCode $currency): array
     {
         return array_values(array_filter($this->accounts, fn($a) => $a->userUid === $userUid && $a->active && $a->currencyCode()->equals($currency)));
+    }
+
+    /**
+     * Every account the double holds, active and inactive alike (T379).
+     *
+     * Deliberately not filtered on `active`, so the double cannot agree with a count that silently
+     * dropped deactivated accounts.
+     */
+    public function countAll(): int
+    {
+        return count($this->accounts);
     }
 
     public function save(PettyCashAccount $account): void

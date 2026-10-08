@@ -34,6 +34,20 @@ interface ExpenseTransactionRepository
     public function findByStageAndStatus(WorkflowStage $stage, ?TransactionStatus $status = null, int $offset = 0, int $limit = 100): array;
     /** @return list<ExpenseTransaction> */
     public function findForFinanceQueue(int $offset = 0, int $limit = 100): array;
+
+    /**
+     * How many transactions exist instance-wide, at every stage and in every status.
+     *
+     * Added for T379. `DashboardController` published `count(findForFinanceQueue(...))` under the
+     * key `totalTransactions`, so the administrator's dashboard reported the depth of the finance
+     * queue while calling it the instance's transaction total. On a healthy instance the queue is
+     * near empty, so the figure read as "this installation has processed almost nothing" to an
+     * administrator looking at a system with ten thousand expense records in it.
+     *
+     * Zero, not an exception, when there are none.
+     */
+    public function countAll(): int;
+
     public function save(ExpenseTransaction $transaction): void;
     /**
      * Remove a transaction and its revisions outright.

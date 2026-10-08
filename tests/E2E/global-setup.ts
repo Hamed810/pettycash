@@ -166,7 +166,11 @@ async function signIn(context: BrowserContext, baseURL: string, user: string, pa
 }
 
 export default async function globalSetup(config: FullConfig): Promise<void> {
-	const baseURL = config.projects[0]?.use?.baseURL ?? 'http://localhost:8080'
+	// The base URL comes from playwright.config.ts, which names this repository's own lab
+	// (`pettycash-lab`, port 8081). The fallback is kept identical to it on purpose: an
+	// earlier version of this file fell back to 8080, the retired shared lab's port, so a
+	// config that failed to load produced a suite that silently aimed at a dead port.
+	const baseURL = config.projects[0]?.use?.baseURL ?? 'http://localhost:8081'
 	const { user, password } = credentials()
 
 	const browser = await chromium.launch()

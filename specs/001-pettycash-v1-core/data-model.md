@@ -22,6 +22,25 @@
   and role so history survives later account or assignment changes.
 - Mutable aggregates include `lock_version` for optimistic checks; finance settlement also uses
   database row locks and uniqueness constraints.
+- `lock_version` carries the behaviour **FR-085** specifies, which was settled on 2026-10-07 after this
+  document already described the mechanism without a stated outcome: **first write wins**. A decision
+  submitted against a stale `lock_version` applies no business effect and is answered `409 Conflict`,
+  and the attempt is recorded as a `SUPERSEDED_ATTEMPT` audit event — its own event type, distinct from
+  an approval and from a rejection, naming the transaction, its active revision, the stage, the actor,
+  the attempted decision, and the decision already in force. This is distinct from command replay
+  (FR-084), where the same `X-PettyCash-Command-ID` returns the first outcome: a replay is one command
+  arriving twice, whereas a superseded attempt is a *different* command issued against changed state,
+  which no command identifier can detect. Last-write-wins is rejected because accepting a second
+  approval could book two consumption movements against one transaction and decrement the account
+  twice; silently ignoring the loser is rejected because a discarded attempt is indistinguishable from
+  a request that never happened; and server-side serialization is rejected because a blocking lock on
+  the decision path buys no correctness property refusal does not already provide, and the client-side
+  transparent retry it would imply is forbidden by FR-075.
+- Finance settlement resolves the target account by the sheet's currency at the moment of approval
+  (FR-040). When no **active** account in that currency exists, the approval is refused with `422`
+  naming the account and the transaction stays at the finance stage; **FR-020's idempotent provisioning
+  does not extend to settlement**, because provisioning there would book approved expense against a
+  balance that was never funded or approved.
 - Historical and audit records have no update or delete application operation.
 - Legacy database import, schema migration, table preservation, and data compatibility are outside
   V1 scope. Prototype tables that may remain in a shared development database are unmanaged
@@ -379,6 +398,30 @@ Command Result 1 ── 0..* Decision, Movement, Audit Event, or State Mutation
 
 Application repositories enforce referential integrity and prevent destructive cascades across
 historical entities. Database indexes support joins and scope filters without relying on deletion.
+
+**Corrected 2026-10-07 (T391, T392).** The sentence above overstated what exists and is retained here
+only with its scope narrowed, because deleting it would lose the real guarantee it was reaching for.
+Three things were wrong with it as written:
+
+- **"The schema declares no foreign key and no check constraint."** Verified against the live instance:
+  `addForeignKeyConstraint` appears zero times in `lib/Migration/`, and `information_schema` reports zero
+  foreign keys and zero check constraints across all 15 `pettycash_*` tables. Recorded as ADR-006, with
+  `tests/Integration/Persistence/SchemaConstraintNamingTest.php` asserting both the naming convention for
+  the kinds that exist and the continued absence of the two that do not, so the decision cannot quietly
+  stop being true.
+- **"Repositories enforce referential integrity."** They scope by uid and currency; they do not check that
+  a uid resolves to a user. `roundtrip-runner.php:143` and `RepositoryRoundTripTest.php:1680` both state
+  the no-foreign-key fact explicitly, and both *depend* on it — a uid naming no Nextcloud user must remain
+  a legal value.
+- **"Prevent destructive cascades" — nothing did.** With no constraint declared and no user-deletion
+  listener registered, deleting a Nextcloud user left their account row `active` with its balance,
+  unreachable through every API yet counted by the administrator dashboard's `totalAccounts`. ADR-005 now
+  supplies the one guarantee that exists: a deleted user's accounts are **deactivated, never deleted**,
+  enforced by `DeletedUserAccountListener` on `UserDeletedEvent`.
+
+So: **indexes and unique constraints are declared and correctly named**; referential integrity across a
+user's lifetime is enforced at the event boundary by ADR-005 rather than by the schema; and no cascade is
+possible because none is declared rather than because one is prevented.
 
 ## Workflow State Machine
 

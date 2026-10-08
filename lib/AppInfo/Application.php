@@ -39,6 +39,8 @@ use OCA\PettyCash\Application\Security\AuthorizationService;
 use OCA\PettyCash\Application\Workflow\FinanceQueue;
 use OCA\PettyCash\Application\Workflow\FinanceSettlementService;
 use OCA\PettyCash\Application\Workflow\ManagementReviewService;
+use OCA\PettyCash\Application\Workflow\SupersededDecisionAudit;
+use OCA\PettyCash\Application\Evidence\PublicEvidenceLinkService;
 use OCA\PettyCash\Application\Workflow\SubmitSheet;
 use OCA\PettyCash\Domain\Account\Repository\AccountMovementRepository;
 use OCA\PettyCash\Domain\Account\Repository\AccountRepository;
@@ -51,8 +53,10 @@ use OCA\PettyCash\Domain\Expense\Repository\ExpenseSheetRepository;
 use OCA\PettyCash\Domain\Expense\Repository\ExpenseTransactionRepository;
 use OCA\PettyCash\Domain\Expense\Repository\TransactionRevisionRepository;
 use OCA\PettyCash\Domain\Evidence\Repository\EvidenceRepository;
+use OCA\PettyCash\Domain\Evidence\Repository\EvidenceLinkRepository;
 use OCA\PettyCash\Domain\Workflow\Repository\WorkflowDecisionRepository;
 use OCA\PettyCash\Infrastructure\Nextcloud\AppDataEvidenceStore;
+use OCA\PettyCash\Infrastructure\Nextcloud\DeletedUserAccountListener;
 use OCA\PettyCash\Infrastructure\Nextcloud\NextcloudAdministratorCheck;
 use OCA\PettyCash\Infrastructure\Nextcloud\NextcloudCurrentUser;
 use OCA\PettyCash\Infrastructure\Export\CsvExporter;
@@ -81,6 +85,7 @@ use OCA\PettyCash\Infrastructure\Http\SheetPayloadFormatter;
 use OCA\PettyCash\Infrastructure\Http\TransactionPayloadFormatter;
 use OCA\PettyCash\Infrastructure\Persistence\Expense\SheetSummaryQuery;
 use OCA\PettyCash\Infrastructure\Persistence\Evidence\DbEvidenceRepository;
+use OCA\PettyCash\Infrastructure\Persistence\Evidence\DbEvidenceLinkRepository;
 use OCA\PettyCash\Infrastructure\Persistence\NextcloudTransactionManager;
 use OCA\PettyCash\Infrastructure\Persistence\Workflow\DbWorkflowDecisionRepository;
 use OCP\AppFramework\App;
@@ -93,6 +98,7 @@ use OCP\IUserManager;
 use OCP\IGroupManager;
 use OCP\IUserSession;
 use OCP\IDBConnection;
+use OCP\User\Events\UserDeletedEvent;
 use Psr\Log\LoggerInterface;
 
 final class Application extends App implements IBootstrap
@@ -182,6 +188,25 @@ final class Application extends App implements IBootstrap
 
         $context->registerService(EvidenceRepository::class, function ($c) {
             return new DbEvidenceRepository(
+                $c->query(IDBConnection::class),
+                $c->query(UserDirectory::class),
+                $c->query(CurrentUser::class)
+            );
+        });
+
+        // FR-031: public evidence links had a domain entity, a port and a working adapter, and **no
+        // container registration at all** — so `findByTokenHash()` was called from nowhere and the whole
+        // consumption path was unreachable. That is the same shape as the unrouted
+        // `evidence#links` / `evidence#deactivateLink` actions: the schema and the repository existed and
+        // nothing was wired to them.
+        //
+        // `CurrentUser` is injected because the adapter's constructor requires it, and it is safe here
+        // only because every use of it is inside `save()`: `NextcloudCurrentUser::uid()` throws for an
+        // unauthenticated request, and construction does not call it. Consumption only reads, so the
+        // anonymous path never reaches that method — and `PublicEvidenceLinkService` is not given a
+        // repository method that could.
+        $context->registerService(EvidenceLinkRepository::class, function ($c) {
+            return new DbEvidenceLinkRepository(
                 $c->query(IDBConnection::class),
                 $c->query(UserDirectory::class),
                 $c->query(CurrentUser::class)
@@ -442,13 +467,30 @@ final class Application extends App implements IBootstrap
             );
         });
 
+        // T391 / ADR-005: close a deleted user's petty-cash accounts.
+        //
+        // Registered rather than resolved lazily inside `boot()`, because a listener that is not
+        // registered is a listener that never runs and the account stays active — and an active
+        // orphaned account is exactly the defect this exists to remove.
+        $context->registerEventListener(
+            UserDeletedEvent::class,
+            DeletedUserAccountListener::class,
+            // Default priority. The listener only reads accounts this application owns and writes
+            // nothing outside them, so it needs no ordering against other applications' handlers, and
+            // claiming an early slot would be a way of asserting a precedence nothing depends on.
+            0
+        );
+
         // Application services
         $context->registerService(SheetService::class, function ($c) {
             return new SheetService(
                 $c->query(ExpenseSheetRepository::class),
                 $c->query(\OCA\PettyCash\Domain\Account\Repository\AccountRepository::class),
                 $c->query(CurrentUser::class),
-                $c->query(TransactionManager::class)
+                $c->query(TransactionManager::class),
+                // FR-020's account rule (T358). Injected rather than reimplemented in the sheet path, so
+                // provisioning keeps the idempotency and concurrent-insert handling T085 gave it.
+                $c->query(AccountAdministrationService::class)
             );
         });
 
@@ -657,6 +699,35 @@ final class Application extends App implements IBootstrap
             );
         });
 
+        // FR-085. Registered explicitly rather than left to reflection-based autowiring, because
+        // `ManagementReviewService` resolves it implicitly while `FinanceSettlementService` is built
+        // with a fixed argument list below — and a service that one path receives by autowiring and
+        // the other does not is a service whose two instances can differ for reasons nothing states.
+        $context->registerService(SupersededDecisionAudit::class, function ($c) {
+            return new SupersededDecisionAudit(
+                $c->query(\OCA\PettyCash\Application\Port\AuditWriter::class),
+                $c->query(ExpenseTransactionRepository::class),
+                $c->query(TransactionManager::class),
+                $c->query(LoggerInterface::class)
+            );
+        });
+
+        // FR-031: public evidence link consumption. Registered explicitly because it is constructed from
+        // ports that are all registered under concrete names, and a route action resolved by reflection
+        // would build a *different* instance of the audit writer than the one the authenticated paths use
+        // — which is exactly the kind of divergence that makes an audit entry appear in one stream and not
+        // the other.
+        $context->registerService(PublicEvidenceLinkService::class, function ($c) {
+            return new PublicEvidenceLinkService(
+                $c->query(EvidenceLinkRepository::class),
+                $c->query(EvidenceRepository::class),
+                $c->query(PrivateFileStore::class),
+                $c->query(EvidenceContentPolicy::class),
+                $c->query(\OCA\PettyCash\Application\Port\AuditWriter::class),
+                $c->query(\OCA\PettyCash\Domain\Shared\Clock::class)
+            );
+        });
+
         $context->registerService(FinanceSettlementService::class, function ($c) {
             return new FinanceSettlementService(
                 $c->query(TransactionManager::class),
@@ -672,7 +743,8 @@ final class Application extends App implements IBootstrap
                 $c->query(IdempotencyService::class),
                 $c->query(CurrentUser::class),
                 $c->query(UserDirectory::class),
-                $c->query(AuthorizationService::class)
+                $c->query(AuthorizationService::class),
+                $c->query(SupersededDecisionAudit::class)
             );
         });
     }

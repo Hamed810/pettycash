@@ -84,6 +84,27 @@ final class DbAccountRepository implements AccountRepository
         return array_map([$this, 'mapRow'], $rows);
     }
 
+    /**
+     * T391 (ADR-005): every account the uid holds, deactivated ones included.
+     *
+     * Deliberately **not** reusing `findActiveByUserUid()` with its filter dropped here — that read is
+     * also called by FR-020's resolve branch, where "active" is the rule rather than an accident, and
+     * loosening the one place that enforces it would be a much worse outcome than a second, narrower
+     * method existing. The two reads differ by exactly one predicate and that predicate is the point.
+     *
+     * @return list<PettyCashAccount>
+     */
+    public function findAllByUserUid(string $userUid): array
+    {
+        $qb = $this->connection->getQueryBuilder();
+        $this->applyProjection($qb)
+            ->from('pettycash_accounts', 'a')
+            ->join('a', 'pettycash_currencies', 'c', $qb->expr()->eq('a.currency_id', 'c.id'))
+            ->where($qb->expr()->eq('a.user_uid', $qb->createNamedParameter($userUid)));
+        $rows = $qb->executeQuery()->fetchAllAssociative();
+        return array_map([$this, 'mapRow'], $rows);
+    }
+
     /** @return list<PettyCashAccount> */
     public function findActiveByUserAndCurrency(string $userUid, CurrencyCode $currency): array
     {
@@ -96,6 +117,23 @@ final class DbAccountRepository implements AccountRepository
             ->andWhere($qb->expr()->eq('a.active', $qb->createNamedParameter(true, IQueryBuilder::PARAM_BOOL)));
         $rows = $qb->executeQuery()->fetchAllAssociative();
         return array_map([$this, 'mapRow'], $rows);
+    }
+
+    /**
+     * Every account on the instance, active and inactive alike (T379).
+     *
+     * The instance-wide read `AccountRepository` did not have, which is why the administrator card
+     * carried a literal `0`. Unlike the other two reads this repository offers, it is deliberately
+     * **not** filtered on `active`: the caller is asking how many accounts exist, and a count that
+     * quietly dropped deactivated ones would answer a different question under the same name.
+     */
+    public function countAll(): int
+    {
+        $qb = $this->connection->getQueryBuilder();
+        $qb->select($qb->func()->count('id', 'pettycash_account_count'))
+            ->from('pettycash_accounts', 'a');
+
+        return (int) $qb->executeQuery()->fetchOne();
     }
 
     public function save(PettyCashAccount $account): void

@@ -53,6 +53,24 @@ final class FailingAuditWriter implements AuditWriter
         $this->inner->appendConfiguration($event);
     }
 
+    /**
+ * FR-031's unauthenticated viewer path.
+ *
+     * Added with the port method rather than left abstract, because the point of this double is that
+     * *every* writer path fails identically — a test that only ever exercised the transaction stream would
+     * not know whether the configuration stream behaves the same way.
+     *
+     * @param array<string,mixed> $event
+     */
+    public function appendConfigurationAsViewer(string $viewerUid, array $event): void
+    {
+        $this->attempted[] = $event;
+        if ($this->failing) {
+            throw new RuntimeException('The configuration audit stream refused this event');
+        }
+        $this->inner->appendConfigurationAsViewer($viewerUid, $event);
+    }
+
     /** Stop refusing, so a test can prove the same path succeeds once the stream recovers. */
     public function recover(): void
     {
