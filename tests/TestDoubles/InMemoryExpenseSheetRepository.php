@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace OCA\PettyCash\Tests\TestDoubles;
 
+use OCA\PettyCash\Application\StaleRecordVersion;
 use OCA\PettyCash\Domain\Expense\ExpenseSheet;
 use OCA\PettyCash\Domain\Expense\Repository\ExpenseSheetRepository;
 use OCA\PettyCash\Domain\Expense\SheetListFilter;
@@ -124,6 +125,28 @@ final class InMemoryExpenseSheetRepository implements ExpenseSheetRepository
             $sheet->dbId = count($this->sheets) + 1;
         }
         $this->sheets[$sheet->dbId] = $sheet;
+    }
+
+    /**
+     * T417 / FR-086. Mirrors `DbExpenseSheetRepository::delete()`, including its `lock_version`
+     * predicate: a delete that does not match the version removes nothing and reports a conflict.
+     *
+     * The predicate is reproduced rather than simplified because a double that deleted unconditionally
+     * would make `DeleteSheet`'s own version guard look sufficient — the guard under test would pass
+     * while the database-level safety net went untested.
+     */
+    public function delete(ExpenseSheet $sheet): void
+    {
+        if ($sheet->dbId === null) {
+            throw new \RuntimeException('Cannot delete a sheet that was never persisted');
+        }
+
+        $stored = $this->sheets[$sheet->dbId] ?? null;
+        if ($stored === null || $stored->lockVersion !== $sheet->lockVersion) {
+            throw StaleRecordVersion::movedDuringWrite('sheet', $sheet->id);
+        }
+
+        unset($this->sheets[$sheet->dbId]);
     }
 
     public function clear(): void

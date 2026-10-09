@@ -83,7 +83,38 @@ function credentials(): { user: string; password: string } {
 	}
 }
 
+/**
+ * The administrator session's credential, read the same way for the same reasons.
+ *
+ * Separate variables rather than a flag on `credentials()`: the two principals are different
+ * accounts with different passwords, and a single lookup that returned "whichever" would let an
+ * admin journey run as a purchaser while reading green on 403s it never distinguished.
+ */
+function adminCredentials(): { user: string; password: string } {
+	loadEnvFile()
+	const user = (process.env.PETTYCASH_E2E_ADMIN_USER ?? '').trim()
+	const password = (process.env.PETTYCASH_E2E_ADMIN_PASSWORD ?? '').trim()
+	if (user === '' || password === '') {
+		throw new Error(
+			'The Playwright suite needs PETTYCASH_E2E_ADMIN_USER and PETTYCASH_E2E_ADMIN_PASSWORD '
+			+ 'in .env.testing (or in the environment) for the administrator journeys.\n'
+			+ 'Without them the admin specs would run unauthenticated, which answers 403 and fails\n'
+			+ 'every test in a way that reads like a product fault rather than a missing credential.\n'
+			+ 'Create the principal once:\n'
+			+ '  scripts/dev/occ user:add --password-from-env --display-name "PettyCash E2E Admin" <uid>\n'
+			+ '  scripts/dev/occ group:adduser admin <uid>',
+		)
+	}
+
+	return { user, password }
+}
+
 const STORAGE_STATE = 'test-results/.auth/e2e-storage-state.json'
+// A second session for the administrator journeys (T089). The purchaser session above cannot
+// administer reference data, fund accounts, or deactivate anything, so admin flows need a session
+// of their own rather than a re-login per test — and a *separate file* rather than a second context
+// in one file, so a spec declares which principal it runs as by importing one constant.
+const ADMIN_STORAGE_STATE = 'test-results/.auth/e2e-admin-storage-state.json'
 
 async function signIn(context: BrowserContext, baseURL: string, user: string, password: string): Promise<void> {
 	const page = await context.newPage()
@@ -179,9 +210,22 @@ export default async function globalSetup(config: FullConfig): Promise<void> {
 		await signIn(context, baseURL, user, password)
 		await context.storageState({ path: STORAGE_STATE })
 		await context.close()
+
+		// The administrator session for T089's admin journeys, signed in the same way for the same
+		// reasons. `pettycash-e2e-admin` is a dedicated principal in the Nextcloud `admin` group
+		// (which is what `AdministratorCheck` reads) — not a promoted shared credential, so a run
+		// that dies mid-suite cannot leak privilege into another suite's assertions. Created once
+		// with `scripts/dev/occ user:add` + `group:adduser admin`; the password lives in
+		// `.env.testing` beside the purchaser credential. Absent credentials fail loudly here rather
+		// than producing an admin suite that runs unauthenticated.
+		const admin = adminCredentials()
+		const adminContext = await browser.newContext()
+		await signIn(adminContext, baseURL, admin.user, admin.password)
+		await adminContext.storageState({ path: ADMIN_STORAGE_STATE })
+		await adminContext.close()
 	} finally {
 		await browser.close()
 	}
 }
 
-export { STORAGE_STATE }
+export { STORAGE_STATE, ADMIN_STORAGE_STATE }

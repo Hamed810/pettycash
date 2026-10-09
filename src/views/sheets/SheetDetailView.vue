@@ -1,13 +1,14 @@
 <script setup lang="ts">
-import { onMounted, computed, h, watch, type VNode } from 'vue'
+import { onMounted, onUnmounted, computed, h, ref, watch, type VNode } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useSheetStore } from '@/stores/sheets'
 import type { SheetStatus, TransactionSummary } from '@/types/api'
 import { NcBreadcrumbs, NcNoteCard, NcButton, NcChip, NcIconSvgWrapper } from '@nextcloud/vue'
-import { mdiPencil, mdiPlus, mdiSend, mdiEye, mdiLock } from '@mdi/js'
+import { mdiPencil, mdiPlus, mdiSend, mdiEye, mdiLock, mdiDelete } from '@mdi/js'
 import { t } from '@nextcloud/l10n'
 import { formatMoney } from '@/utils/money'
 import ResponsiveTable from '@/components/shared/ResponsiveTable.vue'
+import DeleteSheetDialog from '@/components/shared/DeleteSheetDialog.vue'
 import { formatSheetDate as formatDate, formatSheetDateRange as formatDateRange } from '@/utils/date'
 
 const route = useRoute()
@@ -49,6 +50,30 @@ async function handleSubmit() {
 }
 
 /**
+ * FR-086: whether the delete confirmation is open.
+ *
+ * A bare boolean rather than the sheet, because the sheet being viewed **is** the sheet that would be deleted —
+ * unlike the list, where one dialog serves many rows. The title and id the dialog names are read from
+ * `currentSheet`, so there is no second copy of the row to fall out of step with what is displayed.
+ */
+const deleteDialogOpen = ref(false)
+
+function askDelete() { deleteDialogOpen.value = true }
+
+/**
+ * Deleting from the detail view navigates back to the list, because the sheet the caller was reading no longer
+ * exists and leaving the view on a deleted record would show an empty detail page for something that is gone.
+ *
+ * The list reload happens inside the store action, so arriving there already shows the sheet absent rather than
+ * a stale row.
+ */
+async function confirmDeleteFromDetail() {
+	await sheetStore.deleteOwnSheet(sheetId.value, sheetStore.currentSheet!.version)
+	deleteDialogOpen.value = false
+	router.push({ name: 'sheets' })
+}
+
+/**
  * Loads the sheet, which carries its transactions with it.
  *
  * `contracts/ocs-api.yaml` defines `SheetDetail` as `SheetSummary` plus `transactions` and
@@ -67,6 +92,17 @@ function loadSheet(id: string) {
 }
 
 onMounted(() => { loadSheet(sheetId.value) })
+
+/**
+ * A **deleted** sheet must not leave the detail view on a record that no longer exists, and the sheet's own id
+ * never changes — so the watcher on `sheetId` cannot be what clears it. FR-086 makes this observable: deleting
+ * from here navigates to the list, and a reload on arrival would otherwise re-fetch a sheet the server refuses,
+ * putting an error on a screen the purchaser just left in a good state.
+ *
+ * Cleared on unmount rather than only on delete so the same protection covers any future path that removes the
+ * sheet from the store.
+ */
+onUnmounted(() => { sheetStore.clearCurrentSheet() })
 
 watch(sheetId, (newId) => { loadSheet(newId) })
 
@@ -218,6 +254,21 @@ function transactionCell(item: TransactionSummary, column: { key: string }): VNo
 					<NcButton v-if="sheetStore.canSubmit" variant="primary" data-test="submit-sheet-button" @click="handleSubmit">
 						<NcIconSvgWrapper :path="mdiSend" :size="16" class="mr-2" />
 						{{ t('pettycash', 'sheets.submit') }}
+					</NcButton>
+					<!--
+						FR-086's delete control on the **detail** surface, shown only while the sheet is still
+						`OPEN`. The server refuses a submitted, completed, or completed-with-rejections sheet
+						(FR-026, FR-044), and that refusal stays enforced server-side — FR-009 forbids relying on
+						the interface to enforce a rule. Hiding the control is what keeps the interface honest
+						about it, and it is placed last so the destructive action is never the first one reached.
+					-->
+					<NcButton
+						v-if="!isSubmitted && sheetStore.currentSheet?.status === 'OPEN'"
+						variant="error"
+						data-test="delete-sheet-btn"
+						@click="askDelete">
+						<NcIconSvgWrapper :path="mdiDelete" :size="16" class="mr-2" />
+						{{ t('pettycash', 'common.delete') }}
 					</NcButton>
 				</div>
 			</div>
@@ -394,6 +445,19 @@ function transactionCell(item: TransactionSummary, column: { key: string }): VNo
 			<span data-test="submission-error-message">{{ sheetStore.error }}</span>
 			<button type="button" :aria-label="t('pettycash', 'common.dismiss')" @click="sheetStore.clearError">×</button>
 		</div>
+
+		<!--
+			FR-086's confirmation on the **detail** surface. One instance for the view rather than one per
+			control, and its id and title come from `currentSheet` — the very sheet whose deletion is being
+			confirmed — so the name it states cannot drift from what the caller is looking at.
+		-->
+		<DeleteSheetDialog
+			:sheet-id="sheetStore.currentSheet?.id ?? ''"
+			:sheet-title="sheetStore.currentSheet?.title ?? ''"
+			:open="deleteDialogOpen"
+			:busy="sheetStore.loading"
+			@cancel="deleteDialogOpen = false"
+			@confirm="confirmDeleteFromDetail" />
 	</div>
 </template>
 

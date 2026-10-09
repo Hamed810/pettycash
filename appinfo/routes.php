@@ -16,6 +16,9 @@ return [
         ['name' => 'sheet#index', 'url' => '/api/v1/sheets', 'verb' => 'GET'],
         ['name' => 'sheet#show', 'url' => '/api/v1/sheets/{sheetId}', 'verb' => 'GET'],
         ['name' => 'sheet#update', 'url' => '/api/v1/sheets/{sheetId}', 'verb' => 'PATCH'],
+        // T417 / FR-086: owner deletion of a never-submitted sheet. Declared `DELETE` here, absent from
+        // `routes.php` until now — which is why the requirement was unimplementable through any layer.
+        ['name' => 'sheet#destroy', 'url' => '/api/v1/sheets/{sheetId}', 'verb' => 'DELETE'],
         ['name' => 'sheet#submit', 'url' => '/api/v1/sheets/{sheetId}/submit', 'verb' => 'POST'],
 
         // Transaction routes
@@ -67,6 +70,10 @@ return [
         ['name' => 'account#index', 'url' => '/api/v1/accounts', 'verb' => 'GET'],
         ['name' => 'account#create', 'url' => '/api/v1/accounts', 'verb' => 'POST'],
         ['name' => 'account#charge', 'url' => '/api/v1/accounts/{accountId}/charges', 'verb' => 'POST'],
+        // T409 / FR-013: administrator deactivation and reactivation of an account. Declared `PATCH`
+        // here; absent until now, which is why no artifact could deactivate an account except through
+        // owner deletion.
+        ['name' => 'account#update', 'url' => '/api/v1/accounts/{accountId}', 'verb' => 'PATCH'],
         ['name' => 'account#movements', 'url' => '/api/v1/accounts/{accountId}/movements', 'verb' => 'GET'],
 
         // Report routes

@@ -132,6 +132,36 @@ final class PettyCashAccount
         return true;
     }
 
+    /**
+     * Change the active state by an administrator's deliberate decision. FR-013, FR-017.
+     *
+     * **A different path from `deactivateForDeletedOwner()` on purpose, and the name says so.** Both
+     * write the same column, but one is a business decision that FR-017 audits with actor, reason and
+     * before/after values, while the other is the absence of an owner. Sharing one bare `deactivate()`
+     * would make the two indistinguishable at the call site, and a reader could not tell which one
+     * carries an audit obligation.
+     *
+     * **Refuses a no-op the same way `deactivateForDeletedOwner()` does.** Setting the state it already
+     * holds would bump `lockVersion` for no change, and a version that moves without a state change is a
+     * lost-update signal: a concurrent reader holding the old version would be told its data changed
+     * when it did not. The caller reports the current state instead, and writes no audit row — nothing
+     * changed, so there is nothing to record.
+     *
+     * @return bool `false` when the account already held the requested state, so the caller can answer
+     *              the current state without claiming a transition
+     */
+    public function setActiveByAdministrator(bool $active): bool
+    {
+        if ($this->active === $active) {
+            return false;
+        }
+
+        $this->active = $active;
+        $this->lockVersion++;
+
+        return true;
+    }
+
     public function balance(): Money
     {
         return Money::of($this->balanceMinor, $this->currencyCode);

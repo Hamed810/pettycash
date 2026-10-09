@@ -11,6 +11,7 @@ use OCA\PettyCash\Application\Account\AccountAdministrationService;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Application\Port\TransactionManager;
 use OCA\PettyCash\Application\Port\UserDirectory;
+use OCA\PettyCash\Application\StaleRecordVersion;
 use OCA\PettyCash\Domain\Account\Repository\AccountRepository;
 use OCA\PettyCash\Domain\Configuration\Repository\CurrencyRepository;
 use OCA\PettyCash\Domain\Expense\ExpenseSheet;
@@ -165,8 +166,15 @@ final readonly class SheetService
             throw new InvalidArgumentException('Sheet not found');
         }
 
+        // FR-025 covers a sheet's own pre-submission fields, and `contracts/ocs-api.yaml`'s
+        // `Conflict` response names a stale version first, so this is a 409 rather than a 422.
         if ($sheet->lockVersion !== $expectedVersion) {
-            throw new InvalidArgumentException('Stale version');
+            throw StaleRecordVersion::forResource(
+                'sheet',
+                $sheetId,
+                $expectedVersion,
+                $sheet->lockVersion
+            );
         }
 
         if ($sheet->status !== \OCA\PettyCash\Domain\Workflow\SheetStatus::Open) {

@@ -52,7 +52,7 @@ function usage(message) {
 	console.error('  scripts/measure-error-rate.mjs <log> [<log>…]     measure one or more recorded runs')
 	console.error('')
 	console.error('  --base-url=<url>   where this host reaches the instance (default: $PETTYCASH_BASE_URL,')
-	console.error('                     else http://localhost:8080)')
+	console.error('                     else http://localhost:8081 — this project\'s own pettycash-lab)')
 	console.error('')
 	console.error('  Produce a log with PETTYCASH_REQUEST_LOG=<path> scripts/dev/phpunit [suite] and, for the')
 	console.error('  browser half, PETTYCASH_REQUEST_LOG=<path> npm run test:e2e.')
@@ -130,13 +130,18 @@ async function main() {
 
 	// `PETTYCASH_BASE_URL`, not `PETTYCASH_TEST_BASE_URL`. The two name **different vantage points**:
 	// the contract suite runs *inside* the container and reaches the app on `localhost`, while this
-	// script runs on the host, where the same instance is published on a different port. Preferring the
+	// script runs on the host, where this project's own lab is published on 8081. Preferring the
 	// container-facing variable made the probe fail to connect at all — indistinguishable from a dead
 	// instance, and for a reason that has nothing to do with FR-073.
+	//
+	// The default tracks `playwright.config.ts` and must move with the lab. It was left at 8080 after
+	// this project got its own `pettycash-lab`, and the symptom was the same as a dead instance: every
+	// measurement refused with "fetch failed", which reads as a network problem rather than as a
+	// default naming a lab that no longer runs.
 	const baseUrl = (
 		explicitBase?.slice('--base-url='.length)
 		?? process.env.PETTYCASH_BASE_URL
-		?? 'http://localhost:8080'
+		?? 'http://localhost:8081'
 	).replace(/\/$/, '')
 
 	console.log(`measure-error-rate: probing ${baseUrl} before measuring...`)

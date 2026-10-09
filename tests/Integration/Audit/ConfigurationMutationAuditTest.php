@@ -16,6 +16,7 @@ use OCA\PettyCash\Application\Configuration\FinanceAssignmentService;
 use OCA\PettyCash\Domain\Shared\Enum\Role;
 use OCA\PettyCash\Tests\TestDoubles\FailingAuditWriter;
 use OCA\PettyCash\Tests\TestDoubles\FixedClock;
+use OCA\PettyCash\Tests\TestDoubles\InMemoryAccountRepository;
 use OCA\PettyCash\Tests\TestDoubles\InMemoryAdministratorCheck;
 use OCA\PettyCash\Tests\TestDoubles\InMemoryAuditWriter;
 use OCA\PettyCash\Tests\TestDoubles\InMemoryCostCenterRepository;
@@ -104,7 +105,14 @@ final class ConfigurationMutationAuditTest extends TestCase
 
         $configurationAudit = new ConfigurationAuditService($this->audit, $this->transactions);
 
-        $this->currencyService = new CurrencyService($this->currencies, new InMemoryAdministratorCheck(), $configurationAudit);
+        // T422: the account double FR-023's scale guard reads. Empty by default, so these audit cases are
+        // unaffected unless one arranges an account.
+        $this->currencyService = new CurrencyService(
+            $this->currencies,
+            new InMemoryAdministratorCheck(),
+            $configurationAudit,
+            new InMemoryAccountRepository()
+        );
         $this->costCenterService = new CostCenterService(
             $this->costCenters,
             $this->roleAssignments,
@@ -458,7 +466,12 @@ final class ConfigurationMutationAuditTest extends TestCase
         // configuration row survives -- is asserted against MariaDB in the round trip runner.
         $failing = new FailingAuditWriter($this->audit);
         $configurationAudit = new ConfigurationAuditService($failing, $this->transactions);
-        $currencies = new CurrencyService($this->currencies, new InMemoryAdministratorCheck(), $configurationAudit);
+        $currencies = new CurrencyService(
+            $this->currencies,
+            new InMemoryAdministratorCheck(),
+            $configurationAudit,
+            new InMemoryAccountRepository()
+        );
 
         $this->expectException(\RuntimeException::class);
 

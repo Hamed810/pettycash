@@ -425,18 +425,12 @@ final class ReportingQueryTest extends TestCase
     }
 
     // ===== FR-056 the two audit streams stay separable =====
-
-    public function testAConfigurationStageRowIsAConfigurationEvent(): void
-    {
-        self::assertTrue($this->reports->isConfigurationEvent(['stage' => 'CONFIGURATION']));
-        self::assertFalse($this->reports->isTransactionEvent(['stage' => 'CONFIGURATION']));
-    }
-
-    public function testATransactionRowIsATransactionEvent(): void
-    {
-        self::assertTrue($this->reports->isTransactionEvent(['stage' => 'COST_CENTER', 'entityType' => 'transaction']));
-        self::assertFalse($this->reports->isConfigurationEvent(['stage' => 'COST_CENTER', 'entityType' => 'transaction']));
-    }
+    //
+    // T408: the `isConfigurationEvent()` / `isTransactionEvent()` predicates and their two tests were
+    // removed with them. They classified rows no writer produces — the streams are physically separate
+    // tables (`DbAuditEventRepository::STREAMS`), so FR-056 holds by construction and the predicates were
+    // a trap with a green test over it: the only test asserting rows no writer can produce. What remains
+    // in this section (scope decisions per stream) is the actual FR-056 enforcement surface.
 
     public function testTransactionAuditFollowsTheRelatedTransactionsScope(): void
     {

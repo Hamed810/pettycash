@@ -326,6 +326,72 @@ final class AccountWriteControllerTest extends TestCase
         );
     }
 
+    // ===== PATCH /accounts/{id} (T409 / FR-013) =====
+
+    /**
+     * The success path is **not** asserted here, and the absence is deliberate rather than an
+     * omission: deactivation is administrator-only and this suite has no administrator credential
+     * (`ConfigurationControllerTest` documents why), so no request from here can reach it. The 200
+     * path — transition, version bump, audit row, idempotent no-op — is proven at the service level
+     * in `tests/Unit/Application/Account/AccountActiveStateTest.php`, which can hold the role. What
+     * *is* reachable from here is every refusal, and each is asserted because the endpoint is new.
+     */
+    public function testDeactivationWithoutTheAdministratorRoleIsRefused(): void
+    {
+        // The finance-state credential holds FINANCE, not ADMINISTRATOR — and finance must not be
+        // able to retire accounts, because that would let the role that spends also remove the
+        // accounts it spends from.
+        $response = $this->updateAccount(ContractFixtures::accountId(), false);
+
+        $this->assertEquals(403, $response->getStatusCode());
+    }
+
+    public function testDeactivatingAnAccountThatDoesNotExistIsRefusedAsAbsent(): void
+    {
+        $response = $this->updateAccount('99999999-9999-4999-8999-999999999999', false);
+
+        // Exactly 403, not "403 or 404": the actor gate runs **before** the existence check, so a
+        // non-administrator learns nothing about whether the id is real. Reordering to existence-first
+        // would turn this endpoint into an oracle (404 for real ids, 403 otherwise), and this assertion
+        // is what pins the safe order.
+        $this->assertEquals(403, $response->getStatusCode());
+    }
+
+    public function testDeactivationWithoutTheActiveFlagIsRefused(): void
+    {
+        $response = $this->client->request('PATCH', $this->accountUrl(ContractFixtures::accountId()), [
+            'headers' => ['X-PettyCash-Command-ID' => ContractFixtures::commandId()],
+            'json' => ['expectedVersion' => $this->accountVersion(ContractFixtures::accountId())],
+        ]);
+
+        $this->assertEquals(422, $response->getStatusCode());
+        $this->assertStringContainsString('active', (string) $response->getBody());
+    }
+
+    public function testDeactivationWithoutAVersionIsRefused(): void
+    {
+        $response = $this->client->request('PATCH', $this->accountUrl(ContractFixtures::accountId()), [
+            'headers' => ['X-PettyCash-Command-ID' => ContractFixtures::commandId()],
+            'json' => ['active' => false],
+        ]);
+
+        $this->assertEquals(422, $response->getStatusCode());
+        $this->assertStringContainsString('expectedVersion', (string) $response->getBody());
+    }
+
+    private function accountUrl(string $accountId): string
+    {
+        return '/ocs/v2.php/apps/pettycash/api/v1/accounts/' . $accountId;
+    }
+
+    private function updateAccount(string $accountId, bool $active): ResponseInterface
+    {
+        return $this->client->request('PATCH', $this->accountUrl($accountId), [
+            'headers' => ['X-PettyCash-Command-ID' => ContractFixtures::commandId()],
+            'json' => ['active' => $active, 'expectedVersion' => $this->accountVersion($accountId)],
+        ]);
+    }
+
     // ===== HELPERS =====
 
     /** @return array<string, mixed> */

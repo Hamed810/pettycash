@@ -8,6 +8,7 @@ use InvalidArgumentException;
 use OCA\PettyCash\Application\Audit\ConfigurationAuditService;
 use OCA\PettyCash\Application\Audit\ConfigurationEventType;
 use OCA\PettyCash\Application\Port\AdministratorCheck;
+use OCA\PettyCash\Domain\Account\Repository\AccountRepository;
 use OCA\PettyCash\Domain\Configuration\Currency;
 use OCA\PettyCash\Domain\Configuration\Repository\CurrencyRepository;
 use OCA\PettyCash\Domain\Shared\PageBounds;
@@ -60,6 +61,7 @@ final readonly class CurrencyService
         private CurrencyRepository $currencies,
         private AdministratorCheck $administrators,
         private ConfigurationAuditService $configurationAudit,
+        private AccountRepository $accounts,
     ) {}
 
     /**
@@ -161,6 +163,33 @@ final readonly class CurrencyService
             );
         }
 
+        // T422 / FR-023: a currency's decimal scale decides what every stored amount in it **means**, because
+        // amounts are whole minor units read against it. Changing the scale on a currency that holds amounts
+        // would silently reinterpret every balance, sheet total and movement in it — a rial balance of 50,000
+        // becoming 500.00 — with no migration, no audit of the reinterpretation, and no way to tell afterwards.
+        //
+        // **Refused rather than migrated.** V1 has no conversion that could make that safe, and writing one
+        // would be the destructive history rewriting the constitution prohibits (Principle II). Refusing also
+        // keeps the rule a single check rather than a data migration with rollback steps, and `deactivate()`
+        // remains available to an administrator who genuinely needs the currency out of use.
+        //
+        // **Scoped to this field on purpose.** A rename or an activation change is harmless and MUST still
+        // succeed — refusing the whole update because one field is off-limits would be a defect, and the most
+        // likely consequence of guarding in the wrong place.
+        //
+        // **The version check runs first**, so a caller whose view is stale is told to reload rather than being
+        // told the scale is locked; both are refusals, but only one of them is true of the caller's request.
+        if ($minorUnit !== $existing->minorUnit && $this->currencyHoldsAmounts($existing)) {
+            throw new InvalidArgumentException(sprintf(
+                'The decimal scale of %s cannot be changed from %d to %d because the currency already holds '
+                . 'amounts, which are stored as whole minor units and would be reinterpreted; deactivate the '
+                . 'currency instead',
+                $code,
+                $existing->minorUnit,
+                $minorUnit
+            ));
+        }
+
         // T086 / FR-017. `beforeSnapshot` closes over `$existing`, which was read *above* and not
         // re-read inside the transaction: capturing it after the write would make the "previous value"
         // the post-state wearing a "before" label.
@@ -192,6 +221,20 @@ final readonly class CurrencyService
                 return $updated;
             },
         );
+    }
+
+    /**
+     * Whether any account — and therefore any amount — exists in this currency.
+     *
+     * A surrogate id is what the account table stores, and a currency that has never been persisted has no id
+     * at all; `null` therefore means "no accounts", which is the answer for a currency created moments ago.
+     *
+     * @see \OCA\PettyCash\Domain\Account\Repository\AccountRepository::countByCurrencyId() for why an account
+     *      count is a sufficient proxy and why over-refusing is the safe direction
+     */
+    private function currencyHoldsAmounts(Currency $currency): bool
+    {
+        return $currency->id !== null && $this->accounts->countByCurrencyId($currency->id) > 0;
     }
 
     /**

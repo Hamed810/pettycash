@@ -81,6 +81,19 @@ final class InMemoryAccountRepository implements \OCA\PettyCash\Domain\Account\R
         return count($this->accounts);
     }
 
+    /**
+     * T422. Deliberately not filtered on `active`, for the same reason `countAll()` is not: a
+     * **deactivated** account still holds its balance, and a scale change would still reinterpret it — so
+     * counting only active accounts here would let the double agree with a guard the database refuses.
+     */
+    public function countByCurrencyId(int $currencyId): int
+    {
+        return count(array_filter(
+            $this->accounts,
+            static fn(PettyCashAccount $a): bool => $a->currency->id === $currencyId
+        ));
+    }
+
     public function save(PettyCashAccount $account): void
     {
         $this->accounts[$account->id] = $account;

@@ -81,7 +81,7 @@ use PHPUnit\Framework\TestCase;
      *
      * The fixtures are also shared across the whole contract suite, which is why `setUp()` reseeds:
      * this test submits the sheet, so without a reseed the first test leaves the fixture submitted and
-     * every later test fails on `422 "Stale version"`.
+     * every later test fails on a stale-version or submitted-sheet refusal.
      */
 final class TransactionTimelineSubmissionTest extends TestCase
 {
@@ -92,9 +92,14 @@ final class TransactionTimelineSubmissionTest extends TestCase
      *
      * This test *mutates* the fixture by submitting the sheet, and the contract
      * fixtures are a single shared database seeded once per process, not per test. Without the reseed
-     * the first test's submit leaves the sheet submitted and every later test fails `422 "Stale version"`
-     * or `422 "Cannot add transactions to a submitted sheet"`, which is a setup failure that reads like
-     * a product failure. `ContractFixtures::prepare()` is the documented way to get the `draft` state back.
+     * the first test's submit leaves the sheet submitted and every later test fails on a stale
+     * `expectedVersion` or on `"Cannot add transactions to a submitted sheet"`, which is a setup
+     * failure that reads like a product failure. `ContractFixtures::prepare()` is the documented way to
+     * get the `draft` state back.
+     *
+     * The stale-version refusal no longer carries a `422`: T416 made it a `409` throughout
+     * (`StaleVersionConflictTest`). The reseed was never about the status, so the requirement is
+     * unchanged — only the status a leaked fixture would now produce differs.
      */
     protected function setUp(): void
     {

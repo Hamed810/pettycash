@@ -59,4 +59,26 @@ interface ExpenseSheetRepository
     public function countAll(): int;
 
     public function save(ExpenseSheet $sheet): void;
+
+    /**
+     * Remove a sheet row.
+     *
+     * **Added by T417 for FR-086** (owner deletion of a never-submitted draft sheet), which this
+     * interface could not previously express: it had `save()` and no `delete()`, so an abandoned sheet
+     * could not be removed through any layer.
+     *
+     * ## What this method deliberately does NOT do
+     *
+     * It removes the **sheet row only**. It does not cascade to transactions, revisions, or evidence,
+     * and it cannot reach the AppData binaries — a repository has no file store. Cascade is the
+     * application layer's job (`DeleteSheet`), which is the layer that knows both the ordering
+     * requirements and the storage port.
+     *
+     * That division is the reason it is safe for this method to be dumb: every child row is removed by
+     * `ExpenseTransactionRepository::delete()`, which already deletes that transaction's revisions and
+     * evidence rows, and the file bytes are removed while their keys are still readable. A cascading
+     * delete here would duplicate those three responsibilities and reach for a port this interface does
+     * not have.
+     */
+    public function delete(ExpenseSheet $sheet): void;
 }

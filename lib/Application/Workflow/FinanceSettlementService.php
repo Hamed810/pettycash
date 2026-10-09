@@ -15,6 +15,7 @@ use OCA\PettyCash\Application\Port\TransactionManager;
 use OCA\PettyCash\Application\Port\UserDirectory;
 use OCA\PettyCash\Application\Security\AuthorizationService;
 use OCA\PettyCash\Application\Security\AuthorizationContext;
+use OCA\PettyCash\Application\StaleRecordVersion;
 use OCA\PettyCash\Domain\Account\AccountMovement;
 use OCA\PettyCash\Domain\Account\PettyCashAccount;
 use OCA\PettyCash\Domain\Account\Repository\AccountMovementRepository;
@@ -177,8 +178,17 @@ final readonly class FinanceSettlementService
                     throw new InvalidArgumentException('Transaction not found');
                 }
 
+                // Same `409` as `ManagementReviewService` for the same reason: this service answers the
+                // **same** `POST /transactions/{id}/decisions` endpoint, which declares a `409`.
+                // Leaving the finance stage at 422 would make one route answer 409 for a management
+                // decision and 422 for a finance one — a difference no client could explain.
                 if ($transaction->lockVersion !== $expectedVersion) {
-                    throw new InvalidArgumentException('Stale version');
+                    throw StaleRecordVersion::forResource(
+                        'transaction',
+                        $transactionPublicId,
+                        $expectedVersion,
+                        $transaction->lockVersion
+                    );
                 }
 
                 // Authorization check - only finance role can make finance decisions

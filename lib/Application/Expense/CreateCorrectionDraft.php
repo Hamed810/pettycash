@@ -11,6 +11,7 @@ use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Domain\Expense\Repository\ExpenseTransactionRepository;
 use OCA\PettyCash\Domain\Expense\Repository\TransactionRevisionRepository;
 use OCA\PettyCash\Application\Port\TransactionManager;
+use OCA\PettyCash\Application\StaleRecordVersion;
 use OCA\PettyCash\Domain\Expense\TransactionRevision;
 use OCA\PettyCash\Domain\Workflow\TransactionStatus;
 use OCA\PettyCash\Domain\Shared\Uuid;
@@ -43,18 +44,37 @@ class CreateCorrectionDraft
                 throw new InvalidArgumentException('Transaction not found');
             }
 
+            // A `Conflict`, like the `NotAwaitingCorrection` refusal below it — for the same reason and on the
+            // same endpoint. Both are "the world moved, reload"; answering this one 422 would have
+            // split one endpoint's two correct refusals across two statuses.
             if ($transaction->lockVersion !== $expectedVersion) {
-                throw new InvalidArgumentException('Stale version');
+                throw StaleRecordVersion::forResource(
+                    'transaction',
+                    $transactionPublicId,
+                    $expectedVersion,
+                    $transaction->lockVersion
+                );
             }
 
             // Verify transaction is in a state that allows correction
+            //
+            // **This was a bare `LogicException`, so it answered 500.** `OcsErrorMapper` deliberately has
+            // no `LogicException` arm — the right decision for a fault nobody can act on — and the default
+            // arm is `500 UNEXPECTED_FAILURE` with the message withheld. A caller whose view of the
+            // transaction was simply out of date was therefore told *the server had a fault*, and told
+            // nothing about the state that caused it. `NotAwaitingCorrection` carries a `409`, which is
+            // the answer that matches: the request is right and the world moved.
             if ($transaction->status !== TransactionStatus::AwaitingPurchaserCorrection) {
-                throw new LogicException('Transaction is not awaiting purchaser correction');
+                throw new NotAwaitingCorrection($transactionPublicId, $transaction->status->value);
             }
 
             // Verify ownership
+            //
+            // **Also a bare `LogicException`, also a 500.** This one is a permission refusal, so it is a
+            // `403`: see `NotTransactionOwner` for why this path does not use the `404` treatment that
+            // evidence does, and why that difference matters to a caller trying to act.
             if ($transaction->ownerUid !== $actorUid) {
-                throw new LogicException('Only the transaction owner can create a correction');
+                throw new NotTransactionOwner();
             }
 
             // Get the active revision to correct

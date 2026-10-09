@@ -30,15 +30,16 @@ use Psr\Http\Message\ResponseInterface;
  *
  * ## Why only the refusal is covered over HTTP, and that is a finding
  *
- * There is **no `200` case in this file**, and the reason is that a 200 needs a token the server accepts —
- * and there is no way to obtain one, because `POST /evidence/{evidenceId}/links` is declared in
- * `appinfo/routes.php` with no controller action. Link *creation* is T363's gap and is not this task's.
+ * There is **no `200` case in this file**: a 200 needs a token the server accepts — an administrator's
+ * link, opened anonymously. That pairing is T407's, and it lives in
+ * `PublicLinkLifecycleContractTest`, which owns an administrator probe for exactly this purpose. This
+ * file keeps the refusal half because the refusal is a transport property (no login challenge, no
+ * CAPTCHA, no rate limiter) that belongs with the route, while the success path belongs with the
+ * lifecycle that produces the token it opens.
  *
- * A fixture could write a `pettycash_evidence_links` row directly, but it could not put bytes in AppData for
- * the evidence that row points at without reimplementing the upload path, so the 200 would be a test of the
- * seeder rather than of the route. The success path is covered in full at the service level by
- * `PublicEvidenceLinkServiceTest`; what is unverifiable there and verifiable only here is precisely the
- * property this file exists for.
+ * (Corrected T407: this paragraph previously claimed `POST /evidence/{evidenceId}/links` had no
+ * controller action and success was untestable *by nature*. T403 built the action, so the claim was
+ * confidently wrong — a passing test holding an obsolete premise, which is worse than a red one.)
  */
 final class PublicEvidenceRouteContractTest extends TestCase
 {

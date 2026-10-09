@@ -111,7 +111,7 @@ final class RepositoryRoundTripTest extends TestCase
         $services = $this->report('configuration')['services'];
 
         $this->assertNotEmpty($services['costCenterCode'], 'the service must have persisted a cost centre');
-        $this->assertSame(['employee1'], $services['managerUsers'], 'FR-011: exactly one current cost-center manager, held as a role assignment');
+        $this->assertSame([self::actorUid()], $services['managerUsers'], 'FR-011: exactly one current cost-center manager, held as a role assignment');
         $this->assertSame(['admin'], $services['seniorManagerUsers'], 'FR-011: exactly one current senior manager, held as a role assignment');
         $this->assertCount(1, $services['managerUsers'], 'two current managers would route a submission ambiguously');
         $this->assertCount(1, $services['seniorManagerUsers']);
@@ -705,7 +705,7 @@ final class RepositoryRoundTripTest extends TestCase
         $this->assertNotNull($revision['byPublicId']['costCenterCode']);
         $this->assertNotNull($revision['byPublicId']['expenseTypeTitle'], 'the expense type title is a snapshot');
         $this->assertNotNull($revision['byPublicId']['expenseTypeDbId']);
-        $this->assertSame('employee1', $revision['byPublicId']['managerUid']);
+        $this->assertSame(self::actorUid(), $revision['byPublicId']['managerUid']);
         $this->assertNotNull(
             $revision['byPublicId']['transactionDbId'],
             'the revision must point back at the transaction that owns it'
@@ -773,7 +773,7 @@ final class RepositoryRoundTripTest extends TestCase
     {
         $byCommandId = $this->report('expense')['decision']['byCommandId'];
 
-        $this->assertSame('employee1', $byCommandId['actorUid']);
+        $this->assertSame(self::actorUid(), $byCommandId['actorUid']);
         $this->assertSame('Round Trip Actor', $byCommandId['actorName']);
         $this->assertSame('COST_CENTER_MANAGER', $byCommandId['actorRole']);
     }
@@ -821,7 +821,7 @@ final class RepositoryRoundTripTest extends TestCase
         $this->assertNull($config['byPublicId']['decisionDbId']);
 
         // FR-052: the shared actor columns survive the stream binding.
-        $this->assertSame('employee1', $config['byPublicId']['actorUid']);
+        $this->assertSame(self::actorUid(), $config['byPublicId']['actorUid']);
         $this->assertSame('Round Trip Actor', $config['byPublicId']['actorName']);
         $this->assertSame('FINANCE', $config['byPublicId']['actorRole']);
         $this->assertSame('ACCOUNT_CHARGED', $config['byPublicId']['eventType']);
@@ -894,7 +894,7 @@ final class RepositoryRoundTripTest extends TestCase
         $this->assertSame(2048, $evidence['byPublicId']['sizeBytes']);
         $this->assertSame(str_repeat('a', 64), $evidence['byPublicId']['checksum']);
         $this->assertTrue($evidence['byPublicId']['active']);
-        $this->assertSame('employee1', $evidence['byPublicId']['uploadedBy']);
+        $this->assertSame(self::actorUid(), $evidence['byPublicId']['uploadedBy']);
     }
 
     public function testEvidenceIsListedForItsTransactionAndRevision(): void
@@ -1845,6 +1845,35 @@ final class RepositoryRoundTripTest extends TestCase
     }
 
     /** @return array<string, mixed> */
+    /**
+     * The uid the round trips ran as.
+     *
+     * `PETTYCASH_TEST_USER` is what `roundtrip-runner.php` puts in the session, so it is the identity
+     * every `created_by` / `actor_uid` column in the report must carry. Reading it from the
+     * environment is what lets the same file run against the development lab (`employee1`) and the
+     * ephemeral CI instances (`.github/workflows/scripts/portability-pass.sh` creates its own
+     * `pettycash-portability`).
+     *
+     * Hardcoding `employee1` here instead would make the assertions correct for exactly one
+     * environment and would fail on the other three, which is a property of the lab rather than of the
+     * repositories under test. T239 measured that: on SQLite the run reached 443 assertions with 8
+     * failures, every one of them this literal disagreeing with the acting user.
+     */
+    private static function actorUid(): string
+    {
+        $uid = getenv('PETTYCASH_TEST_USER') ?: '';
+
+        self::assertNotSame(
+            '',
+            $uid,
+            'PETTYCASH_TEST_USER is required: it is the identity the round trips run as, and the '
+                . 'assertions about actor columns cannot be made without it. Run through '
+                . '`scripts/dev/phpunit` or the CI portability pass, both of which set it.'
+        );
+
+        return $uid;
+    }
+
     private function report(string $scenario): array
     {
         if (isset(self::$reports[$scenario])) {

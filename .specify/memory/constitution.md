@@ -37,9 +37,10 @@ Sync Impact Report
 - Added sections: none
 - Removed sections: none
 - Follow-up TODOs:
-  1. T239 is unchecked and no CI configuration exists (.github/ contains only skills), so ACC-002's
-     verification plan is NOT satisfied and SC-013 cannot be claimed. The declaration in
-     appinfo/info.xml is stated intent until T239 lands. [carried from 1.2.0, still open]
+  1. CLOSED at T239 (2026-10-09) -- the four-backend CI matrix now exists and all four jobs were
+     executed green, so ACC-002's verification plan is satisfied and appinfo/info.xml's declarations
+     are verified against every declared backend rather than stated intent. SC-013 is still not
+     claimed: that is the acceptance record's to make, not CI's. [carried from 1.2.0, closed by T239]
   2. appinfo/info.xml declares no <php> element, so the 8.2 floor rests on composer.json alone.
      Whether info.xsd permits <php> there is unverified. [carried from 1.2.0 item 6, still open]
   3. CLOSED at 1.2.0 item 2 -- plan.md now carries a "Compatibility Target Register Conformance"
@@ -307,11 +308,25 @@ narrowing reviewable instead of self-certifying.
   the work that produced them, not asserted by a plan; T239 owns the CI matrix and T240 owns the
   static check.
 - **Outstanding, tracked as plan-side follow-up** (does not make the three types provisional):
-  T239 is unchecked and the repository has no CI configuration at all, so the verification plan
-  above is **not yet satisfied** and V1 acceptance under SC-013 cannot be claimed until it is. Until
-  then the declaration in `appinfo/info.xml` is a stated intent, not a verified one. `plan.md`'s
-  Constitution Check asserts PASS without mentioning this register, which its own Governance section
-  now requires; that MUST be corrected there.
+  ~~T239 is unchecked and the repository has no CI configuration at all, so the verification plan
+  above is not yet satisfied and V1 acceptance under SC-013 cannot be claimed until it is.~~
+  **RESOLVED 2026-10-09 by T239.** The repository now has a CI matrix providing four ephemeral
+  backend jobs — MySQL, MariaDB, PostgreSQL and SQLite, with MySQL and MariaDB as separate jobs as
+  this entry requires — and all four were executed green. Each job installs a fresh database, enables
+  the app (which applies the forward-only migrations in version order), and runs the migration and
+  schema compatibility checks, the persistence and repository integration tests, and the
+  representative transaction and workflow queries. The MySQL/MariaDB separation is load-bearing rather
+  than nominal: the run confirmed the two `mysql`-typed jobs resolve to two distinct engines
+  (`MySQL84Platform` and `MariaDb1010Platform` respectively), which is exactly the evidence a single
+  job could never have produced.
+  The T240 static check runs alongside the matrix on every build, as this entry also requires, and is
+  **not** treated as a substitute for it.
+  **What this does not do:** it does not by itself claim SC-013. A success criterion is satisfied by
+  the acceptance record, and a compatibility-suite pass on ephemeral CI instances is not the
+  acceptance run. `appinfo/info.xml`'s declarations are now *verified against every declared backend*
+  rather than stated intent, which is what this outstanding item blocked. The CI contract suite
+  (`tests/Contract`) is deliberately outside the matrix, and `plan.md`'s Constitution Check asserting
+  PASS without mentioning this register remains a separate, still-open correction.
 
 ## Delivery and Change Management
 

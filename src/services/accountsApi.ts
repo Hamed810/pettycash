@@ -1,5 +1,14 @@
-import { ocs } from './http'
-import type { Account, Movement, Page } from '../types/api'
+import { ocs, mutate, commandId } from './http'
+import type {
+	Account,
+	AccountActiveUpdate,
+	AccountCharge,
+	AccountCreate,
+	AccountMutationResult,
+	Movement,
+	Page,
+	CommandOptions
+} from '../types/api'
 
 export interface AccountListParams {
 	page?: number
@@ -38,4 +47,44 @@ export async function listMovements(
 	query.set('page', String(page))
 	query.set('pageSize', String(pageSize))
 	return ocs<Page<Movement>>(`/accounts/${encodeURIComponent(accountId)}/movements?${query.toString()}`)
+}
+
+/**
+ * T088: the administrator and funding writes, one function per endpoint.
+ *
+ * `createAccount` opens a currency account for a user (self-service when the ids match, administrator
+ * otherwise — the server owns that distinction, so the client sends both ids either way). `chargeAccount`
+ * funds it; `updateAccount` deactivates or reactivates it (T409). All three send the command id the
+ * contract requires on mutating operations, so a retry returns the first outcome rather than applying
+ * the write twice.
+ */
+export async function createAccount(data: AccountCreate, options: CommandOptions = {}): Promise<Account> {
+	return mutate<Account>('/accounts', 'POST', data, options.commandId ?? commandId())
+}
+
+export async function chargeAccount(
+	accountId: string,
+	data: AccountCharge,
+	options: CommandOptions = {}
+): Promise<AccountMutationResult> {
+	return mutate<AccountMutationResult>(
+		`/accounts/${encodeURIComponent(accountId)}/charges`,
+		'POST',
+		data,
+		options.commandId ?? commandId()
+	)
+}
+
+export async function updateAccount(
+	accountId: string,
+	data: AccountActiveUpdate,
+	expectedVersion: number,
+	options: CommandOptions = {}
+): Promise<Account> {
+	return mutate<Account>(
+		`/accounts/${encodeURIComponent(accountId)}`,
+		'PATCH',
+		{ ...data, expectedVersion },
+		options.commandId ?? commandId()
+	)
 }

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace OCA\PettyCash\Controller;
 
+use OCA\PettyCash\Infrastructure\Http\CommandId;
 use Exception;
 use InvalidArgumentException;
 use LogicException;
@@ -64,6 +65,21 @@ class TransactionController extends OCSController
             );
         }
 
+        // T415: present but unstoreable. `pettycash_command_results.command_id` is
+        // `string(36)` and the contract declares `format: uuid`, so an over-long
+        // value reaches MySQL and answers 500. A malformed request is not a server
+        // fault. **400, matching this method's own absent case** rather than 422:
+        // both are the same class of fault, a request the caller must change.
+        try {
+            $commandId = CommandId::fromString((string) $commandId)->__toString();
+        } catch (\InvalidArgumentException $malformed) {
+            return $this->ocsErrorMapper->badRequest(
+                'Malformed command ID',
+                null,
+                ['commandId' => [$malformed->getMessage()]]
+            );
+        }
+
         $fieldErrors = [];
         if ($expenseDate === null || trim($expenseDate) === '') {
             $fieldErrors['expenseDate'] = ['expenseDate is required'];
@@ -97,7 +113,7 @@ class TransactionController extends OCSController
             }
             return new DataResponse($this->formatTransaction($transaction));
         } catch (\Throwable $e) {
-            return $this->ocsErrorMapper->map($e);
+            return $this->ocsErrorMapper->map($e, null, ['publicId' => $transactionId]);
         }
     }
 
@@ -132,6 +148,21 @@ class TransactionController extends OCSController
             );
         }
 
+        // T415: present but unstoreable. `pettycash_command_results.command_id` is
+        // `string(36)` and the contract declares `format: uuid`, so an over-long
+        // value reaches MySQL and answers 500. A malformed request is not a server
+        // fault. **400, matching this method's own absent case** rather than 422:
+        // both are the same class of fault, a request the caller must change.
+        try {
+            $commandId = CommandId::fromString((string) $commandId)->__toString();
+        } catch (\InvalidArgumentException $malformed) {
+            return $this->ocsErrorMapper->badRequest(
+                'Malformed command ID',
+                null,
+                ['commandId' => [$malformed->getMessage()]]
+            );
+        }
+
         $fieldErrors = [];
         if ($expenseDate === null || trim($expenseDate) === '') {
             $fieldErrors['expenseDate'] = ['expenseDate is required'];
@@ -159,7 +190,7 @@ class TransactionController extends OCSController
             );
             return new DataResponse($this->formatTransaction($transaction));
         } catch (\Throwable $e) {
-            return $this->ocsErrorMapper->map($e, $commandId);
+            return $this->ocsErrorMapper->map($e, $commandId, ['publicId' => $transactionId]);
         }
     }
 
@@ -179,7 +210,7 @@ class TransactionController extends OCSController
             $this->transactionService->deleteTransaction($transactionId, $expectedVersion);
             return new DataResponse(null, 204);
         } catch (\Throwable $e) {
-            return $this->ocsErrorMapper->map($e, $commandId);
+            return $this->ocsErrorMapper->map($e, $commandId, ['publicId' => $transactionId]);
         }
     }
 
@@ -225,11 +256,24 @@ class TransactionController extends OCSController
             );
         }
 
+        // T415: present but unstoreable. `pettycash_command_results.command_id` is `string(36)` and the
+        // contract declares `format: uuid`, so an over-long value reaches MySQL and answers 500. A
+        // malformed request is not a server fault. **400, matching this method's own absent case.**
+        try {
+            $commandId = CommandId::fromString($commandId)->__toString();
+        } catch (\InvalidArgumentException $malformed) {
+            return $this->ocsErrorMapper->badRequest(
+                'Malformed command ID',
+                null,
+                ['commandId' => [$malformed->getMessage()]]
+            );
+        }
+
         try {
             $revision = $this->createCorrectionDraft->execute($transactionId, $commandId, $expectedVersion);
             return new DataResponse($this->formatRevision($revision), 201);
         } catch (\Throwable $e) {
-            return $this->ocsErrorMapper->map($e, $commandId);
+            return $this->ocsErrorMapper->map($e, $commandId, ['publicId' => $transactionId]);
         }
     }
 
@@ -254,6 +298,19 @@ class TransactionController extends OCSController
             );
         }
 
+        // T415: present but unstoreable. `pettycash_command_results.command_id` is `string(36)` and the
+        // contract declares `format: uuid`, so an over-long value reaches MySQL and answers 500. A
+        // malformed request is not a server fault. **400, matching this method's own absent case.**
+        try {
+            $commandId = CommandId::fromString($commandId)->__toString();
+        } catch (\InvalidArgumentException $malformed) {
+            return $this->ocsErrorMapper->badRequest(
+                'Malformed command ID',
+                null,
+                ['commandId' => [$malformed->getMessage()]]
+            );
+        }
+
         if ($expectedVersion === null) {
             return $this->ocsErrorMapper->validation(
                 'Required fields are missing',
@@ -268,7 +325,7 @@ class TransactionController extends OCSController
             $transaction = $this->transactionService->getTransaction($transactionId);
             return new DataResponse($this->formatTransaction($transaction), 200);
         } catch (\Throwable $e) {
-            return $this->ocsErrorMapper->map($e, $commandId);
+            return $this->ocsErrorMapper->map($e, $commandId, ['publicId' => $transactionId]);
         }
     }
 
@@ -289,7 +346,7 @@ class TransactionController extends OCSController
             $formatted = array_map([$this, 'formatRevision'], $revisions);
             return new DataResponse($formatted);
         } catch (\Throwable $e) {
-            return $this->ocsErrorMapper->map($e);
+            return $this->ocsErrorMapper->map($e, null, ['publicId' => $transactionId]);
         }
     }
 
@@ -345,7 +402,7 @@ class TransactionController extends OCSController
                 ]
             );
         } catch (\Throwable $e) {
-            return $this->ocsErrorMapper->map($e);
+            return $this->ocsErrorMapper->map($e, null, ['publicId' => $transactionId]);
         }
     }
 

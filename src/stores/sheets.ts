@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { SheetSummary, SheetDetail, SheetCreate, SheetFilters, CommandOptions } from '../types/api'
-import { listSheets, createSheet, getSheet, updateSheet, submitSheet } from '../services/sheetsApi'
+import { listSheets, createSheet, getSheet, updateSheet, submitSheet, deleteSheet } from '../services/sheetsApi'
 
 export const useSheetStore = defineStore('sheets', () => {
 	const sheets = ref<SheetSummary[]>([])
@@ -106,6 +106,30 @@ export const useSheetStore = defineStore('sheets', () => {
 		}
 	}
 
+	/**
+	 * FR-086: delete an own sheet that has never been submitted.
+	 *
+	 * **The list is reloaded rather than the row spliced out.** The cascade removes the sheet *and* its draft
+	 * transactions, revisions and stored evidence files, so the only reliable proof that all of that happened is
+	 * a fresh read — and it is what keeps the list's totals and count honest, which a local splice would not.
+	 * `currentSheet` is cleared because a deleted sheet must not remain readable through the detail view.
+	 */
+	async function deleteOwnSheet(sheetId: string, expectedVersion: number, options: CommandOptions = {}) {
+		loading.value = true
+		resetError()
+		try {
+			await deleteSheet(sheetId, expectedVersion, options)
+			if (currentSheet.value?.id === sheetId) currentSheet.value = null
+			await loadSheets({ page: pagination.value.page, pageSize: pagination.value.pageSize })
+		} catch (e: unknown) {
+			const err = e as Error
+			error.value = err.message ?? 'Failed to delete sheet'
+			throw e
+		} finally {
+			loading.value = false
+		}
+	}
+
 	function clearCurrentSheet() { currentSheet.value = null }
 
 	function clearError() { error.value = null }
@@ -125,6 +149,7 @@ export const useSheetStore = defineStore('sheets', () => {
 		createNewSheet,
 		updateExistingSheet,
 		submitCurrentSheet,
+		deleteOwnSheet,
 		clearCurrentSheet,
 		clearError
 	}

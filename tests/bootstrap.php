@@ -176,15 +176,24 @@ $container->register(CurrencyService::class, fn($c) => new CurrencyService(
     new ConfigurationAuditService(
         new InMemoryAuditWriter(),
         $c->query(TransactionManager::class)
-    )
+    ),
+    // T422 / FR-023: `update()` refuses a scale change while the currency holds amounts, and an account is
+    // the proxy. The same container-registered double the provisioning services below use, so the account
+    // FR-020 provisions is the one the scale guard counts.
+    $c->query(AccountRepository::class)
 ));
 
 // FR-020's account rule (T358): none provisions, one resolves, several refuse. `SheetService` resolves
 // an absent `accountId` through this rather than reimplementing the rule, so the idempotency and
 // concurrent-insert handling T085 wrote stays on the only path that provisions.
+//
+// The third argument is FR-017's: provisioning records the account it creates, so this mirrors the
+// production registration in `Application.php` exactly. A test double here would let a container-resolved
+// provisioning path write no audit row at all, which is the gap T411 closed.
 $container->register(AccountAdministrationService::class, fn($c) => new AccountAdministrationService(
     $c->query(AccountRepository::class),
-    $c->query(CurrencyService::class)
+    $c->query(CurrencyService::class),
+    $c->query(\OCA\PettyCash\Application\Port\AuditWriter::class)
 ));
 
 $container->register(SheetService::class, fn($c) => new SheetService(

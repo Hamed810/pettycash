@@ -364,20 +364,97 @@ describe('Transaction Correction - Vue Component Tests (RED: behavior not implem
 		 * missing something the server will refuse, because the refusal arrives only after the
 		 * purchaser has re-read their expense and pressed the button.
 		 */
-		it('does not offer resubmission while the correction is missing a description', async () => {
-			const store = useTransactionStore()
-			store.currentTransaction = transactionFixture()
+		/**
+		 * T364: the conditional this replaces could not fail. It guarded the assertion on the control
+		 * existing, and no view rendered the control — so `exists()` was false and nothing executed.
+		 * Every assertion below is unconditional: the control exists exactly when the form edits a
+		 * correction, and its disabled state follows FR-047's full-dataset rule.
+		 *
+		 * The mount-time load is URL-aware: the form reloads the transaction on mount, so presetting
+		 * the store is not enough — the mock must answer the detail GET with the state under test.
+		 * Anything else keeps the default (complete) fixture.
+		 */
+		function mockTransactionDetail(tx: TransactionDetail) {
+			ocsRequest.mockImplementation((config: unknown) => {
+				const { method = 'GET', url = '' } = (config ?? {}) as { method?: string; url?: string }
+				if (method.toUpperCase() === 'GET' && url.includes('/transactions/tx-1')) {
+					return Promise.resolve(ocsOk(tx))
+				}
+				return Promise.resolve(ocsOk(transactionFixture()))
+			})
+		}
+
+		/**
+		 * Preset the store AND the mock to the same state.
+		 *
+		 * Both are required, for different renders. The mock answers the mount-time reload; the
+		 * preset carries the first render, which happens before that reload resolves — the
+		 * breadcrumb `RouterLink` reads `sheetId` from the store on first render, and a null
+		 * transaction there throws "Missing required param" rather than waiting for the load.
+		 * Presetting something the mock disagrees with would be worse than presetting nothing, so
+		 * the two always travel together.
+		 */
+		function givenCorrection(tx: TransactionDetail) {
+			useTransactionStore().currentTransaction = tx
+			mockTransactionDetail(tx)
+		}
+
+		function incompleteCorrection(): TransactionDetail {
+			return transactionFixture({
+				activeRevision: revisionFixture({ description: '' })
+			})
+		}
+
+		it('renders a disabled resubmit control for an incomplete correction draft', async () => {
+			givenCorrection(incompleteCorrection())
 
 			const wrapper = await mountView(TransactionFormView, '/transactions/tx-1/edit')
 
-			expect(store.currentTransaction?.status).toBe('AWAITING_PURCHASER_CORRECTION')
-			// The form must render without a resubmission affordance for an incomplete draft.
-			// Asserted as "no resubmit control is enabled" rather than a specific selector, so the
-			// test states the rule rather than the current markup.
+			expect(useTransactionStore().currentTransaction?.status).toBe('AWAITING_PURCHASER_CORRECTION')
 			const resubmit = wrapper.find('[data-test="resubmit-correction-btn"]')
-			if (resubmit.exists()) {
-				expect((resubmit.element as HTMLButtonElement).disabled).toBe(true)
-			}
+			expect(resubmit.exists()).toBe(true)
+			expect((resubmit.element as HTMLButtonElement).disabled).toBe(true)
+		})
+
+		it('renders an enabled resubmit control for a complete correction draft', async () => {
+			givenCorrection(transactionFixture())
+
+			const wrapper = await mountView(TransactionFormView, '/transactions/tx-1/edit')
+
+			const resubmit = wrapper.find('[data-test="resubmit-correction-btn"]')
+			expect(resubmit.exists()).toBe(true)
+			expect((resubmit.element as HTMLButtonElement).disabled).toBe(false)
+		})
+
+		it('renders no resubmit control when the transaction is not awaiting correction', async () => {
+			givenCorrection(transactionFixture({ status: 'DRAFT' }))
+
+			const wrapper = await mountView(TransactionFormView, '/transactions/tx-1/edit')
+
+			// A plain draft has nothing to resubmit and a submitted transaction must not be edited
+			// at all (FR-026) — the control belongs to the correction state alone.
+			expect(wrapper.find('[data-test="resubmit-correction-btn"]').exists()).toBe(false)
+		})
+
+		it('resubmits with the live version and navigates back to the list', async () => {
+			givenCorrection(transactionFixture())
+
+			const wrapper = await mountView(TransactionFormView, '/transactions/tx-1/edit')
+			ocsRequest.mockClear()
+
+			await wrapper.find('[data-test="resubmit-correction-btn"]').trigger('click')
+			await flushPromises()
+
+			const resubmitCall = ocsRequest.mock.calls.find((call) =>
+				((call[0] as { url?: string })?.url ?? '').includes('/resubmit')
+			)
+			expect(resubmitCall).toBeDefined()
+			const config = resubmitCall?.[0] as { data?: { expectedVersion?: number }; headers?: Record<string, string> }
+			// The version the server last reported (3 in the fixture), not a remembered one: creating
+			// a draft bumps the lock version, so a stale value is refused as a conflict.
+			expect(config.data?.expectedVersion).toBe(3)
+			expect(config.headers?.['X-PettyCash-Command-ID']).toBeTruthy()
+			expect(router.currentRoute.value.name).toBe('transactions')
 		})
 
 		it('surfaces the field error the server returns rather than a generic failure', async () => {

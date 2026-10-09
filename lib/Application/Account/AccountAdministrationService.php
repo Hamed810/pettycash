@@ -5,10 +5,13 @@ declare(strict_types=1);
 namespace OCA\PettyCash\Application\Account;
 
 use InvalidArgumentException;
+use OCA\PettyCash\Application\Audit\ConfigurationEventType;
 use OCA\PettyCash\Application\Configuration\CurrencyService;
+use OCA\PettyCash\Application\Port\AuditWriter;
 use OCA\PettyCash\Domain\Account\PettyCashAccount;
 use OCA\PettyCash\Domain\Account\Repository\AccountRepository;
 use OCA\PettyCash\Domain\Shared\CurrencyCode;
+use OCA\PettyCash\Domain\Shared\Enum\Role;
 use OCA\PettyCash\Domain\Shared\Uuid;
 
 /**
@@ -68,6 +71,7 @@ final readonly class AccountAdministrationService
     public function __construct(
         private AccountRepository $accounts,
         private CurrencyService $currencies,
+        private AuditWriter $auditWriter,
     ) {}
 
     /**
@@ -86,9 +90,11 @@ final readonly class AccountAdministrationService
             throw new InvalidArgumentException('userId is required');
         }
 
-        // FR-020's precondition is "zero **active** accounts", so a deactivated account does not
-        // satisfy it. Treating one as sufficient would strand a purchaser who retired their only
-        // account with no way to create a sheet again.
+        // FR-020's trigger fires on zero **active** accounts — and that is necessary but not sufficient.
+        // A deactivated account is not active, so the trigger's precondition is met by an account somebody
+        // deliberately retired; provisioning there would let a sheet-creation click silently reverse an
+        // administrator's deactivation and replace the account with a new one carrying neither its identity
+        // nor its history. The distinction is whether a rial record **exists**, not the active flag alone.
         if ($this->accounts->findActiveByUserUid($userUid) !== []) {
             return null;
         }
@@ -96,6 +102,27 @@ final readonly class AccountAdministrationService
         // Resolved before the insert so a misconfigured installation fails with nothing written,
         // rather than provisioning an account and then discovering it has no usable scale.
         $rial = $this->currencies->defaultRial();
+
+        // The carve-out: an inactive rial record blocks provisioning rather than triggering it. The
+        // refusal names the account and the remedy, because a purchaser told only "no active account"
+        // has neither a way to proceed nor a way to learn that one exists — the same actionable-refusal
+        // rule the settlement path follows. Only the holder's **own** accounts are read: another user's
+        // inactive rial account is not this purchaser's state and must not block them.
+        $inactiveRial = null;
+        foreach ($this->accounts->findAllByUserUid($userUid) as $candidate) {
+            if (!$candidate->active && $candidate->currencyCode()->__toString() === $rial->code()) {
+                $inactiveRial = $candidate;
+                break;
+            }
+        }
+        if ($inactiveRial !== null) {
+            throw new InvalidArgumentException(sprintf(
+                'Account %s (%s) is deactivated; an administrator must reactivate it or open a replacement '
+                . 'before a sheet can be created',
+                $inactiveRial->id,
+                $rial->code()
+            ));
+        }
 
         $account = PettyCashAccount::create((string)Uuid::random(), $userUid, $rial);
 
@@ -119,10 +146,58 @@ final readonly class AccountAdministrationService
                 throw $e;
             }
 
+            // **No audit row here**, and deliberately: this request created nothing. The concurrent
+            // request that won the index writes the row, so exactly one `ACCOUNT_CREATED` exists per
+            // account even when two callers raced. Recording it here would claim a creation that did
+            // not happen, which is the failure mode FR-017's `before`/`after` pair exists to prevent.
             return $existing[0];
         }
 
+        $this->recordProvisioningAudit($account, $rial->code());
+
         return $account;
+    }
+
+    /**
+     * FR-017: record that provisioning created an account.
+     *
+     * **The actor is the account holder**, which is what distinguishes this row from an
+     * administrator's deliberate creation (`AccountService::createFor()`) and what makes it honest about
+     * the state it records: the account exists, and **no administrator authorised it**. The same
+     * `ACCOUNT_CREATED` event type serves both origins precisely so that one filter over the trail
+     * answers "which accounts exist and who authorised each" rather than needing the reader to know
+     * two event types.
+     *
+     * `entity_id` is the account's **public id**, not its surrogate key — `ChargedAccountScope` resolves
+     * it through `AccountRepository::findByPublicId()`, so a database id here would silently produce an
+     * empty scope rather than an error. `AccountService`'s funding event carries the same caveat.
+     *
+     * Appended after the save, following the ordering `AccountService::charge()` already uses. That
+     * ordering means a failing append leaves a created account unrecorded; the alternative — recording
+     * first — would claim an account that a failed insert then erased. This is the lesser fault, and it
+     * matches the established pattern rather than introducing a second one.
+     */
+    private function recordProvisioningAudit(PettyCashAccount $account, string $currencyCode): void
+    {
+        $this->auditWriter->appendConfiguration([
+            'id' => (string)Uuid::random(),
+            'entity_type' => 'account',
+            'entity_id' => $account->id,
+            'event_type' => ConfigurationEventType::AccountCreated->value,
+            // FR-017's explanation. Provisioning has no caller-supplied text, and naming the mechanism
+            // is more useful to a reader than an empty field or an invented quotation.
+            'explanation' => 'Provisioned automatically on first sheet creation attempt (FR-020)',
+            'actor_role' => Role::Purchaser->value,
+            'before' => [],
+            'after' => [
+                'currency' => $currencyCode,
+                'balance_minor' => 0,
+                'active' => true,
+                // Self-service is the fact worth recording, and it is not otherwise visible from the
+                // row: nothing else distinguishes this account from one an administrator opened.
+                'origin' => 'fr020-provisioning',
+            ],
+        ]);
     }
 
     /**
@@ -130,7 +205,9 @@ final readonly class AccountAdministrationService
      *
      * | Caller's active accounts | Answer |
      * |---|---|
-     * | none | provision the default rial account and return it |
+     * | none, and no inactive rial record | provision the default rial account and return it |
+     * | none, but an inactive rial record exists | **throw** — the trigger must not fire on a deliberately
+     * retired account; the sheet-creation attempt is refused naming the account and its remedy |
      * | exactly one | return it — "a purchaser with one active account MUST receive its currency automatically" |
      * | several | null — "a purchaser with multiple active accounts MUST choose", and picking one here would make the server's choice the sheet's currency |
      *

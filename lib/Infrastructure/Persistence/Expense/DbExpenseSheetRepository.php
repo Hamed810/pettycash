@@ -9,7 +9,9 @@ use DateTimeZone;
 use OCA\PettyCash\Application\DataIntegrity\UnreadableRecordData;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Application\Port\UserDirectory;
+use OCA\PettyCash\Application\StaleRecordVersion;
 use OCA\PettyCash\Domain\Expense\ExpenseSheet;
+use RuntimeException;
 use OCA\PettyCash\Domain\Expense\Repository\ExpenseSheetRepository;
 use OCA\PettyCash\Domain\Expense\SheetListFilter;
 use OCA\PettyCash\Domain\Workflow\SheetStatus;
@@ -330,5 +332,39 @@ final class DbExpenseSheetRepository implements ExpenseSheetRepository
             ->setMaxResults(1);
         $row = $qb->executeQuery()->fetchAssociative();
         return $row ? $row['public_id'] : '';
+    }
+
+    /**
+     * T417 / FR-086: remove the sheet row, and nothing else.
+     *
+     * The cascade to transactions, revisions and evidence is **not** here on purpose.
+     * `DbExpenseTransactionRepository::delete()` already removes a transaction's revisions and evidence
+     * rows, and the AppData binaries are removed by the application layer while their keys are still
+     * readable — neither of which this class could do, since it has no file store. Duplicating that
+     * here would give two places responsible for a child's removal and one place unable to finish it.
+     *
+     * Guarded on `lock_version` for the same reason `save()` is: FR-086 refuses a stale delete the way
+     * FR-025 refuses a stale edit, and this is the last moment that can be enforced for a row that is
+     * about to stop existing. A delete that matched nothing because the version moved is reported by
+     * zero affected rows rather than silently succeeding.
+     */
+    public function delete(ExpenseSheet $sheet): void
+    {
+        if ($sheet->dbId === null) {
+            throw new RuntimeException('Cannot delete a sheet that was never persisted');
+        }
+
+        $qb = $this->connection->getQueryBuilder();
+        $affected = $qb->delete('pettycash_sheets')
+            ->where($qb->expr()->eq('id', $qb->createNamedParameter($sheet->dbId)))
+            ->andWhere($qb->expr()->eq('lock_version', $qb->createNamedParameter($sheet->lockVersion)))
+            ->executeStatement();
+
+        if ($affected === 0) {
+            // Zero rows means the `lock_version` predicate did not match, i.e. the row moved after the
+            // caller read it. Both versions are not available here, so `movedDuringWrite()` says what
+            // this layer actually knows rather than quoting a number it would have to invent.
+            throw StaleRecordVersion::movedDuringWrite('sheet', $sheet->id);
+        }
     }
 }

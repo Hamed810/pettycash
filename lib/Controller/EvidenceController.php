@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace OCA\PettyCash\Controller;
 
+use OCA\PettyCash\Infrastructure\Http\CommandId;
 use Exception;
 use InvalidArgumentException;
 use OCA\PettyCash\Application\Evidence\EvidenceService;
+use OCA\PettyCash\Application\Evidence\EvidenceLinkService;
 use OCA\PettyCash\Application\Evidence\EvidenceVisibility;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Application\Expense\TransactionService;
@@ -24,6 +26,7 @@ use OCP\AppFramework\Http;
 use OCP\AppFramework\Http\StreamResponse;
 use OCP\AppFramework\OCSController;
 use OCP\IRequest;
+use OCP\IURLGenerator;
 use RuntimeException;
 
 class EvidenceController extends OCSController
@@ -31,6 +34,7 @@ class EvidenceController extends OCSController
     public function __construct(
         IRequest $request,
         private EvidenceService $evidenceService,
+        private EvidenceLinkService $evidenceLinks,
         private EvidenceRepository $evidenceRepository,
         private TransactionService $transactionService,
         private ExpenseTransactionRepository $transactionRepository,
@@ -39,7 +43,8 @@ class EvidenceController extends OCSController
         private CurrentUser $currentUser,
         private OcsErrorMapper $ocsErrorMapper,
         private EvidenceVisibility $evidenceVisibility,
-        private EvidenceContentPolicy $contentPolicy
+        private EvidenceContentPolicy $contentPolicy,
+        private IURLGenerator $urlGenerator
     ) {
         parent::__construct('pettycash', $request);
     }
@@ -58,6 +63,21 @@ class EvidenceController extends OCSController
                 'Required fields are missing',
                 null,
                 ['commandId' => ['commandId is required']]
+            );
+        }
+
+        // T415: present but unstoreable. `pettycash_command_results.command_id` is
+        // `string(36)` and the contract declares `format: uuid`, so an over-long
+        // value reaches MySQL and answers 500. A malformed request is not a server
+        // fault. **400, matching this method's own absent case** rather than 422:
+        // both are the same class of fault, a request the caller must change.
+        try {
+            $commandId = CommandId::fromString((string) $commandId)->__toString();
+        } catch (\InvalidArgumentException $malformed) {
+            return $this->ocsErrorMapper->badRequest(
+                'Malformed command ID',
+                null,
+                ['commandId' => [$malformed->getMessage()]]
             );
         }
 
@@ -126,7 +146,7 @@ class EvidenceController extends OCSController
             return new DataResponse($this->formatEvidence($evidence), 201);
 
         } catch (\Throwable $e) {
-            return $this->ocsErrorMapper->map($e, $commandId);
+            return $this->ocsErrorMapper->map($e, $commandId, ['publicId' => $transactionId]);
         }
     }
 
@@ -212,6 +232,112 @@ class EvidenceController extends OCSController
 
         return $content;
     }
+
+/**
+ * FR-031: create a public evidence link.
+ *
+ * **Administrators only, and that is enforced by the service, not here.** `ConfigurationController`'s
+ * docblock records the convention — "each service enforces that itself through `AdministratorCheck`" —
+ * and this controller follows it rather than adding a second check that could disagree.
+ *
+ * **No `mayRead()` on the evidence, deliberately.** The 2026-10-07 clarification states that an
+ * administrator's own view right is not required to create a link, and that a link on evidence the
+ * administrator cannot themselves view is permitted and audited as such. A visibility check here would
+ * make the capability useless for exactly the case that sentence names. The creation audit records
+ * that the use happened, which is what makes it reconstructable.
+ *
+ * The response carries the raw token **once**. A retried request returns the same link with `url: null`
+ * — see `CreatedEvidenceLink` for why the two requirements cannot both be met by a stored result.
+ *
+ * @param string|null $expiresAt ISO-8601, or null for FR-031's 30-day default. Refused above one year.
+ */
+#[NoAdminRequired]
+public function links(string $evidenceId, ?string $expiresAt = null, ?string $commandId = null): DataResponse
+{
+    $commandId = $commandId ?? $this->request->getHeader('X-PettyCash-Command-ID');
+
+    // Absent is 400, not 422: this is a malformed request rather than an unacceptable value, which is
+    // the same convention `ReviewController::decide()` and `T317` settled on.
+    if ($commandId === null || trim($commandId) === '') {
+        return $this->ocsErrorMapper->badRequest(
+            'Required fields are missing',
+            null,
+            ['commandId' => ['commandId is required']],
+        );
+    }
+
+    // T415: present but unstoreable. `pettycash_command_results.command_id` is
+    // `string(36)` and the contract declares `format: uuid`, so an over-long
+    // value reaches MySQL and answers 500. A malformed request is not a server
+    // fault. **400, matching this method's own absent case** rather than 422:
+    // both are the same class of fault, a request the caller must change.
+    try {
+        $commandId = CommandId::fromString((string) $commandId)->__toString();
+    } catch (\InvalidArgumentException $malformed) {
+        return $this->ocsErrorMapper->badRequest(
+            'Malformed command ID',
+            null,
+            ['commandId' => [$malformed->getMessage()]]
+        );
+    }
+
+    try {
+        $created = $this->evidenceLinks->create($evidenceId, $expiresAt, $commandId);
+    } catch (\Throwable $error) {
+        return $this->ocsErrorMapper->map($error, $commandId, ['publicId' => $evidenceId]);
+    }
+
+    return new DataResponse(
+        $created->link + ['url' => $created->url($this->urlGenerator->getAbsoluteURL('/'))],
+        201,
+    );
+}
+
+/**
+ * FR-031: revoke a public evidence link.
+ *
+ * Deactivating an already-inactive link answers `200` rather than failing, because the client's intent
+ * is satisfied and a retry after a lost response must not fail. The audit records the attempt either
+ * way, so a repeat stays visible.
+ *
+ * @param string|null $commandId `X-PettyCash-Command-ID`; a mutating command, so it is required
+ */
+#[NoAdminRequired]
+public function deactivateLink(string $linkId, ?string $commandId = null): DataResponse
+{
+    $commandId = $commandId ?? $this->request->getHeader('X-PettyCash-Command-ID');
+
+    if ($commandId === null || trim($commandId) === '') {
+        return $this->ocsErrorMapper->badRequest(
+            'Required fields are missing',
+            null,
+            ['commandId' => ['commandId is required']],
+        );
+    }
+
+    // T415: present but unstoreable. `pettycash_command_results.command_id` is
+    // `string(36)` and the contract declares `format: uuid`, so an over-long
+    // value reaches MySQL and answers 500. A malformed request is not a server
+    // fault. **400, matching this method's own absent case** rather than 422:
+    // both are the same class of fault, a request the caller must change.
+    try {
+        $commandId = CommandId::fromString((string) $commandId)->__toString();
+    } catch (\InvalidArgumentException $malformed) {
+        return $this->ocsErrorMapper->badRequest(
+            'Malformed command ID',
+            null,
+            ['commandId' => [$malformed->getMessage()]]
+        );
+    }
+
+    try {
+        $result = $this->evidenceLinks->deactivate($linkId, $commandId);
+    } catch (\Throwable $error) {
+        return $this->ocsErrorMapper->map($error, $commandId, ['publicId' => $linkId]);
+    }
+
+    return new DataResponse($result['link'], 200);
+}
 
 /**
  * @param string $evidenceId
@@ -305,7 +431,7 @@ public function destroy(string $evidenceId): DataResponse
 
             return new DataResponse($this->formatEvidence($deactivated ?? $evidence), 200);
         } catch (\Throwable $e) {
-            return $this->ocsErrorMapper->map($e);
+            return $this->ocsErrorMapper->map($e, null, ['publicId' => $evidenceId]);
         }
     }
 
@@ -411,9 +537,9 @@ public function destroy(string $evidenceId): DataResponse
             if ($e->getMessage() === 'AppData file not found') {
                 return $this->ocsErrorMapper->notFound('Evidence file not found');
             }
-            return $this->ocsErrorMapper->map($e);
+            return $this->ocsErrorMapper->map($e, null, ['publicId' => $evidenceId]);
         } catch (\Throwable $e) {
-            return $this->ocsErrorMapper->map($e);
+            return $this->ocsErrorMapper->map($e, null, ['publicId' => $evidenceId]);
         }
     }
 

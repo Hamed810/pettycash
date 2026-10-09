@@ -47,11 +47,18 @@ use Psr\Http\Message\ResponseInterface;
  *
  * ## Why the refusals assert the message and not only the status
  *
- * Every guard here raises `InvalidArgumentException`, which `OcsErrorMapper` maps to a single
- * `422 VALIDATION_FAILED`. So a status assertion alone cannot tell the completed-sheet guard from
- * any other 422 on the same endpoint — a stale version, a missing field, an unknown cost centre.
- * Each refusal therefore also asserts the message the guard names, which is what makes this a
- * statement about *this* rule rather than about the endpoint being unfriendly.
+ * Every guard **here** raises `InvalidArgumentException`, which `OcsErrorMapper` maps to a single
+ * `422 VALIDATION_FAILED`. Among themselves, status alone cannot tell these guards apart — a missing
+ * field and an unknown cost centre answer identically — so each refusal also asserts the message its
+ * guard names, which is what makes this a statement about *this* rule rather than about the endpoint
+ * being unfriendly.
+ *
+ * **T416 narrowed that overlap, and this suite's assertion strategy is now stricter than it needs to
+ * be for its own guards, deliberately.** A stale `expectedVersion` used to be one of the
+ * indistinguishable `422`s named above; it is now a `409` (`StaleVersionConflictTest` covers it), so
+ * the *status* now separates these guards from it. The message assertions are kept anyway: a status
+ * assertion distinguishes guards that share a status, and nothing distinguishes guards that share a
+ * status *and* a message.
  *
  * The consequence that matters most for review: mutating a guard to accept a completed sheet turns
  * these tests red, whereas the capability test alone would not notice, because it never calls the
@@ -162,8 +169,14 @@ final class CompletedSheetLockTest extends TestCase
      *
      * `expectedVersion` is read from the live sheet rather than from the fixture manifest. The
      * settlement incremented the sheet's lock version, and `SheetService::updateSheet()` checks the
-     * version *before* the status — so a stale value would answer `Stale version`, which is also a
-     * 422, and the test would pass without the status guard ever running.
+     * version *before* the status — so a stale value would answer `Stale version` and the test would
+     * pass without the status guard ever running.
+     *
+     * **T416 changed what that stale answer is, and the reason this reads live is now stronger rather
+     * than weaker.** A stale version is a `409` (see `StaleVersionConflictTest`), so the guards here
+     * remain the only `422` on this endpoint and a stale value would now answer a *different status*
+     * rather than the same status with a different message. Reading live is what keeps this test a
+     * statement about the completed-sheet lock instead of about lock ordering.
      */
     public function testACompletedSheetRefusesAnUpdate(): void
     {
@@ -451,8 +464,12 @@ final class CompletedSheetLockTest extends TestCase
      *
      * Read live rather than from the fixture manifest because the guards that take an
      * `expectedVersion` check the version *before* the status. A manifest value that had gone stale
-     * — the settlement incremented it — would answer `Stale version`, which is also a 422, and the
-     * suite would pass without ever reaching the guard it exists to test.
+     * — the settlement incremented it — would answer `Stale version`, and the suite would pass
+     * without ever reaching the guard it exists to test.
+     *
+     * Since T416 that stale answer is a `409`, so reading live is now also what separates these
+     * guards' `422` from the version guard's `409` by status alone — the distinction this helper's
+     * per-resource split exists to preserve.
      *
      * Split per resource rather than probing one endpoint and falling back to the other: the probe
      * form costs an extra HTTP round trip on every call and, worse, would silently read a

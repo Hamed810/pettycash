@@ -15,6 +15,12 @@ const TransactionReviewDetailView = () => import('../views/reviews/TransactionRe
 const ReturnsQueueView = () => import('../views/reviews/ReturnsQueueView.vue')
 const FinanceReviewView = () => import('../views/reviews/FinanceReviewView.vue')
 const AccountView = () => import('../views/accounts/AccountView.vue')
+// US5 administration (T088). Two views rather than one: reference data (currencies, cost centers,
+// expense types, finance assignments) and funding (open, charge, retire/restore) are different
+// journeys with different server surfaces, and one combined form would be a page that does everything
+// badly. Reachable by URL; there is no navigation shell in this app to extend.
+const ConfigurationView = () => import('../views/admin/ConfigurationView.vue')
+const FundingView = () => import('../views/admin/FundingView.vue')
 
 /**
  * A route that renders nothing, for a path this app has no view for.
@@ -69,6 +75,11 @@ export const routes: RouteRecordRaw[] = [
 
 	// Purchaser balance and ledger (US3, T065).
 	{ path: '/accounts', name: 'accounts', component: AccountView },
+
+	// Administration (US5, T088). No navigation shell exists to extend, so these are reached by URL;
+	// the server still enforces every role the interface does not show.
+	{ path: '/admin/configuration', name: 'admin-configuration', component: ConfigurationView },
+	{ path: '/admin/funding', name: 'admin-funding', component: FundingView },
 
 	{ path: '/:pathMatch(.*)*', name: 'not-found', component: NotFoundView }
 ]

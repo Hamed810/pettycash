@@ -74,12 +74,23 @@ final class DbEvidenceLinkRepository implements EvidenceLinkRepository
         $currentUser = $this->currentUser->uid();
 
         if ($existing) {
+            // **`updated_at` and `updated_by` are deliberately absent.**
+            //
+            // This branch once set both, and `deactivateLink()` therefore answered
+            // **500 UNEXPECTED_FAILURE** on every real HTTP call, with
+            // `SQLSTATE[42S22] Unknown column 'updated_at' in 'SET'`. Nothing caught it: the unit tests
+            // run against an in-memory repository with no schema to contradict them, and the
+            // route-resolution gate proves a route resolves rather than that its endpoint runs.
+            //
+            // `pettycash_evidence_links` has no such columns and no migration adds them — its columns are
+            // `id, public_id, evidence_id, token_hash, active, expires_at, created_by, created_at,
+            // deactivated_by, deactivated_at` — so removing them is correcting the code to the schema,
+            // not dropping a feature. `deactivated_by` and `deactivated_at` already record the actor and
+            // the time of the change, which is precisely what the two removed columns duplicated.
             $qb->update('pettycash_evidence_links')
                 ->set('active', $qb->createNamedParameter($link->active, IQueryBuilder::PARAM_BOOL))
                 ->set('deactivated_by', $link->deactivatedBy ? $qb->createNamedParameter($link->deactivatedBy) : $qb->createNamedParameter(null))
                 ->set('deactivated_at', $link->deactivatedAt ? $qb->createNamedParameter($link->deactivatedAt->format('Y-m-d H:i:s')) : $qb->createNamedParameter(null))
-                ->set('updated_at', $qb->createNamedParameter($now, IQueryBuilder::PARAM_DATETIME_IMMUTABLE))
-                ->set('updated_by', $qb->createNamedParameter($currentUser))
                 ->where($qb->expr()->eq('id', $qb->createNamedParameter($existing->dbId)))
                 ->executeStatement();
         } else {

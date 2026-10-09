@@ -46,106 +46,37 @@ use RuntimeException;
 final class RouteResolutionTest extends TestCase
 {
     /**
-     * Declared routes that do not yet resolve, each with the task that owns building it.
+     * Every declared route must resolve to a public controller action. **This is now the whole gate.**
      *
-     * Keys are `controller#action`; values are the owning task IDs. **Deleting an entry is a
-     * two-part change**: remove it here and, in the same commit, mark the owning task `[X]`. Adding an
-     * entry is never correct — a new entry means a route was registered ahead of its implementation,
-     * which is the defect.
+     * ## How it got here, and what it cost to keep honest
      *
-     * Ownership, from the task list:
-     * - `evidence#links` and `evidence#deactivateLink` are T096's (evidence and public-link routes,
-     *   which adds both actions to the existing `EvidenceController`);
-     * - `report#show` and `export#create` were T112's and were deleted from this list when T112
-     *   completed, in the same change that marked it done. They created `ReportController` and
-     *   `ExportController`.
+     * The file began with a list of known failures — routes registered ahead of their implementation,
+     * each owned by a task — and inverted the assertion so it failed in *both* directions: a new
+     * unresolved route failed, and a stale list entry failed too. That inversion is why the list could
+     * be worked down to nothing over time instead of becoming a permanent red test nobody reads.
      *
-     * The eleven `configuration#*` entries were removed on 2026-10-04 when T087 delivered
-     * `ConfigurationController`, in the same change, as `testTheKnownExpectedFailureListHasNoStaleEntries()`
-     * requires. Convergence Phase 38 re-verified all fifteen mechanically before that; the count has
-     * moved twice since, and the list is now two entries rather than thirteen.
+     * The list is empty as of **2026-10-08**, when T403 implemented `evidence#links` and
+     * `evidence#deactivateLink` — the last two entries, and the only ones still open since T087 closed
+     * eleven `configuration#*` routes on 2026-10-04. With nothing left to allow, the conditional, the
+     * stale-entry check, the owner-naming check and the keep-me-alive check all became scaffolding
+     * around an assertion that is simply: **nothing declared here is unresolved**.
      *
-     * @var array<string, string>
+     * They were deleted rather than left passing.
+     * `testTheKnownUnresolvedListIsNotEmptySoTheGuardIsStillNeeded` existed to fire a prompt when this
+     * moment arrived, and the prompt it printed is the instruction that was followed.
+     *
+     * The invariant did not change; the scaffolding around it did.
      */
-    private const KNOWN_UNRESOLVED = [
-        'evidence#links' => 'T096',
-        'evidence#deactivateLink' => 'T096',
-    ];
-
-    // ===== The guard =====
-
-    public function testNoDeclaredRouteResolvesOutsideTheKnownExpectedFailures(): void
+    public function testEveryDeclaredRouteResolves(): void
     {
         $unresolved = $this->unresolvedRoutes();
 
         self::assertSame(
             [],
-            array_diff_key($unresolved, self::KNOWN_UNRESOLVED),
-            'These declared routes do not resolve to a public controller action, so each answers '
-            . "HTTP 500 at runtime:\n" . $this->describe($unresolved)
+            $unresolved,
+            $this->describe($unresolved)
             . "\nA route registered ahead of its implementation must either be implemented in the same "
-            . 'change or not declared yet. Do NOT add it to KNOWN_UNRESOLVED — that list records work '
-            . 'that is already planned, not a new defect.'
-        );
-    }
-
-    public function testTheKnownExpectedFailureListHasNoStaleEntries(): void
-    {
-        $unresolved = $this->unresolvedRoutes();
-
-        self::assertSame(
-            [],
-            array_diff_key(self::KNOWN_UNRESOLVED, $unresolved),
-            'These entries are in KNOWN_UNRESOLVED but the routes now resolve, so the list is stale:\n'
-            . $this->describe(self::KNOWN_UNRESOLVED)
-            . "\nDelete the entry and mark its owning task complete in the same change. A stale entry is "
-            . 'how a task-owned list quietly stops being a guard.'
-        );
-    }
-
-    /**
-     * The plain gate, active only once every known failure has been closed.
-     *
-     * Written as an unconditional assertion rather than a conditional one: it is always evaluated, so
-     * the day `KNOWN_UNRESOLVED` becomes empty this file *is* "every declared route resolves", with
-     * no further edit needed here.
-     */
-    public function testNoDeclaredRouteIsSilentlyUnresolvedOnceTheKnownListIsEmpty(): void
-    {
-        $unresolved = $this->unresolvedRoutes();
-
-        if (self::KNOWN_UNRESOLVED !== []) {
-            self::assertNotSame([], $unresolved, 'this assertion is only meaningful once the known list is empty');
-            return;
-        }
-
-        self::assertSame([], $unresolved, $this->describe($unresolved));
-    }
-
-    // ===== The list itself is held to account =====
-
-    public function testEveryKnownUnresolvedRouteNamesTheTaskThatOwnsIt(): void
-    {
-        foreach (self::KNOWN_UNRESOLVED as $route => $owner) {
-            self::assertMatchesRegularExpression(
-                '/^T\d{3}$/',
-                $owner,
-                "KNOWN_UNRESOLVED['{$route}'] must name a task ID, so the entry can be closed by the "
-                . 'task that owns it rather than becoming an unowned allowance'
-            );
-        }
-    }
-
-    public function testTheKnownUnresolvedListIsNotEmptySoTheGuardIsStillNeeded(): void
-    {
-        // If this ever fails, KNOWN_UNRESOLVED is empty and the guard above has become the whole gate.
-        // That is a good state, not a failure — but it should be noticed and the task note updated,
-        // not discovered later by someone wondering why a test stopped asserting anything.
-        self::assertNotSame(
-            [],
-            self::KNOWN_UNRESOLVED,
-            'KNOWN_UNRESOLVED is empty, so all declared routes now resolve. Delete the three '
-            . 'guard-shaped tests above and keep only the unconditional one, and record the closure here.'
+            . 'change or not declared yet.'
         );
     }
 
@@ -194,9 +125,6 @@ final class RouteResolutionTest extends TestCase
      * - anything about response *content*. Whether a body is correct is the contract
      *   tests' job, and duplicating that here would be a worse version of it.
      *
-     * Routes listed in `KNOWN_UNRESOLVED` are skipped as well: they are already tracked,
-     * with an owning task, and a 5xx on them is the recorded state rather than a discovery.
-     *
      * Routes with path parameters are skipped rather than guessed at: a synthesised
      * `{sheetId}` is not a real sheet, so a 4xx from one would say nothing about routing.
      * They are reported by `testParameterizedOcsRoutesAreNotCoveredByDispatch` so the gap
@@ -217,14 +145,10 @@ final class RouteResolutionTest extends TestCase
                 continue;
             }
 
-            // Already tracked as unresolved by the structural guard, and owned by a task. A 5xx
-            // there is the *expected* state, not a new finding -- the first version of this
-            // check flagged all four `configuration#*Index` routes for exactly that reason.
-            // What this check exists to catch is a 5xx on a route the guard believes is
-            // resolved, which is the dashboard's shape and not this one's.
-            if (isset(self::KNOWN_UNRESOLVED[$entry['name']])) {
-                continue;
-            }
+            // The known-unresolved skip went with the list itself: every declared route now resolves,
+            // so a 5xx here is always the finding this check exists for. That branch used to read
+            // "already tracked as unresolved by the structural guard, and owned by a task" -- which is
+            // precisely why the structural guard had to be kept honest rather than allowed to rot.
 
             $path = '/ocs/v2.php/apps/pettycash' . $entry['url'];
             $status = $client->request('GET', $path)->getStatusCode();
@@ -521,7 +445,8 @@ final class RouteResolutionTest extends TestCase
 
         $lines = [];
         foreach ($set as $route => $reason) {
-            $owner = self::KNOWN_UNRESOLVED[$route] ?? null;
+            // No owner to name: the list is empty, so every unresolved route here is a fresh defect
+            // rather than known planned work.
             $lines[] = sprintf(
                 '  - %s%s: %s',
                 $route,

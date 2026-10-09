@@ -44,5 +44,25 @@ interface AccountRepository
      */
     public function countAll(): int;
 
+    /**
+     * How many accounts exist in a currency, by surrogate id.
+     *
+     * **Added by T422** so FR-023's rule — a currency's decimal scale is refused while amounts exist in
+     * it — can be enforced at all. Nothing could ask the question before this method existed, so the rule
+     * had no way to be true.
+     *
+     * **Why "an account exists" is the test for "an amount exists", and why that is a safe superset.**
+     * Every amount in the system reaches a balance through an account: a sheet's currency is its account's
+     * currency (FR-020, `SheetService`), and a transaction's amount is denominated in that same currency. So a
+     * currency with **no** account has no balance, no movement, and no transaction — and its scale may be set
+     * freely. A currency with **any** account may hold amounts, and counting accounts is a superset of
+     * "amounts exist". Over-refusing is the acceptable direction: an administrator whose scale change is
+     * refused can still deactivate the currency, whereas under-refusing would silently reinterpret balances
+     * with no way to notice afterwards.
+     *
+     * @param int $currencyId surrogate `pettycash_currencies.id`, not the code
+     */
+    public function countByCurrencyId(int $currencyId): int;
+
     public function save(PettyCashAccount $account): void;
 }

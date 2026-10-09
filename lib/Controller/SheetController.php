@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace OCA\PettyCash\Controller;
 
+use OCA\PettyCash\Infrastructure\Http\CommandId;
 use OCA\PettyCash\Application\Expense\SheetService;
+use OCA\PettyCash\Application\Expense\DeleteSheet;
 use OCA\PettyCash\Application\Expense\SheetListFilterFactory;
 use OCA\PettyCash\Domain\Expense\ExpenseSheet;
 use OCA\PettyCash\Application\Expense\TransactionService;
@@ -23,6 +25,7 @@ class SheetController extends OCSController
     public function __construct(
         \OCP\IRequest $request,
         private SheetService $sheetService,
+        private DeleteSheet $deleteSheet,
         private SheetListFilterFactory $filterFactory,
         private TransactionService $transactionService,
         private SubmitSheet $submitSheet,
@@ -127,7 +130,7 @@ class SheetController extends OCSController
             }
             return new DataResponse($this->formatSheetDetail($sheet));
         } catch (\Throwable $e) {
-            return $this->ocsErrorMapper->map($e);
+            return $this->ocsErrorMapper->map($e, null, ['publicId' => $sheetId]);
         }
     }
 
@@ -158,7 +161,51 @@ class SheetController extends OCSController
             $sheet = $this->sheetService->updateSheet($sheetId, $title, $accountId, $expectedVersion);
             return new DataResponse($this->formatSheetDetail($sheet));
         } catch (\Throwable $e) {
-            return $this->ocsErrorMapper->map($e, $commandId);
+            return $this->ocsErrorMapper->map($e, $commandId, ['publicId' => $sheetId]);
+        }
+    }
+
+    /**
+     * FR-086: delete an own sheet that has never been submitted.
+     *
+     * **The command id is required here, unlike `DELETE /transactions/{id}`.** That operation is
+     * documented as a repeatable command with no header, because a second attempt has nothing left to
+     * remove. A sheet delete without a header would answer "Sheet not found" on the retry — leaving a
+     * client that lost the first response unable to tell its own successful deletion from a failure,
+     * which FR-084 exists to prevent. FR-086 states the rule and this method enforces it.
+     */
+    #[NoAdminRequired]
+    public function destroy(string $sheetId, ?string $commandId = null, ?int $expectedVersion = null): DataResponse
+    {
+        $commandId = $commandId ?? $this->request->getHeader('X-PettyCash-Command-ID');
+
+        // T415's split, applied here for the same reason and not merged into one `422`. A **missing command
+        // id** is `400`, matching `TransactionController::correction()` and `resubmit()`: the header is
+        // a transport-level precondition on a non-repeatable command, and T415 found that treating it
+        // as a body-field failure made it indistinguishable from the very refusals those operations
+        // raise. A **missing `expectedVersion`** is `422`, because that one *is* a body field. Found by
+        // running this test, not by reading the neighbours.
+        if ($commandId === null || trim($commandId) === '') {
+            return $this->ocsErrorMapper->badRequest(
+                'Required fields are missing',
+                $commandId,
+                ['commandId' => ['commandId is required']]
+            );
+        }
+
+        if ($expectedVersion === null) {
+            return $this->ocsErrorMapper->validation(
+                'Required fields are missing',
+                $commandId,
+                ['expectedVersion' => ['expectedVersion is required']]
+            );
+        }
+
+        try {
+            $this->deleteSheet->execute($sheetId, $commandId, $expectedVersion);
+            return new DataResponse(null, 204);
+        } catch (\Throwable $e) {
+            return $this->ocsErrorMapper->map($e, $commandId, ['publicId' => $sheetId]);
         }
     }
 
@@ -171,6 +218,21 @@ class SheetController extends OCSController
         if ($commandId === null || trim($commandId) === '') {
             $fieldErrors['commandId'] = ['commandId is required'];
         }
+
+        // T415: present but unstoreable. `pettycash_command_results.command_id` is
+        // `string(36)` and the contract declares `format: uuid`, so an over-long
+        // value reaches MySQL and answers 500. A malformed request is not a server
+        // fault. **400, matching this method's own absent case** rather than 422:
+        // both are the same class of fault, a request the caller must change.
+        try {
+            $commandId = CommandId::fromString((string) $commandId)->__toString();
+        } catch (\InvalidArgumentException $malformed) {
+            return $this->ocsErrorMapper->validation(
+                'Malformed command ID',
+                null,
+                ['commandId' => [$malformed->getMessage()]]
+            );
+        }
         if ($expectedVersion === null) {
             $fieldErrors['expectedVersion'] = ['expectedVersion is required'];
         }
@@ -182,7 +244,7 @@ class SheetController extends OCSController
             $sheet = $this->submitSheet->execute($sheetId, $commandId, $expectedVersion);
             return new DataResponse($this->formatSheetDetail($sheet), 200);
         } catch (\Throwable $e) {
-            return $this->ocsErrorMapper->map($e, $commandId);
+            return $this->ocsErrorMapper->map($e, $commandId, ['publicId' => $sheetId]);
         }
     }
 

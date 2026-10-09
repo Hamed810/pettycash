@@ -166,6 +166,109 @@ final class ErrorEnvelopeContractTest extends TestCase
         $this->assertSame('BAD_REQUEST', $this->errorOf($response)['code']);
     }
 
+    /**
+     * T415: a command id that is **present but unstoreable** is a `400`, never a `500`.
+     *
+     * Observed before this task, not inferred: `pettycash_command_results.command_id` is `string(36)` and
+     * the contract declares `format: uuid`, so an over-long value reached MySQL and came back as
+     * `SQLSTATE[22001] Data too long for column 'command_id'`, which `OcsErrorMapper`'s catch-all arm
+     * mapped to **`500 UNEXPECTED_FAILURE`**. A malformed request answered as a server fault — the one
+     * status a caller cannot act on, and the one that tells an operator to hunt a bug in their client.
+     *
+     * **Asserted on two endpoints with their own statuses, deliberately.** The guard is per-controller
+     * rather than one shared choke point, because the six controllers do not agree on the absent case
+     * today: three answer `400`, `ExportController` and `SheetController` answer `422`, and two
+     * accumulate field errors. Each site therefore refuses with *its own* convention, and a single
+     * expected status would have been wrong for one of them. What is uniform — and what this asserts — is
+     * that the answer is a **client** error rather than a server fault.
+     */
+    public function testAnOverlongCommandIdIsFourHundredRatherThanFiveHundred(): void
+    {
+        ContractFixtures::prepare('finance');
+
+        $overlong = 't415-' . str_repeat('x', 40);
+
+        foreach ([
+            'charges' => [400, fn (): \Psr\Http\Message\ResponseInterface => $this->client->request(
+                'POST',
+                self::BASE . '/accounts/' . ContractFixtures::secondAccountId() . '/charges',
+                [
+                    'headers' => ['Content-Type' => 'application/json', 'X-PettyCash-Command-ID' => $overlong],
+                    'json' => [
+                        'amountMinor' => 1000,
+                        'description' => 'T415 overlong probe',
+                        'occurredAt' => '2026-01-01T00:00:00+00:00',
+                        'expectedVersion' => 0,
+                    ],
+                ]
+            )],
+            // **422, not 400, and deliberately.** `ExportController` answers `422` for every field
+            // complaint — its own absent-commandId case included — so its malformed-commandId answer
+            // matches its local convention rather than the majority one. Making this 400 would mean
+            // overriding that controller's established envelope for one value, and the status a caller
+            // sees would then depend on which endpoint they hit. T415 settled the *500 → client error*
+            // half of this; it did not re-open the 400-vs-422 question for the absent case, which is a
+            // separate inconsistency across the six controllers.
+            'export' => [422, fn (): \Psr\Http\Message\ResponseInterface => $this->client->request(
+                'POST',
+                self::BASE . '/exports',
+                [
+                    'headers' => ['Content-Type' => 'application/json', 'X-PettyCash-Command-ID' => $overlong],
+                    'json' => ['resource' => 'sheets', 'fileFormat' => 'xlsx'],
+                ]
+            )],
+        ] as $endpoint => [$expectedStatus, $send]) {
+            $response = $send();
+
+            $this->assertErrorEnvelope($response, $expectedStatus);
+            $this->assertNotSame(
+                500,
+                $response->getStatusCode(),
+                $endpoint . ': a command id that cannot be stored is a malformed request, not a fault.'
+            );
+            $this->assertStringContainsString(
+                'commandId',
+                json_encode($this->errorOf($response)['fieldErrors'] ?? []),
+                $endpoint . ': the field error must be keyed to `commandId`, so a client knows which field '
+                . 'to fix rather than receiving a bare status.'
+            );
+        }
+    }
+
+    /**
+     * The refusal is not a blanket ban on short ids, or the guard above would be satisfied by refusing
+     * everything. A well-formed id at the column's exact width must still be accepted and stored.
+     */
+    public function testACommandIdAtTheColumnWidthIsStillAccepted(): void
+    {
+        ContractFixtures::prepare('finance');
+
+        $atWidth = sprintf('%036d', 7); // exactly 36 characters, the column's width
+
+        $response = $this->client->request(
+            'POST',
+            self::BASE . '/accounts/' . ContractFixtures::secondAccountId() . '/charges',
+            [
+                'headers' => ['Content-Type' => 'application/json', 'X-PettyCash-Command-ID' => $atWidth],
+                'json' => [
+                    'amountMinor' => 1000,
+                    'description' => 'T415 at-width probe',
+                    'occurredAt' => '2026-01-01T00:00:00+00:00',
+                    'expectedVersion' => 0,
+                ],
+            ]
+        );
+
+        // Not 400/422: the guard must not refuse a storable value. The charge itself may legitimately
+        // fail for a fixture reason, so the assertion is that the *command id* was not the complaint.
+        $this->assertNotSame(400, $response->getStatusCode(), 'a 36-character command id must not be refused as malformed');
+        $this->assertNotSame(
+            422,
+            $response->getStatusCode(),
+            'and must not be refused as an invalid field value either'
+        );
+    }
+
     // ===== Unauthorized ------------------------------------------------------
 
     public function testAnUnauthenticatedRequestIsRefusedByNextcloudRatherThanByThisApplication(): void

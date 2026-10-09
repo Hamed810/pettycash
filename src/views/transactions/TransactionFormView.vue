@@ -76,6 +76,27 @@ const editable = computed(() => {
 
 const isDraft = computed(() => editable.value)
 
+/**
+ * FR-047/US4: the form is editing a *returned* transaction awaiting purchaser correction.
+ *
+ * Distinct from a plain draft: a correction carries a submitted history behind it, and completing
+ * it means *resubmitting* (POST `/resubmit`, which restarts review) rather than merely saving
+ * (PATCH). The resubmit control below renders only in this state.
+ */
+const isCorrection = computed(() =>
+	isEditing.value && transactionStore.currentTransaction?.status === 'AWAITING_PURCHASER_CORRECTION')
+
+/**
+ * FR-047's resubmission rule, as the button state: the full required dataset and evidence.
+ *
+ * Reuses `validationErrors` (FR-023's submission rules) rather than a second rule set, because
+ * `contracts/workflow.md`'s Correction Contract clause 4 requires resubmission to validate the full
+ * dataset — and two rules for "complete" would disagree about the same draft. The button and the
+ * handler read the same computed, so the control cannot offer what the handler would refuse.
+ */
+const isResubmittable = computed(() =>
+	isCorrection.value && Object.keys(validationErrors.value).length === 0)
+
 const submitButtonText = computed(() => isEditing.value
 	? t('pettycash', 'common.update')
 	: t('pettycash', 'common.create'))
@@ -208,6 +229,29 @@ async function handleSubmit(): Promise<void> {
 	transactionStore.clearError()
 	try {
 		await persist()
+	} catch {
+		// Error surfaced through transactionStore.error
+	}
+}
+
+/**
+ * FR-047: resubmit the corrected transaction, restarting review at the cost-center manager.
+ *
+ * The version comes from the transaction as the store last saw it, not from when the draft was
+ * created — creating a draft bumps the lock version, so a remembered value would be refused as a
+ * conflict. The store sends the command id the resubmission is keyed on; a retry returns the first
+ * outcome rather than activating the revision twice.
+ */
+async function handleResubmit(): Promise<void> {
+	errors.value = collectValidationErrors()
+	if (Object.keys(errors.value).length > 0) return
+	transactionStore.clearError()
+	try {
+		await transactionStore.resubmitCorrectionDraft(
+			transactionId.value,
+			transactionStore.currentTransaction?.version ?? 0,
+		)
+		await router.push({ name: 'transactions', params: { sheetId: sheetId.value } })
 	} catch {
 		// Error surfaced through transactionStore.error
 	}
@@ -376,6 +420,23 @@ onMounted(() => {
 						type="submit"
 						data-test="submit-btn">
 						{{ submitButtonText }}
+					</NcButton>
+					<!--
+						FR-047/US4: resubmit a corrected transaction. Rendered only while the form edits a
+						returned transaction — a plain draft has nothing to resubmit, and a submitted one
+						must not be edited at all (FR-026). Disabled until the draft satisfies the full
+						required dataset, so the control never offers a resubmission the server would
+						refuse; the handler re-checks the same computed rather than trusting the button.
+					-->
+					<NcButton
+						v-if="isCorrection"
+						variant="primary"
+						:disabled="transactionStore.loading || !isResubmittable"
+						:loading="transactionStore.loading"
+						type="button"
+						data-test="resubmit-correction-btn"
+						@click="handleResubmit">
+						{{ t('pettycash', 'transactions.resubmit') }}
 					</NcButton>
 				</div>
 			</form>

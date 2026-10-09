@@ -12,6 +12,7 @@ use OCA\PettyCash\Application\Port\AuditWriter;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Application\Port\PrivateFileStore;
 use OCA\PettyCash\Application\Port\TransactionManager;
+use OCA\PettyCash\Application\StaleRecordVersion;
 use OCA\PettyCash\Domain\Configuration\Repository\CostCenterRepository;
 use OCA\PettyCash\Domain\Configuration\Repository\ExpenseTypeRepository;
 use OCA\PettyCash\Domain\Evidence\Repository\EvidenceRepository;
@@ -246,8 +247,16 @@ final readonly class TransactionService
             throw new InvalidArgumentException('Cannot update transactions in a submitted sheet');
         }
 
+        // FR-025 and `contracts/ocs-api.yaml:475` both require a `409`, not the `422` an
+        // `InvalidArgumentException` becomes. See `StaleRecordVersion` for why this is a
+        // conflict rather than a validation failure.
         if ($transaction->lockVersion !== $expectedVersion) {
-            throw new InvalidArgumentException('Stale version');
+            throw StaleRecordVersion::forResource(
+                'transaction',
+                $transactionId,
+                $expectedVersion,
+                $transaction->lockVersion
+            );
         }
 
         $date = new DateTimeImmutable($expenseDate);
@@ -447,8 +456,15 @@ final readonly class TransactionService
             throw new InvalidArgumentException('Cannot delete transactions from a submitted sheet');
         }
 
+        // The contract declares `409` on this DELETE (`contracts/ocs-api.yaml:475` and the
+        // `Conflict` response it references), so a stale write must not answer 422 here either.
         if ($transaction->lockVersion !== $expectedVersion) {
-            throw new InvalidArgumentException('Stale version');
+            throw StaleRecordVersion::forResource(
+                'transaction',
+                $transactionId,
+                $expectedVersion,
+                $transaction->lockVersion
+            );
         }
 
         // An open sheet is not sufficient on its own: a transaction that has already

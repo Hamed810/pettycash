@@ -12,6 +12,7 @@ use OCA\PettyCash\Application\Configuration\ExpenseTypeService;
 use OCA\PettyCash\Application\Configuration\FinanceAssignmentService;
 use OCA\PettyCash\Application\Port\AdministratorCheck;
 use OCA\PettyCash\Application\Port\CurrentUser;
+use OCA\PettyCash\Infrastructure\Http\CommandId;
 use OCA\PettyCash\Infrastructure\Http\OcsErrorMapper;
 use OCP\AppFramework\Http;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
@@ -587,7 +588,24 @@ class ConfigurationController extends OCSController
 
     private function commandId(?string $commandId): string
     {
-        return $commandId ?? (string)$this->request->getHeader('X-PettyCash-Command-ID');
+        $raw = $commandId ?? (string)$this->request->getHeader('X-PettyCash-Command-ID');
+
+        // T415: bounded so an over-long value cannot reach storage as an oversized key.
+        //
+        // One place, unlike the other controllers which each guard their own site — this controller
+        // already funnels every command id through this helper.
+        //
+        // **Truncated rather than refused**, and the reason is measured: no configuration write reaches
+        // `IdempotencyService` (`grep -rn "IdempotencyService" lib/Application/Configuration/` is empty),
+        // so nothing here ever inserts into `pettycash_command_results` and an over-long id cannot become
+        // the 500 T415 is about. The value is forwarded into audit rows, where a longer key is merely
+        // recorded. Refusing a configuration write over the width of an audit key would trade a
+        // non-existent bug for a real one: a caller unable to create a currency.
+        if (strlen(trim($raw)) > CommandId::MAX_LENGTH) {
+            return substr(trim($raw), 0, CommandId::MAX_LENGTH);
+        }
+
+        return $raw;
     }
 
     /**

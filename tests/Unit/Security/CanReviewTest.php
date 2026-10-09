@@ -256,4 +256,20 @@ final class CanReviewTest extends TestCase
             )
         );
     }
+
+    public function testAnAdministratorWithoutTheFinanceRoleMayNotDecideAtTheFinanceStage(): void
+    {
+        // T078's one unproven sub-claim: administration grants configuration rights, never finance
+        // decision authority. Distinct from the manager case above because an administrator is the
+        // actor most likely to be assumed omnipotent — and the finance queue lists every transaction
+        // regardless of scope, so the refusal must come from the role check alone, not from a scope
+        // the administrator trivially satisfies.
+        self::assertFalse(
+            $this->service->canReview(
+                $this->context('admin-1', 'purchaser-1', [Role::Administrator], []),
+                WorkflowStage::Finance,
+                'cc1'
+            )
+        );
+    }
 }

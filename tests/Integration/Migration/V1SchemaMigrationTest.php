@@ -177,6 +177,35 @@ final class V1SchemaMigrationTest extends TestCase
         }
     }
 
+    public function testNoCheckConstraintIsDeclaredSoADR006HoldsOnEveryBackend(): void
+    {
+        // T239. The schema fixture can no longer answer "does this schema declare a check constraint?"
+        // on any backend: it reads the live schema through `IDBConnection::createSchema()`, and
+        // Doctrine's portable `Table` has no check-constraint API (measured — reflection over
+        // `Doctrine\DBAL\Schema\Table` yields no method or property whose name contains "check").
+        //
+        // A check constraint cannot reach a schema without a migration declaring one, so the declaration
+        // is the portable place to assert it. This runs identically on MySQL, MariaDB, PostgreSQL and
+        // SQLite because it reads source rather than a live catalog, which is what keeps ADR-006's
+        // clause falsifiable everywhere instead of only where a catalog happens to be readable.
+        foreach (self::migrationSources() as $file => $source) {
+            self::assertDoesNotMatchRegularExpression(
+                '/addCheckConstraint\s*\(/',
+                $source,
+                $file . ' declares a check constraint; ADR-006 records that V1 declares none. Name it '
+                    . '`pettycash_<table>_<subject>_chk` per data-model.md and amend ADR-006, or remove it'
+            );
+
+            // Doctrine accepts a check as a table *option* rather than a method, so the method-shaped
+            // assertion alone would miss that spelling.
+            self::assertDoesNotMatchRegularExpression(
+                "/addOption\s*\(\s*['\"]checks?\b/",
+                $source,
+                $file . ' declares check constraints as table options; ADR-006 records that V1 declares none'
+            );
+        }
+    }
+
     public function testEveryIdentifierFitsThePortableBackendLimits(): void
     {
         $identifiers = [];

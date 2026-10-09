@@ -283,6 +283,40 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Account' }
 
+  /accounts/{accountId}:
+    # T409 / FR-013. Administrator deactivation and reactivation of an account. This operation did not
+    # exist — the complete account surface was index/create/charge/movements — so no artifact could
+    # deactivate an account except through owner deletion, and FR-020's inactive-account refusal had no
+    # reachable trigger.
+    patch:
+      tags: [Accounts]
+      summary: Deactivate or reactivate a petty-cash account
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/AccountActiveUpdate'
+                - $ref: '#/components/schemas/ExpectedVersion'
+      responses:
+        '200':
+          description: Updated account
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Account' }
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
   /accounts/{accountId}/charges:
     post:
       tags: [Accounts]
@@ -397,6 +431,35 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/SheetDetail' }
+        # T416. This operation already required `ExpectedVersion` and already refused a stale one --
+        # it answered `422`, because the guard raised `InvalidArgumentException`, which is what
+        # `OcsErrorMapper` maps that class to. The request is well formed; the caller's view is out of
+        # date. FR-025 requires a `409` on a sheet's own pre-submission fields, matching the `409`
+        # `PATCH /transactions/{id}` already declared. The declaration was missing, not the behaviour.
+        '409':
+          $ref: '#/components/responses/Conflict'
+    # T417 / FR-086. Owner deletion of a sheet that has **never been submitted**, with its draft
+    # transactions, their revisions, and their stored evidence files, removed atomically.
+    #
+    # `X-PettyCash-Command-ID` is **required**, unlike the header-free `DELETE /transactions/{id}` next
+    # door. That operation is repeatable because a retry has nothing left to remove; a sheet delete
+    # without a gate would answer "not found" on the retry, so a client that lost the first response
+    # could not tell its own success from a failure. FR-086 makes FR-084 apply here for that reason.
+    delete:
+      tags: [Sheets]
+      summary: Delete an own sheet that has never been submitted
+      parameters:
+        - $ref: '#/components/parameters/SheetId'
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExpectedVersion' }
+      responses:
+        '204': { description: Sheet and its draft subtree removed }
+        '409':
+          $ref: '#/components/responses/Conflict'
 
   /sheets/{sheetId}/submit:
     post:
@@ -507,6 +570,15 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/DecisionResult' }
+        # T427. Two `400` reasons share this declaration. T426's bulk refusal answers `badRequest` when the
+        # body carries `transactionIds`, `transactions`, `ids`, or a `transactionId` that disagrees with the
+        # path — a request V1 cannot satisfy under FR-033's single-transaction rule, so the refusal names the
+        # field rather than narrowing the decision to the path's transaction. The missing-commandId refusal
+        # answers `400` for the same reason and was likewise undeclared; one declaration covers both, since
+        # both are the same class of fault (a request the caller must change, not a field value that failed
+        # validation — hence `400` rather than the `422` below).
+        '400':
+          $ref: '#/components/responses/ValidationError'
         '403':
           $ref: '#/components/responses/Forbidden'
         '409':
@@ -527,6 +599,13 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Revision' }
+        # T416. The `409` was already reachable here and already answered as one: the
+        # `NotAwaitingCorrection` refusal on this operation is a `Conflict`, so the operation
+        # declared a `409` by behaviour and by the very next refusal a caller can hit. The stale
+        # `expectedVersion` refusal is the same answer for the same reason, so it is stated rather
+        # than left to be inferred from the exception type.
+        '409':
+          $ref: '#/components/responses/Conflict'
 
   /transactions/{transactionId}/resubmit:
     post:
@@ -546,6 +625,12 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/TransactionDetail' }
+        # T416. This operation declares a **required** `ExpectedVersion` body, so a stale version is
+        # reachable by construction and the contract had no stated answer for it. FR-025: a stale
+        # pre-submission edit is a `409` whose recovery is "reload", not a `422` telling the caller to
+        # fix a request that was already correct.
+        '409':
+          $ref: '#/components/responses/Conflict'
 
   /transactions/{transactionId}/revisions:
     get:
@@ -1078,7 +1163,49 @@ components:
       type: object
       required: [code, message]
       properties:
-        code: { type: string }
+        # T425 / FR-083 / SC-016. This was `{ type: string }` — **open**, with no list — while the whole
+        # design rests on a client branching on the code: FR-085 was decided partly so
+        # `SUPERSEDED_ATTEMPT` stays distinguishable from `ACCOUNT_VERSION_CONFLICT`, and T416 added
+        # `SHEET_VERSION_CONFLICT` on exactly that reasoning. An open string promises nothing, so a code may be
+        # renamed, dropped, or misspelled and this contract stays valid — making a branch on a code never more
+        # than a guess, and leaving the HTTP status as the only dependable thing to react to.
+        #
+        # The enumeration is **closed and complete** by SC-016's two-way rule: every code the application can
+        # emit is listed, and no listed code is one it cannot emit. A new code is a **contract change**,
+        # shipped deliberately and never ahead of this list.
+        #
+        # The four `CONFIGURATION_*` and bare `*_VERSION_CONFLICT` families are **generated** from a resource
+        # noun by `ConfigurationConflict` and `StaleRecordVersion`, so a code that moves between resources changes
+        # this list. `ConfigurationMutationAuditTest` and `StaleVersionConflictTest` prove the members reachable;
+        # `tests/Contract/Controller/ErrorCodeVocabularyTest.php` proves this list and the application agree in
+        # both directions.
+        code:
+          type: string
+          enum:
+            - BAD_REQUEST
+            - DATA_FAULT
+            - FORBIDDEN
+            - IDEMPOTENCY_CONFLICT
+            - NOT_FOUND
+            - PAYLOAD_TOO_LARGE
+            - STATE_CONFLICT
+            - UNEXPECTED_FAILURE
+            - VALIDATION_FAILED
+            - ACCOUNT_ALREADY_EXISTS
+            - ACCOUNT_NOT_SETTLEABLE
+            - ACCOUNT_VERSION_CONFLICT
+            - CONFIGURATION_COST_CENTER_ALREADY_EXISTS
+            - CONFIGURATION_COST_CENTER_VERSION_CONFLICT
+            - CONFIGURATION_CURRENCY_ALREADY_EXISTS
+            - CONFIGURATION_CURRENCY_VERSION_CONFLICT
+            - CONFIGURATION_EXPENSE_TYPE_ALREADY_EXISTS
+            - CONFIGURATION_EXPENSE_TYPE_VERSION_CONFLICT
+            - EVIDENCE_LINK_REFUSED
+            - NOT_TRANSACTION_OWNER
+            - SHEET_VERSION_CONFLICT
+            - SUPERSEDED_ATTEMPT
+            - TRANSACTION_NOT_AWAITING_CORRECTION
+            - TRANSACTION_VERSION_CONFLICT
         message: { type: string }
         fieldErrors:
           type: object
@@ -1229,6 +1356,12 @@ components:
         description: { type: string, minLength: 1, maxLength: 1000 }
         occurredAt: { type: string, format: date-time }
         expectedVersion: { type: integer, minimum: 0 }
+    AccountActiveUpdate:
+      type: object
+      required: [active]
+      properties:
+        active: { type: boolean }
+        explanation: { type: string, maxLength: 1000, nullable: true }
     Movement:
       type: object
       required: [id, type, amount, balanceAfter, occurredAt]

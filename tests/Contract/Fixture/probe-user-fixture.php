@@ -137,6 +137,21 @@ if ($action === 'create') {
         exit(1);
     }
 
+    // T407: an **administrator** probe, as a fourth argument.
+    //
+    // `AdministratorCheck` reads Nextcloud's `admin` group (`IGroupManager::isAdmin()`), **not** a
+    // petty-cash role assignment, so FR-031's "administrators may create a public link" gate is
+    // unreachable for the suite's single `employee1` credential — which holds COST_CENTER_MANAGER,
+    // FINANCE and SENIOR_MANAGER but not the administrator right.
+    //
+    // **Why a dedicated principal rather than promoting `employee1`.** Promoting the shared credential
+    // would grant blanket privilege for the life of the process, and a run that died before its
+    // teardown would leave it promoted — which silently changes what other suites' role-scope
+    // assertions observe (FR-055 lets an administrator see *all* configuration audit, so a leaked
+    // promotion turns an officer-scope assertion into a false negative). A principal this suite owns and
+    // purges cannot do that.
+    $administrator = ($argv[4] ?? '') === 'admin';
+
     $existing = $userManager->get($userUid);
 
     if ($existing !== null && $pettyCashAccountCount($userUid) > 0) {
@@ -174,11 +189,37 @@ if ($action === 'create') {
         exit(1);
     }
 
+    $isAdministrator = false;
+    if ($administrator) {
+        // Re-added on every run, not only on creation, so a suite whose teardown was interrupted
+        // converges instead of needing manual repair — the same reason the password is re-set above.
+        /** @var \OCP\IGroupManager $groupManager */
+        $groupManager = \OCP\Server::get(\OCP\IGroupManager::class);
+        $adminGroup = $groupManager->get('admin');
+        $probe = $userManager->get($userUid);
+
+        if ($adminGroup === null || $probe === null) {
+            fwrite(STDERR, "Nextcloud refused to resolve the admin group or the probe user.\n");
+            exit(1);
+        }
+
+        $adminGroup->addUser($probe);
+        $isAdministrator = $groupManager->isAdmin($userUid);
+
+        if (!$isAdministrator) {
+            // Reported rather than assumed: a test that then exercised an administrator-only endpoint
+            // would get a `403` and blame the endpoint, having never reached it as an administrator.
+            fwrite(STDERR, sprintf("%s is not an administrator after being added to the admin group.\n", $userUid));
+            exit(1);
+        }
+    }
+
     echo json_encode([
         'userId' => $userUid,
         'password' => $password,
         'outcome' => $outcome,
         'pettyCashAccounts' => $accounts,
+        'administrator' => $isAdministrator,
     ], JSON_UNESCAPED_SLASHES), "\n";
 
     exit(0);

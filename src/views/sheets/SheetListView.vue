@@ -3,6 +3,7 @@ import { computed, h, onMounted, ref, type VNode } from 'vue'
 import { useRouter } from 'vue-router'
 import { useSheetStore } from '@/stores/sheets'
 import NcButton from '@nextcloud/vue/components/NcButton'
+import DeleteSheetDialog from '@/components/shared/DeleteSheetDialog.vue'
 import NcIconSvgWrapper from '@nextcloud/vue/components/NcIconSvgWrapper'
 import NcNoteCard from '@nextcloud/vue/components/NcNoteCard'
 import NcSelect from '@nextcloud/vue/components/NcSelect'
@@ -144,10 +145,14 @@ const LIST_COLUMNS = computed(() => [
 	{ key: 'transactionCount', label: t('pettycash', 'sheets.transactionCount') },
 	{ key: 'activeRevision', label: t('pettycash', 'sheets.activeRevision') },
 	{ key: 'totals', label: t('pettycash', 'sheets.totals') },
-	// FR-062's three stage-approved columns are **T365's** and deliberately absent. This group is the
-	// latest-effective column only, which is what FR-063 calls "summary amounts" and what FR-062
-	// distinguishes it from.
+	// FR-062's latest-effective column, distinct from the per-stage one below: the headline follows
+	// each transaction's latest effective outcome, while the stage columns preserve the differing
+	// manager, senior-manager and finance decisions beside it.
 	{ key: 'latestEffective', label: t('pettycash', 'sheets.latestEffectiveOutcome') },
+	// FR-062 (T365): the three stage-approved figures as their own column, beside the
+	// latest-effective one rather than merged into it — a senior approval that finance later
+	// rejects must stay visible as a senior approval, which a single headline cannot show.
+	{ key: 'stageApproved', label: t('pettycash', 'sheets.stageApproved') },
 	{ key: 'keyDates', label: t('pettycash', 'sheets.keyDates') },
 	{ key: 'actions', label: t('pettycash', 'sheets.actions') },
 ])
@@ -224,6 +229,28 @@ function openSheetCell(item: SheetSummary, column: { key: string }): VNode {
 					},
 					() => t('pettycash', 'common.edit')
 				),
+				// FR-086's delete control, on the **open-sheets** region.
+				//
+				// A second renderer, not a duplicate of the one in `listCell`: the view splits open sheets into
+				// their own region with their own cell function, so a control added only to the main table would be
+				// **absent from the one surface where every sheet is deletable** — found by running the interface
+				// test, not by reading the template.
+				//
+				// The `status === 'OPEN'` condition is redundant here, because this region only ever holds open
+				// sheets, and is kept deliberately: the control's visibility must follow the rule the server
+				// enforces, not the accident of which region a sheet happens to appear in.
+				item.status === 'OPEN'
+					? h(
+							NcButton,
+							{
+								variant: 'error',
+								'aria-label': t('pettycash', 'sheets.deleteNamed', { name: item.title }),
+								onClick: () => askDelete(item),
+								'data-test': 'delete-sheet',
+							},
+							() => t('pettycash', 'common.delete')
+						)
+					: null,
 			])
 		default:
 			return h('span', { 'data-test': `open-sheet-unrendered-${column.key}` }, column.key)
@@ -264,6 +291,19 @@ function listCell(item: SheetSummary, column: { key: string }): VNode {
 				h('small', { class: 'text-caption' }, t('pettycash', 'sheets.effectiveRejected')),
 				h('span', { 'data-test': 'sheet-list-effective-pending' }, formatMoney(item.totals.effectivePending)),
 				h('small', { class: 'text-caption' }, t('pettycash', 'sheets.effectivePending')),
+			])
+		case 'stageApproved':
+			// FR-062 (T365): the per-stage columns the detail view renders as chips, here as one
+			// list cell so the table and the narrow card show the same three figures — the narrow
+			// layout renders every column `listCell` produces, so a table-only addition would be a
+			// second, silently divergent presentation.
+			return h('div', { class: 'totals-cell', 'data-test': 'sheet-list-stage-approved' }, [
+				h('span', { 'data-test': 'sheet-list-cost-center-approved' }, formatMoney(item.totals.costCenterApproved)),
+				h('small', { class: 'text-caption' }, t('pettycash', 'sheets.costCenterApproved')),
+				h('span', { 'data-test': 'sheet-list-senior-approved' }, formatMoney(item.totals.seniorApproved)),
+				h('small', { class: 'text-caption' }, t('pettycash', 'sheets.seniorApproved')),
+				h('span', { 'data-test': 'sheet-list-finance-approved' }, formatMoney(item.totals.financeApproved)),
+				h('small', { class: 'text-caption' }, t('pettycash', 'sheets.financeApproved')),
 			])
 		case 'keyDates':
 			return h('div', { class: 'dates-cell', 'data-test': 'sheet-list-key-dates' }, [
@@ -308,6 +348,25 @@ function listCell(item: SheetSummary, column: { key: string }): VNode {
 						() => t('pettycash', 'common.edit')
 					)
 					: null,
+				// FR-086's delete control, shown **only** while the sheet is still `OPEN`.
+				//
+				// The condition is on the row's own status rather than on a separate capability, because the
+				// server refuses a submitted, completed, or completed-with-rejections sheet (FR-026, FR-044).
+				// A control that is always refused teaches the purchaser the application does not know its own
+				// state — and the refusal stays enforced server-side regardless, since FR-009 forbids relying
+				// on the interface to enforce a rule. Hiding it is what keeps the interface honest about it.
+				item.status === 'OPEN'
+					? h(
+							NcButton,
+							{
+								variant: 'error',
+								'aria-label': t('pettycash', 'sheets.deleteNamed', { name: item.title }),
+								onClick: () => askDelete(item),
+								'data-test': 'delete-sheet',
+							},
+							() => t('pettycash', 'common.delete')
+						)
+					: null,
 			])
 		// `0` for a sheet holding no transactions is a real answer, not a missing value, so it is printed
 		// rather than replaced with the absent-marker the dates use.
@@ -333,9 +392,34 @@ onMounted(() => {
 	sheetStore.loadSheets().catch(() => undefined)
 })
 
+/**
+ * The sheet the confirmation dialog is open for, and nothing else.
+ *
+ * Held as the whole row rather than as an id so the dialog can **name the sheet** in its body — FR-086 requires
+ * the confirmation to say which sheet is about to go, and a purchaser with three open sheets cannot otherwise tell.
+ * `null` means no dialog is open, so Cancel needs no separate flag.
+ */
+const sheetPendingDeletion = ref<SheetSummary | null>(null)
+
 function goToCreate() { router.push({ name: 'sheet-create' }) }
 function goToDetail(sheetId: string) { router.push({ name: 'sheet-detail', params: { id: sheetId } }) }
 function goToEdit(sheetId: string) { router.push({ name: 'sheet-edit', params: { id: sheetId } }) }
+
+/**
+ * FR-086: stage a sheet for deletion rather than deleting it on click.
+ *
+ * Opening the dialog is the whole point of this function — the cascade destroys stored evidence files that cannot
+ * be recovered, so the delete must never be one unconfirmed click away from a row button. Nothing is mutated here;
+ * the sheet being staged is the only state, so choosing Cancel cannot leave anything behind.
+ */
+function askDelete(sheet: SheetSummary) { sheetPendingDeletion.value = sheet }
+
+async function confirmDelete() {
+	const sheet = sheetPendingDeletion.value
+	if (!sheet) return
+	sheetPendingDeletion.value = null
+	await sheetStore.deleteOwnSheet(sheet.id, sheet.version)
+}
 
 </script>
 
@@ -521,6 +605,20 @@ function goToEdit(sheetId: string) { router.push({ name: 'sheet-edit', params: {
 			<span>{{ sheetStore.error }}</span>
 			<button type="button" @click="sheetStore.clearError" aria-label="Dismiss">×</button>
 		</div>
+
+		<!--
+			FR-086's confirmation, on the list surface. Mounted here rather than inside the actions cell so the
+			dialog is a single instance for the whole table: one per row would mean one per `NcButton` in a
+			`cell()` render function, and a dialog whose opener it cannot identify is exactly the case the focus
+			restoration in `DeleteSheetDialog` handles explicitly.
+		-->
+		<DeleteSheetDialog
+			:sheet-id="sheetPendingDeletion?.id ?? ''"
+			:sheet-title="sheetPendingDeletion?.title ?? ''"
+			:open="sheetPendingDeletion !== null"
+			:busy="sheetStore.loading"
+			@cancel="sheetPendingDeletion = null"
+			@confirm="confirmDelete" />
 	</div>
 </template>
 

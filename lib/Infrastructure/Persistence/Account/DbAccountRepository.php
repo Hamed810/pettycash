@@ -136,6 +136,23 @@ final class DbAccountRepository implements AccountRepository
         return (int) $qb->executeQuery()->fetchOne();
     }
 
+    /**
+     * T422 / FR-023: does this currency hold any account?
+     *
+     * Counted on `pettycash_accounts.currency_id` rather than by resolving currency codes, so the query
+     * stays on the account table alone and needs no join. See the interface for why an account count is a
+     * sufficient proxy for "an amount exists" and why over-refusing is the safe direction.
+     */
+    public function countByCurrencyId(int $currencyId): int
+    {
+        $qb = $this->connection->getQueryBuilder();
+        $qb->select($qb->func()->count('id', 'pettycash_account_count'))
+            ->from('pettycash_accounts', 'a')
+            ->where($qb->expr()->eq('a.currency_id', $qb->createNamedParameter($currencyId)));
+
+        return (int) $qb->executeQuery()->fetchOne();
+    }
+
     public function save(PettyCashAccount $account): void
     {
         $qb = $this->connection->getQueryBuilder();

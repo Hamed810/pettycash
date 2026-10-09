@@ -19,6 +19,7 @@ use OCA\PettyCash\Application\Port\TransactionManager;
 use OCA\PettyCash\Application\Command\IdempotencyService;
 use OCA\PettyCash\Application\Security\AuthorizationService;
 use OCA\PettyCash\Application\Security\AuthorizationContext;
+use OCA\PettyCash\Application\StaleRecordVersion;
 use OCA\PettyCash\Domain\Workflow\Decision;
 use OCA\PettyCash\Domain\Workflow\WorkflowStage;
 use OCA\PettyCash\Domain\Workflow\TransactionStatus;
@@ -68,8 +69,17 @@ class ResubmitCorrection
                     throw new InvalidArgumentException('Transaction not found');
                 }
 
+                // A `Conflict`, matching the draft-edit path. FR-025 covers the owner's own pre-submission
+                // edits, and a resubmission is one; answering 422 here while `PATCH
+                // /transactions/{id}` answered 409 would make the same purchaser action differ by
+                // which screen it was taken from.
                 if ($transaction->lockVersion !== $expectedVersion) {
-                    throw new InvalidArgumentException('Stale version');
+                    throw StaleRecordVersion::forResource(
+                        'transaction',
+                        $transactionPublicId,
+                        $expectedVersion,
+                        $transaction->lockVersion
+                    );
                 }
 
                 // Verify transaction is in correction state

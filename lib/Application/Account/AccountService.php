@@ -206,6 +206,133 @@ final class AccountService
             throw $e;
         }
 
+        $this->recordCreationAudit($account, $actorUid, $userUid, $currency->code());
+
+        return $this->payload->account($account);
+    }
+
+    /**
+     * FR-017: record that an account came into existence here.
+     *
+     * **This method has two origins, and the role is what distinguishes them.** `createFor()` admits
+     * both an administrator opening an account for another user and the account holder opening one for
+     * themselves — the gate above only demands the administrator role when `$userUid !== $actorUid`.
+     * FR-013 describes the administrator path; the self-service path is a consequence of that gate
+     * rather than a separately stated requirement, and it is recorded here rather than left implicit,
+     * because "who authorised this account" and "who opened this account" have different answers.
+     *
+     * **The same `ACCOUNT_CREATED` event type serves both, and the provisioning path in
+     * `AccountAdministrationService` writes it too.** One type means a reader filtering the
+     * configuration audit for account creations sees all three origins in one place; two types would
+     * require the reader to know that `createFor()` has a self-service branch to find them all.
+     *
+     * **`origin` in `after` is what makes provisioning legible** rather than merely inferable: an
+     * `actor_role` of `PURCHASER` on a created account is either a self-service open or an FR-020
+     * provisioning, and those are different facts for anyone asking why an account exists.
+     *
+     * `entity_id` is the account's **public id**, matching the funding event below — `ChargedAccountScope`
+     * resolves it through `findByPublicId()`, so a surrogate key here would yield an empty scope rather
+     * than an error.
+     */
+    private function recordCreationAudit(
+        \OCA\PettyCash\Domain\Account\PettyCashAccount $account,
+        string $actorUid,
+        string $userUid,
+        string $currencyCode
+    ): void {
+        $selfService = $userUid === $actorUid;
+
+        $this->auditWriter->appendConfiguration([
+            'id' => (string)Uuid::random(),
+            'entity_type' => 'account',
+            'entity_id' => $account->id,
+            'event_type' => ConfigurationEventType::AccountCreated->value,
+            // FR-017 requires an explanation. This path has no caller-supplied text, so the record
+            // states the mechanism instead of an empty field or an invented quotation.
+            'explanation' => $selfService
+                ? 'Opened for themselves by the account holder'
+                : 'Opened by an administrator for another user',
+            'actor_role' => ($selfService ? Role::Purchaser : Role::Administrator)->value,
+            'before' => [],
+            'after' => [
+                'currency' => $currencyCode,
+                'balance_minor' => 0,
+                'active' => true,
+                'origin' => $selfService ? 'self-service' : 'administrator',
+            ],
+        ]);
+    }
+
+    /**
+     * FR-013: an administrator deactivates or reactivates a petty-cash account.
+     *
+     * **Administrator-only, and the gate is on the role rather than on ownership.** Unlike `createFor()`,
+     * which admits the holder opening one for themselves, there is no self-service branch here: a
+     * purchaser retiring their own account would strand themselves with no way to create a sheet again
+     * except through the administrator they just bypassed — which is exactly the state FR-020's carve-out
+     * refuses to create by accident. Deactivation is a deliberate, audited act, and deliberation is what
+     * the administrator role marks.
+     *
+     * An unknown account is refused the same way `charge()` refuses one, so this endpoint cannot be used
+     * to discover which account ids are real. A request for the state the account already holds succeeds
+     * with the current state and writes **no** audit row — nothing changed, so there is nothing to record,
+     * following the same rule the provisioning path applies to a concurrent loser.
+     *
+     * Optimistic locking is honoured like `charge()` honours it: `expectedVersion` must match, or the
+     * change is a 409. Two administrators acting on the same account at the same moment is the ordinary
+     * case for a shared administration surface, and a lost update here silently un-does the other's
+     * decision about whether an account may spend.
+     *
+     * @return array<string, mixed> the contract's `Account`
+     */
+    public function setActive(
+        string $actorUid,
+        string $accountPublicId,
+        bool $active,
+        int $expectedVersion,
+        ?string $explanation = null
+    ): array {
+        if (!$this->hasRole($actorUid, Role::Administrator)) {
+            throw new LogicException('Only administrators may change an account\'s active state');
+        }
+
+        $account = $this->accounts->findByPublicId($accountPublicId);
+        if ($account === null) {
+            throw new UnknownAccount('No such petty-cash account');
+        }
+
+        if ($account->lockVersion !== $expectedVersion) {
+            throw new StaleAccountVersion('The account has changed; reload it and retry the change');
+        }
+
+        if (!$account->setActiveByAdministrator($active)) {
+            // Already in the requested state: the version was still checked above, so a stale caller
+            // is told to reload rather than handed a success that hides that their view was old.
+            return $this->payload->account($account);
+        }
+
+        $this->accounts->save($account);
+
+        $this->auditWriter->appendConfiguration([
+            'id' => (string)Uuid::random(),
+            'entity_type' => 'account',
+            // The public id, matching the funding and creation events: `ChargedAccountScope` resolves
+            // it through `findByPublicId()`, so a surrogate key would silently produce an empty scope.
+            'entity_id' => $account->id,
+            'event_type' => ($active
+                ? ConfigurationEventType::AccountReactivated
+                : ConfigurationEventType::AccountDeactivated)->value,
+            // FR-017 requires an explanation. A caller-supplied reason states why this account was
+            // retired or restored, which is the fact a later reader most needs; the mechanism sentence
+            // is the fallback, not an invented quotation.
+            'explanation' => trim((string)$explanation) !== ''
+                ? trim((string)$explanation)
+                : ($active ? 'Reactivated by an administrator' : 'Deactivated by an administrator'),
+            'actor_role' => Role::Administrator->value,
+            'before' => ['active' => !$active],
+            'after' => ['active' => $active],
+        ]);
+
         return $this->payload->account($account);
     }
 

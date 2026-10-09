@@ -12,9 +12,11 @@ use OCA\PettyCash\Application\Reporting\ExportService;
 use OCA\PettyCash\Application\Reporting\ReportFilter;
 use OCA\PettyCash\Application\Reporting\ReportFilterFactory;
 use OCA\PettyCash\Application\Reporting\AuditSelectionQuery;
+use OCA\PettyCash\Application\Reporting\CompleteSheetExport;
 use OCA\PettyCash\Application\Reporting\EvidenceSelectionQuery;
 use OCA\PettyCash\Application\Reporting\ReportQuery;
 use OCA\PettyCash\Application\Reporting\ReportScope;
+use OCA\PettyCash\Infrastructure\Http\CommandId;
 use OCA\PettyCash\Infrastructure\Http\OcsErrorMapper;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
 use OCP\AppFramework\Http;
@@ -60,7 +62,16 @@ class ExportController extends OCSController
      * failed. They are also the vocabulary a filter is evaluated against, which is why they are stated
      * once, here, rather than inferred per request.
      */
-    private const SHEET_COLUMNS = ['id', 'title', 'ownerUid', 'status', 'currency', 'submittedTotalMinor', 'createdAt'];
+    /**
+     * FR-062 (T365): the flat sheet rows carry the three stage-approved figures beside the
+     * submitted total, so the reachable export is measured against the same layout as the
+     * complete-sheet one. Named exactly as `COMPLETE_SHEET_COLUMNS` names them, so the two
+     * artifacts cannot drift into spelling the same figure two ways.
+     */
+    private const SHEET_COLUMNS = ['id', 'title', 'ownerUid', 'status', 'currency', 'submittedTotalMinor', 'costCenterApprovedMinor', 'seniorApprovedMinor', 'financeApprovedMinor', 'createdAt'];
+
+    /** The `SHEET_COLUMNS` entries that must be numeric cells in XLSX, not text. */
+    private const SHEET_NUMERIC_COLUMNS = ['submittedTotalMinor', 'costCenterApprovedMinor', 'seniorApprovedMinor', 'financeApprovedMinor'];
 
     private const TRANSACTION_COLUMNS = [
         'id', 'ownerUid', 'stage', 'status', 'sheetId', 'createdAt',
@@ -87,9 +98,11 @@ class ExportController extends OCSController
         private ReportFilterFactory $filters,
         private EvidenceSelectionQuery $evidenceSelection,
         private AuditSelectionQuery $auditSelection,
+        private CompleteSheetExport $completeSheet,
         private \OCA\PettyCash\Domain\Expense\Repository\ExpenseSheetRepository $sheets,
         private \OCA\PettyCash\Domain\Expense\Repository\ExpenseTransactionRepository $transactions,
-        private OcsErrorMapper $ocsErrorMapper
+        private OcsErrorMapper $ocsErrorMapper,
+        private \OCA\PettyCash\Infrastructure\Persistence\Expense\SheetSummaryQuery $summary
     ) {
         parent::__construct('pettycash', $request);
     }
@@ -137,6 +150,22 @@ class ExportController extends OCSController
                 return $this->ocsErrorMapper->validation('Required fields are missing', $commandId, $fieldErrors);
             }
 
+            // T415: present but unstoreable. `pettycash_command_results.command_id` is `string(36)` and
+            // the contract declares `format: uuid`, so an over-long value reaches MySQL and answers 500.
+            // Placed **after** the required-field pass and **before** anything is written, and refused on
+            // its own rather than merged into `$fieldErrors`: the value is present, so calling it
+            // "required" would be false, and this endpoint's own convention is `422` for its field
+            // complaints.
+            try {
+                $commandId = CommandId::fromString((string) $commandId)->__toString();
+            } catch (\InvalidArgumentException $malformed) {
+                return $this->ocsErrorMapper->validation(
+                    'Malformed command ID',
+                    null,
+                    ['commandId' => [$malformed->getMessage()]]
+                );
+            }
+
             $uid = $this->currentUser->uid();
             if ($uid === '') {
                 return $this->ocsErrorMapper->forbidden('No authenticated user in session');
@@ -163,7 +192,24 @@ class ExportController extends OCSController
             // Resolve the selection *before* generating. Authorize-and-generate in one call still
             // holds -- `ExportService::generate()` refuses before it writes anything, which is the
             // ordering `contracts/exports.md` requires -- but the rows are now the selected ones.
-            [$rows, $columns] = $this->rowsForSelection($resource, $ids, $filter, $scope, $fileFormat, $uid);
+            //
+            // T366 / FR-067: a single sheet exported as XLSX takes the complete-sheet path instead. The
+            // flat rows path below cannot carry it -- `generateXlsx()` builds one `Rows` sheet, while the
+            // contract's complete-sheet layout is six tables holding the sheet's decisions, revisions,
+            // audit and evidence. Anything else (several sheets, another format, another resource) keeps
+            // the existing path: a multi-sheet "complete" workbook is not specified, so it is not built.
+            if (
+                $resource === ExportService::RESOURCE_SHEET
+                && $fileFormat === ExportService::FORMAT_XLSX
+                && count($ids) === 1
+            ) {
+                $completeSheetResult = $this->exports->generateCompleteSheetXlsx(
+                    $this->completeSheet->rowsBySheet($scope, $ids[0])
+                );
+            } else {
+                $completeSheetResult = null;
+                [$rows, $columns] = $this->rowsForSelection($resource, $ids, $filter, $scope, $fileFormat, $uid);
+            }
 
             // T367: the ZIP entries the grouped evidence export needs.
             //
@@ -190,7 +236,24 @@ class ExportController extends OCSController
                 $entries = $this->evidenceSelection->archiveEntries($scope, $uid, $ids);
             }
 
-            $result = $this->exports->generate($scope, $resource, $fileFormat, $rows, $entries, $columns);
+            // The complete-sheet branch above already produced its artifact, so it must not reach the
+            // flat `generate()` below: that call would build a second artifact, leak the first one's
+            // transient file (nothing would delete an artifact no response streams), and answer with
+            // the flat rows the caller did not ask for.
+            $result = $completeSheetResult
+                ?? $this->exports->generate(
+                    $scope,
+                    $resource,
+                    $fileFormat,
+                    $rows,
+                    $entries,
+                    $columns,
+                    // T365: the flat sheet rows carry the stage-approved figures as numeric cells.
+                    // Scoped to sheet resources: other resources' columns keep their historical typing.
+                    ($resource === ExportService::RESOURCE_SHEET || $resource === ExportService::RESOURCE_SHEETS)
+                        ? self::SHEET_NUMERIC_COLUMNS
+                        : []
+                );
 
 
             try {
@@ -479,11 +542,31 @@ class ExportController extends OCSController
                 'status' => $sheet->status->value,
                 'currency' => (string) $sheet->currency,
                 'submittedTotalMinor' => $sheet->submittedTotalMinor,
+                // FR-062 (T365): the three stage-approved figures, computed by the same query the
+                // sheet detail renders — a senior approval that finance later rejects must stay
+                // visible as a senior approval in the export too, not collapse into one headline.
+                // One summary query per selected sheet: the selection is id-named and therefore
+                // bounded, so this is not the unbounded enumeration the row cap exists to prevent.
+                ...$this->stageApprovedTotals($sheet),
                 'createdAt' => $sheet->createdAt?->format(DATE_ATOM),
             ];
         }
 
         return $rows;
+    }
+
+    /**
+     * @return array{costCenterApprovedMinor: int, seniorApprovedMinor: int, financeApprovedMinor: int}
+     */
+    private function stageApprovedTotals(\OCA\PettyCash\Domain\Expense\ExpenseSheet $sheet): array
+    {
+        $totals = $this->summary->totalsForSheet($sheet->dbId);
+
+        return [
+            'costCenterApprovedMinor' => $totals->managerApproved,
+            'seniorApprovedMinor' => $totals->seniorApproved,
+            'financeApprovedMinor' => $totals->financeApproved,
+        ];
     }
 
     /**

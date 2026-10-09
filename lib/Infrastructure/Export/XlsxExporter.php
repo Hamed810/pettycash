@@ -166,7 +166,7 @@ final class XlsxExporter
     /**
      * The six sheets of a complete-sheet export, each with its contract columns and the supplied rows.
      *
-     * @param array<string, list<array<string, scalar|null>>> $rowsBySheet keyed by sheet name
+     * @param array<string, list<array<string, mixed>>> $rowsBySheet  // mixed: TYPE_DATE columns carry DateTimeInterface, not strings (T366) keyed by sheet name
      * @return list<XlsxSheet>
      */
     public function completeSheet(array $rowsBySheet): array
@@ -197,7 +197,7 @@ final class XlsxExporter
      * Returned rather than only thrown so a caller can report the whole gap at once instead of one
      * column per run — the same reason the route guard reports its full unresolved set.
      *
-     * @param array<string, list<array<string, scalar|null>>> $rowsBySheet
+     * @param array<string, list<array<string, mixed>>> $rowsBySheet  // mixed: TYPE_DATE columns carry DateTimeInterface, not strings (T366)
      * @return list<string>
      */
     public function missingColumns(array $rowsBySheet): array

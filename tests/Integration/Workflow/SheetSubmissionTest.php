@@ -380,11 +380,30 @@ $revision = TransactionRevision::draft(
         
         $commandId = 'test-command-' . \OCA\PettyCash\Domain\Shared\Uuid::random();
         
-        // This should fail with a concurrency/stale version error
-        $this->expectException(\InvalidArgumentException::class);
+        // A stale version is a `Conflict`, not a validation failure. T416: this used to assert
+        // `InvalidArgumentException`, which `OcsErrorMapper` maps to `422` — while
+        // `contracts/ocs-api.yaml` declares a `409` on `POST /sheets/{sheetId}/submit` and its
+        // `Conflict` response opens with the words "Stale version". The request here is well formed;
+        // the caller's *view* is out of date, so the recovery is "reload", not "fix your input".
+        $this->expectException(\OCA\PettyCash\Application\StaleRecordVersion::class);
         $this->expectExceptionMessage('Stale version');
         
-        $submitSheet->execute('sheet-fail', $commandId, 999); // Wrong version
+        try {
+            $submitSheet->execute('sheet-fail', $commandId, 999); // Wrong version
+        } catch (\OCA\PettyCash\Application\StaleRecordVersion $stale) {
+            // The code is what `OcsErrorMapper` turns into the response's error code, and it has to
+            // stay distinguishable from the *other* 409s this app raises (a superseded decision, an
+            // account already existing) — which is the whole reason `Conflict` is a marker interface
+            // rather than another catch arm in the mapper.
+            self::assertSame('SHEET_VERSION_CONFLICT', $stale->errorCode());
+            // The message must carry the caller's next action. FR-025 requires the client to be told
+            // to reload; a bare "Stale version" gave it nothing to do.
+            self::assertStringContainsString('reload and retry', $stale->getMessage());
+            self::assertStringContainsString('is at version 0, not the expected 999', $stale->getMessage());
+            self::assertInstanceOf(\OCA\PettyCash\Application\Conflict::class, $stale);
+
+            throw $stale;
+        }
     }
 
     public function testEvidenceServiceEnforces100MBLimit(): void

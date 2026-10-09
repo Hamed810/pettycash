@@ -109,7 +109,8 @@ final readonly class ExportService
         string $format,
         array $rows = [],
         array $entries = [],
-        array $columns = []
+        array $columns = [],
+        array $numericColumns = []
     ): array {
         // 1. Authorize. Before anything is built, before anything is written.
         $this->authorize($scope, $resource, $format);
@@ -117,7 +118,7 @@ final readonly class ExportService
         // 2. Produce. Only now can a byte exist.
         return match ($format) {
             self::FORMAT_CSV => $this->generateCsv($rows, $columns),
-            self::FORMAT_XLSX => $this->generateXlsx($rows, $columns),
+            self::FORMAT_XLSX => $this->generateXlsx($rows, $columns, $numericColumns),
             self::FORMAT_ZIP => $this->generateZip($entries),
             // Unreachable: authorize() refuses every other format, PDF included.
             default => throw new InvalidArgumentException("Unsupported export format '{$format}'"),
@@ -263,12 +264,37 @@ final readonly class ExportService
      * @param list<string> $columns
      * @return array{artifactName: string, mediaType: string, format: string, byteSize: int, rowCount: int}
      */
-    private function generateXlsx(array $rows, array $columns = []): array
+    /**
+     * T366 / FR-067: a complete sheet as the six-sheet XLSX layout.
+     *
+     * The groups arrive already assembled by `CompleteSheetExport`, which is what knows the sheet's
+     * transactions and their history; this method only validates the layout contract and builds the
+     * workbook. Split that way so a layout violation — a group missing a column the contract names —
+     * fails here with the whole gap named at once, rather than deep inside a row the caller assembled.
+     *
+     * @param array<string, list<array<string, mixed>>> $rowsBySheet keyed by layout name
+     * @return array{artifactName: string, mediaType: string, format: string, byteSize: int, rowCount: int}
+     */
+    public function generateCompleteSheetXlsx(array $rowsBySheet): array
+    {
+        $result = $this->xlsx->build($this->xlsx->completeSheet($rowsBySheet));
+
+        return [
+            'artifactName' => $result['artifactName'],
+            'mediaType' => $this->xlsx->mediaType(),
+            'format' => self::FORMAT_XLSX,
+            'byteSize' => $result['artifactBytes'],
+            // Every row in every group, because the artifact's content is six tables rather than one.
+            'rowCount' => array_sum($result['rowCounts']),
+        ];
+    }
+
+    private function generateXlsx(array $rows, array $columns = [], array $numericColumns = []): array
     {
         $result = $this->xlsx->build([
             new XlsxSheet(
                 'Rows',
-                $this->columnsOf($rows, $columns),
+                $this->columnsOf($rows, $columns, $numericColumns),
                 $rows
             ),
         ]);
@@ -345,16 +371,28 @@ final readonly class ExportService
      * @param list<string> $declared
      * @return list<array{name: string, type: string}>
      */
-    private function columnsOf(array $rows, array $declared = []): array
+    /**
+     * T365: declared columns listed in `$numericColumns` are typed numeric rather than text.
+     *
+     * Everything else keeps the historical text typing: changing every flat export's typing at once
+     * would alter artifacts this task does not own, and the contract promises typed numerics only
+     * where the layout names them. An unknown key in `$numericColumns` is ignored rather than added,
+     * so a typo cannot conjure a column.
+     */
+    private function columnsOf(array $rows, array $declared = [], array $numeric = []): array
     {
         $columns = [];
         foreach ($declared as $key) {
-            $columns[$key] = ['name' => $key, 'type' => XlsxSheet::TYPE_TEXT];
+            $columns[$key] = ['name' => $key, 'type' => in_array($key, $numeric, true) ? XlsxSheet::TYPE_NUMBER : XlsxSheet::TYPE_TEXT];
         }
 
         foreach ($rows as $row) {
             foreach (array_keys($row) as $key) {
-                $columns[$key] = ['name' => $key, 'type' => XlsxSheet::TYPE_TEXT];
+                // Declared columns keep the type the declaration gave them — including numeric —
+                // so a row carrying the same key cannot silently retype them back to text.
+                if (!isset($columns[$key])) {
+                    $columns[$key] = ['name' => $key, 'type' => XlsxSheet::TYPE_TEXT];
+                }
             }
         }
 

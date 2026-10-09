@@ -34,6 +34,14 @@
 
     <dependencies>
         <!--
+          ACC-001: the PHP 8.2 floor (with the 8.5 ceiling matching `composer.json`'s
+          `>=8.2 <8.6`) is declared here as well as there, so the platform refuses to
+          enable the app on an unsupported runtime instead of failing at class-load.
+          Position is significant: info.xsd defines <dependencies> as an xs:sequence in
+          which an optional <php> comes first, then <database>, then <nextcloud>.
+        -->
+        <php min-version="8.2" max-version="8.5"/>
+        <!--
           Declared V1 database backends (FR-077). Order is significant: the Nextcloud
           info.xsd defines <dependencies> as an xs:sequence in which <database> must
           precede <nextcloud>. The schema permits only sqlite, mysql, and pgsql, so

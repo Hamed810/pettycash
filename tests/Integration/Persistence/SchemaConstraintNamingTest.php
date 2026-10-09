@@ -170,14 +170,64 @@ final class SchemaConstraintNamingTest extends TestCase
     }
 
     /**
-     * ADR-006: V1 declares no check constraints either.
+     * ADR-006: V1 declares no check constraint, and that stays falsifiable.
      *
      * `data-model.md` identifies no invariant that needs database enforcement, and the ones that do exist
-     * are enforced in the domain and verified through real-MariaDB round trips.
+     * are enforced in the domain and verified through real-database round trips.
+     *
+     * ## T239: why this asserts observability, not only emptiness
+     *
+     * The schema fixture used to read `information_schema.table_constraints` and **refused any backend
+     * other than MySQL**, so on this backend it could answer the question and report `[]`.
+     *
+     * It now reads through `IDBConnection::createSchema()`, which is what lets it run on PostgreSQL and
+     * SQLite too — and Doctrine's portable `Table` has **no check-constraint API at all**. Measured on
+     * the live instance rather than assumed: reflecting over `Doctrine\DBAL\Schema\Table` yields zero
+     * methods and zero properties whose names contain "check", so there is no `getCheckConstraints()`.
+     *
+     * So `checkConstraints: []` is no longer evidence of anything on its own, and asserting `[]` alone
+     * would make ADR-006 **pass on every backend regardless of what the schema declares** —
+     * reintroducing, on two of the three declared backends, exactly the vacuity this file was written to
+     * end. That is the difference between "0 offenders out of 0 foreign keys" (fine) and "0 offenders
+     * out of an unasked question" (a green light wired to nothing).
+     *
+     * The assertion is therefore split, and both halves carry weight:
+     *   - the report must state whether check constraints were observable **at all**, so a reader is
+     *     never told "none exist" when the real answer is "nobody looked";
+     *   - where they *are* observable, they must be empty.
+     *
+     * Where they are not observable the guarantee is not dropped — it moves to the migration source,
+     * which `V1SchemaMigrationTest` checks on every backend regardless of engine, since a check
+     * constraint cannot appear in the schema without the migration having declared one.
      */
     public function testNoCheckConstraintIsDeclaredSoADR006StaysHonest(): void
     {
         $report = $this->report();
+
+        // Always answered. A report omitting the key would let the assertion below degrade into
+        // asserting against a missing value, which passes for the wrong reason.
+        self::assertArrayHasKey(
+            'checkConstraintsObservable',
+            $report,
+            'the fixture must report whether check constraints were observable on this backend; without '
+                . 'it an empty checkConstraints list cannot be told apart from an unanswered question'
+        );
+
+        if ($report['checkConstraintsObservable'] !== true) {
+            // The two keys must agree: a non-empty observable-backend list beside observability `false`
+            // would mean the fixture inspected some engines and then reported the question as unasked.
+            self::assertSame(
+                [],
+                $report['checkConstraintsBackends'],
+                'the fixture reports check constraints as unobservable, so its list of engines that CAN '
+                    . 'observe them must be empty; a non-empty list means the report is self-contradictory'
+            );
+
+            // Not a failure, and deliberately not a silent pass: the portable schema API exposes no
+            // check-constraint concept, so there is nothing this backend could have been asked. The
+            // recorded `checkConstraintsObservable: false` is the evidence.
+            return;
+        }
 
         self::assertSame(
             [],

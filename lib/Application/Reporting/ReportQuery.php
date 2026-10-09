@@ -257,30 +257,6 @@ final readonly class ReportQuery
     }
 
     /**
-     * FR-056: the two audit streams must not return each other's events.
-     *
-     * A configuration event is identified by its subject type and a `CONFIGURATION` stage; a transaction
-     * event by a transaction subject. The rule is expressed as a predicate rather than two separate
-     * queries so that a report cannot ask the wrong one and quietly return the other stream.
-     *
-     * @param array<string, mixed> $row
-     */
-    public function isConfigurationEvent(array $row): bool
-    {
-        $stage = (string) ($row['stage'] ?? '');
-
-        return $stage === 'CONFIGURATION' || ($row['entityType'] ?? '') === 'configuration';
-    }
-
-    /**
-     * @param array<string, mixed> $row
-     */
-    public function isTransactionEvent(array $row): bool
-    {
-        return !$this->isConfigurationEvent($row);
-    }
-
-    /**
      * @param list<array<string, mixed>> $rows
      * @return list<array<string, mixed>>
      */

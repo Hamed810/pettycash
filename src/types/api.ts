@@ -269,6 +269,28 @@ export interface Evidence {
 
 // Configuration types
 /**
+ * A currency as `contracts/ocs-api.yaml`'s `Currency` describes it: the write fields plus the
+ * optimistic-lock `version`.
+ *
+ * `minorUnit` is part of the type rather than a separate lookup because every amount the client
+ * formats is divided by it — and a client that assumed 2 (as four views once did) printed rial
+ * amounts a hundred times too small.
+ */
+export interface Currency {
+	code: string
+	name: string
+	minorUnit: number
+	active: boolean
+	version: number
+}
+
+export interface CurrencyWrite {
+	code: string
+	name: string
+	minorUnit: number
+	active: boolean
+}
+/**
  * A cost center as `contracts/ocs-api.yaml`'s `CostCenter` describes it.
  *
  * A transaction is routed to the manager the server holds for this cost center (FR-032), so the
@@ -300,6 +322,51 @@ export interface ExpenseType {
 	version: number
 }
 
+export interface ExpenseTypeWrite {
+	title: string
+	description?: string | null
+	evidenceRequired: boolean
+	active: boolean
+	changeReason: string
+}
+
+export interface CostCenterWrite {
+	code: string
+	name: string
+	description?: string | null
+	validFrom: string
+	validTo?: string | null
+	active: boolean
+	managerUserId: string
+	seniorManagerUserId: string
+	changeReason: string
+}
+
+/**
+ * A finance-officer assignment as the contract's `RoleAssignment` describes it.
+ *
+ * The role travels on the row (rather than being implied by the endpoint) because the roster this
+ * renders lists who may settle expenses — and FR-016's shared queue means every officer sees every
+ * finance-stage transaction, so the assignment is the fact under review, not the person alone.
+ */
+export interface FinanceAssignment {
+	id: string
+	role: string
+	userId: string
+	validFrom: string
+	validTo: string | null
+	active: boolean
+	version: number
+}
+
+export interface FinanceAssignmentWrite {
+	userId: string
+	validFrom: string
+	validTo?: string | null
+	active: boolean
+	changeReason: string
+}
+
 // Account types
 export interface Account {
 	id: string
@@ -319,6 +386,18 @@ export interface AccountCharge {
 	description: string
 	occurredAt: string
 	expectedVersion: number
+}
+
+/**
+ * T409's active-state change: deactivation or reactivation of one account by an administrator.
+ *
+ * `active` is required and `expectedVersion` travels in `CommandOptions`, mirroring the charge
+ * shape — the version guard is what makes two administrators acting at once safe rather than
+ * last-write-wins.
+ */
+export interface AccountActiveUpdate {
+	active: boolean
+	explanation?: string | null
 }
 
 export interface Movement {

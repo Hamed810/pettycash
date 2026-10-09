@@ -15,6 +15,7 @@ use OCA\PettyCash\Application\Configuration\CurrencyService;
 use OCA\PettyCash\Application\Configuration\ExpenseTypeService;
 use OCA\PettyCash\Application\Audit\ConfigurationAuditService;
 use OCA\PettyCash\Application\Configuration\FinanceAssignmentService;
+use OCA\PettyCash\Application\Expense\DeleteSheet;
 use OCA\PettyCash\Application\Expense\SheetService;
 use OCA\PettyCash\Application\Expense\TransactionService;
 use OCA\PettyCash\Application\Evidence\EvidenceService;
@@ -23,6 +24,7 @@ use OCA\PettyCash\Application\Port\AuditWriter;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Application\Port\PrivateFileStore;
 use OCA\PettyCash\Application\Port\RequestTimeZone;
+use OCA\PettyCash\Application\Port\RequestRoute;
 use OCA\PettyCash\Application\Port\RetentionPolicyStore;
 use OCA\PettyCash\Application\Port\TransientExportStore;
 use OCA\PettyCash\Application\Port\TransactionManager;
@@ -34,6 +36,7 @@ use OCA\PettyCash\Application\Reporting\DashboardQuery;
 use OCA\PettyCash\Application\Reporting\ExportService;
 use OCA\PettyCash\Application\Reporting\ReportQuery;
 use OCA\PettyCash\Application\Reporting\AuditSelectionQuery;
+use OCA\PettyCash\Application\Reporting\CompleteSheetExport;
 use OCA\PettyCash\Application\Reporting\EvidenceSelectionQuery;
 use OCA\PettyCash\Application\Security\AuthorizationService;
 use OCA\PettyCash\Application\Workflow\FinanceQueue;
@@ -41,6 +44,7 @@ use OCA\PettyCash\Application\Workflow\FinanceSettlementService;
 use OCA\PettyCash\Application\Workflow\ManagementReviewService;
 use OCA\PettyCash\Application\Workflow\SupersededDecisionAudit;
 use OCA\PettyCash\Application\Evidence\PublicEvidenceLinkService;
+use OCA\PettyCash\Application\Evidence\EvidenceLinkService;
 use OCA\PettyCash\Application\Workflow\SubmitSheet;
 use OCA\PettyCash\Domain\Account\Repository\AccountMovementRepository;
 use OCA\PettyCash\Domain\Account\Repository\AccountRepository;
@@ -64,6 +68,7 @@ use OCA\PettyCash\Infrastructure\Export\EvidenceArchiveExporter;
 use OCA\PettyCash\Infrastructure\Export\XlsxExporter;
 use OCA\PettyCash\Infrastructure\Http\EvidenceContentPolicy;
 use OCA\PettyCash\Infrastructure\Nextcloud\NextcloudRequestTimeZone;
+use OCA\PettyCash\Infrastructure\Nextcloud\NextcloudRequestRoute;
 use OCA\PettyCash\Infrastructure\Http\OcsErrorMapper;
 use OCA\PettyCash\Infrastructure\Nextcloud\AppDataExportStore;
 use OCA\PettyCash\Infrastructure\Nextcloud\NextcloudRetentionPolicyStore;
@@ -249,6 +254,23 @@ final class Application extends App implements IBootstrap
             );
         });
 
+        // T366 / FR-067. Registered explicitly, in the same block as the other two selection
+        // queries, because `ExportController` is built by hand with a positional argument list —
+        // adding a constructor parameter without adding it there shifts every later argument along,
+        // which is the exact failure the comment above `EvidenceSelectionQuery` records.
+        $context->registerService(CompleteSheetExport::class, function ($c) {
+            return new CompleteSheetExport(
+                $c->query(ExpenseSheetRepository::class),
+                $c->query(ExpenseTransactionRepository::class),
+                $c->query(TransactionRevisionRepository::class),
+                $c->query(WorkflowDecisionRepository::class),
+                $c->query(AuditEventRepository::class),
+                $c->query(EvidenceRepository::class),
+                $c->query(SheetSummaryQuery::class),
+                $c->query(UserDirectory::class)
+            );
+        });
+
         // The configuration audit stream (FR-055). Same class, different bound table and subject
         // columns, so the single AuditEventRepository port is unchanged and the reads stay
         // stream-scoped. Registered under a distinct key rather than as a second
@@ -415,7 +437,11 @@ final class Application extends App implements IBootstrap
             return new CurrencyService(
                 $c->query(CurrencyRepository::class),
                 $c->query(AdministratorCheck::class),
-                $c->query(ConfigurationAuditService::class)
+                $c->query(ConfigurationAuditService::class),
+                // T422 / FR-023: lets `update()` know whether this currency already holds amounts, which is
+                // what decides if its decimal scale may change. Injected rather than queried lazily so the
+                // answer cannot depend on when the check happens relative to the write.
+                $c->query(\OCA\PettyCash\Domain\Account\Repository\AccountRepository::class)
             );
         });
         $context->registerService(CostCenterService::class, function ($c) {
@@ -463,7 +489,13 @@ final class Application extends App implements IBootstrap
         $context->registerService(AccountAdministrationService::class, function ($c) {
             return new AccountAdministrationService(
                 $c->query(\OCA\PettyCash\Domain\Account\Repository\AccountRepository::class),
-                $c->query(CurrencyService::class)
+                $c->query(CurrencyService::class),
+                // FR-017: provisioning records the account it creates, so an account is no longer the
+                // one configurable resource whose arrival leaves no trace. The audit writer is queried
+                // rather than the configuration-audit service, because this method keeps its own
+                // duplicate-key handling and wrapping the write in `ConfigurationAuditService::record()`
+                // would move that logic the idempotency note on the class depends on.
+                $c->query(\OCA\PettyCash\Application\Port\AuditWriter::class)
             );
         });
 
@@ -491,6 +523,21 @@ final class Application extends App implements IBootstrap
                 // FR-020's account rule (T358). Injected rather than reimplemented in the sheet path, so
                 // provisioning keeps the idempotency and concurrent-insert handling T085 gave it.
                 $c->query(AccountAdministrationService::class)
+            );
+        });
+
+        $context->registerService(DeleteSheet::class, function ($c) {
+            // T417 / FR-086. `IdempotencyService` is injected rather than left to the controller so the
+            // replay gate wraps the guards themselves: on a replay the closure never runs, so a retried
+            // delete cannot re-validate a version check against a sheet that no longer exists.
+            return new DeleteSheet(
+                $c->query(CurrentUser::class),
+                $c->query(ExpenseSheetRepository::class),
+                $c->query(\OCA\PettyCash\Domain\Expense\Repository\ExpenseTransactionRepository::class),
+                $c->query(\OCA\PettyCash\Domain\Evidence\Repository\EvidenceRepository::class),
+                $c->query(PrivateFileStore::class),
+                $c->query(TransactionManager::class),
+                $c->query(\OCA\PettyCash\Application\Command\IdempotencyService::class)
             );
         });
 
@@ -545,6 +592,14 @@ final class Application extends App implements IBootstrap
         // surface is needed for this app; see the port for why the chain is core's and not ours.
         $context->registerService(RequestTimeZone::class, function ($c) {
             return new NextcloudRequestTimeZone($c->query(\OCP\IConfig::class));
+        });
+
+        // FR-087: the route a fault is recorded against. Registered explicitly for the same reason
+        // `RequestTimeZone` above is — the container *could* resolve `RequestRoute` to nothing, because
+        // the interface has no single obvious implementation, and a fault recorder that silently resolved
+        // to a null collaborator would drop the route from every log line without any error.
+        $context->registerService(RequestRoute::class, function ($c) {
+            return new NextcloudRequestRoute($c->query(\OCP\IRequest::class));
         });
 
         // FR-060's inline-safe media-type policy (T275). Registered explicitly for the same reason
@@ -693,9 +748,13 @@ final class Application extends App implements IBootstrap
                 $c->query(\OCA\PettyCash\Application\Reporting\ReportFilterFactory::class),
                 $c->query(EvidenceSelectionQuery::class),
                 $c->query(AuditSelectionQuery::class),
+                $c->query(CompleteSheetExport::class),
                 $c->query(ExpenseSheetRepository::class),
                 $c->query(ExpenseTransactionRepository::class),
-                $c->query(OcsErrorMapper::class)
+                $c->query(OcsErrorMapper::class),
+                // T365, appended last so no existing positional argument shifts: `ExportController`
+                // is built by hand, and the file already documents what a mid-list insertion did once.
+                $c->query(SheetSummaryQuery::class)
             );
         });
 
@@ -724,6 +783,24 @@ final class Application extends App implements IBootstrap
                 $c->query(PrivateFileStore::class),
                 $c->query(EvidenceContentPolicy::class),
                 $c->query(\OCA\PettyCash\Application\Port\AuditWriter::class),
+                $c->query(\OCA\PettyCash\Domain\Shared\Clock::class)
+            );
+        });
+
+        // FR-031: the producer half — creating and revoking a link. Registered explicitly for the same
+        // reason, and because `EvidenceController` is autowired: a service resolved by reflection for one
+        // path and explicitly for another is a service whose two instances can differ for reasons
+        // nothing states. Both halves share `EvidenceLinkRepository` and the audit writer, so a link can
+        // be created by one and opened by the other only if both see the same rows.
+        $context->registerService(EvidenceLinkService::class, function ($c) {
+            return new EvidenceLinkService(
+                $c->query(EvidenceLinkRepository::class),
+                $c->query(EvidenceRepository::class),
+                $c->query(\OCA\PettyCash\Application\Port\AdministratorCheck::class),
+                $c->query(\OCA\PettyCash\Application\Port\AuditWriter::class),
+                $c->query(IdempotencyService::class),
+                $c->query(\OCA\PettyCash\Application\Command\CommandResultRepository::class),
+                $c->query(CurrentUser::class),
                 $c->query(\OCA\PettyCash\Domain\Shared\Clock::class)
             );
         });

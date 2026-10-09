@@ -34,17 +34,25 @@ final class AccountAdministrationServiceTest extends TestCase
 
     private AccountAdministrationService $service;
 
+    /** FR-017: provisioning's `ACCOUNT_CREATED` row, retained so the tests can read it. */
+    private InMemoryAuditWriter $auditWriter;
+
     protected function setUp(): void
     {
         $this->accounts = new InMemoryAccountRepository();
         $this->currencies = new InMemoryCurrencyRepository();
+        $this->auditWriter = new InMemoryAuditWriter();
         $this->service = new AccountAdministrationService(
             $this->accounts,
             new CurrencyService(
                 $this->currencies,
                 new InMemoryAdministratorCheck(),
-                new ConfigurationAuditService(new InMemoryAuditWriter(), new InMemoryTransactionManager())
-            )
+                new ConfigurationAuditService($this->auditWriter, new InMemoryTransactionManager()),
+                // T422: the account repository the same class provisions into, so FR-023's scale guard
+                // counts real accounts here rather than an empty set.
+                $this->accounts
+            ),
+            $this->auditWriter
         );
     }
 
@@ -127,6 +135,84 @@ final class AccountAdministrationServiceTest extends TestCase
 
         self::assertNotNull($provisioned, 'Zero *active* accounts is the precondition FR-020 states');
         self::assertSame('IRR', (string)$provisioned->currencyCode());
+    }
+
+    // --- T410: the carve-out — an inactive *rial* record blocks provisioning ---
+
+    /**
+     * An inactive rial record MUST NOT trigger provisioning: it is a deliberately retired account, and a
+     * sheet-creation click must not silently reverse an administrator's deactivation with a replacement
+     * carrying neither the retired account's identity nor its history.
+     *
+     * The refusal names the account and the remedy, because a purchaser told only "no active account" has
+     * neither a way to proceed nor a way to learn that one exists — the actionable-refusal rule the
+     * settlement path already follows.
+     */
+    public function testAnInactiveRialRecordBlocksProvisioningWithAnActionableRefusal(): void
+    {
+        $irr = $this->currencies->findByCode('IRR');
+        self::assertNotNull($irr);
+        $retired = PettyCashAccount::create('acct-rial-retired', 'purchaser-1', $irr);
+        $retired->setActiveByAdministrator(false);
+        $this->accounts->save($retired);
+
+        try {
+            $this->service->ensureDefaultRialAccount('purchaser-1');
+            self::fail('provisioning must not fire on a deliberately retired rial account');
+        } catch (InvalidArgumentException $e) {
+            self::assertStringContainsString('acct-rial-retired', $e->getMessage(), 'the refusal must name the account');
+            self::assertStringContainsString('reactivate', $e->getMessage(), 'the refusal must state the remedy');
+        }
+
+        self::assertSame(
+            [],
+            $this->accounts->findActiveByUserUid('purchaser-1'),
+            'the refusal must provision nothing — a replacement account would be the silent reversal'
+        );
+    }
+
+    /**
+     * The carve-out is rial-specific: an inactive **non-rial** record does not block provisioning.
+     *
+     * `testAnInactiveAccountDoesNotCountAsHavingAnActiveOne` above already pins this for USD; this states
+     * the reason rather than repeating the case — the distinction is whether a *rial* record exists, not
+     * the active flag alone.
+     */
+    public function testAnotherUsersInactiveRialRecordDoesNotBlockProvisioning(): void
+    {
+        $irr = $this->currencies->findByCode('IRR');
+        self::assertNotNull($irr);
+        $foreign = PettyCashAccount::create('acct-rial-foreign', 'purchaser-2', $irr);
+        $foreign->setActiveByAdministrator(false);
+        $this->accounts->save($foreign);
+
+        // Only the holder's own accounts are read: another user's retired rial account is not this
+        // purchaser's state and must not block them.
+        $provisioned = $this->service->ensureDefaultRialAccount('purchaser-1');
+
+        self::assertNotNull($provisioned);
+        self::assertSame('purchaser-1', $provisioned->userUid);
+    }
+
+    /**
+     * The sheet path surfaces the refusal rather than "must choose".
+     *
+     * `resolveAccountForNewSheet()` returns null when the caller holds several active accounts, and
+     * `SheetService` answers that with "send accountId to choose". The inactive-rial case must not take
+     * that branch — choosing cannot fix a retired account — so the refusal throws through instead.
+     */
+    public function testResolveAccountForNewSheetThrowsRatherThanAskingToChoose(): void
+    {
+        $irr = $this->currencies->findByCode('IRR');
+        self::assertNotNull($irr);
+        $retired = PettyCashAccount::create('acct-rial-retired', 'purchaser-1', $irr);
+        $retired->setActiveByAdministrator(false);
+        $this->accounts->save($retired);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('acct-rial-retired');
+
+        $this->service->resolveAccountForNewSheet('purchaser-1');
     }
 
     public function testOneUserBeingProvisionedDoesNotProvisionAnother(): void
@@ -304,8 +390,12 @@ final class AccountAdministrationServiceTest extends TestCase
             new CurrencyService(
                 $currencies,
                 new InMemoryAdministratorCheck(),
-                new ConfigurationAuditService(new InMemoryAuditWriter(), new InMemoryTransactionManager())
-            )
+                new ConfigurationAuditService(new InMemoryAuditWriter(), new InMemoryTransactionManager()),
+                new InMemoryAccountRepository()
+            ),
+            // FR-017: the same writer instance, so a test that reconfigures currencies and then
+            // provisions can still read the `ACCOUNT_CREATED` row off `$this->auditWriter`.
+            $this->auditWriter
         );
     }
 

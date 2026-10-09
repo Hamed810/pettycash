@@ -15,6 +15,7 @@ use OCA\PettyCash\Application\Port\TransactionManager;
 use OCA\PettyCash\Application\Port\UserDirectory;
 use OCA\PettyCash\Application\Security\AuthorizationService;
 use OCA\PettyCash\Application\Security\AuthorizationContext;
+use OCA\PettyCash\Application\StaleRecordVersion;
 use OCA\PettyCash\Domain\Audit\AuditEvent;
 use OCA\PettyCash\Domain\Configuration\Repository\CostCenterRepository;
 use OCA\PettyCash\Domain\Configuration\Repository\RoleAssignmentRepository;
@@ -158,8 +159,16 @@ final readonly class ManagementReviewService
                     throw new InvalidArgumentException('Transaction not found');
                 }
 
+                // Distinct from FR-085's `SupersededDecisionAttempt`, which is also a 409: that is a
+                // decision already recorded against this stage, whereas this is the caller's view of
+                // the record being stale. Both answer 409; the error codes stay distinguishable.
                 if ($transaction->lockVersion !== $expectedVersion) {
-                    throw new InvalidArgumentException('Stale version');
+                    throw StaleRecordVersion::forResource(
+                        'transaction',
+                        $transactionPublicId,
+                        $expectedVersion,
+                        $transaction->lockVersion
+                    );
                 }
 
                 // Authorization check.

@@ -13,6 +13,7 @@ use OCA\PettyCash\Application\Port\AuditWriter;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Application\Port\TransactionManager;
 use OCA\PettyCash\Application\Security\AuthorizationService;
+use OCA\PettyCash\Application\StaleRecordVersion;
 use OCA\PettyCash\Domain\Audit\AuditEvent;
 use OCA\PettyCash\Domain\Configuration\Repository\CostCenterRepository;
 use OCA\PettyCash\Domain\Configuration\Repository\RoleAssignmentRepository;
@@ -60,8 +61,16 @@ final readonly class SubmitSheet
                     throw new InvalidArgumentException('Sheet not found');
                 }
 
+                // `contracts/ocs-api.yaml` declares both `409` and `422` on
+                // `POST /sheets/{sheetId}/submit`: a stale version is the 409, an unopenable sheet
+                // is the 422 below. FR-025 requires the same split.
                 if ($sheet->lockVersion !== $expectedVersion) {
-                    throw new InvalidArgumentException('Stale version');
+                    throw StaleRecordVersion::forResource(
+                        'sheet',
+                        $sheetId,
+                        $expectedVersion,
+                        $sheet->lockVersion
+                    );
                 }
 
                 if ($sheet->status !== \OCA\PettyCash\Domain\Workflow\SheetStatus::Open) {

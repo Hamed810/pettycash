@@ -9,6 +9,7 @@ use LogicException;
 use OCA\PettyCash\Application\Configuration\ConfigurationConflict;
 use OCA\PettyCash\Application\Audit\ConfigurationAuditService;
 use OCA\PettyCash\Application\Configuration\CurrencyService;
+use OCA\PettyCash\Tests\TestDoubles\InMemoryAccountRepository;
 use OCA\PettyCash\Tests\TestDoubles\InMemoryAdministratorCheck;
 use OCA\PettyCash\Tests\TestDoubles\InMemoryCurrencyRepository;
 use OCA\PettyCash\Tests\TestDoubles\InMemoryAuditWriter;
@@ -25,11 +26,18 @@ final class CurrencyServiceTest extends TestCase
 {
     private InMemoryCurrencyRepository $currencies;
 
+    private InMemoryAccountRepository $accounts;
+
     private CurrencyService $service;
 
     protected function setUp(): void
     {
         $this->currencies = new InMemoryCurrencyRepository();
+        // T422: FR-023 refuses a currency's scale change while amounts exist in it, and an account is the
+        // proxy for "an amount exists". Empty by default, so the pre-existing cases — which include one that
+        // asserts a scale change *succeeds* — keep exercising an unused currency unless they say otherwise.
+        $this->accounts = new InMemoryAccountRepository();
+        $this->accounts->clear();
         // T086: the service writes a configuration audit event on every mutation, so the double is supplied
         // here rather than left out of the constructor. These cases are about currency rules, and an
         // audit stream that accepts everything keeps them that way; the audit behaviour itself is
@@ -37,7 +45,8 @@ final class CurrencyServiceTest extends TestCase
         $this->service = new CurrencyService(
             $this->currencies,
             new InMemoryAdministratorCheck(),
-            new ConfigurationAuditService(new InMemoryAuditWriter(), new InMemoryTransactionManager())
+            new ConfigurationAuditService(new InMemoryAuditWriter(), new InMemoryTransactionManager()),
+            $this->accounts
         );
     }
 
@@ -241,7 +250,8 @@ final class CurrencyServiceTest extends TestCase
         (new CurrencyService(
             new CurrencyRepositoryWithoutRial(),
             new InMemoryAdministratorCheck(),
-            new ConfigurationAuditService(new InMemoryAuditWriter(), new InMemoryTransactionManager())
+            new ConfigurationAuditService(new InMemoryAuditWriter(), new InMemoryTransactionManager()),
+            new InMemoryAccountRepository()
         ))
             ->defaultRial();
     }

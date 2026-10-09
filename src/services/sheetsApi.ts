@@ -54,3 +54,24 @@ export async function updateSheet(
 export async function submitSheet(sheetId: string, expectedVersion: number, options: CommandOptions = {}): Promise<SheetDetail> {
 	return mutate<SheetDetail>(`/sheets/${sheetId}/submit`, 'POST', { expectedVersion }, options.commandId ?? commandId())
 }
+
+/**
+ * `DELETE /sheets/{id}` — FR-086: delete an own sheet that has **never been submitted**.
+ *
+ * **The command id is sent, and unlike `deleteTransaction` it is required.** FR-084 and FR-086 state that this
+ * operation is replay-guarded: a sheet delete without a gate would reach the server, find nothing on the retry,
+ * and answer "not found" — leaving a client that lost the first response unable to tell its own successful
+ * deletion from a failure. So the caller must supply `options.commandId` and should keep it across retries; the
+ * `?? commandId()` fallback is a convenience for the common single-shot case, not a licence to retry with a
+ * fresh id.
+ *
+ * Answers `204` with no body, so this returns `void` rather than a sheet — the caller reloads the list, which
+ * is also what proves the sheet is really gone.
+ */
+export async function deleteSheet(
+	sheetId: string,
+	expectedVersion: number,
+	options: CommandOptions = {}
+): Promise<void> {
+	await mutate<void>(`/sheets/${sheetId}`, 'DELETE', { expectedVersion }, options.commandId ?? commandId())
+}

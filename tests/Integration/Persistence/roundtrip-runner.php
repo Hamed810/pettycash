@@ -116,6 +116,7 @@ use OCA\PettyCash\Infrastructure\Persistence\Configuration\DbExpenseTypeReposito
 use OCA\PettyCash\Infrastructure\Persistence\Configuration\DbRoleAssignmentRepository;
 use OCA\PettyCash\Infrastructure\Persistence\NextcloudTransactionManager;
 use OCA\PettyCash\Tests\TestDoubles\FailingAuditWriter;
+use OCA\PettyCash\Tests\TestDoubles\InMemoryAuditWriter;
 use OCA\PettyCash\Tests\TestDoubles\InMemoryCurrentUser;
 use OCA\PettyCash\Infrastructure\Persistence\Evidence\DbEvidenceLinkRepository;
 use OCA\PettyCash\Infrastructure\Persistence\Evidence\DbEvidenceRepository;
@@ -456,13 +457,13 @@ try {
             $costCenters,
             $expenseTypes,
             $roleAssignments,
-            (new CurrencyService($currencies, $administrators, $configurationAudit)),
+            (new CurrencyService($currencies, $administrators, $configurationAudit, $accounts)),
             (new CostCenterService($costCenters, $roleAssignments, $userDirectory, $administrators, $clock, $configurationAudit)),
             (new ExpenseTypeService($expenseTypes, $administrators, $configurationAudit)),
             (new FinanceAssignmentService($roleAssignments, $userDirectory, $administrators, $clock, $configurationAudit)),
             // The same repositories and the same *real* transaction manager, behind an audit writer that
             // refuses. Nothing is faked here except the one failure under test.
-            (new CurrencyService($currencies, $administrators, new ConfigurationAuditService(new FailingAuditWriter($auditWriter), $transactionManager))),
+            (new CurrencyService($currencies, $administrators, new ConfigurationAuditService(new FailingAuditWriter($auditWriter), $transactionManager), $accounts)),
             $currencies,
             // The same repository and the same *real* transaction manager, behind an audit writer that
             // refuses. Nothing is faked here except the one failure under test.
@@ -538,7 +539,7 @@ try {
                 // FR-020's rule (T358). The sheet-list scenario always passes an explicit `accountId`, so
                 // this dependency is never exercised here -- it is wired because the constructor requires
                 // it and a sheet list that cannot construct its service tests nothing.
-                new AccountAdministrationService($accounts, (new CurrencyService($currencies, $administrators, $configurationAudit)))
+                new AccountAdministrationService($accounts, (new CurrencyService($currencies, $administrators, $configurationAudit, $accounts)), new InMemoryAuditWriter())
             )),
             // T333's date facet compares a `created_at` written by `save()` (always `now()`) against a
             // back-dated one, so the scenario needs the same instant the dispatch stamped. Passing it
@@ -567,7 +568,7 @@ try {
                 $accounts,
                 new InMemoryCurrentUser($ownerUid),
                 $transactionManager,
-                new AccountAdministrationService($accounts, (new CurrencyService($currencies, $administrators, $configurationAudit)))
+                new AccountAdministrationService($accounts, (new CurrencyService($currencies, $administrators, $configurationAudit, $accounts)), new InMemoryAuditWriter())
             )
         ),
         // T388: FR-020's observable outcome, over the real repositories. T358 delivered the trigger and
@@ -578,7 +579,7 @@ try {
             $currencies,
             $accounts,
             $sheets,
-            (new CurrencyService($currencies, $administrators, $configurationAudit)),
+            (new CurrencyService($currencies, $administrators, $configurationAudit, $accounts)),
             $transactionManager,
             $track,
             $surrogateIdOfCurrency
@@ -2868,7 +2869,20 @@ function scenarioProvisioning(
         $rial = $currencies->findByCode('IRR');
     }
 
-    $accountAdministration = new AccountAdministrationService($accounts, $currencyService);
+    $accountAdministration = new AccountAdministrationService(
+        $accounts,
+        $currencyService,
+        // FR-017: provisioning records the account it creates (T411).
+        //
+        // **In memory here, deliberately.** This scenario's subject is T388's provisioning outcome — an
+        // account and a sheet over real MariaDB — not the audit writer, and a real configuration-audit
+        // row would have to be tracked for the sweep or the post-condition check would report a leak.
+        // The row's *persistence* is not assumed: `scenarioAudit` already proves a committed row in
+        // `pettycash_configuration_audit` through this same writer, and provisioning writes through that
+        // identical path. What is proven here is that provisioning *emits* the row; what is proven there
+        // is that the writer lands it.
+        new InMemoryAuditWriter()
+    );
     $sheetService = new SheetService(
         $sheets,
         $accounts,

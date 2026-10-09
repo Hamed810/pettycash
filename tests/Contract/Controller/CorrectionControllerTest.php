@@ -50,6 +50,65 @@ final class CorrectionControllerTest extends TestCase
         $this->client = OcsTestClient::create();
     }
 
+    // ===== T404/T407: refusals that used to be reported as server faults =====
+
+    /**
+     * **These two are the only reason FR-073's first measured figure was not zero.**
+     *
+     * The measurement counted 2 responses of `500` out of 521 counted requests, and both were this
+     * endpoint. `CreateCorrectionDraft` raised a bare `LogicException` for each refusal, and
+     * `OcsErrorMapper` deliberately has no `LogicException` arm — the right decision for a fault nobody
+     * can act on, applied to two refusals that somebody could. The default arm then withheld the message
+     * as well, so a caller whose view of a transaction was merely out of date was told the server had a
+     * fault and given nothing about the state that caused it.
+     *
+     * The suite passed either way, which is the point worth recording: no assertion in this file covered
+     * a refusal on this endpoint, so the defect was invisible to `npm run check` and only the release
+     * figure found it. A behavioural pin is therefore the actual deliverable here — the fix without one
+     * would be free to regress.
+     */
+    public function testACorrectionForATransactionNotAwaitingOneIsAConflictNotAServerFault(): void
+    {
+        $response = $this->client->request(
+            'POST',
+            $this->correctionUrl(),
+            [
+                'headers' => ['X-PettyCash-Command-ID' => ContractFixtures::commandId()],
+                'json' => ['expectedVersion' => 0],
+            ],
+        );
+
+        // `409`, not `422`: the request is correct and the caller's view is out of date, so the
+        // recovery is "reload". `422` would send the caller to edit a request that needed no correction,
+        // and `500` told them nothing at all.
+        self::assertSame(409, $response->getStatusCode());
+        self::assertStringNotContainsString(
+            'unexpected',
+            strtolower((string) $response->getBody()),
+            'a refusal the caller can act on must not be reported as an unexpected fault',
+        );
+    }
+
+    public function testACorrectionForAnUnknownTransactionIsNotAServerFault(): void
+    {
+        $response = $this->client->request(
+            'POST',
+            '/ocs/v2.php/apps/pettycash/api/v1/transactions/'
+            . ContractFixtures::unknownId() . '/correction',
+            [
+                'headers' => ['X-PettyCash-Command-ID' => ContractFixtures::commandId()],
+                'json' => ['expectedVersion' => 0],
+            ],
+        );
+
+        self::assertLessThan(
+            500,
+            $response->getStatusCode(),
+            'an unknown transaction is a refusal, not a fault — this is the request shape that produced '
+            . 'both of the 500s the first measured FR-073 figure found.',
+        );
+    }
+
     // ===== HELPERS =====
 
     private function correctionUrl(): string

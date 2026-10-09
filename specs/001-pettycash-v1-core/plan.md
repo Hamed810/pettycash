@@ -88,9 +88,9 @@ application code while suppressing the successful requests that would have exerc
 shares one Nextcloud instance with other applications by design, so a contended run is an expected
 operational condition, not a rare accident. See **research.md** Decision 17.
 
-**Constraints**: Persian RTL V1 UI with all listed elements (sheet status, transaction status, current stage, prior decisions, history, evidence) visible without horizontal scroll at 390px viewport, status color/icon meeting WCAG AA contrast, text ≥12pt Persian font; server-authoritative authorization with explicit multi-role decision matrix: self-review permitted when user holds required review role + scope + stage permission, ownership grants purchaser rights only; append-only business audit with minimum 7-year retention; immutable prior revisions; no destructive migration of historical data; atomic workflow and ledger changes; shared finance queue; no automatic escalation or mutation retry; no independent authentication, logging, backup, or file system; evidence file size capped at 100 MB per file by a ceiling PettyCash enforces itself, refusing anything larger regardless of the host file service limit, with a host limit below 100 MB still rejecting first and reported separately as a host-limit failure (FR-074, clarified 2026-10-02); zero-active-account purchasers get default rial account auto-created on first sheet creation (idempotent provisioning per FR-020); public evidence links have configurable TTL (default 30 days, max 1 year) with per-access audit logging in configuration audit per FR-031; reporting periods for group exports are **Jalali in-progress periods** (current month, quarter and year), resolved at query time to inclusive Gregorian date ranges in the requesting account's time zone, and are mutually exclusive with an explicit custom date range, per FR-068 as designed under **Jalali Reporting Periods (FR-068)**
+**Constraints**: Persian RTL V1 UI with all listed elements (sheet status, transaction status, current stage, prior decisions, history, evidence) visible without horizontal scroll at 390px viewport, status color/icon meeting WCAG AA contrast, text ≥12pt Persian font; server-authoritative authorization with explicit multi-role decision matrix: self-review permitted when user holds required review role + scope + stage permission, ownership grants purchaser rights only; append-only business audit with minimum 7-year retention; immutable prior revisions; no destructive migration of historical data; atomic workflow and ledger changes; shared finance queue; no automatic escalation or mutation retry; no independent authentication, logging, backup, or file system; evidence file size capped at 100 MB per file by a ceiling PettyCash enforces itself, refusing anything larger regardless of the host file service limit, with a host limit below 100 MB still rejecting first and reported separately as a host-limit failure (FR-074, clarified 2026-10-02); purchasers with no rial account record get a default rial account auto-created on first sheet creation (idempotent provisioning per FR-020); where a rial account exists but is inactive the attempt is refused with `422` and only an administrator restores it (FR-014/FR-020, clarified 2026-10-08); public evidence links have configurable TTL (default 30 days, max 1 year) with per-access audit logging in configuration audit per FR-031; reporting periods for group exports are **Jalali in-progress periods** (current month, quarter and year), resolved at query time to inclusive Gregorian date ranges in the requesting account's time zone, and are mutually exclusive with an explicit custom date range, per FR-068 as designed under **Jalali Reporting Periods (FR-068)**
 
-**Scale/Scope**: Eight user journeys, **85** functional requirements, five business roles, three review
+**Scale/Scope**: Eight user journeys, **88** functional requirements, five business roles, three review
 stages, **15** persistent entity families, a role-aware dashboard, reports, and Excel,
 CSV, PDF, and grouped-evidence export
 
@@ -99,7 +99,9 @@ CSV, PDF, and grouped-evidence export
 *GATE: Passed before Phase 0 research, re-checked after Phase 1 design, re-checked against the
 Approved Compatibility Change register on 2026-09-30 after constitution v1.1.0 introduced ACC-001
 and v1.2.0 introduced ACC-002, and re-checked on 2026-10-07 after the clarification session added
-FR-085 and amended FR-031, FR-040, FR-071, FR-073 and FR-076.*
+FR-085 and amended FR-031, FR-040, FR-071, FR-073 and FR-076, and re-checked on 2026-10-09 after the
+2026-10-08/09 sessions added FR-086, FR-087, FR-088 and SC-015, SC-016 and amended FR-014, FR-020,
+FR-023, FR-025, FR-033, FR-070, FR-083, FR-084 and SC-009: PASS, no exception.*
 
 - **I. Specification Before Implementation — PASS**: The finalized specification supplies
   priorities, acceptance scenarios, requirements, success criteria, assumptions, and resolved
@@ -144,6 +146,24 @@ FR-085 and amended FR-031, FR-040, FR-071, FR-073 and FR-076.*
   No microservice, parallel authentication system, independent logger, or speculative distributed
   component is introduced.
 
+### Post-2026-10-07 Decisions (re-check 2026-10-09: PASS, no exception)
+
+- **FR-083 / SC-016**: `Error.code` is a closed, two-way-checked enumeration (T425 done); new codes are
+  contract changes. T314 (open) still owns the `/dashboard` and administrator refusal paths.
+- **FR-086**: draft-sheet deletion — `DeleteSheet` command, atomic cascade incl. stored files, no audit
+  row (T417/T423 done).
+- **FR-087 / SC-015**: fault logging through Nextcloud standard logging with five named fields
+  (T418/T424 done; known-partial closed by T424).
+- **FR-088**: post-save navigation lands on the sheet detail with its Submit control (defect recorded
+  on open T171; no other owner).
+- **FR-025 concurrency (2026-10-08)**: stale-`lock_version` draft save refused `409`, no
+  `SUPERSEDED_ATTEMPT`; traceability via T134, behavior rides the draft-edit path.
+- **FR-023 scale guard (2026-10-08)**: `minor_unit` change refused `422` while amounts exist (T419/T422).
+- **SC-009 keyboard floor**: primary journeys keyboard-completable with visible focus (T122 open,
+  T400 done); screen-reader semantics deferred to V2 per FR-076.
+- Delegations (FR-031 links, FR-074 types/scanning) affirmatively comply with Principle III;
+  FR-085/FR-040/FR-086/FR-087 add protection under Principle IV.
+
 ### Compatibility Target Register Conformance
 
 The Governance section of the constitution requires every compliance review to confirm that each
@@ -166,11 +186,16 @@ is what FR-077, SC-013, `research.md` Decision 16 and `appinfo/info.xml` already
 
 **Two register entries remain unsatisfied, which this plan records rather than hides:**
 
-1. **ACC-002's verification plan is not yet executed.** It requires the four-job ephemeral database
-   CI matrix (T239). T239 is unchecked and no CI configuration exists, so the three declared
-   backends are a **stated intent, not a verified target**, and SC-013 cannot be claimed. Per ACC-002's
-   own wording this does not make the targets provisional, but V1 release readiness must not treat
-   portability as proven until T239 lands.
+1. **ACC-002's verification plan is now executed (T239, 2026-10-09).** The four-job ephemeral
+   database CI matrix exists — MySQL, MariaDB, PostgreSQL and SQLite, with MySQL and MariaDB as
+   separate jobs as ACC-002 requires — and all four were run green, each applying the forward-only
+   migrations on a fresh database and then the migration/schema compatibility checks, the persistence
+   and repository integration tests, and the representative transaction and workflow queries. The two
+   `mysql`-typed jobs resolved to two distinct engines (`MySQL84Platform` and `MariaDb1010Platform`),
+   which is the evidence ACC-002's "a MariaDB pass is not evidence for MySQL" asks for. The three
+   declared backends are therefore a **verified target rather than a stated intent**. **SC-013 is
+   still not claimed** by this: that is the acceptance record's to make, not a CI run's. Per ACC-002's
+   own wording none of this makes the targets provisional.
 2. **ACC-001's plan-side artifacts are outstanding.** ACC-001 defers the full impact analysis,
    migration path, and compatibility verification plan to `plan.md`. ACC-001's evidence basis and
    verification signals are recorded here and in the constitution; the PHP range in **Technical
@@ -189,8 +214,9 @@ T135 per FR-073, browser targets are Chrome 120+,
 Edge 120+, Firefox 115+ (ESR) per FR-072, advanced evidence restrictions (classification, redaction,
 watermarking, extended logging, time-limited access, type-specific permissions) deferred to V2 per
 FR-030, public evidence links have configurable TTL (default 30 days, max 1 year) with per-access
-audit logging in configuration audit per FR-031, zero-active-account purchasers get default rial
-account auto-created on first sheet creation (idempotent provisioning per FR-020), group-export
+audit logging in configuration audit per FR-031, purchasers with no rial account record get a
+default rial account auto-created on first sheet creation (idempotent provisioning per FR-020, with
+the exists-but-inactive `422` carve-out per FR-014/FR-020 clarified 2026-10-08), group-export
 reporting periods are **Jalali** in-progress periods resolved at query time per FR-068 as designed
 in **Complexity Tracking → Jalali Reporting Periods (FR-068)**, sheet summaries show stage-approved
 totals as separate columns (Cost Center Approved | Senior Approved | Finance Approved) alongside
@@ -532,10 +558,11 @@ field, and announced status for mutations — are deferred to V2** under FR-076,
 scoped to the primary journeys rather than to every page so that the frontend work is bounded by the
 journeys acceptance actually exercises. See `research.md` Decision 19.
 
-**Default Account Provisioning (FR-014, FR-020)**: Zero-active-account purchasers receive a default
-active rial petty-cash account auto-created on first sheet creation attempt. This idempotent
-provisioning ensures seamless onboarding while maintaining the invariant that every user has at
-least one active account.
+**Default Account Provisioning (FR-014, FR-020)**: Purchasers with no rial account record receive a
+default active rial petty-cash account auto-created on first sheet creation attempt. This idempotent
+provisioning ensures seamless onboarding. **Carve-out (clarified 2026-10-08):** where a rial account
+exists but is inactive, provisioning MUST NOT fire; the attempt is refused with `422` naming the
+account, and FR-014's baseline is suspended until an administrator's deliberate, audited act lifts it.
 
 **Jalali Reporting Periods (FR-068)**: Group exports accept a `period` filter alongside an explicit
 custom date range. The specification was clarified on 2026-09-30, and this is the resulting design.

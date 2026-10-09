@@ -165,4 +165,93 @@ enum ConfigurationEventType: string
      * Width: 23 characters, inside the `string(48)` column this enum's docblock documents.
      */
     case EvidenceLinkAccessed = 'EVIDENCE_LINK_ACCESSED';
+
+    /**
+     * FR-031: an administrator created a public evidence link.
+     *
+     * A distinct case from {@see self::EvidenceLinkAccessed} because the two answer opposite
+     * questions and happen at opposite ends of the link's life — "who opened it" versus "who handed it
+     * out". Merging them would make the creation event answer a question about access and the access
+     * event answer one about issuance, and neither could be asked cleanly.
+     *
+     * **`ChargedAccountScope` reads only `AccountFunded` and `AccountCharged`,** so neither this nor
+     * {@see self::EvidenceLinkDeactivated} can widen an officer's configuration-audit scope. That is
+     * structural rather than incidental: FR-055 says only funding and charging events count toward the
+     * charged-account set, and adding a case to this enum cannot change what that reader matches.
+     *
+     * Width: 24 characters, inside the `string(48)` column.
+     */
+    case EvidenceLinkCreated = 'EVIDENCE_LINK_CREATED';
+
+    /**
+     * FR-031: a public evidence link was revoked.
+     *
+     * Revocation is one of the **two controls FR-031 leaves** once the token is the whole authority —
+     * TTL being the other — so it is a named control with its own record rather than a mutation of the
+     * creation event. `before`/`after` carry `active`, so an audit reader can tell a revocation from a
+     * re-issued link.
+     *
+     * Width: 27 characters, inside the `string(48)` column.
+     */
+    case EvidenceLinkDeactivated = 'EVIDENCE_LINK_DEACTIVATED';
+
+    /**
+     * FR-017: a petty-cash account came into existence.
+     *
+     * An account is the object that confers spending authority, and this is the **one configurable
+     * resource whose arrival used to leave no trace** — currency, cost centre and expense type each
+     * recorded their own creation, and an account's *funding* and *charging* were already recorded, so
+     * the omission was an inconsistency rather than a policy. FR-055 did not name accounts, which is
+     * why the question was open rather than settled; clarified 2026-10-08.
+     *
+     * **One event type for every origin, not one per origin.** Three paths create an account:
+     * `AccountService::createFor()` as an administrator (FR-013), `createFor()` as the account holder
+     * opening one for themselves, and `AccountAdministrationService::ensureDefaultRialAccount()` as
+     * FR-020's self-service provisioning. They are the same kind of fact, so two types would fragment
+     * the stream an administrator reads to answer "who created this, and was that authorised".
+     *
+     * **The recorded actor is what distinguishes them.** For a provisioned account the actor is the
+     * **account holder**, so the row shows both that the account exists and that **no administrator
+     * authorised it** — the most useful thing it can say.
+     *
+     * **The row is a record, not an authorisation.** Provisioning stays self-service and a purchaser
+     * needs no approval or role; this event MUST NOT be presented or exported as evidence of
+     * administrator consent. Mirrors the 2026-10-07 evidence-link clarification.
+     *
+     * **`ChargedAccountScope` still reads only {@see self::AccountFunded} and
+     * {@see self::AccountCharged}**, so adding this case cannot widen a finance officer's
+     * configuration-audit scope — the same structural argument that applies to the evidence-link
+     * cases. A freshly provisioned, unfunded account therefore stays outside that scope, which is
+     * correct: FR-055 admits funding and charging events only.
+     *
+     * Width: 14 characters, inside the `string(48)` column.
+     */
+    case AccountCreated = 'ACCOUNT_CREATED';
+
+    /**
+     * FR-017: an administrator deactivated a petty-cash account. FR-013 as decided.
+     *
+     * A distinct case from `AccountCreated` because the two answer opposite questions about the same
+     * object — one says spending authority was conferred, the other says it was withdrawn — and a single
+     * `ACCOUNT_UPDATED` would force every reader to open the before/after pair to tell which happened.
+     *
+     * **`ChargedAccountScope` reads only `AccountFunded` and `AccountCharged`**, so adding these cases
+     * cannot widen a finance officer's configuration-audit scope — the same structural argument the
+     * `AccountCreated` case records. A deactivated account therefore stays visible exactly where it was
+     * visible before, which is correct: FR-055 admits funding and charging events only.
+     *
+     * Width: 19 characters, inside the `string(48)` column.
+     */
+    case AccountDeactivated = 'ACCOUNT_DEACTIVATED';
+
+    /**
+     * FR-017: an administrator reactivated a petty-cash account.
+     *
+     * Its own case rather than sharing `AccountDeactivated` for the same reason that case is separate
+     * from `AccountCreated`: the direction is the fact, and a reader filtering for "which accounts were
+     * retired" must not have to exclude the ones that were later restored.
+     *
+     * Width: 19 characters, inside the `string(48)` column.
+     */
+    case AccountReactivated = 'ACCOUNT_REACTIVATED';
 }

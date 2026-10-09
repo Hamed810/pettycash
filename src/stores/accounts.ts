@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import type { Account, Movement } from '../types/api'
-import { listAccounts, listMovements } from '../services/accountsApi'
+import type { Account, AccountActiveUpdate, AccountCharge, AccountCreate, Movement } from '../types/api'
+import { listAccounts, listMovements, createAccount, chargeAccount, updateAccount } from '../services/accountsApi'
 
 export const useAccountStore = defineStore('accounts', () => {
 	const accounts = ref<Account[]>([])
@@ -106,6 +106,63 @@ export const useAccountStore = defineStore('accounts', () => {
 		selectedAccountId.value = id
 	}
 
+	/**
+	 * T088: the funding writes — open, charge, deactivate/reactivate.
+	 *
+	 * Each reloads the caller's own list afterwards, so a balance the server changed is read back
+	 * rather than assumed. Note the reachable shape this supports: creation returns the account
+	 * (id and version in hand), and charge/deactivation act on a known id — there is no endpoint
+	 * listing another user's accounts, so cross-user funding addresses an id from the creation
+	 * response or pasted from the accounts report, never from a lookup this store cannot perform.
+	 */
+	async function openAccount(data: AccountCreate) {
+		loading.value = true
+		resetError()
+		try {
+			const account = await createAccount(data)
+			loaded.value = false
+			await loadAccounts()
+			return account
+		} catch (e: unknown) {
+			error.value = e instanceof Error ? e.message : String(e)
+			throw e
+		} finally {
+			loading.value = false
+		}
+	}
+
+	async function fundAccount(accountId: string, data: AccountCharge) {
+		loading.value = true
+		resetError()
+		try {
+			const result = await chargeAccount(accountId, data)
+			loaded.value = false
+			await loadAccounts()
+			return result
+		} catch (e: unknown) {
+			error.value = e instanceof Error ? e.message : String(e)
+			throw e
+		} finally {
+			loading.value = false
+		}
+	}
+
+	async function setAccountActive(accountId: string, data: AccountActiveUpdate, expectedVersion: number) {
+		loading.value = true
+		resetError()
+		try {
+			const account = await updateAccount(accountId, data, expectedVersion)
+			loaded.value = false
+			await loadAccounts()
+			return account
+		} catch (e: unknown) {
+			error.value = e instanceof Error ? e.message : String(e)
+			throw e
+		} finally {
+			loading.value = false
+		}
+	}
+
 	return {
 		accounts,
 		movements,
@@ -125,6 +182,9 @@ export const useAccountStore = defineStore('accounts', () => {
 		resetError,
 		loadAccounts,
 		loadMovements,
-		selectAccount
+		selectAccount,
+		openAccount,
+		fundAccount,
+		setAccountActive
 	}
 })

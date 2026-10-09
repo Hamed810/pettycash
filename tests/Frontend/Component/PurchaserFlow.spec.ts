@@ -841,16 +841,15 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 		})
 
 		/**
-		 * FR-062's three stage-approved figures are **T365's**, and this list must not carry them.
+		 * FR-062's three stage-approved figures are **T365's**, and this list now carries them.
 		 *
-		 * Proven by *value* rather than by a missing `data-test` hook: the fixture gives the three distinctive
-		 * amounts, so any column rendering them puts those strings into the row and this fails. A hook-based
-		 * absence check would pass for a column that used a different attribute name entirely.
-		 *
-		 * **This test is expected to fail when T365 lands**, and that is the point: T365 owns those columns
-		 * on this file, so its delivery must update this assertion rather than find it inconvenient.
+		 * Proven by *value* rather than by hook presence alone: the fixture gives the three distinctive
+		 * amounts (11_111, 22_222, 33_333), so any column rendering them puts those formatted strings
+		 * into the row. Before T365 this same test asserted their absence — it was written to fail when
+		 * T365 landed — and a hook-based check would pass for a column that used a different attribute
+		 * name entirely, which is why the amounts themselves are asserted.
 		 */
-		it('carries no figure from FR-062’s three stage-approved columns, which are T365’s', async () => {
+		it('carries FR-062’s three stage-approved figures beside the latest-effective column', async () => {
 			const wrapper = await mountWithFullSheet()
 
 			const rows = wrapper.findAll('[data-test="sheet-row"]')
@@ -861,11 +860,19 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 			// had to be reopened for.
 			const row = rows[0]
 			expect(row).toBeDefined()
-			for (const amountMinor of [11_111, 22_222, 33_333]) {
-				expect(row?.text()).not.toContain(amountMinor.toLocaleString('fa-IR'))
+			const group = row?.find('[data-test="sheet-list-stage-approved"]')
+			expect(group?.exists()).toBe(true)
+			for (const [hook, amountMinor] of [
+				['sheet-list-cost-center-approved', 11_111],
+				['sheet-list-senior-approved', 22_222],
+				['sheet-list-finance-approved', 33_333],
+			] as const) {
+				const cell = group?.find(`[data-test="${hook}"]`)
+				expect(cell?.exists(), `${hook} must be rendered`).toBe(true)
+				expect(cell?.text()).toContain(amountMinor.toLocaleString('fa-IR'))
 			}
-			// The latest-effective group this task *does* own is present, so the guard above is about the
-			// three stage figures specifically rather than about totals vanishing from the list.
+			// The latest-effective group this surface already owned is still present, so the new
+			// column sits beside it rather than replacing it — FR-062 distinguishes the two.
 			expect(row?.find('[data-test="sheet-list-effective-outcome"]').exists()).toBe(true)
 		})
 	})

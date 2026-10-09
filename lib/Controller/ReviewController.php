@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace OCA\PettyCash\Controller;
 
+use OCA\PettyCash\Infrastructure\Http\CommandId;
 use InvalidArgumentException;
 use LogicException;
 use OCA\PettyCash\Application\Account\AccountPayloadFormatter;
@@ -23,6 +24,16 @@ use OCP\AppFramework\OCSController;
 
 class ReviewController extends OCSController
 {
+    /**
+     * Set by {@see refuseBulkDecision()} when the request body names more than one transaction.
+     *
+     * A field rather than a returned response, because the check has to run **before** the command-id and
+     * validation guards to be able to answer with its own reason: a caller who sent both a bulk field and no
+     * command id should be told about the bulk field, since that is the one that cannot be satisfied by any
+     * correction to the rest of the request.
+     */
+    private ?string $bulkRefusal = null;
+
     public function __construct(
         \OCP\IRequest $request,
         private ManagementReviewService $managementReviewService,
@@ -116,6 +127,25 @@ class ReviewController extends OCSController
         ?string $explanation,
         int $expectedVersion
     ): DataResponse {
+        // T426 / FR-033: V1 has **no** bulk decision, so a request naming more than one transaction MUST be
+        // refused rather than narrowed to the one in the path. Nextcloud binds only the declared arguments, so
+        // an extra `transactionIds` never reaches this method and one decision would be applied to the path's
+        // transaction while returning success -- a client asking to approve four told it approved one. The check
+        // therefore reads the **raw request body**, which is the only place the extra field is visible, and it
+        // runs first so a caller who sent both a bulk field and no command id is told about the bulk field.
+        $this->refuseBulkDecision();
+        if ($this->bulkRefusal !== null) {
+            // `400`, and **not** a `SUPERSEDED_ATTEMPT`. Nothing was attempted against any particular
+            // transaction's state, so FR-085's audit rule must not claim otherwise — the audit would record a
+            // race that never happened. It is also not a `422`: no field the contract declares is invalid, the
+            // request carries a field the contract does not define at all.
+            return $this->ocsErrorMapper->badRequest(
+                'A decision applies to exactly one transaction',
+                null,
+                ['bulk' => [$this->bulkRefusal]]
+            );
+        }
+
         // The caller's command id is the idempotency key. Minting a fresh UUID here
         // would make every retry look like a new command, so a replayed decision
         // would be recorded a second time with a second immutable WorkflowDecision and
@@ -127,6 +157,21 @@ class ReviewController extends OCSController
                 'Required fields are missing',
                 null,
                 ['commandId' => ['commandId is required']]
+            );
+        }
+
+        // T415: present but unstoreable. `pettycash_command_results.command_id` is
+        // `string(36)` and the contract declares `format: uuid`, so an over-long
+        // value reaches MySQL and answers 500. A malformed request is not a server
+        // fault. **400, matching this method's own absent case** rather than 422:
+        // both are the same class of fault, a request the caller must change.
+        try {
+            $commandId = CommandId::fromString((string) $commandId)->__toString();
+        } catch (\InvalidArgumentException $malformed) {
+            return $this->ocsErrorMapper->badRequest(
+                'Malformed command ID',
+                null,
+                ['commandId' => [$malformed->getMessage()]]
             );
         }
 
@@ -207,7 +252,7 @@ class ReviewController extends OCSController
         } catch (LogicException $e) {
             return $this->ocsErrorMapper->forbidden($e->getMessage(), $commandId);
         } catch (\Throwable $e) {
-            return $this->ocsErrorMapper->map($e, $commandId);
+            return $this->ocsErrorMapper->map($e, $commandId, ['publicId' => $transactionId]);
         }
     }
 
@@ -222,6 +267,85 @@ class ReviewController extends OCSController
      *
      * @return array<string, list<string>>
      */
+    /**
+     * T426 / FR-033: refuse a request whose body names more than one transaction.
+     *
+     * **Reads the raw request body, not the bound arguments** — that is the whole point: Nextcloud binds only the
+     * declared parameters, so an extra `transactionIds` never appears in `$transactionId` and the only place it
+     * can be seen is the request itself. Without this check the field is silently dropped and the caller is told
+     * its decision was recorded when only one transaction was decided.
+     *
+     * **Deliberately narrow.** It looks only for keys that *name a transaction collection* — `transactionIds`,
+     * `transactions`, `ids` — plus a body `transactionId` that **disagrees** with the path. Refusing unknown
+     * fields generally would reject forward-compatible additions the contract does not mention, which is a worse
+     * failure than ignoring one. A body `transactionId` that agrees with the path is redundant but harmless, so
+     * it is allowed.
+     *
+     * The disagreement case is caught because it is easy to miss and would decide a *different* record than the
+     * caller addressed — subtler than a bulk list, and invisible to a status assertion.
+     */
+    private function refuseBulkDecision(): void
+    {
+        $this->bulkRefusal = null;
+        $params = $this->request->getParams();
+        if (!is_array($params)) {
+            return;
+        }
+
+        foreach (['transactionIds', 'transactions', 'ids'] as $key) {
+            if (array_key_exists($key, $params)) {
+                $this->bulkRefusal = sprintf(
+                    "'%s' names more than one transaction, and V1 decides exactly one transaction per request",
+                    $key
+                );
+
+                return;
+            }
+        }
+
+        $body = $params['transactionId'] ?? null;
+        if (is_string($body) && $body !== '' && $body !== $this->routedTransactionId()) {
+            $this->bulkRefusal = "'transactionId' in the request body must not conflict with the one in the path";
+        }
+    }
+
+    /**
+     * The transaction id as it appears in the **URL**, not as it was bound.
+     *
+     * This distinction is the whole reason the guard exists. Nextcloud binds a body parameter with the same
+     * name *over* the path segment, so `$transactionId` in `decide()` already carries the **body's** value when
+     * the body supplies one. Comparing the body against that bound value therefore always finds them equal, and
+     * the guard passes — while the request is aimed at a different record than the caller addressed.
+     *
+     * Found by running: the conflicting-body case answered `404` (not-found for the *body's* id) rather than the
+     * expected `400`, which is exactly the symptom of the body having won.
+     *
+     * Read from the path rather than from a route-parameter lookup because this controller is reached by
+     * Nextcloud's OCS dispatcher, where the routed parameter is not guaranteed to be retrievable, and the path is
+     * always the last segment for this operation.
+     */
+    private function routedTransactionId(): string
+    {
+        $path = (string) $this->request->getPathInfo();
+        $segments = array_values(array_filter(explode('/', $path), static fn(string $s): bool => $s !== ''));
+
+        // This operation is `POST /transactions/{id}/decisions`, so the identifier is the segment **before** the
+        // trailing `decisions` — not the last segment, which is the literal operation name. Found by running:
+        // reading the last segment made every well-formed decision answer `400`.
+        //
+        // `getParams()` cannot be used instead, because it merges the request's **routed** parameters, so
+        // `transactionId` is always present in it — and a body value overwrites the routed one, which is the very
+        // override this guard exists to catch. Comparing a body value against `getParams()` would find them
+        // always equal and pass.
+        $count = count($segments);
+        if ($count < 2) {
+            return '';
+        }
+        $candidate = $segments[$count - 2];
+
+        return $candidate === 'decisions' ? '' : $candidate;
+    }
+
     private function fieldErrorsFor(\Throwable $e): array
     {
         $message = $e->getMessage();

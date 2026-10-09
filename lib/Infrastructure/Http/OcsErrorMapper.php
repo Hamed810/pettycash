@@ -8,7 +8,9 @@ use InvalidArgumentException;
 use OCA\PettyCash\Application\Command\CommandConflict;
 use OCA\PettyCash\Application\Conflict;
 use OCA\PettyCash\Application\DataIntegrity\UnreadableRecordData;
+use OCA\PettyCash\Application\Forbidden;
 use OCA\PettyCash\Application\Refusal;
+use OCA\PettyCash\Application\Support\FaultContextFactory;
 use OCP\AppFramework\Http;
 use OCA\PettyCash\Infrastructure\Nextcloud\TechnicalLogger;
 use OCP\AppFramework\Http\DataResponse;
@@ -48,10 +50,16 @@ final class OcsErrorMapper
         . 'affected records from the application log.';
 
     public function __construct(
-        private readonly TechnicalLogger $logger
+        private readonly TechnicalLogger $logger,
+        private readonly FaultContextFactory $faultContext,
     ) {}
 
-    public function map(Throwable $error, ?string $commandId = null): DataResponse
+    /**
+     * @param array<string,mixed> $context  extra details for the technical log, e.g. `['publicId' => …]`.
+     *                                     Ignored for every non-`5xx` outcome, because a correctly refused
+     *                                     request writes no technical entry at all (FR-087).
+     */
+    public function map(Throwable $error, ?string $commandId = null, array $context = []): DataResponse
     {
         [$status, $code] = match (true) {
             $error instanceof CommandConflict => [Http::STATUS_CONFLICT, 'IDEMPOTENCY_CONFLICT'],
@@ -82,6 +90,19 @@ final class OcsErrorMapper
             // other's interface the silent arm-shadowing that T063 was raised for becomes possible
             // and nothing would report it.
             $error instanceof Refusal => [Http::STATUS_UNPROCESSABLE_ENTITY, $error->errorCode()],
+            // FR-031's correction path (T407). The third of the four answers, and the one the correction
+            // endpoints were missing: a caller acting on a record they have no right to act on.
+            //
+            // It reached here as a bare `LogicException`, which this class deliberately does not arm, so
+            // `POST /transactions/{id}/correction` answered **500 UNEXPECTED_FAILURE** with its message
+            // withheld when a purchaser who was not the owner asked to correct it. That is the same defect
+            // T398 fixed on the finance path, on a different endpoint, and the FR-073 measurement is
+            // what surfaced it: two of 521 counted requests were `500`, and both were this endpoint
+            // refusing a correction for a reason the caller could act on.
+            //
+            // Placed after `Conflict` and `Refusal` because all three markers are disjoint types, so the
+            // order states intent rather than resolving an ambiguity.
+            $error instanceof Forbidden => [Http::STATUS_FORBIDDEN, $error->errorCode()],
             // FR-083, and the reason this arm is here rather than in four controllers.
             //
             // A stored record whose reference no longer resolves is a fault in the *data* — not in the
@@ -127,7 +148,7 @@ final class OcsErrorMapper
         if ($status === Http::STATUS_INTERNAL_SERVER_ERROR) {
             // Never surface an internal message to the caller, but always record it:
             // technical errors must go through standard Nextcloud logging.
-            $this->logger->unexpected($error, $commandId);
+            $this->logger->unexpected($error, $commandId, $this->faultContext->build($context));
             $message = 'pettycash.error.unexpected';
         } elseif ($error instanceof UnreadableRecordData) {
             // **Logged *and* withheld** — the combination no other 4xx arm needs. The status is a
@@ -141,7 +162,7 @@ final class OcsErrorMapper
             // i.e. something about rows they may not be able to see. It would also break the status of
             // the answer: a caller reading surrogate keys learns it can probe, and one reading "IRR"
             // learns a wrong unit.
-            $this->logger->unexpected($error, $commandId);
+            $this->logger->unexpected($error, $commandId, $this->faultContext->build($context));
             $message = self::DATA_FAULT_MESSAGE;
         } else {
             $message = $error->getMessage();

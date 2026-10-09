@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace OCA\PettyCash\Controller;
 
+use OCA\PettyCash\Infrastructure\Http\CommandId;
 use OCA\PettyCash\Application\Account\AccountAlreadyExists;
 use OCA\PettyCash\Application\Account\AccountService;
 use OCA\PettyCash\Application\Account\UnknownAccount;
@@ -135,6 +136,21 @@ class AccountController extends OCSController
             );
         }
 
+        // T415: present but unstoreable. `pettycash_command_results.command_id` is
+        // `string(36)` and the contract declares `format: uuid`, so an over-long
+        // value reaches MySQL and answers 500. A malformed request is not a server
+        // fault. **400, matching this method's own absent case** rather than 422:
+        // both are the same class of fault, a request the caller must change.
+        try {
+            $commandId = CommandId::fromString((string) $commandId)->__toString();
+        } catch (\InvalidArgumentException $malformed) {
+            return $this->ocsErrorMapper->badRequest(
+                'Malformed command ID',
+                null,
+                ['commandId' => [$malformed->getMessage()]]
+            );
+        }
+
         try {
             $uid = $this->currentUser->uid();
             if ($uid === '') {
@@ -202,6 +218,68 @@ class AccountController extends OCSController
     }
 
     /**
+     * FR-013: deactivate or reactivate a petty-cash account.
+     *
+     * Administrator-only: the service refuses anyone else, because a purchaser retiring their own
+     * account would strand themselves with no sheet-creation path except through the administrator
+     * they bypassed. The control is **absent** for a submitted sheet's account only in the sense that
+     * no such rule exists — deactivation is about spendability, not about history, and past movements
+     * stay readable either way.
+     *
+     * `active` and `expectedVersion` are required body fields, so a missing one is a 422 naming the
+     * field — the same split T415 records for the neighbouring operations (a missing required *header*
+     * would be a 400, but this operation takes none). An account already in the requested state
+     * succeeds with its current shape and is not an error: the version was still checked, so a stale
+     * caller is told to reload rather than handed a quiet success.
+     */
+    #[NoAdminRequired]
+    public function update(
+        string $accountId,
+        ?bool $active = null,
+        ?int $expectedVersion = null,
+        ?string $explanation = null,
+        ?string $commandId = null
+    ): DataResponse {
+        $commandId ??= $this->request->getHeader('X-PettyCash-Command-ID');
+
+        try {
+            $uid = $this->currentUser->uid();
+            if ($uid === '') {
+                return $this->ocsErrorMapper->forbidden('No authenticated user in session');
+            }
+
+            $fieldErrors = [];
+            if ($active === null) {
+                $fieldErrors['active'] = ['active is required'];
+            }
+            if ($expectedVersion === null) {
+                $fieldErrors['expectedVersion'] = ['expectedVersion is required'];
+            }
+            if ($fieldErrors !== []) {
+                return $this->ocsErrorMapper->validation('Required fields are missing', $commandId, $fieldErrors);
+            }
+
+            return new DataResponse(
+                $this->accountService->setActive($uid, $accountId, $active, $expectedVersion, $explanation)
+            );
+        } catch (UnknownAccount $e) {
+            return $this->ocsErrorMapper->notFound($e->getMessage(), $commandId);
+        } catch (\InvalidArgumentException $e) {
+            return $this->ocsErrorMapper->validation(
+                $e->getMessage(),
+                $commandId,
+                ['active' => [$e->getMessage()]]
+            );
+        } catch (\LogicException $e) {
+            return $this->ocsErrorMapper->forbidden($e->getMessage(), $commandId);
+        } catch (\Throwable $e) {
+            // A stale version reaches the mapper, which answers 409 with the code the exception names —
+            // the same arm `charge()` relies on, so no hand-rolled conflict branch is added here.
+            return $this->ocsErrorMapper->map($e, $commandId, ['publicId' => $accountId]);
+        }
+    }
+
+    /**
      * One account's ledger, as a `MovementPage`.
      *
      * The account id comes from the path, so it is the one identifier in this controller that is not
@@ -235,7 +313,11 @@ class AccountController extends OCSController
                 $this->request->getHeader('X-PettyCash-Command-ID')
             );
         } catch (\Throwable $e) {
-            return $this->ocsErrorMapper->map($e, $this->request->getHeader('X-PettyCash-Command-ID'));
+            return $this->ocsErrorMapper->map(
+                $e,
+                $this->request->getHeader('X-PettyCash-Command-ID'),
+                ['publicId' => $accountId]
+            );
         }
     }
 }
