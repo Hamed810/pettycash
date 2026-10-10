@@ -83,6 +83,9 @@ const evidenceItems = computed(() => transactionStore.currentTransaction?.eviden
 
 function goToEdit() { router.push({ name: 'transaction-edit', params: { id: transactionId.value } }) }
 
+/** US6 history (T098): the formal audit timeline lives on its own view. */
+function goToAudit() { router.push({ name: 'transaction-audit', params: { transactionId: transactionId.value } }) }
+
 /**
  * FR-026's one carve-out after submission: a returned transaction stays editable.
  *
@@ -202,6 +205,9 @@ watch(transactionId, () => { loadData() })
 					<NcButton v-if="canCreateCorrection" variant="secondary" @click="goToCreateCorrection" data-test="create-correction-btn">
 						<NcIconSvgWrapper :path="mdiUndoVariant" :size="16" class="mr-2" />
 						{{ t('pettycash', 'transactions.createCorrection') }}
+					</NcButton>
+					<NcButton variant="tertiary" @click="goToAudit" data-test="view-audit-btn">
+						{{ t('pettycash', 'transactions.viewHistory') }}
 					</NcButton>
 				</div>
 			</div>

@@ -209,7 +209,11 @@ async function persist(): Promise<void> {
 	} else {
 		await transactionStore.createNewTransaction(sheetId.value, draft.value)
 	}
-	await router.push({ name: 'transactions', params: { sheetId: sheetId.value } })
+	// FR-088: a save MUST return the purchaser to the sheet's detail view, where the
+	// sheet's status, its transactions, and its Submit control are presented together.
+	// The transactions list keeps its role as a readable view, but it MUST NOT be the
+	// terminus of a save: it renders no Submit control and no route back to the sheet.
+	await router.push({ name: 'sheet-detail', params: { id: sheetId.value } })
 }
 
 async function handleSaveDraft(): Promise<void> {
@@ -251,7 +255,9 @@ async function handleResubmit(): Promise<void> {
 			transactionId.value,
 			transactionStore.currentTransaction?.version ?? 0,
 		)
-		await router.push({ name: 'transactions', params: { sheetId: sheetId.value } })
+		// FR-088, same as `persist()` above: a save terminates on the sheet detail,
+		// never on the transactions list.
+		await router.push({ name: 'sheet-detail', params: { id: sheetId.value } })
 	} catch {
 		// Error surfaced through transactionStore.error
 	}

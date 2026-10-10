@@ -17,11 +17,14 @@ const sheetStore = useSheetStore()
 
 const sheetId = computed(() => route.params.id as string)
 
+// The domain's `SheetStatus` values (FR-037): the `AWAITING_*` names this map carried before are
+// `TransactionStatus` values, and every submitted sheet rendered an undefined chip because of it.
 const statusLabels: Record<SheetStatus, string> = {
 	OPEN: 'pettycash.status.open',
-	AWAITING_COST_CENTER_REVIEW: 'pettycash.status.awaitingCostCenter',
-	AWAITING_SENIOR_REVIEW: 'pettycash.status.awaitingSenior',
-	AWAITING_FINANCE_REVIEW: 'pettycash.status.awaitingFinance',
+	COST_CENTER: 'pettycash.status.costCenter',
+	CORRECTION: 'pettycash.status.correction',
+	SENIOR: 'pettycash.status.senior',
+	FINANCE: 'pettycash.status.finance',
 	COMPLETED: 'pettycash.status.completed',
 	COMPLETED_WITH_REJECTIONS: 'pettycash.status.completedWithRejections'
 }
