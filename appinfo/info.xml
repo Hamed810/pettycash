@@ -54,4 +54,20 @@
         <nextcloud min-version="34"/>
     </dependencies>
 
+    <!--
+      App-menu entry. Without a <navigations> block Nextcloud never lists the
+      app in the menu, even though page#index answers /apps/pettycash/ fine.
+      Route follows the {appid}.{controller}.{method} convention for
+      page#index in appinfo/routes.php (cf. activity.Activities.index).
+      Icon resolves relative to img/ (cf. activity.svg in the activity app).
+    -->
+    <navigations>
+        <navigation>
+            <name>Petty Cash</name>
+            <route>pettycash.page.index</route>
+            <icon>app.svg</icon>
+            <order>50</order>
+        </navigation>
+    </navigations>
+
 </info>
