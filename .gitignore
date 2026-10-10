@@ -32,6 +32,8 @@ Thumbs.db
 # Local agent tooling backups (may embed private endpoints; never commit)
 *.bak
 opencode.local.json
+/.agents.backup-before-integration-cleanup/
+/.specify.backup-before-integration-cleanup/
 
 # Local agent tooling state. Per-checkout caches and generated indexes, not project
 # source. Narrow rules only, deliberately:
@@ -48,6 +50,8 @@ opencode.local.json
 # Shared tool guidance lives in AGENTS.md, which stays tracked.
 /.codebase-memory/
 /.opencode/index/
+/.opencode/codebase-index.json
+/.specify/integrations/.cache/
 /.serena/
 /.cbmignore
 
