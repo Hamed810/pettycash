@@ -467,6 +467,21 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
       expect(history.find('[data-testid="decision-item-d-0"]').text()).toContain('Earlier Manager')
     })
 
+    it('should mark the cost-centre decision advisory on the senior detail reached by route (T053)', async () => {
+      // FR-034. The router delivers the stage lowercase (`/reviews/senior/tx-1`),
+      // while decisions carry uppercase stages — the badge must survive that
+      // boundary. Mounting with an uppercase prop would assert nothing about it.
+      const wrapper = await mountReview(reviewedTransaction({
+        decisions: [{
+          id: 'd-0', stage: 'COST_CENTER', decision: 'APPROVE', explanation: 'Within budget',
+          actor: { userId: 'user0', displayName: 'Earlier Manager', role: 'COST_CENTER_MANAGER' },
+          decidedAt: '2026-09-19T10:00:00Z'
+        }]
+      }), 'senior')
+
+      expect(wrapper.find('[data-testid="advisory-badge"]').exists()).toBe(true)
+    })
+
     it('should show evidence preview and download', async () => {
       // FR-060. The inline `evidence-preview` is an `<img>`, so it is image-only by construction and
       // the original assertion — that it exists for a PDF — could never hold. The affordance that
