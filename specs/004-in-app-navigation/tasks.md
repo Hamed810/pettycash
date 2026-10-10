@@ -53,7 +53,7 @@
 
 ---
 
-## Phase 4: User Story 2 - Reviewer reaches queues (Priority: P2)
+## Phase 4: User Story 2 - Reviewer reaches queues (Priority: P1)
 
 **Goal**: Each reviewer role reaches its queues/returns from nav + dashboard, with queue↔detail↔dashboard back-links.
 
@@ -73,7 +73,7 @@
 
 ---
 
-## Phase 5: User Story 3 - Purchaser reaches sheets and accounts (Priority: P3)
+## Phase 5: User Story 3 - Purchaser reaches sheets and accounts (Priority: P2)
 
 **Goal**: Purchaser reaches sheets + accounts from nav + dashboard; every sheet/transaction view links back.
 

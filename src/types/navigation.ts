@@ -6,7 +6,7 @@ import type { Role } from './permissions'
  * A navigation entry names an existing route — never a new one — plus the
  * session predicate that decides whether it is shown. Route names stay literal
  * strings so `tests/Frontend/routeNameIntegrity.spec.ts` keeps proving every
- * navigated name exists in `src/router/index.ts` (T359).
+ * navigated name exists in `src/router/index.ts` (001/T359).
  *
  * Visibility is disclosure hygiene only, never authorization: every OCS action
  * behind these routes enforces its own role/scope server-side
@@ -64,7 +64,7 @@ const dashboardOrSheets = (session: NavigationSession): boolean =>
  *   authenticated user (FR-018: any caller with app access is a purchaser, and
  *   the returns queue is scoped server-side to the caller's own returns).
  * - The three decision queues: owning role only. Finance deliberately requires
- *   `FINANCE`, never administrator-alone (FR-007: administrator status must
+ *   `FINANCE`, never administrator-alone (001/FR-007: administrator status must
  *   never confer decision authority).
  * - `admin-configuration`, `admin-funding`: `canAdminister` only (FR-010/12/13).
  */

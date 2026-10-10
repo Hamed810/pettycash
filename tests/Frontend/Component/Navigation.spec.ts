@@ -3,7 +3,7 @@
 // T002/T007/T010/T014. What only the interface can be wrong about:
 //   - an administrator sees the administration entries, a non-admin does not;
 //   - each reviewer role sees exactly its own queue entry (finance never by
-//     admin-alone, FR-007);
+//     admin-alone, 001/FR-007);
 //   - every rendered entry resolves to a declared route (defense in depth next
 //     to routeNameIntegrity.spec.ts, which scans source text);
 //   - admin views carry a dashboard back-link (FR-004: no dead ends).
@@ -101,7 +101,7 @@ describe('AppNavigation', () => {
 		expect(finance.find('[data-test="nav-review-finance"]').exists()).toBe(true)
 	})
 
-	it('never grants the finance queue by administrator status alone (FR-007)', async () => {
+	it('never grants the finance queue by administrator status alone (001/FR-007)', async () => {
 		signInAs(['PURCHASER', 'ADMINISTRATOR'], true)
 		const wrapper = await mountNav()
 		expect(wrapper.find('[data-test="nav-review-finance"]').exists()).toBe(false)
