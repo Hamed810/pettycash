@@ -12,6 +12,7 @@ use OCA\PettyCash\Application\Reporting\ReportScope;
 use OCA\PettyCash\Infrastructure\Export\CsvExporter;
 use OCA\PettyCash\Infrastructure\Export\EvidenceArchiveEntry;
 use OCA\PettyCash\Infrastructure\Export\EvidenceArchiveExporter;
+use OCA\PettyCash\Infrastructure\Export\PdfExporter;
 use OCA\PettyCash\Infrastructure\Export\XlsxExporter;
 use OCA\PettyCash\Domain\Shared\Enum\Role;
 use OCA\PettyCash\Tests\TestDoubles\InMemoryEvidenceRepository;
@@ -49,7 +50,8 @@ final class ExportServiceTest extends TestCase
             new XlsxExporter($this->store),
             new EvidenceArchiveExporter($this->store),
             $this->store,
-            $this->files
+            $this->files,
+            new PdfExporter()
         );
     }
 
@@ -130,7 +132,7 @@ final class ExportServiceTest extends TestCase
 
     public function testTheFormatEnumIsTheContractsSet(): void
     {
-        self::assertSame(['csv', 'xlsx', 'zip'], ExportService::SUPPORTED_FORMATS);
+        self::assertSame(['csv', 'xlsx', 'pdf', 'zip'], ExportService::SUPPORTED_FORMATS);
     }
 
     public function testTheResourceEnumIsTheContractsSet(): void
@@ -157,29 +159,45 @@ final class ExportServiceTest extends TestCase
         self::assertStringContainsString('Unknown export format', $decision['reason']);
     }
 
-    // ===== PDF is refused, not half-produced =====
+    // ===== PDF generation (T109) =====
 
-    public function testPdfIsRefusedWithTheRecordedReason(): void
+    public function testPdfIsAuthorizedLikeAnyOtherFormat(): void
     {
-        // T109 is blocked on the font asset, so the honest answer is a refusal that says why. Emitting a
-        // PDF that cannot render the contract's Persian would be worse than not emitting one.
         $decision = $this->exports->authorization($this->admin(), ExportService::RESOURCE_REPORT, ExportService::FORMAT_PDF);
 
-        self::assertFalse($decision['allowed']);
-        self::assertStringContainsString('T109', $decision['reason']);
-        self::assertStringContainsString('font', $decision['reason']);
+        self::assertTrue($decision['allowed']);
     }
 
-    public function testARefusedPdfProducesNoArtifact(): void
+    public function testAPdfExportIsPersistedWithAnEmbeddedSubsetFont(): void
     {
-        try {
-            $this->exports->generate($this->admin(), ExportService::RESOURCE_REPORT, ExportService::FORMAT_PDF);
-            self::fail('pdf must be refused while T109 is blocked');
-        } catch (InvalidArgumentException) {
-            // expected
-        }
+        $result = $this->exports->generate(
+            $this->admin(),
+            ExportService::RESOURCE_SHEETS,
+            ExportService::FORMAT_PDF,
+            $this->rows()
+        );
 
-        self::assertSame([], $this->store->artifactNames());
+        self::assertSame('pdf', $result['format']);
+        self::assertSame('application/pdf', $result['mediaType']);
+        self::assertSame(2, $result['rowCount']);
+        $bytes = $this->store->artifactBytes($result['artifactName']);
+        self::assertStringStartsWith('%PDF-', $bytes);
+        // Subset-embedded Vazirmatn (AAAAAB+ prefix marker) with a ToUnicode map,
+        // so the Persian text stays selectable rather than becoming curves.
+        self::assertStringContainsString('Vazirmatn', $bytes);
+        self::assertStringContainsString('ToUnicode', $bytes);
+    }
+
+    public function testAPdfExportCleansUpItsScratchFile(): void
+    {
+        $before = glob(sys_get_temp_dir() . '/pettycash-double-*') ?: [];
+        $this->exports->generate(
+            $this->admin(),
+            ExportService::RESOURCE_SHEETS,
+            ExportService::FORMAT_PDF,
+            $this->rows()
+        );
+        self::assertSame($before, glob(sys_get_temp_dir() . '/pettycash-double-*') ?: []);
     }
 
     // ===== CSV generation =====

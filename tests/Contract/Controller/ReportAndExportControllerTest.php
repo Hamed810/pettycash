@@ -932,15 +932,19 @@ final class ReportAndExportControllerTest extends TestCase
     }
 
     /**
-     * PDF is in the contract's format enum but T109 is blocked on the font asset, so it is refused
-     * with a reason rather than producing a document that cannot render the contract's Persian.
+     * PDF is generated with the embedded subset font (T109): the artifact must be
+     * a real PDF carrying the selected sheet, like the CSV twin below.
      */
-    public function testPdfIsRefusedWithTheRecordedReason(): void
+    public function testPdfExportGeneratesADocument(): void
     {
-        $response = $this->post('/exports', ['resource' => 'sheets', 'fileFormat' => 'pdf'], $this->commandId());
+        $response = $this->post('/exports', ['resource' => 'sheets', 'fileFormat' => 'pdf', 'ids' => [self::FIXTURE_SHEET_ID]], $this->commandId());
 
-        $this->assertEquals(422, $response['status']);
-        $this->assertStringContainsString('T109', $response['message']);
+        $this->assertEquals(200, $response['status'], json_encode($response['data']));
+        $this->assertSame(1, $response['data']['rowCount'], 'exactly the selected sheet must be exported');
+        $this->assertSame('application/pdf', $response['data']['mediaType']);
+
+        $pdf = (string) base64_decode((string) $response['data']['data'], true);
+        $this->assertStringStartsWith('%PDF-', $pdf, 'the artifact must be a PDF document');
     }
 
     // ===== FR-068: the selection is honoured, or refused =====

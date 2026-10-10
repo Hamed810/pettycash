@@ -8,6 +8,7 @@ use InvalidArgumentException;
 use OCA\PettyCash\Application\Reporting\ExportService;
 use OCA\PettyCash\Infrastructure\Export\CsvExporter;
 use OCA\PettyCash\Infrastructure\Export\EvidenceArchiveExporter;
+use OCA\PettyCash\Infrastructure\Export\PdfExporter;
 use OCA\PettyCash\Infrastructure\Export\XlsxExporter;
 use OCA\PettyCash\Tests\TestDoubles\InMemoryPrivateFileStore;
 use OCA\PettyCash\Tests\TestDoubles\InMemoryTransientExportStore;
@@ -42,7 +43,8 @@ final class CompleteSheetXlsxTest extends TestCase
             new XlsxExporter($this->store),
             new EvidenceArchiveExporter($this->store),
             $this->store,
-            new InMemoryPrivateFileStore()
+            new InMemoryPrivateFileStore(),
+            new PdfExporter()
         );
     }
 
