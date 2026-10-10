@@ -118,6 +118,17 @@ final readonly class SubmitSheet
                 // Submit the sheet (domain logic)
                 $submittedTotal = $sheet->submit();
 
+                // Persist the routed transactions, not just the sheet. `$sheet->submit()`
+                // transitions every transaction in memory (`activate()` moves each to
+                // COST_CENTER / AWAITING_COST_CENTER_REVIEW), but the sheet repository
+                // does not compose transactions — so saving only the sheet kept the
+                // 200 response while every transaction row stayed DRAFT, and no
+                // review queue ever filled. Inside the same database transaction,
+                // so a failed write rolls the sheet back with them (FR-042).
+                foreach ($sheet->transactions() as $routedTransaction) {
+                    $this->transactionRepository->save($routedTransaction);
+                }
+
                 // Create audit event for submission.
                 //
                 // `AuditWriter::append()` reads snake_case keys; casting the AuditEvent

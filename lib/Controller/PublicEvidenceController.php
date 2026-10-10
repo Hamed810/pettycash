@@ -8,6 +8,7 @@ use OCA\PettyCash\Application\Evidence\PublicEvidenceLinkService;
 use OCA\PettyCash\Application\Evidence\PublicEvidenceRefusal;
 use OCA\PettyCash\Infrastructure\Http\OcsErrorMapper;
 use OCP\AppFramework\Http;
+use OCP\AppFramework\Http\Attribute\NoCSRFRequired;
 use OCP\AppFramework\Http\Attribute\PublicPage;
 use OCP\AppFramework\Http\DataResponse;
 use OCP\AppFramework\Http\StreamResponse;
@@ -65,8 +66,14 @@ class PublicEvidenceController extends OCSController
      *   header, and that is right rather than an oversight: consumption mutates nothing business-side, so
      *   it is idempotent by the token itself and a command identifier would imply a replay store it has no
      *   use for.
+     *
+     * `#[NoCSRFRequired]` below IS required, and its absence answered every anonymous consumption with
+     * `412 CSRF check failed`: there is no session to forge a request for, so there is nothing the check
+     * could protect, and without the exemption the token — the whole authority on this path — is
+     * unreachable to the very holder FR-031 grants it to.
      */
     #[PublicPage]
+    #[NoCSRFRequired]
     public function show(string $token, ?string $disposition = null): DataResponse|StreamResponse
     {
         try {

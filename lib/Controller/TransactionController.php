@@ -11,17 +11,14 @@ use LogicException;
 use OCA\PettyCash\Application\Expense\TransactionService;
 use OCA\PettyCash\Application\Expense\CreateCorrectionDraft;
 use OCA\PettyCash\Application\Workflow\ResubmitCorrection;
+use OCA\PettyCash\Application\Audit\AuditQueryService;
 use OCA\PettyCash\Application\Port\CurrentUser;
-use OCA\PettyCash\Domain\Expense\Repository\TransactionRevisionRepository;
-use OCA\PettyCash\Domain\Audit\Repository\AuditEventRepository;
 use OCA\PettyCash\Domain\Workflow\WorkflowStage;
 use OCA\PettyCash\Domain\Shared\Uuid;
 use OCA\PettyCash\Domain\Shared\CurrencyCode;
-use OCA\PettyCash\Domain\Shared\PageBounds;
 use OCA\PettyCash\Infrastructure\Http\OcsErrorMapper;
 use OCA\PettyCash\Infrastructure\Http\TransactionPayloadFormatter;
 use OCA\PettyCash\Domain\Expense\TransactionRevision;
-use OCA\PettyCash\Domain\Audit\AuditEvent;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
 use OCP\AppFramework\Http\DataResponse;
 use OCP\AppFramework\OCSController;
@@ -34,8 +31,7 @@ class TransactionController extends OCSController
         private TransactionService $transactionService,
         private CreateCorrectionDraft $createCorrectionDraft,
         private ResubmitCorrection $resubmitCorrection,
-        private TransactionRevisionRepository $revisionRepository,
-        private AuditEventRepository $auditRepository,
+        private AuditQueryService $auditQueries,
         private CurrentUser $currentUser,
         private OcsErrorMapper $ocsErrorMapper,
         private TransactionPayloadFormatter $payloadFormatter
@@ -47,10 +43,20 @@ class TransactionController extends OCSController
      * @param string $sheetId
      * @param string $expenseDate
      * @param int $amountMinor
+     * @param string|null $description
+     * @param string|null $costCenterId   public id, per `TransactionDraftWrite`
+     * @param string|null $expenseTypeId  public id, per `TransactionDraftWrite`
      * @return DataResponse
+     *
+     * The three optional fields are bound by name from the JSON body, exactly as
+     * the contract declares them. They were absent from this signature while the
+     * client sent them, so every created transaction silently lost its
+     * description, cost centre and expense type and answered 201 for a draft no
+     * submission could accept ("Transaction missing cost center"). They are
+     * forwarded to the service, which resolves and stores them like on update.
      */
     #[NoAdminRequired]
-    public function create(string $sheetId, ?string $expenseDate = null, ?int $amountMinor = null): DataResponse
+    public function create(string $sheetId, ?string $expenseDate = null, ?int $amountMinor = null, ?string $description = null, ?string $costCenterId = null, ?string $expenseTypeId = null): DataResponse
     {
         $commandId = $this->request->getHeader('X-PettyCash-Command-ID');
         // `contracts/ocs-api.yaml:436` declares this header `required: true`. It is refused with 400, the
@@ -92,7 +98,7 @@ class TransactionController extends OCSController
         }
 
         try {
-            $transaction = $this->transactionService->createTransaction($sheetId, $expenseDate, $amountMinor, $commandId);
+            $transaction = $this->transactionService->createTransaction($sheetId, $expenseDate, $amountMinor, $commandId, $description, $costCenterId, $expenseTypeId);
             return new DataResponse($this->formatTransaction($transaction), 201);
         } catch (\Throwable $e) {
             return $this->ocsErrorMapper->map($e, $commandId);
@@ -107,7 +113,11 @@ class TransactionController extends OCSController
     public function show(string $transactionId): DataResponse
     {
         try {
-            $transaction = $this->transactionService->getTransaction($transactionId);
+            // Role-scoped like the history reads (FR-002/FR-004/FR-005): an
+            // owner-only gate here answered every reviewer with 404 on the
+            // very record they were asked to decide, while the queue listed
+            // it as awaiting their decision.
+            $transaction = $this->auditQueries->visibleTransaction($this->currentUser->uid(), $transactionId);
             if ($transaction === null) {
                 return $this->ocsErrorMapper->notFound('Transaction not found');
             }
@@ -330,83 +340,6 @@ class TransactionController extends OCSController
     }
 
     /**
-     * @param string $transactionId
-     * @return DataResponse
-     */
-    #[NoAdminRequired]
-    public function revisions(string $transactionId): DataResponse
-    {
-        try {
-            $transaction = $this->transactionService->getTransaction($transactionId);
-            if ($transaction === null) {
-                return $this->ocsErrorMapper->notFound('Transaction not found');
-            }
-
-            $revisions = $this->revisionRepository->findByTransactionId($transaction->dbId ?? 0);
-            $formatted = array_map([$this, 'formatRevision'], $revisions);
-            return new DataResponse($formatted);
-        } catch (\Throwable $e) {
-            return $this->ocsErrorMapper->map($e, null, ['publicId' => $transactionId]);
-        }
-    }
-
-    /**
-     * The contract's `AuditPage`.
-     *
-     * `contracts/ocs-api.yaml:581` declares this operation's `200` as `$ref:
-     * '#/components/responses/AuditPage'`, which at `:913-922` is `PageMeta` — `page`, `pageSize`,
-     * `total`, all `required` — plus `items`. The endpoint previously returned `array_map(...)`
-     * directly, so `ocs.data` was a JSON list and every one of those keys was absent, while
-     * `:574-575` declared `Page` and `PageSize` that nothing read.
-     *
-     * `page`/`pageSize` are nullable rather than typed `int` because of T225: the AppFramework
-     * `Dispatcher` coerces an absent query parameter to `null` and would throw an unhandled
-     * `TypeError` on an `int` signature *before* this method body runs — returning a `400` with an
-     * empty body and no `ocs` envelope, which is the failure T225 existed to remove from this very
-     * controller. The absence is therefore resolved inside the body, where `PageBounds` can apply
-     * the contract's own defaults.
-     *
-     * The bounds live in `PageBounds` rather than here so `AuditQueryService` (T093) can reuse the
-     * same rule as `ReportFilter` instead of a third copy. What this method owns is the assembly:
-     * it is the only place that knows the response is an `AuditPage`.
-     *
-     * **Authorization is not this method's, and is still T093's.** It reaches
-     * `TransactionService::getTransaction()`, which is owner-only, so a manager, finance officer, or
-     * administrator is answered 404 today. Correcting that is `AuditQueryService`'s work; widening
-     * the gate here would put a second, divergent authorization decision in the controller — which
-     * is how the two would drift apart.
-     */
-    /**
-     * @param string $transactionId
-     * @param int|null $page
-     * @param int|null $pageSize
-     * @return DataResponse
-     */
-    #[NoAdminRequired]
-    public function audit(string $transactionId, ?int $page = null, ?int $pageSize = null): DataResponse
-    {
-        try {
-            $bounds = new PageBounds($page, $pageSize);
-
-            $transaction = $this->transactionService->getTransaction($transactionId);
-            if ($transaction === null) {
-                return $this->ocsErrorMapper->notFound('Transaction not found');
-            }
-
-            $transactionDbId = $transaction->dbId ?? 0;
-            $auditEvents = $this->auditRepository->findByTransactionId($transactionDbId, $bounds->offset, $bounds->pageSize);
-
-            return new DataResponse(
-                $bounds->pageMeta($this->auditRepository->countByTransactionId($transactionDbId)) + [
-                    'items' => array_map([$this, 'formatAuditEvent'], $auditEvents),
-                ]
-            );
-        } catch (\Throwable $e) {
-            return $this->ocsErrorMapper->map($e, null, ['publicId' => $transactionId]);
-        }
-    }
-
-    /**
      * The contract's `TransactionDetail`.
      *
      * Formatting lives in `TransactionPayloadFormatter` because `ReviewController` used to
@@ -421,24 +354,5 @@ class TransactionController extends OCSController
     private function formatRevision(TransactionRevision $rev): array
     {
         return $this->payloadFormatter->revision($rev);
-    }
-
-    private function formatAuditEvent(AuditEvent $event): array
-    {
-        return [
-            'id' => $event->id,
-            'eventType' => $event->eventType,
-            'stage' => $event->stage,
-            'decision' => $event->decisionId ? 'DECISION' : null,
-            'explanation' => $event->explanation,
-            'actor' => [
-                'userId' => $event->actorUid,
-                'displayName' => $event->actorName,
-                'role' => $event->actorRole,
-            ],
-            'before' => json_decode($event->beforeJson, true),
-            'after' => json_decode($event->afterJson, true),
-            'occurredAt' => $event->occurredAt->format(\DateTimeInterface::ATOM),
-        ];
     }
 }

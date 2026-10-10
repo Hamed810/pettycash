@@ -66,22 +66,42 @@ final readonly class TransactionService
      * The sheet lookup and its ownership and status checks also moved inside, for the same reason: on a
      * replay they must not run, because re-validating a command that already succeeded is how a replay
      * turns into a spurious refusal.
+     *
+     * @param string|null $description    stored on revision 1 when the caller also supplies both
+     *                                    references; otherwise the draft stays minimal per FR-022
+     * @param string|null $costCenterId   public id; resolved and snapshotted like in updateTransaction()
+     * @param string|null $expenseTypeId  public id; resolved and snapshotted like in updateTransaction()
+     *
+     * A create carrying the full draft MUST persist it: `contracts/ocs-api.yaml` declares the whole
+     * `TransactionDraftWrite` body on this operation, and dropping everything but the date and the
+     * amount made every created transaction unsubmittable ("Transaction missing cost center") while
+     * answering 201. References supplied here are validated exactly as on update — an unknown cost
+     * centre, an unknown expense type, or an inactive expense type is refused rather than stored —
+     * because silently dropping caller data is the failure this rule exists to prevent. A minimal
+     * create (date and amount only) is unchanged: revision 1 stays a bare draft until a PATCH or a
+     * fuller create completes it, so FR-022's minimum is never newly refused.
      */
     public function createTransaction(
         string $sheetId,
         string $expenseDate,
         int $amountMinor,
-        string $commandId
+        string $commandId,
+        ?string $description = null,
+        ?string $costCenterId = null,
+        ?string $expenseTypeId = null
     ): ExpenseTransaction {
         $payload = [
             'sheet_id' => $sheetId,
             'expense_date' => $expenseDate,
             'amount_minor' => $amountMinor,
+            'description' => $description,
+            'cost_center_id' => $costCenterId,
+            'expense_type_id' => $expenseTypeId,
             'command_id' => $commandId,
         ];
 
-        return $this->transactionManager->transactional(function () use ($sheetId, $expenseDate, $amountMinor, $commandId, $payload): ExpenseTransaction {
-            $stored = $this->idempotencyService->execute($commandId, $payload, function () use ($sheetId, $expenseDate, $amountMinor, $commandId): array {
+        return $this->transactionManager->transactional(function () use ($sheetId, $expenseDate, $amountMinor, $commandId, $description, $costCenterId, $expenseTypeId, $payload): ExpenseTransaction {
+            $stored = $this->idempotencyService->execute($commandId, $payload, function () use ($sheetId, $expenseDate, $amountMinor, $commandId, $description, $costCenterId, $expenseTypeId): array {
                 $ownerUid = $this->currentUser->uid();
                 $sheet = $this->sheetRepository->findByPublicId($sheetId);
 
@@ -101,6 +121,50 @@ final readonly class TransactionService
                 $revisionId = (string)Uuid::random();
 
                 $revision = TransactionRevision::draft($revisionId, 1, $date, $amount);
+
+                // The full draft the contract declares, resolved exactly as on update: a supplied
+                // reference that resolves to nothing (or to an inactive expense type) is a caller
+                // error refused here, not data dropped. `complete()` runs only when all three
+                // submission fields are present — it refuses an incomplete set itself, and a
+                // minimal draft must stay savable per FR-022.
+                // A blank string counts as absent: the client sends `''` for an
+                // unchosen optional, and refusing it would newly reject minimal
+                // drafts that FR-022 allows.
+                if ($costCenterId !== null && trim($costCenterId) !== '') {
+                    $costCenter = $this->costCenterRepository->findByPublicId($costCenterId);
+                    if ($costCenter === null) {
+                        throw new InvalidArgumentException("Cost center not found: {$costCenterId}");
+                    }
+                } else {
+                    $costCenter = null;
+                }
+
+                if ($expenseTypeId !== null && trim($expenseTypeId) !== '') {
+                    $expenseType = $this->expenseTypeRepository->findByPublicId($expenseTypeId);
+                    if ($expenseType === null) {
+                        throw new InvalidArgumentException("Expense type not found: {$expenseTypeId}");
+                    }
+                    if (!$expenseType->active) {
+                        throw new InvalidArgumentException("Expense type is inactive: {$expenseTypeId}");
+                    }
+                } else {
+                    $expenseType = null;
+                }
+
+                if ($description !== null && trim($description) !== '' && $costCenter !== null && $expenseType !== null) {
+                    $revision->complete(
+                        $description,
+                        $costCenter->publicId,
+                        $costCenter->code(),
+                        $costCenter->name,
+                        $costCenter->id ?? 0,
+                        $expenseType->title,
+                        $expenseType->id ?? 0,
+                        false,
+                        $expenseType->publicId
+                    );
+                }
+
                 $transaction = new ExpenseTransaction($transactionId, $ownerUid, $revision);
                 $transaction->sheetId = $sheet->dbId;
 
