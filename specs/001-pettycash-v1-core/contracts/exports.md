@@ -50,6 +50,16 @@ only files actually present in the archive.
 - Stage approvals: independent manager, senior, and finance approval sums.
 - Reports label the effective stage and do not describe pre-finance approval as settled.
 
+## Idempotency (T346)
+
+`POST /exports` requires `X-PettyCash-Command-ID` and stamps it on refusals, but
+does not replay through `IdempotencyService`: FR-084 covers replay of mutating
+commands, and an export leaves no durable state (the transient artifact is
+deleted after streaming), so there is no stored outcome to return. Persisting
+the base64 artifact bytes for replay would put up to 100MB (FR-074) into a TEXT
+result column. A retried export regenerates; the command id still correlates
+the attempts in logs and refusals.
+
 ## Acceptance Checks
 
 - Purchaser exports contain only the purchaser's records.

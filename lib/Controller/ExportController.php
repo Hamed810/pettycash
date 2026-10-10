@@ -116,6 +116,13 @@ class ExportController extends OCSController
         // Read the way every other controller in this app reads it, rather than as a bound
         // parameter: the contract declares the command id as a *header*, and a bound parameter would
         // accept a query-string copy of an idempotency key that the contract does not define.
+        //
+        // T346: the header is required and is stamped on refusals, but the endpoint deliberately
+        // does NOT replay through `IdempotencyService`. FR-084 covers replay of mutating commands;
+        // an export leaves no durable state — the transient artifact is deleted after streaming —
+        // so there is nothing idempotent to return to. Replaying would require persisting the
+        // base64 artifact bytes (evidence ZIPs reach 100MB per FR-074) in a TEXT result column,
+        // which is unsafe by construction. Recorded in `contracts/exports.md`, not silently absent.
         $commandId = (string) $this->request->getHeader('X-PettyCash-Command-ID');
 
         // FR-068's selection. Previously read by nobody, which is the defect T302 records: a caller
