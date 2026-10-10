@@ -60,7 +60,6 @@ final class PlanStructureTest extends TestCase
      * entry is deleted in the same change that creates the directory.
      */
     private const PENDING = [
-        'src/composables' => 'T121',
         'l10n' => 'T119',
         'tests/Integration/Storage' => 'T091',
     ];
