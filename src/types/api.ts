@@ -102,9 +102,10 @@ export interface SheetTotals {
 
 export type SheetStatus =
 	| 'OPEN'
-	| 'AWAITING_COST_CENTER_REVIEW'
-	| 'AWAITING_SENIOR_REVIEW'
-	| 'AWAITING_FINANCE_REVIEW'
+	| 'COST_CENTER'
+	| 'CORRECTION'
+	| 'SENIOR'
+	| 'FINANCE'
 	| 'COMPLETED'
 	| 'COMPLETED_WITH_REJECTIONS'
 
@@ -119,13 +120,14 @@ export type SheetStatus =
  *
  * The `satisfies` clause means a member that is not a `SheetStatus` is a **compile** error rather than a
  * runtime surprise, and the element type widens the literal to the union so callers get `SheetStatus[]`
- * rather than a six-element tuple.
+ * rather than a seven-element tuple.
  */
 export const SHEET_STATUSES = [
 	'OPEN',
-	'AWAITING_COST_CENTER_REVIEW',
-	'AWAITING_SENIOR_REVIEW',
-	'AWAITING_FINANCE_REVIEW',
+	'COST_CENTER',
+	'CORRECTION',
+	'SENIOR',
+	'FINANCE',
 	'COMPLETED',
 	'COMPLETED_WITH_REJECTIONS',
 ] as const satisfies readonly SheetStatus[]
@@ -220,6 +222,23 @@ export interface DecisionWrite {
 	decision: 'APPROVE' | 'REJECT' | 'RETURN'
 	explanation?: string
 	expectedVersion: number
+}
+
+/**
+ * One formal audit event, as `GET /transactions/{id}/audit` emits it
+ * (T093/T098). The actor snapshot is historical — the identity and role at the
+ * time — so a disabled or deleted user reads unchanged (FR-054).
+ */
+export interface AuditEvent {
+	id: string
+	eventType: string
+	stage: string
+	decision: string | null
+	explanation?: string | null
+	actor: ActorSnapshot
+	before?: unknown
+	after?: unknown
+	occurredAt: string
 }
 
 /** The three decisions a review stage can record. */

@@ -28,8 +28,8 @@ return [
         ['name' => 'transaction#destroy', 'url' => '/api/v1/transactions/{transactionId}', 'verb' => 'DELETE'],
         ['name' => 'transaction#correction', 'url' => '/api/v1/transactions/{transactionId}/correction', 'verb' => 'POST'],
         ['name' => 'transaction#resubmit', 'url' => '/api/v1/transactions/{transactionId}/resubmit', 'verb' => 'POST'],
-        ['name' => 'transaction#revisions', 'url' => '/api/v1/transactions/{transactionId}/revisions', 'verb' => 'GET'],
-        ['name' => 'transaction#audit', 'url' => '/api/v1/transactions/{transactionId}/audit', 'verb' => 'GET'],
+        ['name' => 'audit#revisions', 'url' => '/api/v1/transactions/{transactionId}/revisions', 'verb' => 'GET'],
+        ['name' => 'audit#timeline', 'url' => '/api/v1/transactions/{transactionId}/audit', 'verb' => 'GET'],
 
         // Evidence routes
         ['name' => 'evidence#upload', 'url' => '/api/v1/transactions/{transactionId}/evidence', 'verb' => 'POST'],

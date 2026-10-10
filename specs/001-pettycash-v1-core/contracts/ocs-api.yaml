@@ -1381,7 +1381,13 @@ components:
         movement: { $ref: '#/components/schemas/Movement' }
     SheetStatus:
       type: string
-      enum: [OPEN, AWAITING_COST_CENTER_REVIEW, AWAITING_SENIOR_REVIEW, AWAITING_FINANCE_REVIEW, COMPLETED, COMPLETED_WITH_REJECTIONS]
+      # The domain's `SheetStatus` values, not the transaction `AWAITING_*` names this list carried
+      # before: FR-037 (clarified 2026-10-02) establishes `CORRECTION` as a genuine sheet status over
+      # the ranking Draft/CostCenter/Correction/Senior/Finance/Final, and the clarification records
+      # that the `AWAITING_*` names are `TransactionStatus` values, not `SheetStatus` ones. The server
+      # emits the domain values (a submitted sheet reports `COST_CENTER`), so the old list made every
+      # submitted sheet unrepresentable and unassertable — corrected here to match, not the code to it.
+      enum: [OPEN, COST_CENTER, CORRECTION, SENIOR, FINANCE, COMPLETED, COMPLETED_WITH_REJECTIONS]
     SheetCreate:
       type: object
       required: [title]
