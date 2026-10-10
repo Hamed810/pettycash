@@ -4,10 +4,12 @@
 
 **Created**: 2026-09-19
 
-**Status**: Approved for implementation — under convergence. 322 of 374 ledger tasks complete
-(case-insensitive checkbox count, 2026-10-09); T326 and T327 are delivered and no open task carries a
-`[CRITICAL]` tag. The remaining purchaser-journey closure is T171 (open E2E; 1 of 7 journeys green
-as of 2026-10-09).
+**Status**: Approved for implementation — under convergence. 327 of 377 ledger tasks complete
+(case-insensitive checkbox count, 2026-10-09); T304, T326, T327, T428, T429, T430 and T171 are delivered
+and no open task carries a `[CRITICAL]` tag. The purchaser journey is closed: T171's E2E suite is 7 of
+7 green as of 2026-10-09. (Corrected by T430; its prescribed "323 of 374" described the pre-Phase-74
+state and was superseded before it could land by T171, T428, T429 and T430 itself closing in the same
+pass.)
 
 **Input**: User description: "Read the existing business requirements and create feature
 specifications from them. Do not implement anything. Only create specs."
