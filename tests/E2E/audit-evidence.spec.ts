@@ -318,7 +318,7 @@ async function backToSheet(page: Page): Promise<void> {
 
 async function submitSheet(page: Page): Promise<void> {
 	await page.click('[data-test="submit-sheet-button"]')
-	await expect(page.locator('[data-test="sheet-status"]')).toContainText('pettycash.status.costCenter')
+	await expect(page.locator('[data-test="sheet-status"]')).toContainText('مرکز هزینه')
 }
 
 test.describe('Audit and evidence journeys', () => {

@@ -108,7 +108,7 @@ function confirm(): void {
 				ref="cancelButton"
 				:disabled="busy"
 				@click="close">
-				{{ t('pettycash', 'Cancel') }}
+				{{ t('pettycash', 'common.cancel') }}
 			</NcButton>
 			<NcButton
 				variant="error"

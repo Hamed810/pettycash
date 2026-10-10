@@ -268,7 +268,7 @@ test.describe('Purchaser Capture and Submission', () => {
 		await expect(page.locator('[data-test="submission-error-message"]')).not.toBeEmpty()
 
 		// Verify the sheet was not advanced past submission: it stays open rather than moving to review.
-		await expect(page.locator('[data-test="sheet-status"]').first()).toContainText('pettycash.status.open')
+		await expect(page.locator('[data-test="sheet-status"]').first()).toContainText('باز')
 	})
 
 	test('should upload evidence', async ({ page }) => {
@@ -323,7 +323,7 @@ test.describe('Purchaser Capture and Submission', () => {
 		// The key is `costCenter` (not `awaitingCostCenter`): sheet statuses are
 		// the domain's COST_CENTER/CORRECTION/SENIOR/FINANCE values per FR-037,
 		// and the contract's `SheetStatus` was corrected to match.
-		await expect(page.locator('[data-test="sheet-status"]')).toContainText('pettycash.status.costCenter')
+		await expect(page.locator('[data-test="sheet-status"]')).toContainText('مرکز هزینه')
 		
 		// Verify transactions are locked: the create control is withheld entirely
 		// on a submitted sheet (`v-if`, not a disabled button) — same as the
@@ -360,7 +360,7 @@ test.describe('Purchaser Capture and Submission', () => {
 
 		// Should succeed even if account balance is insufficient (status key, not
 		// the English sentence — see the catalog note on the journey above).
-		await expect(page.locator('[data-test="sheet-status"]')).toContainText('pettycash.status.costCenter')
+		await expect(page.locator('[data-test="sheet-status"]')).toContainText('مرکز هزینه')
 	})
 })
 

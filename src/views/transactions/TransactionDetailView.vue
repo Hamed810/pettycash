@@ -8,6 +8,7 @@ import { mdiPencil, mdiUndoVariant, mdiPlus, mdiLock } from '@mdi/js'
 import EvidenceUploader from '@/components/evidence/EvidenceUploader.vue'
 import EvidenceList from '@/components/evidence/EvidenceList.vue'
 import { t } from '@nextcloud/l10n'
+import { decisionKey, stageKey } from '@/l10n'
 import { formatMoney } from '@/utils/money'
 import { selectOptionKey, selectOptionValue } from '@/utils/selectOption'
 
@@ -18,17 +19,17 @@ const transactionStore = useTransactionStore()
 const transactionId = computed(() => route.params.id as string)
 
 const statusLabels: Record<TransactionStatus, string> = {
-	DRAFT: 'pettycash.status.draft',
-	AWAITING_COST_CENTER_REVIEW: 'pettycash.status.awaitingCostCenter',
-	COST_CENTER_APPROVED: 'pettycash.status.costCenterApproved',
-	COST_CENTER_REJECTED: 'pettycash.status.costCenterRejected',
-	AWAITING_SENIOR_REVIEW: 'pettycash.status.awaitingSenior',
-	SENIOR_APPROVED: 'pettycash.status.seniorApproved',
-	SENIOR_REJECTED: 'pettycash.status.seniorRejected',
-	AWAITING_FINANCE_REVIEW: 'pettycash.status.awaitingFinance',
-	AWAITING_PURCHASER_CORRECTION: 'pettycash.status.awaitingCorrection',
-	COMPLETED_APPROVED: 'pettycash.status.completedApproved',
-	COMPLETED_REJECTED: 'pettycash.status.completedRejected'
+	DRAFT: 'status.draft',
+	AWAITING_COST_CENTER_REVIEW: 'status.awaitingCostCenter',
+	COST_CENTER_APPROVED: 'status.costCenterApproved',
+	COST_CENTER_REJECTED: 'status.costCenterRejected',
+	AWAITING_SENIOR_REVIEW: 'status.awaitingSenior',
+	SENIOR_APPROVED: 'status.seniorApproved',
+	SENIOR_REJECTED: 'status.seniorRejected',
+	AWAITING_FINANCE_REVIEW: 'status.awaitingFinance',
+	AWAITING_PURCHASER_CORRECTION: 'status.awaitingCorrection',
+	COMPLETED_APPROVED: 'status.completedApproved',
+	COMPLETED_REJECTED: 'status.completedRejected'
 }
 
 const status = computed(() => transactionStore.currentTransaction?.status)
@@ -237,7 +238,7 @@ watch(transactionId, () => { loadData() })
 					<strong>{{ t('pettycash', 'transactions.stage') }}</strong>
 					<div>
 						<NcChip>
-							{{ t('pettycash', 'stage.' + transactionStore.currentTransaction.stage.toLowerCase()) }}
+							{{ t('pettycash', stageKey(transactionStore.currentTransaction.stage)) }}
 						</NcChip>
 					</div>
 				</div>
@@ -357,9 +358,9 @@ watch(transactionId, () => { loadData() })
 				<div v-for="decision in transactionStore.currentTransaction.decisions" :key="decision.id" class="decision-item" data-test="decision-item">
 					<div class="decision-header">
 						<NcChip>
-							{{ t('pettycash', 'decision.' + decision.decision.toLowerCase()) }}
+							{{ t('pettycash', decisionKey(decision.decision)) }}
 						</NcChip>
-						<span>{{ t('pettycash', 'stage.' + decision.stage.toLowerCase()) }}</span>
+						<span>{{ t('pettycash', stageKey(decision.stage)) }}</span>
 						<small>{{ new Date(decision.decidedAt).toLocaleString('fa-IR') }}</small>
 					</div>
 					<div class="decision-meta">
@@ -414,7 +415,7 @@ watch(transactionId, () => { loadData() })
 
 		<div v-if="transactionStore.error" class="alert alert--error" role="alert">
 			<span>{{ transactionStore.error }}</span>
-			<button type="button" @click="transactionStore.clearError" aria-label="Dismiss">×</button>
+			<button type="button" @click="transactionStore.clearError" :aria-label="t('pettycash', 'common.dismiss')">×</button>
 		</div>
 	</div>
 </template>

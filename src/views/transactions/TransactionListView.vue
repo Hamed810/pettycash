@@ -9,6 +9,7 @@ import NcNoteCard from '@nextcloud/vue/components/NcNoteCard'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import { mdiPlus, mdiEye } from '@mdi/js'
 import { t } from '@nextcloud/l10n'
+import { decisionKey, stageKey } from '@/l10n'
 import { formatMoney } from '@/utils/money'
 import { formatSheetDate as formatDate } from '@/utils/date'
 import ResponsiveTable from '@/components/shared/ResponsiveTable.vue'
@@ -91,17 +92,17 @@ function transactionCell(item: TransactionSummary, column: { key: string }): VNo
 	case 'expenseType':
 		return h('span', null, item.activeRevision.expenseType.name)
 	case 'stage':
-		return h(NcChip, { 'data-test': 'transaction-stage' }, () => t('pettycash', 'stage.' + item.stage.toLowerCase()))
+		return h(NcChip, { 'data-test': 'transaction-stage' }, () => t('pettycash', stageKey(item.stage)))
 	case 'status':
 		return h(StatusBadge, { status: item.status })
 	case 'latestDecision':
 		// FR-052: the actor is a snapshot, so the name shown is the one the decision was made under.
 		return item.latestDecision
 			? h('div', { 'data-test': 'latest-decision' }, [
-				h('span', { class: 'latest-decision__decision' }, t('pettycash', 'decision.' + item.latestDecision.decision.toLowerCase())),
+				h('span', { class: 'latest-decision__decision' }, t('pettycash', decisionKey(item.latestDecision.decision))),
 				h('small', { class: 'latest-decision__actor' }, [
 					`${item.latestDecision.actor.displayName} (`,
-					t('pettycash', 'stage.' + item.latestDecision.stage.toLowerCase()),
+					t('pettycash', stageKey(item.latestDecision.stage)),
 					')'
 				])
 			])
@@ -173,7 +174,7 @@ function transactionCell(item: TransactionSummary, column: { key: string }): VNo
 
 		<div v-if="sheetStore.error" class="alert alert--error" role="alert">
 			<span>{{ sheetStore.error }}</span>
-			<button type="button" aria-label="Dismiss" @click="sheetStore.clearError">×</button>
+			<button type="button" :aria-label="t('pettycash', 'common.dismiss')" @click="sheetStore.clearError">×</button>
 		</div>
 	</div>
 </template>

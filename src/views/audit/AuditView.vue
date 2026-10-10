@@ -69,17 +69,17 @@ async function loadEvidence() {
 			{{ evidenceError }}
 		</NcNoteCard>
 
-		<section aria-label="audit-timeline-section">
+		<section :aria-label="t('pettycash', 'audit.timeline')">
 			<h2>{{ t('pettycash', 'audit.timeline') }}</h2>
 			<AuditTimeline :events="auditStore.items" />
 		</section>
 
-		<section aria-label="revision-history-section">
+		<section :aria-label="t('pettycash', 'transactions.revisionHistory')">
 			<h2>{{ t('pettycash', 'transactions.revisionHistory') }}</h2>
 			<RevisionHistory :revisions="auditStore.revisions" />
 		</section>
 
-		<section aria-label="evidence-section">
+		<section :aria-label="t('pettycash', 'evidence.list')">
 			<h2>{{ t('pettycash', 'evidence.list') }}</h2>
 			<EvidenceList :evidence="evidence" :is-draft="false" />
 			<div v-for="item in evidence" :key="item.id" class="audit-view__item">
