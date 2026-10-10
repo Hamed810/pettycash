@@ -61,7 +61,8 @@ final readonly class ReportScope
     public static function forActor(
         RoleAssignmentRepository $assignments,
         string $actorUid,
-        DateTimeImmutable $on
+        DateTimeImmutable $on,
+        bool $isPlatformAdministrator = false
     ): self {
         $effective = $assignments->findActiveByUserUid($actorUid, $on);
 
@@ -97,6 +98,17 @@ final readonly class ReportScope
         }
 
         $roles = array_values(array_unique($roles, SORT_REGULAR));
+
+        // Platform administrators (Nextcloud `admin` group, via `AdministratorCheck`) hold the
+        // administrator scope even with no `ADMINISTRATOR` assignment row -- the same rule
+        // `SessionController::resolveRoles()` applies, so `/me` and `/dashboard` agree about the
+        // same person. Cost-centre scope still comes only from valid assignment rows: platform
+        // status invents no managed cost centres.
+        if ($isPlatformAdministrator) {
+            $roles[] = Role::Administrator;
+            $roles = array_values(array_unique($roles, SORT_REGULAR));
+            $administrator = true;
+        }
 
         // A manager whose assignment carries no cost centre covers none. Dropping the nulls here rather
         // than passing them into every query is the difference between "no results" and "all results", and
