@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Clear Nextcloud's route cache, and record that it happened.
+#
+# WHY THIS EXISTS
+#
+# `scripts/dev/route-settle` refuses to let a contract-test run proceed while a
+# stale route collection could still be served. Its bound is
+# `now - mtime(appinfo/routes.php) < 3600`, because that is the honest
+# time-based answer: nothing observable from outside tells you when the cache
+# entry was written.
+#
+# That bound has a consequence, which is why this script exists. Once the cache
+# *has* been cleared, the stale entry is gone -- but the mtime has not changed,
+# so the settle script keeps blocking for the rest of the hour. An operator who
+# did exactly the right thing would be told to do it again, and again. That is
+# the same failure this repository keeps running into in a new place: a check
+# that cannot tell "not yet done" from "already done", reporting the first as
+# the second.
+#
+# So the clear records itself. This script asks Apache to reload gracefully, waits
+# for the workers to come back, and only then writes a marker with that moment's epoch. The settle script treats the route cache as settled when
+# the marker is newer than `appinfo/routes.php`, which is exactly the condition
+# under which no pre-edit collection can be in flight.
+#
+# The marker is written last, on purpose. A marker written before the recycle
+# finished would claim a clear that had not happened, which is the failure this
+# whole mechanism exists to prevent.
+#
+# WHY SIGUSR2, AND WHY PID 1
+#
+# `occ` cannot do this. Under CLI, `ICacheFactory::createLocal()` returns an
+# array-backed cache, so clearing there empties nothing that Apache's `mod_php`
+# serves; Apache's local cache is APCu, one instance per worker. The only
+# mechanism that reaches it is recycling the workers. SIGUSR2 is Apache's
+# graceful restart: in-flight requests are allowed to finish, the configuration
+# is re-read unchanged, and no container, volume, database or file is touched.
+#
+# In this image Apache is PID 1. `apachectl -k graceful` is used rather than
+# `kill -USR2 1`, which is the textbook signal for the same thing and does nothing
+# here: the child PIDs were byte-identical before and after, no lifecycle event
+# reached Apache's log, and the stale route kept being served. The reload is
+# confirmed by observing a different set of children, never by assuming one.
+#
+# SCOPE AND PERMISSION
+#
+# This restarts a service in a container this repository does not own. It is listed
+# here explicitly so the boundary is visible rather than implied: it recycles and
+# re-reads Apache, changes no configuration, and deletes nothing.
+# The alternatives are worse -- an hour-long block on every contract run after a
+# route edit, or a `routes.php` change that silently mis-reports for an hour.
+#
+# USAGE
+#
+#   scripts/dev/route-cache-clear
+#
+# Then re-run the suite. `scripts/dev/route-settle --status` will confirm.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# The canonical container name, and load-bearing: the lab's Compose project is named
+# `pettycash-lab`, so every container in it carries that prefix. A container called
+# `nextcloud` does not exist here, and guessing it produced a clean "No such container"
+# failure on the first run -- which is the right failure, from the wrong hardcoding.
+#
+# The prefix is not a guess: COMPOSE_PROJECT_NAME=pettycash-lab in
+# ~/projects/nextcloud-lab/env/pettycash.env is what Compose prefixes container names
+# with. It matches the default in scripts/dev/in-container; the override exists so a lab
+# rename is one value rather than a search across the repository.
+readonly CONTAINER="${PETTYCASH_LAB_CONTAINER:-pettycash-lab-nextcloud-1}"
+readonly MARKER=/tmp/pettycash-route-cache-cleared
+
+# Apache recycles its workers asynchronously, so the master can accept the request a
+# moment before the new workers are serving.
+#
+# The proof that it happened is that the set of child PIDs CHANGED, not that a count
+# still matched. A count is the check that let the ineffective `kill -USR2 1` through:
+# the same ten workers were there before and after, so the count was identical and the
+# script was satisfied while nothing had been cleared. Comparing identity rather than
+# quantity is the whole difference between verifying an action and assuming it.
+child_pids() {
+  local value
+  # `pgrep -P 1 apache2` rather than `ps` piped into `awk`: awk needs `$2`/`$3`
+  # field references, and inside this nesting level bash tries to expand them before
+  # awk ever sees them. The first version failed with "$2: unbound variable", which
+  # surfaced as "could not read the child PIDs" -- the right outcome from a broken probe,
+  # for the wrong reason.
+  value="$("$SCRIPT_DIR/in-container" sh -c "pgrep -P 1 apache2 2>/dev/null | sort -n | tr '\n' ' '" || true)"
+  case "$value" in
+    ''|*[!0-9\ ]*)
+      # An empty or unreadable result is a hard failure, not "no children".
+      return 1
+      ;;
+  esac
+  printf '%s' "$value"
+}
+
+PIDS_BEFORE="$(child_pids)" || {
+  echo "route-cache-clear: could not read the Apache child PIDs in the container." >&2
+  echo "route-cache-clear: Without them there is no way to prove the workers were" >&2
+  echo "route-cache-clear: recycled, so no marker will be written." >&2
+  exit 1
+}
+
+echo "route-cache-clear: asking Apache in ${CONTAINER} to reload gracefully."
+
+# The one privileged action: a graceful reload. Same configuration, in-flight requests
+# finish, nothing is deleted or rewritten.
+#
+# It is `apachectl -k graceful`, NOT `kill -USR2 1`. The signal version was tried first
+# because SIGUSR2 is the textbook graceful-restart signal, and it reported success while
+# changing nothing: the child PIDs before and after were byte-identical, Apache's log
+# recorded no lifecycle event, and the stale route kept being served. A textbook signal,
+# silently ineffective, in a container where Apache is PID 1 -- so the mechanism is chosen
+# from observed behaviour here, not from documentation.
+if ! docker exec -u root "${CONTAINER}" apachectl -k graceful; then
+  echo "route-cache-clear: could not ask Apache to reload gracefully." >&2
+  echo "route-cache-clear: Needs access to the '${CONTAINER}' container as root." >&2
+  echo "route-cache-clear: No marker was written, so route-settle will keep blocking --" >&2
+  echo "route-cache-clear: which is the correct outcome for a clear that did not happen." >&2
+  exit 1
+fi
+
+# Wait for the recycle, checking for a *different* set of children.
+deadline=$(( $(date +%s) + 30 ))
+recycled=0
+pids_after=""
+while [ "$(date +%s)" -lt "$deadline" ]; do
+  sleep 1
+  pids_after="$(child_pids || true)"
+  if [ -n "$pids_after" ] && [ "$pids_after" != "$PIDS_BEFORE" ]; then
+    recycled=1
+    break
+  fi
+done
+
+if [ "$recycled" -ne 1 ]; then
+  echo "route-cache-clear: Apache's workers were NOT recycled within 30s." >&2
+  echo "route-cache-clear: These pre-reload workers survived and still hold the APCu route" >&2
+  echo "route-cache-clear: cache: ${survived:-<none identified>}" >&2
+  echo "route-cache-clear: The reload did not take effect, so the route cache may still be" >&2
+  echo "route-cache-clear: serving the pre-edit collection. No marker was written and" >&2
+  echo "route-cache-clear: route-settle will keep blocking, which is the correct outcome." >&2
+  exit 1
+fi
+
+# The marker is written last, and only now. Its value is the moment the workers
+# were back, which is the earliest instant at which no pre-edit APCu entry can
+# still be held: the old workers are gone by definition once the new ones serve.
+now="$("$SCRIPT_DIR/in-container" date +%s)" || exit 1
+case "$now" in
+  ''|*[!0-9]*)
+    echo "route-cache-clear: could not read the container clock; no marker written." >&2
+    exit 1
+    ;;
+esac
+
+if ! "$SCRIPT_DIR/in-container" sh -c "printf '%s\n' '$now' > '$MARKER'"; then
+  echo "route-cache-clear: workers recycled but the marker could not be written at" >&2
+  echo "route-cache-clear: $MARKER. The clear did happen; route-settle will still block" >&2
+  echo "route-cache-clear: until the mtime bound expires, because it cannot tell." >&2
+  exit 1
+fi
+
+echo "route-cache-clear: Apache recycled (children ${PIDS_BEFORE} -> ${pids_after}); route cache cleared."
+echo "route-cache-clear: marked at epoch ${now}. Re-run the suite."

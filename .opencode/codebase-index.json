@@ -1,0 +1,17 @@
+{
+  "embeddingProvider": "ollama",
+  "embeddingModel": "qwen3-embedding:8b",
+  "scope": "project",
+
+  "embedding": {
+    "batch": {
+      "maxBatchItems": 4
+    }
+  },
+
+  "indexing": {
+    "autoIndex": false,
+    "watchFiles": true,
+    "requireProjectMarker": true
+  }
+}

@@ -16,7 +16,11 @@
         approval workflows, documents, revisions and audit trails.
     ]]></description>
 
-    <version>1.0.0</version>
+    <!--
+      Must stay at or above the highest lib/Migration/VersionNNNNNN prefix (010300 -> 1.3.0),
+      because Nextcloud only applies migrations whose version is <= the app version.
+    -->
+    <version>1.3.1</version>
 
     <licence>agpl</licence>
 
@@ -29,6 +33,24 @@
     <category>office</category>
 
     <dependencies>
+        <!--
+          ACC-001: the PHP 8.2 floor (with the 8.5 ceiling matching `composer.json`'s
+          `>=8.2 <8.6`) is declared here as well as there, so the platform refuses to
+          enable the app on an unsupported runtime instead of failing at class-load.
+          Position is significant: info.xsd defines <dependencies> as an xs:sequence in
+          which an optional <php> comes first, then <database>, then <nextcloud>.
+        -->
+        <php min-version="8.2" max-version="8.5"/>
+        <!--
+          Declared V1 database backends (FR-077). Order is significant: the Nextcloud
+          info.xsd defines <dependencies> as an xs:sequence in which <database> must
+          precede <nextcloud>. The schema permits only sqlite, mysql, and pgsql, so
+          Oracle/oci is structurally not declarable here — see the deferred
+          Oracle/Enterprise constraint in plan.md.
+        -->
+        <database>mysql</database>
+        <database>pgsql</database>
+        <database>sqlite</database>
         <nextcloud min-version="34"/>
     </dependencies>
 

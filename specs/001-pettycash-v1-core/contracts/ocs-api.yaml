@@ -1,0 +1,1785 @@
+openapi: 3.0.3
+info:
+  title: PettyCash V1 OCS API
+  version: 1.0.0-draft
+  description: |
+    Versioned JSON contract for the PettyCash Nextcloud application. The deployed base path is
+    /ocs/v2.php/apps/pettycash/api/v1. JSON responses use the standard OCS envelope; schemas below
+    describe the value carried in ocs.data unless an operation streams a file.
+servers:
+  - url: /ocs/v2.php/apps/pettycash/api/v1
+security:
+  - nextcloudSession: []
+tags:
+  - name: Session
+  - name: Configuration
+  - name: Accounts
+  - name: Sheets
+  - name: Transactions
+  - name: Workflow
+  - name: Evidence
+  - name: Audit
+  - name: Reports
+  - name: Exports
+
+paths:
+  /me:
+    get:
+      tags: [Session]
+      summary: Return the current user and effective capabilities
+      responses:
+        '200':
+          description: Current user context
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionContext'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /dashboard:
+    get:
+      tags: [Session]
+      summary: Return role-scoped dashboard cards and work summaries
+      responses:
+        '200':
+          description: Dashboard projection for all active roles
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Dashboard'
+
+  /configuration/currencies:
+    get:
+      tags: [Configuration]
+      summary: List currencies visible to the current administrative context
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          $ref: '#/components/responses/CurrencyPage'
+    post:
+      tags: [Configuration]
+      summary: Create a currency
+      parameters:
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CurrencyWrite'
+      responses:
+        '201':
+          description: Currency created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Currency'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /configuration/currencies/{currencyId}:
+    patch:
+      tags: [Configuration]
+      summary: Update or activate/deactivate a currency
+      parameters:
+        - $ref: '#/components/parameters/CurrencyId'
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/CurrencyWrite'
+                - $ref: '#/components/schemas/ExpectedVersion'
+      responses:
+        '200':
+          description: Updated currency
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Currency'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /configuration/cost-centers:
+    get:
+      tags: [Configuration]
+      summary: List cost centers within the caller's view scope
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          $ref: '#/components/responses/CostCenterPage'
+    post:
+      tags: [Configuration]
+      summary: Create a cost center and current manager assignments
+      parameters:
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CostCenterWrite'
+      responses:
+        '201':
+          description: Cost center created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CostCenter'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /configuration/cost-centers/{costCenterId}:
+    patch:
+      tags: [Configuration]
+      summary: Update a cost center or its current assignments
+      parameters:
+        - $ref: '#/components/parameters/CostCenterId'
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/CostCenterWrite'
+                - $ref: '#/components/schemas/ExpectedVersion'
+      responses:
+        '200':
+          description: Updated cost center
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CostCenter'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /configuration/expense-types:
+    get:
+      tags: [Configuration]
+      summary: List expense types
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          $ref: '#/components/responses/ExpenseTypePage'
+    post:
+      tags: [Configuration]
+      summary: Create an expense type
+      parameters:
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExpenseTypeWrite'
+      responses:
+        '201':
+          description: Expense type created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExpenseType'
+
+  /configuration/expense-types/{expenseTypeId}:
+    patch:
+      tags: [Configuration]
+      summary: Update or activate/deactivate an expense type
+      parameters:
+        - $ref: '#/components/parameters/ExpenseTypeId'
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/ExpenseTypeWrite'
+                - $ref: '#/components/schemas/ExpectedVersion'
+      responses:
+        '200':
+          description: Updated expense type
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExpenseType'
+
+  /configuration/finance-assignments:
+    get:
+      tags: [Configuration]
+      summary: List shared-queue finance officers
+      responses:
+        '200':
+          description: Active and historical finance assignments
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/RoleAssignment' }
+    post:
+      tags: [Configuration]
+      summary: Add or update a shared-queue finance assignment
+      parameters:
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FinanceAssignmentWrite'
+      responses:
+        '201':
+          description: Assignment created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleAssignment'
+
+  /accounts:
+    get:
+      tags: [Accounts]
+      summary: List accounts permitted for the caller
+      parameters:
+        - name: userId
+          in: query
+          schema: { type: string }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          $ref: '#/components/responses/AccountPage'
+    post:
+      tags: [Accounts]
+      summary: Create a user account for a supported currency
+      parameters:
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountCreate'
+      responses:
+        '201':
+          description: Account created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Account' }
+
+  /accounts/{accountId}:
+    # T409 / FR-013. Administrator deactivation and reactivation of an account. This operation did not
+    # exist — the complete account surface was index/create/charge/movements — so no artifact could
+    # deactivate an account except through owner deletion, and FR-020's inactive-account refusal had no
+    # reachable trigger.
+    patch:
+      tags: [Accounts]
+      summary: Deactivate or reactivate a petty-cash account
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/AccountActiveUpdate'
+                - $ref: '#/components/schemas/ExpectedVersion'
+      responses:
+        '200':
+          description: Updated account
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Account' }
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /accounts/{accountId}/charges:
+    post:
+      tags: [Accounts]
+      summary: Charge a petty-cash account
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountCharge'
+      responses:
+        '201':
+          description: Charge movement and updated account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountMutationResult'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /accounts/{accountId}/movements:
+    get:
+      tags: [Accounts]
+      summary: List permitted account movements
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          $ref: '#/components/responses/MovementPage'
+
+  /sheets:
+    get:
+      tags: [Sheets]
+      summary: List role-scoped sheets
+      parameters:
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/SheetStatus' }
+        - name: ownerId
+          in: query
+          schema: { type: string }
+        - name: currency
+          in: query
+          schema: { type: string, minLength: 3, maxLength: 3 }
+        - name: from
+          in: query
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          schema: { type: string, format: date }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          $ref: '#/components/responses/SheetPage'
+    post:
+      tags: [Sheets]
+      summary: Create an open sheet
+      parameters:
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SheetCreate'
+      responses:
+        '201':
+          description: Sheet created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SheetDetail' }
+
+  /sheets/{sheetId}:
+    get:
+      tags: [Sheets]
+      summary: Return a role-scoped sheet detail projection
+      parameters:
+        - $ref: '#/components/parameters/SheetId'
+      responses:
+        '200':
+          description: Sheet detail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SheetDetail' }
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [Sheets]
+      summary: Update an open sheet
+      parameters:
+        - $ref: '#/components/parameters/SheetId'
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/SheetCreate'
+                - $ref: '#/components/schemas/ExpectedVersion'
+      responses:
+        '200':
+          description: Updated sheet
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SheetDetail' }
+        # T416. This operation already required `ExpectedVersion` and already refused a stale one --
+        # it answered `422`, because the guard raised `InvalidArgumentException`, which is what
+        # `OcsErrorMapper` maps that class to. The request is well formed; the caller's view is out of
+        # date. FR-025 requires a `409` on a sheet's own pre-submission fields, matching the `409`
+        # `PATCH /transactions/{id}` already declared. The declaration was missing, not the behaviour.
+        '409':
+          $ref: '#/components/responses/Conflict'
+    # T417 / FR-086. Owner deletion of a sheet that has **never been submitted**, with its draft
+    # transactions, their revisions, and their stored evidence files, removed atomically.
+    #
+    # `X-PettyCash-Command-ID` is **required**, unlike the header-free `DELETE /transactions/{id}` next
+    # door. That operation is repeatable because a retry has nothing left to remove; a sheet delete
+    # without a gate would answer "not found" on the retry, so a client that lost the first response
+    # could not tell its own success from a failure. FR-086 makes FR-084 apply here for that reason.
+    delete:
+      tags: [Sheets]
+      summary: Delete an own sheet that has never been submitted
+      parameters:
+        - $ref: '#/components/parameters/SheetId'
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExpectedVersion' }
+      responses:
+        '204': { description: Sheet and its draft subtree removed }
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /sheets/{sheetId}/submit:
+    post:
+      tags: [Workflow]
+      summary: Validate and submit an open sheet
+      parameters:
+        - $ref: '#/components/parameters/SheetId'
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExpectedVersion' }
+      responses:
+        '200':
+          description: Submitted sheet and routed transactions
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SheetDetail' }
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /sheets/{sheetId}/transactions:
+    post:
+      tags: [Transactions]
+      summary: Add a draft transaction to an open sheet
+      parameters:
+        - $ref: '#/components/parameters/SheetId'
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TransactionDraftWrite' }
+      responses:
+        '201':
+          description: Draft transaction created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TransactionDetail' }
+
+  /transactions/{transactionId}:
+    get:
+      tags: [Transactions]
+      summary: Return transaction detail and allowed actions
+      parameters:
+        - $ref: '#/components/parameters/TransactionId'
+      responses:
+        '200':
+          description: Transaction detail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TransactionDetail' }
+    patch:
+      tags: [Transactions]
+      summary: Update a draft transaction or correction draft
+      parameters:
+        - $ref: '#/components/parameters/TransactionId'
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/TransactionDraftWrite'
+                - $ref: '#/components/schemas/ExpectedVersion'
+      responses:
+        '200':
+          description: Updated transaction
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TransactionDetail' }
+        '409':
+          $ref: '#/components/responses/Conflict'
+    delete:
+      tags: [Transactions]
+      summary: Delete a transaction from an open sheet
+      # Repeatable command: no `X-PettyCash-Command-ID`. `contracts/workflow.md` requires that header
+      # only for *non-repeatable* commands, and a DELETE of a draft row is repeatable — the caller
+      # retries it, and the endpoint has nothing to deduplicate because the row is simply gone.
+      # `expectedVersion` still guards against a *concurrent* edit; it is not a replay guard, since a
+      # sequential retry resends the version the client originally read.
+      parameters:
+        - $ref: '#/components/parameters/TransactionId'
+      responses:
+        '204': { description: Draft transaction deleted }
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /transactions/{transactionId}/decisions:
+    post:
+      tags: [Workflow]
+      summary: Record the actor's permitted decision for the current stage
+      parameters:
+        - $ref: '#/components/parameters/TransactionId'
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DecisionWrite' }
+      responses:
+        '201':
+          description: Decision, updated transaction, and any account effect
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DecisionResult' }
+        # T427. Two `400` reasons share this declaration. T426's bulk refusal answers `badRequest` when the
+        # body carries `transactionIds`, `transactions`, `ids`, or a `transactionId` that disagrees with the
+        # path — a request V1 cannot satisfy under FR-033's single-transaction rule, so the refusal names the
+        # field rather than narrowing the decision to the path's transaction. The missing-commandId refusal
+        # answers `400` for the same reason and was likewise undeclared; one declaration covers both, since
+        # both are the same class of fault (a request the caller must change, not a field value that failed
+        # validation — hence `400` rather than the `422` below).
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /transactions/{transactionId}/correction:
+    post:
+      tags: [Transactions]
+      summary: Create a correction draft from the active returned revision
+      parameters:
+        - $ref: '#/components/parameters/TransactionId'
+        - $ref: '#/components/parameters/CommandId'
+      responses:
+        '201':
+          description: Correction draft revision
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Revision' }
+        # T416. The `409` was already reachable here and already answered as one: the
+        # `NotAwaitingCorrection` refusal on this operation is a `Conflict`, so the operation
+        # declared a `409` by behaviour and by the very next refusal a caller can hit. The stale
+        # `expectedVersion` refusal is the same answer for the same reason, so it is stated rather
+        # than left to be inferred from the exception type.
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /transactions/{transactionId}/resubmit:
+    post:
+      tags: [Workflow]
+      summary: Validate and activate a correction revision
+      parameters:
+        - $ref: '#/components/parameters/TransactionId'
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExpectedVersion' }
+      responses:
+        '200':
+          description: New active revision routed to cost-center review
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TransactionDetail' }
+        # T416. This operation declares a **required** `ExpectedVersion` body, so a stale version is
+        # reachable by construction and the contract had no stated answer for it. FR-025: a stale
+        # pre-submission edit is a `409` whose recovery is "reload", not a `422` telling the caller to
+        # fix a request that was already correct.
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /transactions/{transactionId}/revisions:
+    get:
+      tags: [Audit]
+      summary: List authorized immutable revisions
+      parameters:
+        - $ref: '#/components/parameters/TransactionId'
+      responses:
+        '200':
+          description: Revision history
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Revision' }
+
+  /transactions/{transactionId}/audit:
+    get:
+      tags: [Audit]
+      summary: List authorized business history
+      parameters:
+        - $ref: '#/components/parameters/TransactionId'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          $ref: '#/components/responses/AuditPage'
+
+  /queues/{stage}:
+    get:
+      tags: [Workflow]
+      summary: Return the caller's cost-center, senior, or shared finance queue
+      parameters:
+        - name: stage
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [cost-center, senior, finance]
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          $ref: '#/components/responses/TransactionPage'
+
+  /returns:
+    get:
+      tags: [Workflow]
+      summary: Return the current purchaser's correction queue
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          $ref: '#/components/responses/TransactionPage'
+
+  /transactions/{transactionId}/evidence:
+    post:
+      tags: [Evidence]
+      summary: Upload evidence for a draft or permitted transaction state
+      parameters:
+        - $ref: '#/components/parameters/TransactionId'
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '201':
+          description: Evidence metadata
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Evidence' }
+
+  /evidence/{evidenceId}:
+    delete:
+      tags: [Evidence]
+      summary: Delete draft evidence or deactivate submitted evidence
+      # Repeatable command: no `X-PettyCash-Command-ID`, for the reason given on
+      # `DELETE /transactions/{transactionId}`. The effect is idempotent rather than merely
+      # repeatable — the evidence row survives as deactivated, so a repeat returns the same `200`
+      # and the same metadata, including the `deactivatedAt` recorded by the *first* call.
+      parameters:
+        - $ref: '#/components/parameters/EvidenceId'
+      responses:
+        '200':
+          description: Deactivated evidence metadata
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Evidence' }
+        '204': { description: Draft evidence deleted }
+
+  /evidence/{evidenceId}/content:
+    get:
+      tags: [Evidence]
+      summary: Stream authorized evidence content or preview
+      parameters:
+        - $ref: '#/components/parameters/EvidenceId'
+        - name: disposition
+          in: query
+          description: >-
+            Preview or download. Honoured for a media type that is safe to render in the
+            Nextcloud origin (images, PDF, plain text). A media type outside that set is
+            always served as `application/octet-stream` with an `attachment` disposition
+            regardless of this parameter, because an attacker-supplied type served inline
+            would execute as script in the viewer's session. FR-060.
+          schema:
+            type: string
+            enum: [inline, attachment]
+            default: inline
+      responses:
+        '200':
+          # FR-060 (T275). This used to declare exactly one success content type,
+          # `application/octet-stream`, which made the requirement's preview journey
+          # unimplementable while the same block declared a `disposition` parameter
+          # defaulting to `inline` -- a value that cannot render an octet-stream body. The
+          # 2026-09-30 clarification settled that the contract was the artifact at fault.
+          #
+          # The declared set is now the closed set the endpoint can actually return: the
+          # inline-safe types are served with their own media type so they render, and
+          # everything else is served as `application/octet-stream`. Listing them explicitly
+          # rather than writing "the stored media type" keeps the response checkable -- a new
+          # type cannot be served without either appearing here or being coerced to the
+          # fallback.
+          #
+          # `image/svg+xml` is deliberately absent from the inline-safe set. SVG is an image
+          # and it can carry `<script>`; serving it inline would execute script in the
+          # viewer's session, which is the harm FR-060 names. It is served as
+          # `application/octet-stream` with an `attachment` disposition like any other
+          # unlisted type.
+          description: Evidence byte stream
+          content:
+            'application/octet-stream':
+              schema: { type: string, format: binary }
+            'application/pdf':
+              schema: { type: string, format: binary }
+            'image/png':
+              schema: { type: string, format: binary }
+            'image/jpeg':
+              schema: { type: string, format: binary }
+            'image/gif':
+              schema: { type: string, format: binary }
+            'image/webp':
+              schema: { type: string, format: binary }
+            'image/bmp':
+              schema: { type: string, format: binary }
+            'text/plain':
+              schema: { type: string, format: binary }
+
+  /evidence/{evidenceId}/links:
+    post:
+      tags: [Evidence]
+      summary: Create an administrator-controlled public link
+      parameters:
+        - $ref: '#/components/parameters/EvidenceId'
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                expiresAt: { type: string, format: date-time, nullable: true }
+      responses:
+        '201':
+          description: Public link; raw token is returned only at creation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EvidenceLink' }
+
+  /evidence-links/{linkId}/deactivate:
+    post:
+      tags: [Evidence]
+      summary: Deactivate a public evidence link
+      parameters:
+        - name: linkId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/CommandId'
+      responses:
+        '200':
+          description: Deactivated link metadata
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EvidenceLink' }
+
+  # FR-031 (**clarified 2026-10-07**). This is the **only route in V1 reachable without
+  # authentication**, and it exists because the token *is* the authority: anyone holding the unguessable
+  # token may open the evidence, without a session and without any role or responsibility scope.
+  #
+  # Three properties are load-bearing and each is a defect if violated:
+  #
+  # 1. **No `CommandId` parameter and no `security` requirement.** Consumption is idempotent by the
+  #    token itself and mutates nothing business-side; requiring a command identifier would be
+  #    incoherent, and declaring an authenticated security scheme would contradict the decision.
+  # 2. **`404` for unknown, deactivated, and expired alike.** A response that distinguishes "you had a
+  #    link, it lapsed" from "no such link" turns the error itself into a confirmation that evidence
+  #    exists, so all three MUST produce one identical response.
+  # 3. **FR-060's media-type policy applies here too.** Content is inline only for the inline-safe
+  #    stored media types and `application/octet-stream` + `attachment` otherwise. This is the one place
+  #    where an attacker-supplied stored type would be rendered against a viewer who never authenticated,
+  #    so the same policy cannot be relaxed for public links.
+  #
+  # Abuse control is delegated to Nextcloud's brute-force limiter (the source requirements place
+  # authentication policy in Nextcloud's hands), so this route MUST NOT gain an application-level rate
+  # limiter, login challenge, or CAPTCHA -- that would be the parallel authentication system the
+  # constitution forbids.
+  /public/evidence/{token}:
+    get:
+      tags: [Evidence]
+      summary: Retrieve evidence through an unguessable public link token (unauthenticated)
+      operationId: getPublicEvidenceByToken
+      security: [] # unauthenticated by design; see the notes above
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema: { type: string, minLength: 32, maxLength: 256 }
+        - name: disposition
+          in: query
+          required: false
+          description: >-
+            FR-060. `inline` renders inline-safe media types (images, PDF, plain text) and downloads
+            everything else; `attachment` always downloads.
+          schema: { type: string, enum: [inline, attachment], default: inline }
+      responses:
+        '200':
+          description: >-
+            Evidence content. `Content-Type` is the stored media type when it is inline-safe and
+            `application/octet-stream` otherwise; `Content-Disposition` follows `disposition`.
+          content:
+            'application/octet-stream':
+              schema: { type: string, format: binary }
+            'application/pdf':
+              schema: { type: string, format: binary }
+            'image/png':
+              schema: { type: string, format: binary }
+            'image/jpeg':
+              schema: { type: string, format: binary }
+            'image/gif':
+              schema: { type: string, format: binary }
+            'image/webp':
+              schema: { type: string, format: binary }
+            'image/bmp':
+              schema: { type: string, format: binary }
+            'text/plain':
+              schema: { type: string, format: binary }
+        '404':
+          # FR-031: unknown, deactivated and expired tokens are **indistinguishable by design**.
+          # The generic `NotFound` response is the correct shape here precisely because it carries no
+          # detail beyond the resource being absent -- a bespoke body would tempt an implementation into
+          # disclosing *which* of the three cases applied, which would confirm that a link once existed.
+          $ref: '#/components/responses/NotFound'
+
+  /reports/{reportType}:
+    get:
+      tags: [Reports]
+      summary: Return a role-scoped paged report
+      parameters:
+        - name: reportType
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [sheets, transactions, cost-centers, accounts, process, evidence, audit]
+        - name: filters
+          in: query
+          # `type: string`, not an object, because a query parameter is a string: the filter object is
+          # JSON-encoded into this **one** parameter. The description previously said "encoded as query
+          # parameters by the client", which is a different wire shape -- one parameter per facet -- and
+          # would have led a generated client to send `?statuses[]=OPEN`, which the server cannot read.
+          # Each controller owns how its own transport encodes the value and hands the decoded object to one
+          # `ReportFilterFactory`; the vocabulary is shared, the encoding is not.
+          description: >-
+            The report filter object, JSON-encoded into this single query parameter. The accepted keys are
+            `ReportFilters`; an unrecognised key is refused with `422` rather than ignored. A `filters` value
+            that is not decodable JSON, or that decodes to a list rather than an object, is refused with
+            `422` too -- treating it as no filter at all would answer with the unfiltered report.
+          schema: { type: string }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Report projection
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReportPage' }
+        # T374. Declared because the filter object is a **closed** vocabulary: the server refuses an
+        # unrecognised, wrongly-typed, or mutually exclusive filter with a 422, and a client reading this
+        # document had no way to know that. The message names the offending key and, for an unknown one, the
+        # accepted list -- so the caller learns which filter to change rather than only that something was
+        # wrong.
+        '422':
+          $ref: '#/components/responses/FilterRejected'
+
+  /exports:
+    post:
+      tags: [Exports]
+      summary: Generate and stream a role-scoped export
+      parameters:
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExportRequest' }
+      responses:
+        '200':
+          # An OCS envelope, not a bare artifact body. Every route in this `ocs` section is
+          # wrapped by `OCSMiddleware` in a `V2Response`, so a response whose body is the raw
+          # CSV/XLSX/PDF/ZIP bytes is unreachable from here. `mediaType` names the artifact's
+          # real type and `data` carries its base64-encoded bytes.
+          description: Generated export, encoded inside the OCS envelope
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExportResult' }
+        '422':
+          # T374: the export reads the same closed `ReportFilters` vocabulary as `GET /reports`, decoded
+          # from the JSON body rather than from a query parameter. It gets the same declared refusal
+          # because it is the same rule -- not because the two endpoints happen to agree today.
+          $ref: '#/components/responses/FilterRejected'
+
+components:
+  securitySchemes:
+    nextcloudSession:
+      type: apiKey
+      in: cookie
+      name: session
+      description: Existing authenticated Nextcloud browser session and standard request token
+
+  parameters:
+    CommandId:
+      name: X-PettyCash-Command-ID
+      in: header
+      required: true
+      description: Client-generated UUID used for idempotent command replay
+      schema: { type: string, format: uuid }
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    PageSize:
+      name: pageSize
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 25 }
+    CurrencyId:
+      name: currencyId
+      in: path
+      required: true
+      schema: { type: string, minLength: 3, maxLength: 3 }
+    CostCenterId:
+      name: costCenterId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ExpenseTypeId:
+      name: expenseTypeId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    AccountId:
+      name: accountId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    SheetId:
+      name: sheetId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    TransactionId:
+      name: transactionId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    EvidenceId:
+      name: evidenceId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+
+  responses:
+    # Every response below carries `ocs.data.error` — the `ErrorEnvelope` wrapper, not `Error`
+    # itself. The wrapper is what makes an OCS-200-that-carries-a-failure distinguishable from a
+    # success payload: the OCS protocol permits a failure to arrive with HTTP 200, and a body of
+    # `{code, message}` in `ocs.data` is a shape a success payload could also take, whereas a
+    # present `error` key is a declared one. T334.
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    Forbidden:
+      description: The caller lacks role, ownership, scope, stage, or state authority
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    NotFound:
+      description: Resource does not exist or is intentionally hidden from the caller
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    Conflict:
+      description: Stale version, duplicate/conflicting command, invalid state, or concurrency conflict
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    ValidationError:
+      description: Business validation failed
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    # T374. Separate from the generic `ValidationError` because the *reason* is documented rather than the
+    # status: the filter vocabulary is closed, so a 422 here specifically means the request named a filter
+    # the server does not accept, gave one the wrong shape, or combined two that are mutually exclusive --
+    # and the message names the offending key so the caller can correct it. A client that only knew
+    # "validation failed" would not know that an unknown filter is refused rather than dropped, which is
+    # precisely the assumption that produces a silently unfiltered report.
+    FilterRejected:
+      description: >-
+        The filter object was refused: an unrecognised key (naming the accepted list), a key of the wrong
+        shape, or `period` together with `from`/`to`. Refused rather than ignored, because ignoring an
+        unrecognised filter returns the unfiltered report and the caller cannot tell that apart from a
+        filter that matched everything.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    CurrencyPage:
+      description: Paged currencies
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/PageMeta'
+              - type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Currency' } }
+    CostCenterPage:
+      description: Paged cost centers
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/PageMeta'
+              - type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/CostCenter' } }
+    ExpenseTypePage:
+      description: Paged expense types
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/PageMeta'
+              - type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ExpenseType' } }
+    AccountPage:
+      description: Paged accounts
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/PageMeta'
+              - type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Account' } }
+    MovementPage:
+      description: Paged account movements
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/PageMeta'
+              - type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Movement' } }
+    SheetPage:
+      description: Paged sheet summaries
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/PageMeta'
+              - type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/SheetSummary' } }
+    TransactionPage:
+      description: Paged transaction summaries
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/PageMeta'
+              - type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/TransactionSummary' } }
+    AuditPage:
+      description: Paged audit events
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/PageMeta'
+              - type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/AuditEvent' } }
+
+  schemas:
+    ExpectedVersion:
+      type: object
+      required: [expectedVersion]
+      properties:
+        expectedVersion: { type: integer, minimum: 0 }
+    PageMeta:
+      type: object
+      required: [page, pageSize, total]
+      properties:
+        page: { type: integer }
+        pageSize: { type: integer }
+        total: { type: integer }
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        # T425 / FR-083 / SC-016. This was `{ type: string }` — **open**, with no list — while the whole
+        # design rests on a client branching on the code: FR-085 was decided partly so
+        # `SUPERSEDED_ATTEMPT` stays distinguishable from `ACCOUNT_VERSION_CONFLICT`, and T416 added
+        # `SHEET_VERSION_CONFLICT` on exactly that reasoning. An open string promises nothing, so a code may be
+        # renamed, dropped, or misspelled and this contract stays valid — making a branch on a code never more
+        # than a guess, and leaving the HTTP status as the only dependable thing to react to.
+        #
+        # The enumeration is **closed and complete** by SC-016's two-way rule: every code the application can
+        # emit is listed, and no listed code is one it cannot emit. A new code is a **contract change**,
+        # shipped deliberately and never ahead of this list.
+        #
+        # The four `CONFIGURATION_*` and bare `*_VERSION_CONFLICT` families are **generated** from a resource
+        # noun by `ConfigurationConflict` and `StaleRecordVersion`, so a code that moves between resources changes
+        # this list. `ConfigurationMutationAuditTest` and `StaleVersionConflictTest` prove the members reachable;
+        # `tests/Contract/Controller/ErrorCodeVocabularyTest.php` proves this list and the application agree in
+        # both directions.
+        code:
+          type: string
+          enum:
+            - BAD_REQUEST
+            - DATA_FAULT
+            - FORBIDDEN
+            - IDEMPOTENCY_CONFLICT
+            - NOT_FOUND
+            - PAYLOAD_TOO_LARGE
+            - STATE_CONFLICT
+            - UNEXPECTED_FAILURE
+            - VALIDATION_FAILED
+            - ACCOUNT_ALREADY_EXISTS
+            - ACCOUNT_NOT_SETTLEABLE
+            - ACCOUNT_VERSION_CONFLICT
+            - CONFIGURATION_COST_CENTER_ALREADY_EXISTS
+            - CONFIGURATION_COST_CENTER_VERSION_CONFLICT
+            - CONFIGURATION_CURRENCY_ALREADY_EXISTS
+            - CONFIGURATION_CURRENCY_VERSION_CONFLICT
+            - CONFIGURATION_EXPENSE_TYPE_ALREADY_EXISTS
+            - CONFIGURATION_EXPENSE_TYPE_VERSION_CONFLICT
+            - EVIDENCE_LINK_REFUSED
+            - NOT_TRANSACTION_OWNER
+            - SHEET_VERSION_CONFLICT
+            - SUPERSEDED_ATTEMPT
+            - TRANSACTION_NOT_AWAITING_CORRECTION
+            - TRANSACTION_VERSION_CONFLICT
+        message: { type: string }
+        fieldErrors:
+          type: object
+          additionalProperties:
+            type: array
+            items: { type: string }
+        commandId: { type: string, format: uuid, nullable: true }
+    ErrorEnvelope:
+      # The value every error response carries in `ocs.data`: the `Error` schema under an `error`
+      # key. `OcsErrorMapper::respond()` is the single producer, so there is one nesting to keep.
+      type: object
+      required: [error]
+      properties:
+        error: { $ref: '#/components/schemas/Error' }
+    Money:
+      type: object
+      required: [amountMinor, currency, minorUnit]
+      properties:
+        amountMinor: { type: integer, format: int64 }
+        currency: { type: string, minLength: 3, maxLength: 3 }
+        minorUnit: { type: integer, minimum: 0, maximum: 4 }
+    CapabilitySet:
+      type: object
+      additionalProperties: { type: boolean }
+    SessionContext:
+      type: object
+      required: [userId, displayName, roles, capabilities, costCenterCodes]
+      properties:
+        userId: { type: string }
+        displayName: { type: string }
+        roles:
+          type: array
+          items: { type: string, enum: [PURCHASER, COST_CENTER_MANAGER, SENIOR_MANAGER, FINANCE, ADMINISTRATOR] }
+        capabilities: { $ref: '#/components/schemas/CapabilitySet' }
+        # The cost centres whose transactions and reports this caller is assigned to review
+        # (FR-004, FR-005) — the union of their cost-centre-manager and senior-manager assignments
+        # that are active on the date of the request. Empty for anybody with no such assignment,
+        # **including an administrator**: FR-007 gives an administrator visibility without decision
+        # authority, and visibility is a server-side rule, so this is a scope, not a grant.
+        #
+        # A member of `SessionContext`, not of `capabilities`, because `CapabilitySet` is
+        # `additionalProperties: {type: boolean}` and a list of strings would violate it. Codes
+        # rather than public ids because this is the vocabulary the server's own authorization
+        # uses (`ManagementReviewService::getManagedCostCenterCodes()`) and the one the transaction
+        # rows carry as `EntitySnapshot.code`, so the client and the server cannot disagree about
+        # what identifies a cost centre (T336).
+        costCenterCodes:
+          type: array
+          items: { type: string }
+    Dashboard:
+      type: object
+      properties:
+        purchaser: { type: object, additionalProperties: true }
+        costCenter: { type: object, additionalProperties: true }
+        senior: { type: object, additionalProperties: true }
+        finance: { type: object, additionalProperties: true }
+        admin: { type: object, additionalProperties: true }
+    CurrencyWrite:
+      type: object
+      required: [code, name, minorUnit, active]
+      properties:
+        code: { type: string, pattern: '^[A-Z]{3}$' }
+        name: { type: string, minLength: 1, maxLength: 100 }
+        minorUnit: { type: integer, minimum: 0, maximum: 4 }
+        active: { type: boolean }
+    Currency:
+      allOf:
+        - $ref: '#/components/schemas/CurrencyWrite'
+        - type: object
+          required: [version]
+          properties:
+            version: { type: integer }
+    CostCenterWrite:
+      type: object
+      required: [code, name, validFrom, active, managerUserId, seniorManagerUserId]
+      properties:
+        code: { type: string, minLength: 1, maxLength: 64 }
+        name: { type: string, minLength: 1, maxLength: 255 }
+        description: { type: string, nullable: true }
+        validFrom: { type: string, format: date }
+        validTo: { type: string, format: date, nullable: true }
+        active: { type: boolean }
+        managerUserId: { type: string }
+        seniorManagerUserId: { type: string }
+        changeReason: { type: string, minLength: 1 }
+    CostCenter:
+      allOf:
+        - $ref: '#/components/schemas/CostCenterWrite'
+        - type: object
+          required: [id, version]
+          properties:
+            id: { type: string, format: uuid }
+            version: { type: integer }
+    ExpenseTypeWrite:
+      type: object
+      required: [title, evidenceRequired, active]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 255 }
+        description: { type: string, nullable: true }
+        evidenceRequired: { type: boolean }
+        active: { type: boolean }
+        changeReason: { type: string, minLength: 1 }
+    ExpenseType:
+      allOf:
+        - $ref: '#/components/schemas/ExpenseTypeWrite'
+        - type: object
+          required: [id, version]
+          properties:
+            id: { type: string, format: uuid }
+            version: { type: integer }
+    FinanceAssignmentWrite:
+      type: object
+      required: [userId, validFrom, active, changeReason]
+      properties:
+        userId: { type: string }
+        validFrom: { type: string, format: date }
+        validTo: { type: string, format: date, nullable: true }
+        active: { type: boolean }
+        changeReason: { type: string, minLength: 1 }
+    RoleAssignment:
+      allOf:
+        - $ref: '#/components/schemas/FinanceAssignmentWrite'
+        - type: object
+          required: [id, role]
+          properties:
+            id: { type: string, format: uuid }
+            role: { type: string, enum: [FINANCE] }
+    AccountCreate:
+      type: object
+      required: [userId, currency]
+      properties:
+        userId: { type: string }
+        currency: { type: string, pattern: '^[A-Z]{3}$' }
+    Account:
+      type: object
+      required: [id, userId, balance, active, version]
+      properties:
+        id: { type: string, format: uuid }
+        userId: { type: string }
+        balance: { $ref: '#/components/schemas/Money' }
+        active: { type: boolean }
+        version: { type: integer }
+    AccountCharge:
+      type: object
+      required: [amountMinor, description, occurredAt, expectedVersion]
+      properties:
+        amountMinor: { type: integer, format: int64, minimum: 1 }
+        description: { type: string, minLength: 1, maxLength: 1000 }
+        occurredAt: { type: string, format: date-time }
+        expectedVersion: { type: integer, minimum: 0 }
+    AccountActiveUpdate:
+      type: object
+      required: [active]
+      properties:
+        active: { type: boolean }
+        explanation: { type: string, maxLength: 1000, nullable: true }
+    Movement:
+      type: object
+      required: [id, type, amount, balanceAfter, occurredAt]
+      properties:
+        id: { type: string, format: uuid }
+        type: { type: string, enum: [CHARGE, CONSUMPTION] }
+        amount: { $ref: '#/components/schemas/Money' }
+        balanceAfter: { $ref: '#/components/schemas/Money' }
+        description: { type: string }
+        sourceRevisionId: { type: string, format: uuid, nullable: true }
+        occurredAt: { type: string, format: date-time }
+    AccountMutationResult:
+      type: object
+      required: [account, movement]
+      properties:
+        account: { $ref: '#/components/schemas/Account' }
+        movement: { $ref: '#/components/schemas/Movement' }
+    SheetStatus:
+      type: string
+      enum: [OPEN, AWAITING_COST_CENTER_REVIEW, AWAITING_SENIOR_REVIEW, AWAITING_FINANCE_REVIEW, COMPLETED, COMPLETED_WITH_REJECTIONS]
+    SheetCreate:
+      type: object
+      required: [title]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 255 }
+        accountId:
+          type: string
+          format: uuid
+          description: >
+            Optional, and its absence is meaningful rather than merely unchecked. FR-020 resolves the
+            account for a new sheet from the caller's own active accounts: none means the default rial
+            account is provisioned on this attempt and used; exactly one means that account is used
+            automatically; several means the caller must send this field and the request is refused
+            naming it. A purchaser with zero accounts therefore has no `accountId` to send, which is
+            why it cannot be required -- FR-020 and a required `accountId` cannot both hold.
+    SheetTotals:
+      type: object
+      properties:
+        current: { $ref: '#/components/schemas/Money' }
+        submitted: { $ref: '#/components/schemas/Money' }
+        effectiveApproved: { $ref: '#/components/schemas/Money' }
+        effectiveRejected: { $ref: '#/components/schemas/Money' }
+        effectivePending: { $ref: '#/components/schemas/Money' }
+        costCenterApproved: { $ref: '#/components/schemas/Money' }
+        seniorApproved: { $ref: '#/components/schemas/Money' }
+        financeApproved: { $ref: '#/components/schemas/Money' }
+    SheetSummary:
+      type: object
+      required: [id, title, ownerId, currency, status, transactionCount, totals, version]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        ownerId: { type: string }
+        ownerDisplayName: { type: string }
+        currency: { type: string }
+        status: { $ref: '#/components/schemas/SheetStatus' }
+        transactionCount: { type: integer }
+        totals: { $ref: '#/components/schemas/SheetTotals' }
+        createdAt: { type: string, format: date-time }
+        submittedAt: { type: string, format: date-time, nullable: true }
+        completedAt: { type: string, format: date-time, nullable: true }
+        firstExpenseDate: { type: string, format: date, nullable: true }
+        lastExpenseDate: { type: string, format: date, nullable: true }
+        version: { type: integer }
+        activeRevisionNumber:
+          type: integer
+          minimum: 0
+          nullable: true
+          description: >
+            FR-063's latest active transaction revision number: the highest revision number among the
+            active revisions of this sheet's transactions, and 0 when the sheet holds none. Added
+            2026-10-06 (T385), because the requirement named "the active transaction revision", which is a
+            member of TransactionSummary and therefore one per transaction rather than one per sheet.
+    SheetDetail:
+      allOf:
+        - $ref: '#/components/schemas/SheetSummary'
+        - type: object
+          properties:
+            allowedActions: { $ref: '#/components/schemas/CapabilitySet' }
+            transactions:
+              type: array
+              items: { $ref: '#/components/schemas/TransactionSummary' }
+    TransactionStage:
+      type: string
+      enum: [DRAFT, COST_CENTER, CORRECTION, SENIOR, FINANCE, FINAL]
+    TransactionStatus:
+      type: string
+      enum: [DRAFT, AWAITING_COST_CENTER_REVIEW, COST_CENTER_APPROVED, COST_CENTER_REJECTED, AWAITING_SENIOR_REVIEW, SENIOR_APPROVED, SENIOR_REJECTED, AWAITING_FINANCE_REVIEW, AWAITING_PURCHASER_CORRECTION, COMPLETED_APPROVED, COMPLETED_REJECTED]
+    TransactionDraftWrite:
+      type: object
+      required: [expenseDate, amountMinor]
+      properties:
+        expenseDate: { type: string, format: date }
+        amountMinor: { type: integer, format: int64, minimum: 1 }
+        description: { type: string, nullable: true }
+        costCenterId: { type: string, format: uuid, nullable: true }
+        expenseTypeId: { type: string, format: uuid, nullable: true }
+    TransactionSummary:
+      type: object
+      required: [id, sheetId, activeRevision, stage, status, evidenceCount, version]
+      properties:
+        id: { type: string, format: uuid }
+        sheetId: { type: string, format: uuid }
+        activeRevision: { $ref: '#/components/schemas/Revision' }
+        stage: { $ref: '#/components/schemas/TransactionStage' }
+        status: { $ref: '#/components/schemas/TransactionStatus' }
+        finalOutcome: { type: string, enum: [APPROVED, REJECTED], nullable: true }
+        latestDecision: { $ref: '#/components/schemas/Decision' }
+        evidenceCount: { type: integer }
+        version: { type: integer }
+    TransactionDetail:
+      allOf:
+        - $ref: '#/components/schemas/TransactionSummary'
+        - type: object
+          properties:
+            allowedActions: { $ref: '#/components/schemas/CapabilitySet' }
+            decisions: { type: array, items: { $ref: '#/components/schemas/Decision' } }
+            evidence: { type: array, items: { $ref: '#/components/schemas/Evidence' } }
+    Revision:
+      type: object
+      required: [id, number, expenseDate, amount, createdBy, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        number: { type: integer, minimum: 1 }
+        expenseDate: { type: string, format: date }
+        amount: { $ref: '#/components/schemas/Money' }
+        description: { type: string, nullable: true }
+        costCenter: { $ref: '#/components/schemas/EntitySnapshot' }
+        expenseType: { $ref: '#/components/schemas/EntitySnapshot' }
+        createdBy: { type: string }
+        createdAt: { type: string, format: date-time }
+        active: { type: boolean }
+    EntitySnapshot:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string, nullable: true }
+        name: { type: string }
+    DecisionWrite:
+      type: object
+      required: [decision, expectedVersion]
+      properties:
+        decision: { type: string, enum: [APPROVE, REJECT, RETURN] }
+        explanation: { type: string, nullable: true }
+        expectedVersion: { type: integer, minimum: 0 }
+    Decision:
+      type: object
+      required: [id, stage, decision, actor, decidedAt]
+      properties:
+        id: { type: string, format: uuid }
+        stage: { type: string, enum: [COST_CENTER, SENIOR, FINANCE] }
+        decision: { type: string, enum: [APPROVE, REJECT, RETURN] }
+        explanation: { type: string, nullable: true }
+        actor: { $ref: '#/components/schemas/ActorSnapshot' }
+        decidedAt: { type: string, format: date-time }
+    DecisionResult:
+      type: object
+      required: [decision, transaction]
+      properties:
+        decision: { $ref: '#/components/schemas/Decision' }
+        transaction: { $ref: '#/components/schemas/TransactionDetail' }
+        accountMutation: { $ref: '#/components/schemas/AccountMutationResult' }
+    ActorSnapshot:
+      type: object
+      required: [userId, displayName, role]
+      properties:
+        userId: { type: string }
+        displayName: { type: string }
+        role: { type: string }
+    Evidence:
+      type: object
+      required: [id, transactionId, revisionId, name, mediaType, sizeBytes, active, uploadedBy, uploadedAt]
+      properties:
+        id: { type: string, format: uuid }
+        transactionId: { type: string, format: uuid }
+        revisionId: { type: string, format: uuid }
+        name: { type: string }
+        mediaType: { type: string }
+        sizeBytes: { type: integer, format: int64 }
+        active: { type: boolean }
+        uploadedBy: { type: string }
+        uploadedAt: { type: string, format: date-time }
+        deactivatedAt: { type: string, format: date-time, nullable: true }
+        # Why the evidence was deactivated, when it was.
+        #
+        # Declared by T339 rather than removed from the response. `EvidenceController` emitted it and
+        # this schema did not describe it, so a reader could tell the two removal paths apart on one
+        # endpoint and not the other — and it is not cosmetic. FR-058 requires submitted evidence to be
+        # "marked inactive rather than physically removed", and the reason is the only observable of
+        # *which* path ran: the row is deactivated either way, and `GET /evidence/{id}/content` answers
+        # 403 once inactive. `EvidenceLifecycleControllerTest::
+        # testTheRecordedReasonShowsWhichRemovalActuallyHappened` is the pin that says so.
+        deactivationReason: { type: string, nullable: true }
+    EvidenceLink:
+      type: object
+      required: [id, evidenceId, active, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        evidenceId: { type: string, format: uuid }
+        url: { type: string, nullable: true, description: Returned only at creation }
+        active: { type: boolean }
+        expiresAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+    AuditEvent:
+      type: object
+      required: [id, eventType, actor, occurredAt]
+      properties:
+        id: { type: string, format: uuid }
+        # FR-051 plus **FR-085**. `SUPERSEDED_ATTEMPT` is a real member of this vocabulary, not an
+        # `after` payload: it is the record of a decision that was refused because the transaction had
+        # already moved on. It is deliberately **neither an approval nor a rejection** -- recording it
+        # as either would falsify the decision history -- and it is deliberately not omitted either,
+        # because a discarded attempt is indistinguishable from a request that never happened and would
+        # leave a reviewer who acted with no trace.
+        eventType:
+          type: string
+          enum:
+            - SHEET_SUBMITTED
+            - TRANSACTION_ROUTED
+            - DECISION_APPROVED
+            - DECISION_REJECTED
+            - TRANSACTION_RETURNED
+            - CORRECTION_SUBMITTED
+            - REVISION_CREATED
+            - TRANSACTION_CHANGED
+            - EVIDENCE_ADDED
+            - EVIDENCE_DEACTIVATED
+            - SETTLEMENT_RECORDED
+            - SUPERSEDED_ATTEMPT
+        stage: { type: string, nullable: true }
+        decision: { type: string, nullable: true }
+        explanation: { type: string, nullable: true }
+        actor: { $ref: '#/components/schemas/ActorSnapshot' }
+        before: { type: object, nullable: true, additionalProperties: true }
+        after: { type: object, nullable: true, additionalProperties: true }
+        # FR-085: on `SUPERSEDED_ATTEMPT`, `before` carries the decision already in force and `after`
+        # carries the decision the caller attempted, so one read reconstructs the race without needing
+        # a second query.
+        occurredAt: { type: string, format: date-time }
+    # FR-064/FR-065/FR-068: the accepted filter vocabulary, as a **closed** set.
+    #
+    # `additionalProperties: false` is the load-bearing line, and it is the whole of T374. This object
+    # used to be `type: object` with `additionalProperties: true` and no enumeration, so a client
+    # generated from this document could send any key at all -- while the server refuses an unrecognised
+    # filter with a `422` rather than ignoring it. The generated client and the server therefore disagreed
+    # about what a legal request was, and the `422` that disagreement produces was nowhere declared here,
+    # so a client had no documented way to learn which filters exist or that unknown ones are refused
+    # rather than dropped.
+    #
+    # Declaring the closure here also means the 15 names are stated once. `ReportFilterFactory::ACCEPTED_FILTERS`
+    # is the server's copy and this is the contract's; a filter added to one and not the other is drift in
+    # whichever direction is worse -- a client that can send what the server refuses, or a filter the
+    # contract never mentioned.
+    #
+    # Ignoring an unknown filter is what makes closure necessary rather than pedantic: silently discarding
+    # it returns the *unfiltered* answer, and the caller cannot tell that apart from a filter that matched
+    # everything. A refusal the caller can see is the only way the two are distinguishable.
+    ReportFilters:
+      type: object
+      additionalProperties: false
+      description: >-
+        FR-064/FR-065 report filters in the server's vocabulary. The set is **closed**: an unrecognised
+        key is refused with `422` naming it and the accepted list, never ignored, because ignoring it
+        returns the unfiltered report and the caller cannot tell the difference. Both endpoints read the
+        same object -- `GET /reports` as a JSON-encoded query parameter, `POST /exports` as a JSON body
+        member -- so the vocabulary is one set, not one per transport.
+      properties:
+        # --- Date and period ---
+        # Typed `string` rather than `format: date-time` on purpose: the server hands the value to
+        # `new DateTimeImmutable()`, which also accepts a bare `YYYY-MM-DD`, and declaring the narrower
+        # format would be a stricter promise than the implementation keeps. T373 sends the bare date form
+        # and it is accepted.
+        from:
+          type: string
+          description: >-
+            Inclusive lower bound, ISO-8601. A date or a date-time; anything `DateTimeImmutable` parses is
+            accepted. Mutually exclusive with `period`.
+        to:
+          type: string
+          description: Inclusive upper bound, ISO-8601. Mutually exclusive with `period`.
+        period:
+          type: string
+          enum: [month, quarter, year]
+          description: >-
+            A predefined Jalali period in progress, resolved at query time in the requesting user's own time
+            zone (their account setting, else the instance default). Each names the period **in progress at
+            request time**, first day through last inclusive: `month`/`quarter`/`year` are Jalali (Solar
+            Hijri), a year spans Farvardin to Esfand, and a quarter begins at Farvardin. A previous or
+            trailing period is requested with `from`/`to` instead.
+            Mutually exclusive with `from`/`to` within one request: supplying both is refused with `422`
+            naming the conflict and stating which to remove. Neither is honoured while the other is
+            discarded, and they are never intersected. FR-068 was amended on 2026-09-30 to state that
+            `period` is a member in its own right rather than a parameterisation of `from`/`to`; before
+            that this document's own closed-vocabulary rule forbade a filter FR-068 required.
+        # --- Facet lists ---
+        # Every facet below is a **list on the wire**, because the server refuses a non-array for each of
+        # them. A single-select control sends a one-element list, not a bare string; a bare string is a 422
+        # on a filter the user filled in correctly.
+        statuses:
+          type: array
+          items: { type: string }
+          description: Sheet/transaction workflow statuses. A list even for one value.
+        stages:
+          type: array
+          items: { type: string }
+          description: Workflow stages.
+        currencyCodes:
+          type: array
+          items: { type: string }
+          description: ISO currency codes.
+        eventTypes:
+          type: array
+          items: { type: string }
+          description: Configuration/audit event types.
+        actorUids:
+          type: array
+          items: { type: string }
+          description: Nextcloud user ids of actors.
+        # --- Two id spaces per facet, unioned ---
+        # `costCenterIds`/`expenseTypeIds` name **public UUIDs**; `costCenterDbIds`/`expenseTypeDbIds` name
+        # internal integer join keys. Both spellings name members of one facet, so a request naming both
+        # means the **union** of the two sets -- not a precedence rule, which would silently discard
+        # whichever the caller happened to spell differently. The UUID forms are the ones a client should
+        # send; the integer forms exist so a server-side caller need not resolve a public id first.
+        costCenterIds:
+          type: array
+          items: { type: string, format: uuid }
+          description: Cost centres by **public UUID**.
+        costCenterDbIds:
+          type: array
+          items: { type: integer }
+          description: >-
+            Cost centres by internal database id. An internal join key, unioned with `costCenterIds` rather
+            than preferred over it.
+        expenseTypeIds:
+          type: array
+          items: { type: string, format: uuid }
+          description: Expense types by **public UUID**.
+        expenseTypeDbIds:
+          type: array
+          items: { type: integer }
+          description: Expense types by internal database id, unioned with `expenseTypeIds`.
+        # --- Scalars ---
+        createdBy:
+          type: string
+          description: Nextcloud user id of the creator.
+        amountMinMinor:
+          type: integer
+          description: >-
+            Inclusive lower amount bound in the **minor units of the row's own currency**. A whole number,
+            not a major-unit decimal: there is no fiscal or display rounding on this path, so a bound that
+            silently multiplied or divided by 1000 would be a wrong financial answer rather than a wrong
+            display.
+        amountMaxMinor:
+          type: integer
+          description: Inclusive upper amount bound, in minor units. See `amountMinMinor`.
+    ReportPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          properties:
+            columns: { type: array, items: { type: string } }
+            rows: { type: array, items: { type: object, additionalProperties: true } }
+            # FR-068: when the request resolved a predefined `period`, this carries `period`,
+            # `resolvedFrom`, `resolvedTo` and `resolvedTimeZone`. Absent otherwise, rather than present
+            # and null -- a key describing a request the response did not use is a claim about the request
+            # rather than about the answer.
+            summary: { type: object, additionalProperties: true }
+    ExportResult:
+      type: object
+      required: [artifactName, mediaType, format, byteSize, rowCount, data]
+      properties:
+        artifactName: { type: string, description: Transient name; the artifact is removed once streamed }
+        mediaType:
+          type: string
+          description: The artifact's own media type, not the envelope's
+          enum: [text/csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/pdf, application/zip]
+        format: { type: string, enum: [csv, xlsx, pdf, zip] }
+        byteSize: { type: integer }
+        rowCount: { type: integer }
+        # FR-068. Present only when the request resolved a predefined `period`. Both the range and the zone
+        # are stated so two users in different zones can tell a different period from a different
+        # timezone -- which is where an export's numbers actually get reconciled against each other.
+        period: { type: string, enum: [month, quarter, year] }
+        resolvedFrom: { type: string, format: date, description: First day of the resolved period, inclusive }
+        resolvedTo: { type: string, format: date, description: Last day of the resolved period, inclusive }
+        resolvedTimeZone:
+          type: string
+          description: The zone the period was resolved in, not an offset
+        data: { type: string, format: byte, description: base64-encoded artifact bytes }
+        artifactRemoved: { type: boolean, description: True once the transient artifact has been deleted }
+    ExportRequest:
+      type: object
+      required: [resource, fileFormat]
+      properties:
+        resource:
+          type: string
+          enum: [sheet, sheets, transactions, report, audit, evidence]
+        # Named `fileFormat`, not `format`. Nextcloud's OCS layer reserves the request
+        # parameter `format` for choosing the response envelope: `Request::getFormat()`
+        # (lib/private/AppFramework/Http/Request.php:903) reads `getParam('format')` *before*
+        # the `Accept` header, and `OCSMiddleware` falls back to `xml` whenever the value is not
+        # a registered responder. A request carrying a field literally called `format`
+        # therefore always answers XML and no `Accept` header can override it, which would make
+        # every conforming request to this endpoint return the wrong envelope.
+        fileFormat:
+          type: string
+          enum: [csv, xlsx, pdf, zip]
+        ids:
+          type: array
+          items: { type: string, format: uuid }
+        reportType:
+          type: string
+          nullable: true
+        filters:
+          # T374: the vocabulary is declared once, in `ReportFilters`, and referenced here. This used to
+          # be an open `type: object` with `additionalProperties: true` that declared only `period` -- so a
+          # client generated from this document could send a filter the server refuses with a `422` the
+          # document never described. One referenced schema also means the export and report endpoints
+          # cannot drift into declaring different vocabularies.
+          $ref: '#/components/schemas/ReportFilters'

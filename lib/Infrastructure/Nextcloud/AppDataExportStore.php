@@ -1,0 +1,152 @@
+<?php
+
+declare(strict_types=1);
+
+namespace OCA\PettyCash\Infrastructure\Nextcloud;
+
+use OCA\PettyCash\Application\Port\TransientExportStore;
+use OCP\Files\IAppData;
+use OCP\Files\NotFoundException;
+use OCP\Files\SimpleFS\ISimpleFolder;
+use RuntimeException;
+
+/**
+ * Nextcloud `IAppData` as the transient export store.
+ *
+ * Constitution III keeps storage on supported Nextcloud services, and `contracts/exports.md` names
+ * "private transient application storage" — which is `IAppData`, the one location in a Nextcloud
+ * installation that is private to this app and is not the user's files. The exporter's previous
+ * implementation used the host's shared system temp directory, which is neither private nor app-scoped.
+ *
+ * Artifacts live in one folder, `exports`, and are removed by `deleteAll()` — the contract's "removed
+ * after streaming". Nothing here is a user's document, so nothing here is ever exposed through the
+ * Nextcloud filesystem API to a user.
+ *
+ * The scratch path is `sys_get_temp_dir()` and is scratch by definition: `ZipArchive` has no stream API,
+ * so the archive has to be assembled at a filesystem path before it can be moved in. It is never where
+ * an artifact lives, and the exporter removes it in a `finally` whether or not the build succeeded.
+ */
+final readonly class AppDataExportStore implements TransientExportStore
+{
+    private const EXPORTS_FOLDER = 'exports';
+
+    public function __construct(private IAppData $appData) {}
+
+    public function scratchPath(string $name): string
+    {
+        $path = tempnam(sys_get_temp_dir(), 'pettycash-export-');
+        if ($path === false) {
+            throw new RuntimeException('Could not create a scratch file for the export');
+        }
+
+        return $path;
+    }
+
+    public function persist(string $name, string $scratchPath): void
+    {
+        $folder = $this->exportsFolder();
+
+        // Replace rather than merge: persisting the same name twice must leave the newer artifact, and
+        // a stale file from an interrupted build must not be served.
+        if ($folder->fileExists($name)) {
+            $folder->getFile($name)->delete();
+        }
+
+        $file = $folder->newFile($this->safeName($name));
+        $source = @fopen($scratchPath, 'rb');
+        if ($source === false) {
+            throw new RuntimeException("Could not read the built artifact at {$scratchPath}");
+        }
+
+        try {
+            $target = $file->write();
+            if (!is_resource($target)) {
+                throw new RuntimeException("Could not open {$name} in app storage for writing");
+            }
+
+            // Streamed, not buffered. A group evidence archive is bounded by disk rather than by PHP's
+            // memory limit, which is the whole reason this is an AppData adapter rather than a string.
+            if (stream_copy_to_stream($source, $target) === false) {
+                throw new RuntimeException("Could not write {$name} into app storage");
+            }
+        } finally {
+            fclose($source);
+        }
+    }
+
+    public function read(string $name)
+    {
+        $file = $this->exportsFolder()->getFile($this->safeName($name));
+        $handle = $file->read();
+        if (!is_resource($handle)) {
+            throw new RuntimeException("Could not open {$name} in app storage for reading");
+        }
+
+        return $handle;
+    }
+
+    public function exists(string $name): bool
+    {
+        return $this->exportsFolder()->fileExists($this->safeName($name));
+    }
+
+    public function size(string $name): ?int
+    {
+        if (!$this->exists($name)) {
+            return null;
+        }
+
+        $size = $this->exportsFolder()->getFile($this->safeName($name))->getSize();
+
+        return is_int($size) ? $size : (int) $size;
+    }
+
+    public function delete(string $name): void
+    {
+        $safe = $this->safeName($name);
+        if (!$this->exportsFolder()->fileExists($safe)) {
+            return;
+        }
+
+        $this->exportsFolder()->getFile($safe)->delete();
+    }
+
+    public function deleteAll(): void
+    {
+        $folder = $this->exportsFolder();
+
+        // `getDirectoryListing()` returns ISimpleFile[] for this folder, so this is every artifact this
+        // store owns. The folder itself is left in place: it is app-private and empty, and removing it
+        // would mean recreating it on the next export.
+        foreach ($folder->getDirectoryListing() as $child) {
+            if ($child instanceof \OCP\Files\SimpleFS\ISimpleFile) {
+                $child->delete();
+            }
+        }
+    }
+
+    private function exportsFolder(): ISimpleFolder
+    {
+        try {
+            return $this->appData->getFolder(self::EXPORTS_FOLDER);
+        } catch (NotFoundException) {
+            return $this->appData->newFolder(self::EXPORTS_FOLDER);
+        }
+    }
+
+    /**
+     * Reduce a name to a single safe filename.
+     *
+     * Artifact names are generated by the exporter, so this is a second line of defence — the same
+     * reasoning as the archive-path sanitiser. `SimpleFS` resolves a name containing a separator as a
+     * nested path, so an unsanitised name could write outside the exports folder.
+     */
+    private function safeName(string $name): string
+    {
+        $base = basename(str_replace(['\\', "\0"], '', $name));
+        $base = preg_replace('/[^A-Za-z0-9._-]/u', '_', $base) ?? '';
+        $base = trim($base, '._');
+
+        return $base === '' ? 'export.bin' : $base;
+    }
+}

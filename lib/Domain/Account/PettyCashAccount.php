@@ -1,0 +1,169 @@
+<?php
+
+declare(strict_types=1);
+
+namespace OCA\PettyCash\Domain\Account;
+
+use InvalidArgumentException;
+use OCA\PettyCash\Domain\Configuration\Currency;
+use OCA\PettyCash\Domain\Shared\CurrencyCode;
+use OCA\PettyCash\Domain\Shared\Money;
+use OCA\PettyCash\Domain\Shared\Enum\MovementType;
+use DateTimeImmutable;
+
+final class PettyCashAccount
+{
+    public function __construct(
+        public string $id,
+        public string $userUid,
+        public CurrencyCode $currencyCode,
+        public Currency $currency,
+        public int $balanceMinor = 0,
+        public bool $active = true,
+        public int $lockVersion = 0,
+        public ?DateTimeImmutable $createdAt = null,
+        public ?string $createdBy = null,
+        public ?DateTimeImmutable $updatedAt = null,
+        public ?string $updatedBy = null,
+        public ?int $dbId = null
+    ) {}
+
+    public static function create(string $id, string $userUid, Currency $currency): self
+    {
+        if (trim($userUid) === '') {
+            throw new InvalidArgumentException('User UID is required');
+        }
+        return new self($id, $userUid, CurrencyCode::fromString($currency->code()), $currency, 0, true);
+    }
+
+    public function currencyCode(): CurrencyCode
+    {
+        return $this->currencyCode;
+    }
+
+    public function charge(
+        Money $amount,
+        string $commandId,
+        string $description = 'Account charge',
+        ?DateTimeImmutable $occurredAt = null
+    ): AccountMovement {
+        if (!$this->active) {
+            throw new InvalidArgumentException('Cannot charge inactive account');
+        }
+        if (!$amount->currency()->equals($this->currencyCode)) {
+            throw new InvalidArgumentException('Currency mismatch');
+        }
+        $movement = AccountMovement::createCharge(
+            $this->newMovementId(),
+            $amount,
+            $description,
+            $this,
+            $commandId,
+            $occurredAt
+        );
+        $this->balanceMinor = $movement->balanceAfter()->minorUnits();
+        return $movement;
+    }
+
+    public function consume(Money $amount, string $commandId, string $sourceRevisionId, string $sourceDecisionId): AccountMovement
+    {
+        if (!$this->active) {
+            throw new InvalidArgumentException('Cannot consume from inactive account');
+        }
+        if (!$amount->currency()->equals($this->currencyCode)) {
+            throw new InvalidArgumentException('Currency mismatch');
+        }
+        $movement = AccountMovement::createConsumption(
+            $this->newMovementId(),
+            $amount,
+            'Expense consumption',
+            $this,
+            $sourceRevisionId,
+            $sourceDecisionId,
+            $commandId
+        );
+        $this->balanceMinor = $movement->balanceAfter()->minorUnits();
+        return $movement;
+    }
+
+    /**
+     * A movement's public identifier.
+     *
+     * This used to be `$this->id . '-' . $commandId`, which is 73 characters for two UUIDs, and
+     * `pettycash_account_movements.public_id` is 36. Every charge and every consumption therefore
+     * failed to insert with "Data too long for column 'public_id'" — so `POST /accounts/{id}/decisions`
+     * with APPROVE answered **500**, having already applied the new balance to the aggregate in
+     * memory. A UUID is minted instead, like every other aggregate here.
+     *
+     * The command id is not lost by this: it is stored in its own `command_id` column, which is
+     * what makes a replayed command find the movement it already wrote. Folding it into the public
+     * id added nothing but the overflow.
+     */
+    private function newMovementId(): string
+    {
+        return (string)\OCA\PettyCash\Domain\Shared\Uuid::random();
+    }
+
+    /**
+     * Deactivate because the owning Nextcloud user was deleted. ADR-005.
+     *
+     * **Deactivated, never deleted, and never the same path as an administrator's deactivation.** The
+     * distinction is the whole point: an administrator deactivating an account is a business decision that
+     * FR-017 audits, whereas this is the absence of an owner. They share one `active` column, so the
+     * method is named for the reason rather than left as a bare `deactivate()` that reads as either.
+     *
+     * **Refuses an already-inactive account** rather than silently re-saving it. A second `UserDeletedEvent`
+     * — a retried deletion, or two accounts where one was deactivated earlier — would otherwise bump
+     * `lockVersion` for no change, and a version that moves without a state change is a lost-update
+     * signal: a concurrent reader holding the old version would be told its data changed when it did not.
+     *
+     * @return bool `false` when there was nothing to change, so the caller can report a count of real
+     *              transitions rather than a count of rows it visited
+     */
+    public function deactivateForDeletedOwner(): bool
+    {
+        if (!$this->active) {
+            return false;
+        }
+
+        $this->active = false;
+        $this->lockVersion++;
+
+        return true;
+    }
+
+    /**
+     * Change the active state by an administrator's deliberate decision. FR-013, FR-017.
+     *
+     * **A different path from `deactivateForDeletedOwner()` on purpose, and the name says so.** Both
+     * write the same column, but one is a business decision that FR-017 audits with actor, reason and
+     * before/after values, while the other is the absence of an owner. Sharing one bare `deactivate()`
+     * would make the two indistinguishable at the call site, and a reader could not tell which one
+     * carries an audit obligation.
+     *
+     * **Refuses a no-op the same way `deactivateForDeletedOwner()` does.** Setting the state it already
+     * holds would bump `lockVersion` for no change, and a version that moves without a state change is a
+     * lost-update signal: a concurrent reader holding the old version would be told its data changed
+     * when it did not. The caller reports the current state instead, and writes no audit row — nothing
+     * changed, so there is nothing to record.
+     *
+     * @return bool `false` when the account already held the requested state, so the caller can answer
+     *              the current state without claiming a transition
+     */
+    public function setActiveByAdministrator(bool $active): bool
+    {
+        if ($this->active === $active) {
+            return false;
+        }
+
+        $this->active = $active;
+        $this->lockVersion++;
+
+        return true;
+    }
+
+    public function balance(): Money
+    {
+        return Money::of($this->balanceMinor, $this->currencyCode);
+    }
+}

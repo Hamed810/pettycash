@@ -1,0 +1,270 @@
+<?php
+
+declare(strict_types=1);
+
+namespace OCA\PettyCash\Application\Workflow;
+
+use DateTimeImmutable;
+use DateTimeZone;
+use InvalidArgumentException;
+use LogicException;
+use OCA\PettyCash\Application\Command\IdempotencyService;
+use OCA\PettyCash\Application\Port\AuditWriter;
+use OCA\PettyCash\Application\Port\CurrentUser;
+use OCA\PettyCash\Application\Port\TransactionManager;
+use OCA\PettyCash\Application\Security\AuthorizationService;
+use OCA\PettyCash\Application\StaleRecordVersion;
+use OCA\PettyCash\Domain\Audit\AuditEvent;
+use OCA\PettyCash\Domain\Configuration\Repository\CostCenterRepository;
+use OCA\PettyCash\Domain\Configuration\Repository\RoleAssignmentRepository;
+use OCA\PettyCash\Domain\Shared\Enum\Role;
+use OCA\PettyCash\Domain\Expense\ExpenseSheet;
+use OCA\PettyCash\Domain\Expense\Repository\ExpenseSheetRepository;
+use OCA\PettyCash\Domain\Expense\Repository\ExpenseTransactionRepository;
+use OCA\PettyCash\Domain\Expense\Repository\TransactionRevisionRepository;
+use OCA\PettyCash\Domain\Expense\TransactionRevision;
+use OCA\PettyCash\Domain\Workflow\WorkflowStage;
+use OCA\PettyCash\Domain\Shared\Enum\AuditEventType;
+
+final readonly class SubmitSheet
+{
+    public function __construct(
+        private TransactionManager $transactionManager,
+        private ExpenseSheetRepository $sheetRepository,
+        private AuditWriter $auditWriter,
+        private IdempotencyService $idempotencyService,
+        private CurrentUser $currentUser,
+        private CostCenterRepository $costCenterRepository,
+        private ExpenseTransactionRepository $transactionRepository,
+        private RoleAssignmentRepository $roleAssignmentRepository
+    ) {}
+
+    /**
+     * Submit an open sheet for review
+     *
+     * @param string $sheetId
+     * @param string $commandId
+     * @param int $expectedVersion
+     * @return ExpenseSheet
+     */
+    public function execute(string $sheetId, string $commandId, int $expectedVersion): ExpenseSheet
+    {
+        $ownerUid = $this->currentUser->uid();
+
+        return $this->transactionManager->transactional(function () use ($sheetId, $ownerUid, $commandId, $expectedVersion): ExpenseSheet {
+            // Check idempotency
+            $payload = ['sheet_id' => $sheetId, 'command_id' => $commandId];
+            $this->idempotencyService->execute($commandId, $payload, function () use ($sheetId, $ownerUid, $expectedVersion, $commandId): array {
+                $sheet = $this->sheetRepository->findByPublicId($sheetId);
+
+                if ($sheet === null || $sheet->ownerUid !== $ownerUid) {
+                    throw new InvalidArgumentException('Sheet not found');
+                }
+
+                // `contracts/ocs-api.yaml` declares both `409` and `422` on
+                // `POST /sheets/{sheetId}/submit`: a stale version is the 409, an unopenable sheet
+                // is the 422 below. FR-025 requires the same split.
+                if ($sheet->lockVersion !== $expectedVersion) {
+                    throw StaleRecordVersion::forResource(
+                        'sheet',
+                        $sheetId,
+                        $expectedVersion,
+                        $sheet->lockVersion
+                    );
+                }
+
+                if ($sheet->status !== \OCA\PettyCash\Domain\Workflow\SheetStatus::Open) {
+                    throw new InvalidArgumentException('Only open sheets can be submitted');
+                }
+
+                // Attach the sheet's transactions before validating it.
+                //
+                // `ExpenseSheet` is a domain aggregate that owns its transactions, but
+                // `DbExpenseSheetRepository` deliberately does not compose them, so a
+                // sheet loaded from the database always carried an empty collection.
+                // Submission then failed with "At least one transaction is required"
+                // for every sheet that genuinely had one.
+                if ($sheet->dbId !== null) {
+                    foreach ($this->transactionRepository->findBySheetId($sheet->dbId) as $transaction) {
+                        $sheet->addTransaction($transaction);
+                    }
+                }
+
+                // Validate all transactions are complete
+                if ($sheet->transactions() === []) {
+                    throw new InvalidArgumentException('At least one transaction is required');
+                }
+
+                // Check each transaction's cost center, and resolve who it routes to.
+                //
+                // FR-032: "Submission MUST route each transaction to the manager assigned to its cost
+                // center", and the data model states that assignment changes govern future routing
+                // without rewriting history. So the assignee is read *at submission time* and frozen
+                // into the audit event below -- an assignment changed afterwards must not retroactively
+                // change what this submission was routed to.
+                $routingTargets = [];
+                foreach ($sheet->transactions() as $tx) {
+                    $costCenter = $this->resolveCostCenter($tx->revision());
+                    if ($costCenter === null) {
+                        throw new InvalidArgumentException('Transaction missing cost center');
+                    }
+                    $routingTargets[] = [
+                        'transaction' => $tx,
+                        'cost_center' => $costCenter,
+                        'manager' => $this->resolveCostCenterManager($costCenter),
+                    ];
+                }
+
+                // Submit the sheet (domain logic)
+                $submittedTotal = $sheet->submit();
+
+                // Create audit event for submission.
+                //
+                // `AuditWriter::append()` reads snake_case keys; casting the AuditEvent
+                // object yields camelCase properties, so `command_id` is never found
+                // and the insert fails on the NOT NULL column.
+                $this->auditWriter->append([
+                    'id' => (string)\OCA\PettyCash\Domain\Shared\Uuid::random(),
+                    'sheet_id' => $sheet->dbId,
+                    'transaction_id' => null,
+                    'revision_id' => null,
+                    'stage' => WorkflowStage::CostCenter->value,
+                    'decision_id' => null,
+                    'entity_type' => 'sheet',
+                    'entity_id' => $sheetId,
+                    // The enum, not a literal: see `AuditEventType` for why the producers were
+                    // moved onto it, and `AuditEventTypeConformanceTest` for what keeps them there.
+                    'event_type' => AuditEventType::Submitted->value,
+                    'actor_uid' => $ownerUid,
+                    'actor_role' => 'PURCHASER',
+                    'explanation' => '',
+                    'before' => [],
+                    'after' => [
+                        'sheet_id' => $sheetId,
+                        'transaction_count' => count($sheet->transactions()),
+                        'submitted_total_minor' => $submittedTotal,
+                    ],
+                    'command_id' => $commandId,
+                ]);
+
+                // One ROUTED event per transaction (FR-051 "routing").
+                //
+                // This is per transaction rather than one sheet-level event because the fact it records
+                // -- which manager this specific transaction went to -- differs per cost center. A single
+                // sheet-level event would have to list them all in a JSON blob and still could not answer
+                // "which manager was this transaction routed to" without parsing it.
+                //
+                // It is written after the SUBMITTED event because that is the order the two happen in:
+                // FR-032 has submission begin formal history and route in the same breath, and the
+                // `stage` below is the stage the transaction has been routed *into*.
+                foreach ($routingTargets as $target) {
+                    $transaction = $target['transaction'];
+                    $costCenter = $target['cost_center'];
+                    $manager = $target['manager'];
+
+                    $this->auditWriter->append([
+                        'id' => (string)\OCA\PettyCash\Domain\Shared\Uuid::random(),
+                        'sheet_id' => $sheet->dbId,
+                        'transaction_id' => $transaction->dbId,
+                        'revision_id' => $transaction->revision()->dbId,
+                        'stage' => WorkflowStage::CostCenter->value,
+                        'decision_id' => null,
+                        'entity_type' => 'transaction',
+                        'entity_id' => $transaction->publicId,
+                        'event_type' => AuditEventType::Routed->value,
+                        'actor_uid' => $ownerUid,
+                        'explanation' => '',
+                        // The prior state is genuinely empty: routing establishes the queue position, it
+                        // does not change anything that was previously true about the transaction.
+                        'before' => [],
+                        'after' => [
+                            'cost_center_code' => $costCenter->code(),
+                            'cost_center_id' => $costCenter->publicId,
+                            // Null when no manager is assigned to the cost center. That is recorded
+                            // honestly rather than omitted: submission does not require an assignee
+                            // today, and a fabricated UID would put a real-looking name on a routing
+                            // decision nobody made. See the report for the follow-up this implies.
+                            'assigned_manager_uid' => $manager?->userUid,
+                            'routed_to_stage' => WorkflowStage::CostCenter->value,
+                        ],
+                        'command_id' => $commandId,
+                    ]);
+                }
+
+                // Persist the sheet
+                $this->sheetRepository->save($sheet);
+
+                return ['sheet_id' => $sheetId, 'submitted_total' => $submittedTotal];
+            });
+
+            // Reload and return the sheet
+            $sheet = $this->sheetRepository->findByPublicId($sheetId);
+            if ($sheet === null) {
+                throw new LogicException('Sheet not found after submission');
+            }
+
+            return $sheet;
+        });
+    }
+
+    private function currentUserDisplayName(): string
+    {
+        return $this->currentUser->uid();
+    }
+
+    /**
+     * Resolve the cost center a revision points at.
+     *
+     * `TransactionRevision::costCenterId()` is the cost center's public UUID, which
+     * `findByCode()` can never match, so the numeric join key is tried first and the
+     * submission-time code snapshot second.
+     */
+    /**
+     * The manager currently assigned to a cost center, or null when none is.
+     *
+     * Read through `findActiveByRoleAndCostCenter()` with today's date so an assignment that has
+     * expired or is not yet valid is not treated as governing routing. FR-034 makes the cost-center
+     * manager's decision advisory, so this lookup determines who may review the transaction, not who
+     * decides it.
+     */
+    private function resolveCostCenterManager(\OCA\PettyCash\Domain\Configuration\CostCenter $costCenter): ?\OCA\PettyCash\Domain\Configuration\RoleAssignment
+    {
+        if ($costCenter->id === null) {
+            return null;
+        }
+
+        $assignments = $this->roleAssignmentRepository->findActiveByRoleAndCostCenter(
+            Role::CostCenterManager,
+            $costCenter->id,
+            new DateTimeImmutable('now', new DateTimeZone('UTC'))
+        );
+
+        // More than one active manager for a cost center is a configuration ambiguity, not a reason to
+        // pick one silently. The first is used so routing is still recorded, and the count is left in the
+        // event so the ambiguity is visible in the audit trail instead of being resolved invisibly.
+        return $assignments[0] ?? null;
+    }
+
+    private function resolveCostCenter(TransactionRevision $revision): ?\OCA\PettyCash\Domain\Configuration\CostCenter
+    {
+        if ($revision->costCenterDbId !== null) {
+            $byId = $this->costCenterRepository->findById($revision->costCenterDbId);
+            if ($byId !== null) {
+                return $byId;
+            }
+        }
+
+        if ($revision->costCenterId() !== null) {
+            $byPublicId = $this->costCenterRepository->findByPublicId($revision->costCenterId());
+            if ($byPublicId !== null) {
+                return $byPublicId;
+            }
+        }
+
+        if ($revision->costCenterCode !== null && $revision->costCenterCode !== '') {
+            return $this->costCenterRepository->findByCode($revision->costCenterCode);
+        }
+
+        return null;
+    }
+}

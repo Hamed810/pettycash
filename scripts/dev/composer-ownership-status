@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Report the ownership state of this repository's Composer-managed files. READ-ONLY.
+#
+# It inspects and prints. It never chowns, deletes, regenerates or writes anything into the
+# repository — not to `composer.json`, not to `composer.lock`, not to `vendor/`, and not to any
+# file inside it. There is no flag that makes it mutate anything, deliberately: the ownership
+# handoff is a one-time maintainer decision with its own preconditions, and a helper that can
+# perform it would eventually be run by something that has not read them. See
+# docs/development/composer-ownership-migration.md for the plan and the exact commands.
+#
+# USAGE
+#
+#   scripts/dev/composer-ownership-status
+#
+# Exit status: 0 when every path is owned by the invoking user, 1 when at least one is not.
+# It never exits non-zero for a reason other than ownership, so it can gate a mutating command.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+readonly HOST_UID="$(id -u)"
+readonly HOST_GID="$(id -g)"
+
+cd "$REPO_ROOT"
+
+echo "Composer ownership status — ${REPO_ROOT}"
+echo "host developer: uid=${HOST_UID} gid=${HOST_GID} ($(id -un))"
+echo
+
+status=0
+
+report() {
+  local path="$1" owner mode writable
+  if [ ! -e "$path" ]; then
+    printf '  %-16s ABSENT\n' "$path"
+    return 0
+  fi
+  owner="$(stat -c '%U:%G (%u:%g)' "$path")"
+  mode="$(stat -c '%A' "$path")"
+  if [ -w "$path" ]; then
+    writable="writable by uid ${HOST_UID}"
+  else
+    writable="NOT writable by uid ${HOST_UID}"
+    status=1
+  fi
+  printf '  %-16s %-22s %-11s %s\n' "$path" "$owner" "$mode" "$writable"
+}
+
+echo "Composer-managed paths:"
+report composer.json
+report composer.lock
+report vendor
+
+if [ -d vendor ]; then
+  echo
+  echo "vendor/ composition:"
+  total="$(find vendor -mindepth 1 | wc -l | tr -d ' ')"
+  non_host="$(find vendor -mindepth 1 ! -uid "$HOST_UID" | wc -l | tr -d ' ')"
+  echo "  entries total                              : ${total}"
+  echo "  entries NOT owned by uid ${HOST_UID}                  : ${non_host}"
+  if [ "$non_host" -gt 0 ]; then
+    echo "  -> vendor/ is not host-owned: a mutating Composer command cannot write it."
+    status=1
+  fi
+fi
+
+echo
+echo "Integrity baselines (record these before and after any migration):"
+sha256sum composer.json composer.lock 2>/dev/null | sed 's/^/  /'
+
+echo
+echo "Gates before an ownership migration:"
+echo "  - read this file's companion plan:"
+echo "      docs/development/composer-ownership-migration.md"
+echo "  - confirm registry reachability with a BOUNDED check (composer diagnose hangs here):"
+echo "      curl -sS --max-time 20 -o /dev/null -w '%{http_code}\\n' https://repo.packagist.org/packages.json"
+echo "  - this script must print 'writable by uid ${HOST_UID}' for composer.json and vendor"
+echo "    before any mutating Composer command is expected to succeed."
+
+echo
+if [ "$status" -eq 0 ]; then
+  echo "RESULT: all Composer-managed paths are owned by uid ${HOST_UID}."
+else
+  echo "RESULT: ownership mismatch — see docs/development/composer-ownership-migration.md."
+  echo "        This script changed nothing. No file was chowned, deleted or regenerated."
+fi
+
+exit "$status"

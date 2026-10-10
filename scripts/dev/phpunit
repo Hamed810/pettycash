@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+# Local, gitignored credentials for the live-HTTP OCS contract tests.
+# Source: .env.example documents every variable.
+ENV_FILE="$REPO_ROOT/.env.testing"
+declare -a ENV_ARGS=()
+if [ -f "$ENV_FILE" ]; then
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      ''|'#'*) continue ;;
+    esac
+    key="${line%%=*}"
+    value="${line#*=}"
+    if [ "$key" = "$value" ]; then
+      continue
+    fi
+    # Strip optional surrounding quotes and surrounding whitespace.
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    value="${value%\"}"; value="${value#\"}"
+    value="${value%\'}"; value="${value#\'}"
+    ENV_ARGS+=(--env "$key=$value")
+  done < "$ENV_FILE"
+fi
+
+# FR-073's error-rate measurement needs the contract suite's responses recorded.
+#
+# Forwarded, not left to the ambient environment: `in-container` execs into a container, which does not
+# inherit this shell's environment, so an exported variable silently does not arrive and the run produces
+# no log — the measurement then reports on nothing rather than failing. `scripts/dev/in-container` is the
+# documented way to pass variables in, and the wrapper owns what the container gets for a test run.
+#
+# **The log is written inside the container and copied out afterwards, because the app tree is not
+# writable by the identity PHPUnit runs as.** The bind mount is owned by uid 1000 and this wrapper execs
+# as `www-data`, so a path inside the repository fails with `Permission denied` and — because the
+# measurement is optional — produces no log and no error. `/tmp` inside the container is writable, and
+# the retrieval goes back out through `in-container` so this script never builds a raw `docker exec`.
+if [ -n "${PETTYCASH_REQUEST_LOG:-}" ]; then
+  REQUEST_LOG_DEST="$PETTYCASH_REQUEST_LOG"
+  mkdir -p "$(dirname "$REQUEST_LOG_DEST")"
+  # Truncated before the run rather than appended to: a stale log from an earlier, contaminated run would
+  # be indistinguishable from this one once merged, and the figure would then cover two sessions.
+  "$SCRIPT_DIR/in-container" sh -c ': > /tmp/pettycash-fr073-requests.ndjson' || true
+  ENV_ARGS+=(--env "PETTYCASH_REQUEST_LOG=/tmp/pettycash-fr073-requests.ndjson")
+fi
+
+# The OCS contract tests issue real HTTP requests, so `lib/` is loaded by
+# Apache's mod_php through an opcode cache that can hold the previous bytecode
+# for `opcache.revalidate_freq` seconds after an edit. PHPUnit itself runs in
+# the CLI SAPI, where opcache is off, so the run cannot notice this itself: it
+# would report a false PASS or a false FAIL and look healthy either way.
+# Settling first is what makes the result evidence. It costs nothing when
+# nothing has changed recently, and it is a hard failure if the wait cannot be
+# computed, because an unverified PHP result is not a result.
+#
+# The only exception is an argument that cannot run a test at all, where there is
+# no bytecode to settle and a wait would only be an obstacle.
+case "${1:-}" in
+  --list-tests|--help|-h|--version|--help-md|--migrate-configuration) ;;
+  *) "$SCRIPT_DIR/opcache-settle" ;;
+esac
+
+# The OCS contract tests reach the app over HTTP, so they are also subject to
+# Nextcloud's route cache: `CachingRouter` caches the whole serialized route
+# collection for 3600s, so a request can be dispatched by a route table that
+# predates an edit to `appinfo/routes.php`. That is a false-result hazard of the
+# same kind as the opcode cache and in the same tests (tasks.md T300).
+#
+# Unlike the opcode cache, this one is scoped to the tests that actually make an
+# HTTP request, because the exposure window is 3600s rather than 60s: the
+# bytecode wait is free, an hour-long block after every route edit is not, and
+# blocking unit and integration runs for a hazard they cannot observe would train
+# people to reach for `in-container` instead of this wrapper. The contract suite
+# is still protected, and a whole-suite run (no path argument) includes it.
+# Whether any selected test reaches the app over HTTP. Checked across *all*
+# arguments, not just the first: `phpunit tests/Unit/A.php tests/Contract/B.php`
+# is a mixed run, and the contract file in it is exposed to the stale route table
+# just as much as a contract-only run is. Deciding from `$1` alone would have left
+# that case unprotected while looking protected.
+runs_contract_tests=1
+if [ "$#" -gt 0 ]; then
+  any_path=0
+  for arg in "$@"; do
+    case "$arg" in
+      -*) continue ;;
+      tests/Contract/*|*/tests/Contract/*) any_path=1; continue ;;
+      *) continue ;;
+    esac
+  done
+  # No path arguments at all means the whole suite, which includes the contract
+  # tests. With path arguments, settle only if one of them is a contract test.
+  if [ "$any_path" -eq 0 ]; then
+    case " $* " in
+      *" tests/"*|*"/tests/"*) runs_contract_tests=0 ;;
+    esac
+  fi
+fi
+
+if [ "$runs_contract_tests" -eq 1 ]; then
+  "$SCRIPT_DIR/route-settle"
+fi
+
+set +e
+"$SCRIPT_DIR/in-container" \
+  "${ENV_ARGS[@]+"${ENV_ARGS[@]}"}" \
+  php vendor/bin/phpunit \
+  --do-not-cache-result \
+  "$@"
+phpunit_status=$?
+set -e
+
+# The suite's exit status is the result of this script's own job and must not be masked by whether the
+# optional measurement log could be retrieved. So the retrieval runs afterwards and its own failure is
+# reported without replacing the status.
+if [ -n "${REQUEST_LOG_DEST:-}" ]; then
+  if "$SCRIPT_DIR/in-container" cat /tmp/pettycash-fr073-requests.ndjson > "$REQUEST_LOG_DEST" 2>/dev/null; then
+    echo "phpunit: recorded $(wc -l < "$REQUEST_LOG_DEST") HTTP requests to $REQUEST_LOG_DEST (FR-073)."
+  else
+    echo "phpunit: WARNING — could not retrieve the FR-073 request log." >&2
+  fi
+fi
+
+exit "$phpunit_status"

@@ -6,22 +6,53 @@ config/
 node_modules/
 dist/
 npm-debug.log
+coverage/
+playwright-report/
+test-results/
 
 # PHP
 vendor/
-
-# Composer
-composer.lock
+.phpunit.cache/
+.phpunit.result.cache
+.php-cs-fixer.cache
 
 # IDE
 .idea/
 .vscode/
+*.swp
 
 # OS
 .DS_Store
+Thumbs.db
 
 # Environment
-.env
+.env*
+!.env.example
+
+# Local agent tooling backups (may embed private endpoints; never commit)
+*.bak
+opencode.local.json
+
+# Local agent tooling state. Per-checkout caches and generated indexes, not project
+# source. Narrow rules only, deliberately:
+#   .opencode/commands/ is TRACKED project configuration and stays tracked; so does
+#     this file. .opencode/node_modules, package.json and package-lock.json are
+#     already covered by .opencode/.gitignore and are not duplicated here.
+#   .opencode/index/ is generated index state from a local tool.
+#   .codebase-memory/ is a retired tool's generated call-graph artifact. The tool is
+#     uninstalled, the tracked artifact was deleted, and it must never be reintroduced.
+#   .serena/ holds only local caches, generated memories and per-checkout config —
+#     nothing under it is tracked. Its own .gitignore already covers cache/ and
+#     project.local.yml; the whole directory is ignored here so a checkout stays clean.
+#   .cbmignore belongs beside the index it configures.
+# Shared tool guidance lives in AGENTS.md, which stays tracked.
+/.codebase-memory/
+/.opencode/index/
+/.serena/
+/.cbmignore
 
 # Build
 *.log
+*.tmp
+js/*.map
+css/*.map

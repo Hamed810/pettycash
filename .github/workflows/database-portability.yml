@@ -1,0 +1,262 @@
+# T239 / FR-077 / SC-013: the database-portability matrix.
+#
+# ACC-002 registers `mysql`, `pgsql` and `sqlite` as the V1 backend set and requires that
+# "continuous integration MUST provide a matrix of **four** ephemeral database services -- MySQL,
+# MariaDB, PostgreSQL and SQLite -- in which each job runs the forward-only migrations and schema
+# creation, the persistence and repository integration tests, the representative transaction and
+# workflow queries, and the migration and schema compatibility checks".
+#
+# ## Why four jobs and not three
+#
+# The Nextcloud database type `mysql` covers **two distinct concrete engines**. A green MariaDB run is
+# therefore not evidence for MySQL, and ACC-002 says so explicitly: "MySQL and MariaDB MUST be
+# separate jobs, because the `mysql` Nextcloud type covers two distinct concrete engines and a MariaDB
+# pass is not evidence for MySQL." `concurrency`-free `fail-fast: false` is deliberate for the same
+# reason -- a MySQL failure must not mask the PostgreSQL result, since each answers a different
+# question. `fail-fast: true` would report one failure and hide three verdicts.
+#
+# `matrix.backend` and the service blocks are declared explicitly rather than generated, because the
+# four services take **different environment variable names**: the MySQL/MariaDB images read
+# `MYSQL_*`, PostgreSQL reads `POSTGRES_*`, and SQLite reads `SQLITE_DATABASE` with no host at all.
+# A loop over one templated service block cannot express that, and a job that started a service with
+# the wrong variable names would install Nextcloud against a default configuration and report a green
+# run for the wrong backend -- the exact false-evidence failure this matrix exists to prevent.
+#
+# ## What each job proves, and what it does not
+#
+# Each job installs a **fresh, empty** database, enables the app (which applies the forward-only
+# migrations in version order -- schema creation), and then runs:
+#
+#   * `tests/Integration/Migration` -- migration and schema compatibility checks (SC-014's migration
+#     clauses, FR-078/FR-079, and the identifier limits PostgreSQL imposes).
+#   * `tests/Integration/Persistence` -- the persistence and repository integration tests plus the
+#     representative transaction and workflow queries. These reach the real database through
+#     `roundtrip-runner.php`, a subprocess that bootstraps Nextcloud, so they exercise the actual
+#     backend rather than the `InMemory*` doubles the rest of the suite uses.
+#
+# ## Why the contract suite is deliberately absent
+#
+# `tests/Contract` issues live HTTP to a running Nextcloud and authenticates with an app token. Its
+# failures here would be about credential and web-server setup, not about the database, and including
+# it would make this matrix red for reasons unrelated to portability. It is not run locally either --
+# `scripts/dev/phpunit` covers it against the development lab. T239's scope is the backend matrix, and
+# widening it to the OCS contract suite is a separate decision this workflow does not make silently.
+#
+# ## What this workflow must never do
+#
+# ACC-002 forbids it outright: "no CI job may modify or replace the shared Nextcloud database, Docker
+# volumes, or another application's data." Every database here is an ephemeral GitHub Actions service
+# container, created and destroyed with the job. Nothing in this file references the local
+# `pettycash-lab` or `pts-lab` environments, and `scripts/dev/in-container` is not used here: it
+# targets a container by the lab's own Compose name and would reach the wrong runtime entirely.
+
+name: Database portability
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A stuck service container must not consume a runner indefinitely. The matrix is four jobs, so a
+# genuine schema hang should fail the job and report which backend hung.
+timeout-minutes: 45
+
+permissions:
+  contents: read
+
+concurrency:
+  group: database-portability-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Backend A: MySQL. Declared as `mysql` by ACC-002 and paired with MariaDB below.
+  # ---------------------------------------------------------------------------
+  mysql:
+    name: mysql (MySQL 8.4)
+    runs-on: ubuntu-latest
+
+    services:
+      db:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: nextcloud
+          MYSQL_USER: nextcloud
+          MYSQL_PASSWORD: nextcloud
+        ports:
+          - 3306:3306
+        # The image reports healthy only once it accepts connections. Without this the job starts
+        # polling before the server binds and the first attempt fails for a reason that is not a
+        # portability defect.
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run the MySQL portability pass
+        env:
+          PETTYCASH_BACKEND: mysql
+          PETTYCASH_NEXTCLOUD_IMAGE: nextcloud:34-apache
+          MYSQL_HOST: 127.0.0.1
+          MYSQL_PORT: '3306'
+          MYSQL_DATABASE: nextcloud
+          MYSQL_USER: nextcloud
+          MYSQL_PASSWORD: nextcloud
+          PETTYCASH_DB_PORT: '3306'
+        run: .github/workflows/scripts/portability-pass.sh
+
+  # ---------------------------------------------------------------------------
+  # Backend B: MariaDB. SEPARATE from MySQL on purpose -- see the header.
+  # ---------------------------------------------------------------------------
+  mariadb:
+    name: mariadb (MariaDB 11.4)
+    runs-on: ubuntu-latest
+
+    services:
+      db:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: root
+          MARIADB_DATABASE: nextcloud
+          MARIADB_USER: nextcloud
+          MARIADB_PASSWORD: nextcloud
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run the MariaDB portability pass
+        env:
+          PETTYCASH_BACKEND: mariadb
+          PETTYCASH_NEXTCLOUD_IMAGE: nextcloud:34-apache
+          MYSQL_HOST: 127.0.0.1
+          MYSQL_PORT: '3306'
+          MYSQL_DATABASE: nextcloud
+          MYSQL_USER: nextcloud
+          MYSQL_PASSWORD: nextcloud
+          PETTYCASH_DB_PORT: '3306'
+        run: .github/workflows/scripts/portability-pass.sh
+
+  # ---------------------------------------------------------------------------
+  # Backend C: PostgreSQL. Reads POSTGRES_*, which is why it is not templated with MySQL.
+  # ---------------------------------------------------------------------------
+  postgresql:
+    name: postgresql (PostgreSQL 17)
+    runs-on: ubuntu-latest
+
+    services:
+      db:
+        image: postgres:17
+        env:
+          POSTGRES_DB: nextcloud
+          POSTGRES_USER: nextcloud
+          POSTGRES_PASSWORD: nextcloud
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U nextcloud -d nextcloud"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # PostgreSQL 15 removed the default `CREATE` privilege on the `public` schema from every role,
+      # leaving it with `pg_database_owner` alone. Nextcloud's installer creates `oc_migrations` and
+      # the rest of its core schema during `maintenance:install`, and against an unfixed 15+ server
+      # that fails with:
+      #
+      #     SQLSTATE[42501]: Insufficient privilege: permission denied for table oc_migrations
+      #
+      # This is a server-default change, not an application defect, and not something the app's own
+      # migrations can work around — the failure happens during install, before the app is enabled.
+      # Granting the schema to the installing role is the documented remedy, and it is done here
+      # rather than in the app because the application must not require elevated privileges on a
+      # backend it declares support for.
+      #
+      # Confirmed by running this pass against postgres:17 rather than assumed: without the grant the
+      # container's built-in install retry loop exhausts and exits non-zero, so a job that skipped this
+      # step would fail for a reason that has nothing to do with portability.
+      - name: Grant CREATE on the public schema (PostgreSQL 15+)
+        env:
+          PGPASSWORD: nextcloud
+        run: |
+          docker exec -e PGPASSWORD="$PGPASSWORD" "${{ job.services.db.id }}" \
+            psql -v ON_ERROR_STOP=1 -U nextcloud -d nextcloud \
+            -c 'ALTER SCHEMA public OWNER TO nextcloud;' \
+            -c 'GRANT ALL ON SCHEMA public TO nextcloud;'
+
+      - name: Run the PostgreSQL portability pass
+        env:
+          PETTYCASH_BACKEND: postgresql
+          PETTYCASH_NEXTCLOUD_IMAGE: nextcloud:34-apache
+          POSTGRES_HOST: 127.0.0.1
+          POSTGRES_PORT: '5432'
+          POSTGRES_DB: nextcloud
+          POSTGRES_USER: nextcloud
+          POSTGRES_PASSWORD: nextcloud
+          PETTYCASH_DB_PORT: '5432'
+        run: .github/workflows/scripts/portability-pass.sh
+
+  # ---------------------------------------------------------------------------
+  # Backend D: SQLite. A file, not a service container.
+  #
+  # SQLite is declared in `appinfo/info.xml` "for compatibility verification rather than as a
+  # production recommendation" (ACC-002), which is precisely why the job exists: it is a declared
+  # backend, so SC-013 covers it. There is no service to declare -- the database is a file inside the
+  # Nextcloud container, created by `occ maintenance:install` on first use and discarded with the
+  # container. The job therefore has no `services:` block, which is the honest expression of
+  # "ephemeral": nothing survives it.
+  # ---------------------------------------------------------------------------
+  sqlite:
+    name: sqlite (SQLite 3)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run the SQLite portability pass
+        env:
+          PETTYCASH_BACKEND: sqlite
+          PETTYCASH_NEXTCLOUD_IMAGE: nextcloud:34-apache
+          SQLITE_DATABASE: nextcloud
+        run: .github/workflows/scripts/portability-pass.sh
+
+  # ---------------------------------------------------------------------------
+  # T240's static check, run on every push.
+  #
+  # Listed here so the matrix and the static check are one required status rather than two that can
+  # drift apart -- ACC-002 pairs them: "On top of those per-backend execution passes, a static
+  # portability check MUST run on every build". It is NOT a substitute for the four jobs above and
+  # nothing in this workflow treats it as one: `npm run check:portability` reads no database, so a
+  # green run here is a statement about source constructs only.
+  # ---------------------------------------------------------------------------
+  static-portability:
+    name: static portability check (T240)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Reject vendor-specific constructs (FR-077)
+        run: npm run check:portability
