@@ -1712,11 +1712,21 @@ function scenarioExpense(
         static fn (AuditEvent $e): string => (string) $e->publicId,
         $auditEvents->findByActorUid($actorUid)
     );
+    // Explicit limit: the default 100 with oldest-first timeline order drops the
+    // newest rows once the shared table holds more than 100 in-window events — and
+    // this table accumulates every suite's legitimate append-only history (contract
+    // runs, E2E journeys), so the count depends on what ran that day, not on this
+    // scenario. Measured 2026-10-09: 172 in-window rows after a heavy E2E session
+    // cut this scenario's own event out of the default window. The limit is passed
+    // rather than assumed; deleting rows to fit the default would contradict the
+    // append-only property under test.
     $auditInRange = array_map(
         static fn (AuditEvent $e): string => (string) $e->publicId,
         $auditEvents->findByDateRange(
             new DateTimeImmutable('-1 day', new DateTimeZone('UTC')),
-            new DateTimeImmutable('+1 day', new DateTimeZone('UTC'))
+            new DateTimeImmutable('+1 day', new DateTimeZone('UTC')),
+            0,
+            1000
         )
     );
     $auditOutOfRange = array_map(

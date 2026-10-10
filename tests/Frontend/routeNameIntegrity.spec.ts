@@ -274,8 +274,13 @@ describe('component reachability', () => {
 	 */
 	it('has every component rendered by some view', () => {
 		const viewFiles = vueFiles(VIEWS)
+		// The app shell is a render root like any view: `src/AppRoot.vue`
+		// renders the global navigation above `RouterView` (004-in-app-navigation),
+		// so components it imports are rendered on every route. Seeding the walk
+		// from views alone would report the shell's components as orphans.
+		const APP_ROOT = join(process.cwd(), 'src/AppRoot.vue')
 		const sources = new Map<string, string>()
-		for (const file of [...viewFiles, ...componentFiles]) {
+		for (const file of [...viewFiles, ...componentFiles, APP_ROOT]) {
 			sources.set(file, readFileSync(file, 'utf8'))
 		}
 
@@ -311,10 +316,11 @@ describe('component reachability', () => {
 			return [...edges]
 		}
 
-		// Breadth-first from every view. A component is reachable when some view reaches it, directly
-		// or through other components.
+		// Breadth-first from every view and from the app shell. A component is
+		// reachable when some view or the shell reaches it, directly or through
+		// other components.
 		const reachable = new Set<string>()
-		const queue = [...viewFiles]
+		const queue = [...viewFiles, APP_ROOT]
 		while (queue.length > 0) {
 			const file = queue.shift() as string
 			for (const edge of componentEdges(file)) {

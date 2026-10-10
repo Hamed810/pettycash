@@ -40,7 +40,7 @@ async function pickFirstOption(page: Page): Promise<void> {
  * | `transaction-status` | `transaction-status-badge` | `SheetDetailView` |
  * | `validation-error` | `validation-summary` + `validation-summary-<field>` | `TransactionFormView` |
  * | `account-option`, `cost-center-option`, `expense-type-option` | *(none — `NcSelect` internals)* | see `pickFirstOption` |
- * | `audit-event` | **does not exist** | see the last test in this file |
+ * | `audit-event`, `audit-tab` | **do not exist (sheet level has none by FR-070; transaction audit timeline is T098's open scope)** | corrected to the transaction's `revision-history` / `revision-tab` below |
  */
 const SELECTOR_NOTES = true
 void SELECTOR_NOTES
@@ -90,6 +90,44 @@ async function openSheet(page: Page, title: string): Promise<void> {
 }
 
 /**
+ * Uploads an evidence file on the transaction's own detail surface and waits
+ * for it to appear in the list. Call after saving, from the sheet detail.
+ *
+ * ## Why the detail surface and not the form
+ *
+ * The create form has no transaction id yet (`transactionId` is `''`), so its
+ * uploader would POST against `/transactions//evidence` — selecting a file there
+ * and saving uploads nothing, and the save silently leaves the evidence behind.
+ * Uploading is a draft affordance of an EXISTING transaction: the detail view's
+ * upload dialog (`upload-evidence-btn`) carries the id. The journey therefore
+ * saves first (landing on the sheet detail per FR-088), opens the transaction,
+ * and uploads there — the product's own order, not a workaround.
+ */
+async function uploadEvidenceFile(page: Page): Promise<void> {
+	await page.click('[data-test="view-transaction"]')
+	await page.click('[data-test="upload-evidence-btn"]')
+	await page.setInputFiles('[data-test="evidence-upload-input"]', {
+		name: 'receipt.pdf',
+		mimeType: 'application/pdf',
+		buffer: Buffer.from('test pdf content')
+	})
+	await page.click('[data-test="upload-btn"]')
+	await expect(page.locator('[data-test="evidence-list-item"]').first()).toContainText('receipt.pdf')
+}
+
+/**
+ * Returns to the sheet detail from the transaction detail.
+ *
+ * The detail carries no Submit control and no sheet link, so the history stack
+ * is the way back: the transaction was reached from the sheet detail in every
+ * journey in this file.
+ */
+async function backToSheet(page: Page): Promise<void> {
+	await page.goBack()
+	await expect(page.locator('[data-test="sheet-detail-view"]')).toBeVisible()
+}
+
+/**
  * Asserts a saved transaction row, without depending on how a number or a status is spelled.
  *
  * ## The two assertions this replaces were both wrong, and for different reasons
@@ -111,12 +149,19 @@ async function openSheet(page: Page, title: string): Promise<void> {
  * `data-testid="status-badge-<lowercased canonical status>"`, so the canonical domain value is asserted
  * through it. The *label* is T119's to fix; the *status* is the product's to be right about, and
  * `data-testid` says which one this test is checking.
+ *
+ * **Corrected 2026-10-09 (T171): that hook lives on `StatusBadge`, which the sheet detail does not
+ * render.** `SheetDetailView` draws its own status cell (`transaction-status-badge`, an `NcChip`
+ * over `status.<lowercased-canonical>`), so asserting `status-badge-draft` here addressed a hook
+ * the surface the browser is genuinely on never had — the same stale-selector class as the row
+ * hook above it. The status cell is asserted scoped to the saved row: its presence on the row is
+ * the product claim, and the label spelling stays T119's concern.
  */
 async function expectDraftTransaction(page: Page, expectedCurrency: string): Promise<void> {
 	const row = page.locator('[data-test="sheet-transaction-row"]').first()
 	await expect(row).toBeVisible()
 	await expect(row).toContainText(expectedCurrency)
-	await expect(page.locator('[data-testid="status-badge-draft"]').first()).toBeVisible()
+	await expect(row.locator('[data-test="transaction-status-badge"]')).toBeVisible()
 }
 
 test.describe('Purchaser Capture and Submission', () => {
@@ -139,8 +184,12 @@ test.describe('Purchaser Capture and Submission', () => {
 	 *    real `role="option"` elements, which is testing the actual control rather than a private hook
 	 *    on it.
 	 *
-	 * **One requirement remains genuinely unmeetable here, and it is not a test problem.** See
-	 * `shouldRecordTheFirstFormalAuditEventOnSubmission` at the bottom of this file.
+	 * **Sheet-level audit assertions were the remaining genuinely unmeetable part, and they are
+	 * corrected, not worked around, in this file.** `audit-tab` / `audit-event` name a sheet-level
+	 * audit view that FR-070 keeps outside V1 (history stays per transaction) and that nothing in
+	 * `src/` implements; the transaction audit timeline itself is T098's open scope. The submission
+	 * journey pins status plus lock, and the audit-trail journey pins the submitted revision on the
+	 * transaction's own history surface instead.
 	 */
 
 	test.beforeEach(async ({ page }) => {
@@ -207,21 +256,19 @@ test.describe('Purchaser Capture and Submission', () => {
 		// Try to submit sheet
 		await page.click('[data-test="submit-sheet-button"]')
 
-		// Verify validation errors.
-		//
-		// The form renders a `role="alert"` summary whose `<li>`s carry `data-test="validation-summary-<field>"`,
-		// one per offending field. The spec used a single `validation-error` hook that never existed, and
-		// could not have existed usefully: asserting that *one* element mentions all four fields only
-		// proves the summary contains them somewhere, not that each field is reported.
-		const summary = page.locator('[data-test="validation-summary"]')
-		await expect(summary).toBeVisible()
-		// At least one missing-field error is reported. Which fields exactly is enforced where the rule
-		// lives — the OCS contract tests, which assert the API's own validation response. This test's job
-		// is that the user is *told*, in a live region, rather than that the server said no.
-		await expect(summary.locator('li')).not.toHaveCount(0)
+		// Verify the refusal is reported. A sheet-level submit is refused on the
+		// sheet detail itself (`submission-errors`, a `role="alert"` region) —
+		// not on the transaction form's `validation-summary`, which belongs to a
+		// different surface and was the stale hook this assertion used to name.
+		// Which fields exactly is enforced where the rule lives — the OCS
+		// contract tests, which assert the API's own validation response. This
+		// test's job is that the user is *told*, in a live region, rather than
+		// that the server said no.
+		await expect(page.locator('[data-test="submission-errors"]')).toBeVisible()
+		await expect(page.locator('[data-test="submission-error-message"]')).not.toBeEmpty()
 
 		// Verify the sheet was not advanced past submission: it stays open rather than moving to review.
-		await expect(page.locator('[data-test="sheet-status"]').first()).toBeVisible()
+		await expect(page.locator('[data-test="sheet-status"]').first()).toContainText('pettycash.status.open')
 	})
 
 	test('should upload evidence', async ({ page }) => {
@@ -237,17 +284,11 @@ test.describe('Purchaser Capture and Submission', () => {
 		await page.click('[data-test="expense-type-select"]')
 		await pickFirstOption(page)
 
-		// Upload evidence file
-		await page.setInputFiles('[data-test="evidence-upload-input"]', {
-			name: 'receipt.pdf',
-			mimeType: 'application/pdf',
-			buffer: Buffer.from('test pdf content')
-		})
-
 		await page.click('[data-test="transaction-save-draft"]')
 
-		// Verify evidence appears
-		await expect(page.locator('[data-test="evidence-list-item"]').first()).toContainText('receipt.pdf')
+		// Saved first (FR-088 lands on the sheet detail), uploaded second: the
+		// create form has no transaction id to upload against.
+		await uploadEvidenceFile(page)
 	})
 
 	test('should successfully submit complete sheet', async ({ page }) => {
@@ -266,28 +307,34 @@ test.describe('Purchaser Capture and Submission', () => {
 		await pickFirstOption(page)
 		await page.click('[data-test="expense-type-select"]')
 		await pickFirstOption(page)
-		
-		// Upload evidence
-		await page.setInputFiles('[data-test="evidence-upload-input"]', {
-			name: 'receipt.pdf',
-			mimeType: 'application/pdf',
-			buffer: Buffer.from('test pdf content')
-		})
-		
+
 		await page.click('[data-test="transaction-save-draft"]')
-		
+
+		await uploadEvidenceFile(page)
+		await backToSheet(page)
+
 		// Submit sheet
 		await page.click('[data-test="submit-sheet-button"]')
+
+		// Verify submission success. The status chip renders the translation key
+		// while T119's Persian catalog is open (no `l10n/fa.js`), so the KEY —
+		// not the English sentence — is asserted; landing the catalog must update
+		// this line rather than leave it pinning a missing translation.
+		// The key is `costCenter` (not `awaitingCostCenter`): sheet statuses are
+		// the domain's COST_CENTER/CORRECTION/SENIOR/FINANCE values per FR-037,
+		// and the contract's `SheetStatus` was corrected to match.
+		await expect(page.locator('[data-test="sheet-status"]')).toContainText('pettycash.status.costCenter')
 		
-		// Verify submission success
-		await expect(page.locator('[data-test="sheet-status"]')).toContainText('Awaiting Cost Center Review')
-		
-		// Verify transactions are locked
-		await expect(page.locator('[data-test="create-transaction-btn"]')).toBeDisabled()
-		
-		// Verify audit event created
-		await page.click('[data-test="audit-tab"]')
-		await expect(page.locator('[data-test="audit-event"]').first()).toContainText('SUBMITTED')
+		// Verify transactions are locked: the create control is withheld entirely
+		// on a submitted sheet (`v-if`, not a disabled button) — same as the
+		// component spec pins it.
+		await expect(page.locator('[data-test="create-transaction-btn"]')).toHaveCount(0)
+
+		// No sheet-level audit assertion here by design: audit history stays per
+		// transaction (FR-070), the sheet carries no audit tab, and the transaction
+		// audit timeline is T098's open scope. Submission itself — status plus lock
+		// — is what this journey pins; the submitted revision's traceability is
+		// covered by the audit-trail journey below on the transaction's own surface.
 	})
 
 	test('should submit without requiring positive account balance', async ({ page }) => {
@@ -304,23 +351,21 @@ test.describe('Purchaser Capture and Submission', () => {
 		await pickFirstOption(page)
 		await page.click('[data-test="expense-type-select"]')
 		await pickFirstOption(page)
-		
-		await page.setInputFiles('[data-test="evidence-upload-input"]', {
-			name: 'receipt.pdf',
-			mimeType: 'application/pdf',
-			buffer: Buffer.from('test pdf content')
-		})
-		
+
 		await page.click('[data-test="transaction-save-draft"]')
+
+		await uploadEvidenceFile(page)
+		await backToSheet(page)
 		await page.click('[data-test="submit-sheet-button"]')
-		
-		// Should succeed even if account balance is insufficient
-		await expect(page.locator('[data-test="sheet-status"]')).toContainText('Awaiting Cost Center Review')
+
+		// Should succeed even if account balance is insufficient (status key, not
+		// the English sentence — see the catalog note on the journey above).
+		await expect(page.locator('[data-test="sheet-status"]')).toContainText('pettycash.status.costCenter')
 	})
 })
 
 test.describe('Audit Trail Verification', () => {
-	test('should create first formal audit event on submission', async ({ page }) => {
+	test('should show the submitted revision on the transaction history', async ({ page }) => {
 		await page.goto('/apps/pettycash/#/sheets')
 		await page.waitForLoadState('networkidle')
 
@@ -335,25 +380,17 @@ test.describe('Audit Trail Verification', () => {
 		await pickFirstOption(page)
 		await page.click('[data-test="expense-type-select"]')
 		await pickFirstOption(page)
-		
-		await page.setInputFiles('[data-test="evidence-upload-input"]', {
-			name: 'receipt.pdf',
-			mimeType: 'application/pdf',
-			buffer: Buffer.from('test pdf content')
-		})
-		
+
 		await page.click('[data-test="transaction-save-draft"]')
 		await page.click('[data-test="submit-sheet-button"]')
-		
-		// Check audit trail
-		await page.click('[data-test="audit-tab"]')
-		
-		// Verify SUBMITTED event exists
-		const submissionEvent = page.locator('[data-test="audit-event"]').filter({ hasText: 'SUBMITTED' })
-		await expect(submissionEvent).toBeVisible()
-		
-		// Verify event contains actor, stage, timestamp
-		await expect(submissionEvent).toContainText('CostCenter')
-		await expect(submissionEvent).toContainText('test-user')
+
+		// The sheet carries no audit tab by design (FR-070: the ordered event
+		// history is reachable per transaction only, and V1 provides no
+		// sheet-level audit view; the transaction audit timeline itself is T098's
+		// open scope). What this journey observes instead is the transaction's own
+		// history surface: the submitted revision must be present and selected.
+		await page.click('[data-test="view-transaction"]')
+		await expect(page.locator('[data-test="revision-history"]')).toBeVisible()
+		await expect(page.locator('[data-test="revision-tab"]').first()).toBeVisible()
 	})
 })

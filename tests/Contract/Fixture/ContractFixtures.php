@@ -31,11 +31,11 @@ final class ContractFixtures
      * test happened to leave behind, which is order-dependent and hides real
      * behaviour.
      *
-     * @param 'draft'|'submitted'|'correction'|'usd'|'scope'|'finance' $state
+     * @param 'draft'|'submitted'|'correction'|'usd'|'scope'|'finance'|'deactivated-rial' $state
      */
     public static function prepare(string $state = 'draft'): void
     {
-        if (!in_array($state, ['draft', 'submitted', 'correction', 'usd', 'scope', 'finance'], true)) {
+        if (!in_array($state, ['draft', 'submitted', 'correction', 'usd', 'scope', 'finance', 'deactivated-rial'], true)) {
             throw new \RuntimeException("Unknown contract fixture state '{$state}'.");
         }
 

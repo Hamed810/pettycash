@@ -65,8 +65,13 @@ final class FaultIdentifierCoverageTest extends TestCase
             'destroy' => 'transactionId',
             'correction' => 'transactionId',
             'resubmit' => 'transactionId',
+        ],
+        // T096: the revision-history and transaction-audit reads moved here from
+        // `TransactionController`, whose owner-only gate they outgrew. Same URLs,
+        // same identifier parameter, same third-slot `publicId` context.
+        'AuditController.php' => [
             'revisions' => 'transactionId',
-            'audit' => 'transactionId',
+            'timeline' => 'transactionId',
         ],
         'ReviewController.php' => [
             'decide' => 'transactionId',
