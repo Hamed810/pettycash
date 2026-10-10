@@ -1,9 +1,9 @@
 /**
  * T119: localization contract for the Persian V1 catalog.
  *
- * The catalog itself lives in `l10n/fa.js` (`OC.L10N.register`), which the
- * Nextcloud server loads for Persian users — that file is the single source of
- * truth for translations. This module carries no translations; it names the
+ * The catalog ships in both platform spellings with identical content: `l10n/fa.js`
+ * (`OC.L10N.register`, injected into app pages) and `l10n/fa.json` (API consumers),
+ * mirroring how core apps ship both. A completeness gate pins them in sync. This module carries no translations; it names the
  * *dynamic* key families whose members cannot be found by scanning for string
  * literals (route params, enum values, server-driven metric keys), so the
  * catalog-completeness gate (`tests/Frontend/l10nCatalog.spec.ts`) can expand

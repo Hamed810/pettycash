@@ -5,11 +5,25 @@ import { join, extname } from 'node:path'
 import { DYNAMIC_KEY_FAMILIES, expandFamily } from '@/l10n'
 
 const SRC = join(process.cwd(), 'src')
-const FA = join(process.cwd(), 'l10n/fa.js')
+const FA_JSON = join(process.cwd(), 'l10n/fa.json')
+const FA_JS = join(process.cwd(), 'l10n/fa.js')
 
-/** The catalog as the server will load it: evaluate with a stubbed OC global. */
+/** The catalog as the server loads it: `l10n/<lang>.json` for API consumers. */
 function loadCatalog(): Record<string, string> {
-	const code = readFileSync(FA, 'utf8')
+	const document = JSON.parse(readFileSync(FA_JSON, 'utf8')) as {
+		translations?: Record<string, string>
+	}
+	const catalog = document.translations
+	expect(catalog, 'l10n/fa.json must hold the pettycash translations').toBeTruthy()
+	if (catalog === undefined) {
+		throw new Error('l10n/fa.json must hold the pettycash translations')
+	}
+	return catalog
+}
+
+/** The legacy `.js` registration the app page injects must carry the same catalog. */
+function loadJsCatalog(): Record<string, string> {
+	const code = readFileSync(FA_JS, 'utf8')
 	const registered: Record<string, Record<string, string>> = {}
 	const OC = {
 		L10N: {
@@ -63,16 +77,20 @@ function staticKeys(): Set<string> {
 describe('Persian catalog completeness', () => {
 	it('registers a well-formed pettycash catalog', () => {
 		const catalog = loadCatalog()
+		const legacy = loadJsCatalog()
 		expect(Object.keys(catalog).length).toBeGreaterThan(300)
 		for (const [key, value] of Object.entries(catalog)) {
 			expect(value.trim().length, `empty translation for ${key}`).toBeGreaterThan(0)
 		}
+		// Both shipped spellings carry the same catalog: the page injects the
+		// `.js` registration while API consumers read the `.json` file.
+		expect(legacy, 'fa.js catalog must match fa.json').toEqual(catalog)
 	})
 
 	it('covers every static translation key used in source', () => {
 		const catalog = loadCatalog()
 		const missing = [...staticKeys()].filter((key) => !(key in catalog))
-		expect(missing, `missing from l10n/fa.js: ${missing.join(', ')}`).toEqual([])
+		expect(missing, `missing from l10n/fa.json: ${missing.join(', ')}`).toEqual([])
 	})
 
 	it('covers every dynamic key family', () => {
@@ -85,7 +103,7 @@ describe('Persian catalog completeness', () => {
 				}
 			}
 		}
-		expect(missing, `missing from l10n/fa.js: ${missing.join(', ')}`).toEqual([])
+		expect(missing, `missing from l10n/fa.json: ${missing.join(', ')}`).toEqual([])
 	})
 
 	it('contains no doubled-app-prefix keys', () => {
