@@ -65,6 +65,7 @@ use OCA\PettyCash\Infrastructure\Nextcloud\NextcloudAdministratorCheck;
 use OCA\PettyCash\Infrastructure\Nextcloud\NextcloudCurrentUser;
 use OCA\PettyCash\Infrastructure\Export\CsvExporter;
 use OCA\PettyCash\Infrastructure\Export\EvidenceArchiveExporter;
+use OCA\PettyCash\Infrastructure\Export\PdfExporter;
 use OCA\PettyCash\Infrastructure\Export\XlsxExporter;
 use OCA\PettyCash\Infrastructure\Http\EvidenceContentPolicy;
 use OCA\PettyCash\Infrastructure\Nextcloud\NextcloudRequestTimeZone;
@@ -715,7 +716,8 @@ final class Application extends App implements IBootstrap
                 new XlsxExporter($c->query(TransientExportStore::class)),
                 new EvidenceArchiveExporter($c->query(TransientExportStore::class)),
                 $c->query(TransientExportStore::class),
-                $c->query(PrivateFileStore::class)
+                $c->query(PrivateFileStore::class),
+                new PdfExporter()
             );
         });
 
