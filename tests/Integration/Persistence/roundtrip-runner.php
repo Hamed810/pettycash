@@ -1692,6 +1692,13 @@ function scenarioExpense(
         static fn (AuditEvent $e): string => (string) $e->publicId,
         $auditEvents->findByActorUid($actorUid)
     );
+    // And the mirror: the configuration binding must not be able to read the
+    // transaction event, even though both events share the actor.
+    $transactionHiddenFromConfigStream = !in_array(
+        (string) $auditEvent->publicId,
+        $configurationByActor,
+        true
+    );
     $transmissionOfConfiguration = in_array(
         (string) $configurationEvent->publicId,
         $visibleToTransactionStream,
@@ -1939,6 +1946,7 @@ function scenarioExpense(
             'foundInDateRange' => in_array($configurationEvent->publicId, $configurationByRange, true),
             'rowCountInConfigurationTable' => count($configurationRows),
             'visibleToTransactionStream' => $transmissionOfConfiguration,
+            'transactionHiddenFromConfigStream' => $transactionHiddenFromConfigStream,
         ],
         'evidence' => [
             'publicId' => $evidenceRow->publicId,

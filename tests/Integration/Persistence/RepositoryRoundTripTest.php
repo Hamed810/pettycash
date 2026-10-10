@@ -835,6 +835,10 @@ final class RepositoryRoundTripTest extends TestCase
             'the transaction binding must not be able to read a configuration event; if both '
             . 'streams resolved to one table the two audit trails are indistinguishable'
         );
+        $this->assertTrue(
+            $config['transactionHiddenFromConfigStream'],
+            'the configuration binding must not be able to read a transaction event'
+        );
     }
 
     public function testAuditEventPointsAtItsSheetTransactionRevisionAndDecision(): void
