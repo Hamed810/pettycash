@@ -250,4 +250,40 @@ final class DbAccountRepository implements AccountRepository
         $account->dbId = (int) $row['id'];
         return $account;
     }
+
+    /**
+     * T060 reconciliation per data-model.md: every account's stored balance must
+     * equal its latest movement's `balance_after_minor`.
+     *
+     * Two plain reads rather than a joined subquery: `LIMIT` inside a subquery and
+     * vendor-specific window functions have no portable expression here, and
+     * reconciliation is a diagnostic read, not a hot path (V1 scale: <100 users).
+     * Accounts with no movements have nothing to verify against and are skipped.
+     *
+     * @return list<string> account public ids whose balance disagrees
+     */
+    public function findBalanceMismatches(): array
+    {
+        $qb = $this->connection->getQueryBuilder();
+        $accounts = $qb->select('id', 'public_id', 'balance_minor')
+            ->from('pettycash_accounts')
+            ->executeQuery()->fetchAllAssociative();
+        $mismatches = [];
+        foreach ($accounts as $account) {
+            $mq = $this->connection->getQueryBuilder();
+            $latest = $mq->select('balance_after_minor')
+                ->from('pettycash_account_movements')
+                ->where($mq->expr()->eq('account_id', $mq->createNamedParameter($account['id'])))
+                ->orderBy('id', 'DESC')
+                ->setMaxResults(1)
+                ->executeQuery()->fetchOne();
+            if ($latest === false) {
+                continue;
+            }
+            if ((int) $account['balance_minor'] !== (int) $latest) {
+                $mismatches[] = (string) $account['public_id'];
+            }
+        }
+        return $mismatches;
+    }
 }

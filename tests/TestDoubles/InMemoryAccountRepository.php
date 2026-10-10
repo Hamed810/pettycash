@@ -15,6 +15,13 @@ final class InMemoryAccountRepository implements \OCA\PettyCash\Domain\Account\R
      */
     private array $accounts = [];
 
+    /**
+     * T060: the movement side of reconciliation. Optional so every existing
+     * construction keeps working; without movements every account is vacuously
+     * consistent, which is the safe default for suites that never exercise this.
+     */
+    public function __construct(private ?InMemoryAccountMovementRepository $movements = null) {}
+
     public function findById(int $id): ?PettyCashAccount
     {
         // Scans rather than indexing, because `save()` keys by public id. Indexing here would look
@@ -103,5 +110,49 @@ final class InMemoryAccountRepository implements \OCA\PettyCash\Domain\Account\R
     public function clear(): void
     {
         $this->accounts = [];
+    }
+
+    /**
+     * T060 reconciliation over the double: an account mismatches when its stored
+     * balance differs from its latest movement's `balance_after`. Latest means
+     * highest surrogate id, mirroring the adapter's `ORDER BY id DESC`; movements
+     * without one keep insertion order via `all()`. Movement-less accounts are
+     * skipped, exactly as in the adapter.
+     *
+     * @return list<string> account public ids whose balance disagrees
+     */
+    public function findBalanceMismatches(): array
+    {
+        if ($this->movements === null) {
+            return [];
+        }
+        /** @var array<string, AccountMovement> $latestByAccount */
+        $latestByAccount = [];
+        /** @var array<string, int> $orderByAccount */
+        $orderByAccount = [];
+        $order = 0;
+        foreach ($this->movements->all() as $movement) {
+            $key = $movement->accountPublicId;
+            if ($key === null) {
+                continue;
+            }
+            $rank = $movement->dbId ?? $order;
+            if (!isset($latestByAccount[$key]) || $rank >= ($orderByAccount[$key] ?? -1)) {
+                $latestByAccount[$key] = $movement;
+                $orderByAccount[$key] = $rank;
+            }
+            $order++;
+        }
+        $mismatches = [];
+        foreach ($this->accounts as $account) {
+            $latest = $latestByAccount[$account->id] ?? null;
+            if ($latest === null) {
+                continue;
+            }
+            if ($account->balanceMinor !== $latest->balanceAfter()->minorUnits()) {
+                $mismatches[] = $account->id;
+            }
+        }
+        return $mismatches;
     }
 }

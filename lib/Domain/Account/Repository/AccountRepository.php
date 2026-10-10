@@ -64,5 +64,14 @@ interface AccountRepository
      */
     public function countByCurrencyId(int $currencyId): int;
 
+    /**
+     * T060 reconciliation per data-model.md: every account's stored balance must
+     * equal its latest movement's `balance_after_minor`.
+     *
+     * @return list<string> account public ids whose balance disagrees; accounts
+     * with no movements have nothing to verify against and are skipped
+     */
+    public function findBalanceMismatches(): array;
+
     public function save(PettyCashAccount $account): void;
 }
