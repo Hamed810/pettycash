@@ -16,6 +16,7 @@
  * refusal leaves the displayed rows at the versions the server actually holds.
  */
 import { onMounted, ref } from 'vue'
+import { RouterLink } from 'vue-router'
 import NcButton from '@nextcloud/vue/components/NcButton'
 import NcNoteCard from '@nextcloud/vue/components/NcNoteCard'
 import NcTextField from '@nextcloud/vue/components/NcTextField'
@@ -165,6 +166,9 @@ async function saveAssignment() {
 
 <template>
 	<div class="configuration-view" dir="rtl" data-test="configuration-view">
+		<nav :aria-label="t('pettycash', 'navigation.title')" data-test="configuration-breadcrumb">
+			<RouterLink :to="{ name: 'dashboard' }" data-test="configuration-back-dashboard">{{ t('pettycash', 'navigation.dashboard') }}</RouterLink>
+		</nav>
 		<h2 data-test="configuration-heading">{{ t('pettycash', 'administration.configuration') }}</h2>
 
 		<div v-if="store.error" class="alert alert--error" role="alert" data-test="configuration-error">

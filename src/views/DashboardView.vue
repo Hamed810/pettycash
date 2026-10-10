@@ -1,11 +1,30 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { computed, onMounted } from 'vue'
+import { RouterLink } from 'vue-router'
 import { t } from '@nextcloud/l10n'
 import NcButton from '@nextcloud/vue/components/NcButton'
 import DashboardCard from '@/components/dashboard/DashboardCard.vue'
 import { useDashboardStore } from '@/stores/dashboard'
+import { useAuthStore } from '@/stores/auth'
+import { visibleEntries } from '@/types/navigation'
 
 const dashboard = useDashboardStore()
+const auth = useAuthStore()
+
+/**
+ * T013/T016 (specs/004-in-app-navigation): the dashboard cards are metrics,
+ * not destinations (`DashboardCard.vue` stays presentational), so the entry
+ * points live here as explicit links reusing the same `visibleEntries` table
+ * as the global navigation — one role table, two surfaces, no drift.
+ */
+const quickLinks = computed(() =>
+	visibleEntries({
+		roles: auth.roles,
+		canAdminister: auth.capabilities.canAdminister === true,
+		isAuthenticated: auth.isAuthenticated,
+		sessionFailed: auth.error !== null && !auth.isAuthenticated,
+	}).filter((entry) => entry.name !== 'dashboard')
+)
 
 /**
  * The store records the failure in `error` and the state below renders it with a manual retry, so a
@@ -57,6 +76,21 @@ onMounted(onLoad)
 				/>
 			</li>
 		</ul>
+
+		<nav
+			v-if="quickLinks.length > 0"
+			class="dashboard__quicklinks"
+			:aria-label="t('pettycash', 'navigation.title')"
+			data-testid="dashboard-quicklinks"
+		>
+			<ul class="dashboard__quicklinks-list">
+				<li v-for="entry in quickLinks" :key="entry.name" class="dashboard__quicklinks-item">
+					<RouterLink :to="{ name: entry.name }" :data-testid="`dashboard-link-${entry.name}`">
+						{{ t('pettycash', entry.labelKey) }}
+					</RouterLink>
+				</li>
+			</ul>
+		</nav>
 	</section>
 </template>
 
@@ -89,6 +123,23 @@ onMounted(onLoad)
 
 .dashboard__card-item {
 	min-inline-size: 0;
+}
+
+/*
+ * T013/T016: entry points beside the metric cards. Same wrapping flex idiom
+ * as the pager rows elsewhere — reflows at 390px instead of scrolling (FR-071).
+ */
+.dashboard__quicklinks-list {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.25rem 0.75rem;
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.dashboard__quicklinks {
+	font-size: var(--font-size-floor);
 }
 
 .dashboard__state {

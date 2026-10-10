@@ -101,6 +101,10 @@ export const useAuthStore = defineStore('auth', () => {
   function logout() {
     user.value = null
     capabilities.value = {}
+    // T022: a stale load error must not survive sign-out — otherwise a signed-out
+    // caller would inherit the failed-session fallback (dashboard+sheets) that is
+    // meant only for a load that actually failed. Signed out means no entries.
+    error.value = null
     // The scope is the caller's, so it goes with them: leaving it behind would let the next session
     // on this browser pass a scope gate with somebody else's cost centres.
     managedCostCenterCodes.value = []

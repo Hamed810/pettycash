@@ -13,6 +13,7 @@
  * displayed rows at the versions the server actually holds.
  */
 import { computed, onMounted, ref } from 'vue'
+import { RouterLink } from 'vue-router'
 import NcButton from '@nextcloud/vue/components/NcButton'
 import NcNoteCard from '@nextcloud/vue/components/NcNoteCard'
 import NcTextField from '@nextcloud/vue/components/NcTextField'
@@ -86,6 +87,9 @@ async function flipActive() {
 
 <template>
 	<div class="funding-view" dir="rtl" data-test="funding-view">
+		<nav :aria-label="t('pettycash', 'navigation.title')" data-test="funding-breadcrumb">
+			<RouterLink :to="{ name: 'dashboard' }" data-test="funding-back-dashboard">{{ t('pettycash', 'navigation.dashboard') }}</RouterLink>
+		</nav>
 		<h2 data-test="funding-heading">{{ t('pettycash', 'administration.funding') }}</h2>
 
 		<div v-if="accountStore.error" class="alert alert--error" role="alert" data-test="funding-error">

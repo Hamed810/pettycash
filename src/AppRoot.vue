@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { RouterView } from 'vue-router'
+import AppNavigation from '@/components/navigation/AppNavigation.vue'
 </script>
 
 <template>
@@ -7,6 +8,7 @@ import { RouterView } from 'vue-router'
 		<h1 id="pettycash-heading">
 			Petty Cash
 		</h1>
+		<AppNavigation />
 		<RouterView />
 	</main>
 </template>
