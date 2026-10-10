@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-09
 **Spec:** `specs/004-in-app-navigation/` (spec → plan → tasks → implement → converge-assess → implement)
-**Status:** complete; automated gates green, live-lab headless validation 13/13 (2026-10-10), manual walkthrough passed 2026-10-10 with no defects (T020)
+**Status:** complete; automated gates green, live-lab headless validation 13/13 on the rebuilt T022-capable bundle (2026-10-10), live fallback proof PASS, manual walkthrough passed 2026-10-10 with no defects (T020 closed)
 
 ## Problem
 
