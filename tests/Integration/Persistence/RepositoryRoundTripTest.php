@@ -959,6 +959,11 @@ final class RepositoryRoundTripTest extends TestCase
         );
         $this->assertSame('CHARGE', $command['found']['response']['movement']['type']);
         $this->assertTrue($command['unknownCommandIdIsNull'], 'an unissued command id must find nothing');
+        // T251: the replay dimensions round-trip through the new columns.
+        $this->assertSame('round-trip', $command['found']['actorUid']);
+        $this->assertSame('roundtrip.probe', $command['found']['operation']);
+        $this->assertNull($command['found']['targetPublicId']);
+        $this->assertSame(200, $command['found']['resultStatus']);
     }
 
     // ===== T332: `GET /sheets` reports a real `total` =====

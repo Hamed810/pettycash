@@ -2028,6 +2028,12 @@ function scenarioCommand(
             // that reshapes it would make a retry report something the first attempt never said.
             'response' => $found->response,
             'responseIsIdentical' => $found->response === $response,
+            // T251: the replay dimensions must round-trip exactly, or a retry
+            // could not be told apart from a conflicting reuse.
+            'actorUid' => $found->actorUid,
+            'operation' => $found->operation,
+            'targetPublicId' => $found->targetPublicId,
+            'resultStatus' => $found->resultStatus,
         ],
         'unknownCommandIdIsNull' => $unknown === null,
     ];

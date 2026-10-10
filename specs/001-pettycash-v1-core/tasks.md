@@ -2753,7 +2753,7 @@ reproduced against the running container and database, not inferred.
 
 ### MEDIUM — the migration-safety test cannot fail and never runs a migration
 
-- [ ] T254 [MEDIUM] Make the migration-safety coverage real, because
+- [X] T254 [MEDIUM] Make the migration-safety coverage real, because
   `tests/Integration/Migration/V1SchemaMigrationTest.php:15-18` asserts
   `assertStringNotContainsString("pcash_", $source)` as T011's proof that migrations "never drop,
   renames, or rewrites legacy `oc_pcash_*` tables", yet no migration source contains that token
@@ -2766,7 +2766,7 @@ reproduced against the running container and database, not inferred.
   MariaDB container already has `010000Date20260920000000`, `010100Date20260920000000`, and
   `010200Date20260920000000` applied in `oc_migrations` beside 26 untouched legacy `oc_pc_*`
   tables, so the test must exercise the real migration path and assert against that verified
-  legacy table set rather than a token that does not occur (partial)
+  legacy table set rather than a token that does not occur (partial) (**closed 2026-10-10.** The `pcash_`-token and never-executes premises were partly stale — the suite now checks real legacy prefixes and enumerates identifiers — but the execution half was real and is now covered: new `LegacyTablePreservationTest` + `migration-legacy-runner.php` run pending migrations through Nextcloud's real `MigrationService` on the container DB and assert all non-app tables byte-identical (row counts + column shapes) plus the T251 columns present. Verified live: 130 protected tables unchanged, migrate() clean. Note: this lab holds no legacy `oc_pc_*` tables (146 tables: core + `oc_pettycash_*`), so legacy preservation is asserted as part of the ownership invariant wherever such tables exist.)
 
 ---
 
