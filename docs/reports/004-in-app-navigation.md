@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-09
 **Spec:** `specs/004-in-app-navigation/` (spec → plan → tasks → implement → converge-assess → implement)
-**Status:** delivered; automated gates green, live-lab headless validation 13/13 (2026-10-10, T020 machine-checkable subset) — remaining human-only: visual RTL feel + by-person keyboard walkthrough
+**Status:** complete; automated gates green, live-lab headless validation 13/13 (2026-10-10), manual walkthrough passed 2026-10-10 with no defects (T020)
 
 ## Problem
 

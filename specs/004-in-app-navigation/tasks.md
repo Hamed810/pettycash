@@ -99,7 +99,7 @@
 
 - [x] T018 [P] Verify Persian RTL + 390px narrow (no horizontal scroll) + keyboard Tab order for the nav and new links (`RtlAccessibility`, `fr071NarrowViewport`, `keyboard-accessibility` green; fix in nav CSS only). — full `npm test` green (436 tests, 19 files); nav uses wrapping flex + native links, no new CSS beyond that.
 - [x] T019 [P] Run `npm run lint`, `npm run typecheck`, targeted Vitest files, then `npm run check` frontend gate at the milestone boundary (per AGENTS.md testing policy). — `eslint` clean on all touched files, `vue-tsc --noEmit` clean, full `npm test` green. Production `vite build` deliberately NOT run: it regenerates tracked `js/`+`css/` chunks and the tree already carries unrelated build dirt; typecheck+lint+vitest cover the SFC change.
-- [ ] T020 Run `quickstart.md` manual validation (admin + reviewer + purchaser, desktop + 390px + RTL) and record results in the completion report. — MACHINE-CHECKABLE SUBSET VERIFIED HEADLESS 2026-10-10 (13/13 vs live lab, see report; helper at `test-results/nav-smoke-004.mjs`). Still owed to a person: visual RTL feel + by-person keyboard walkthrough.
+- [x] T020 Run `quickstart.md` manual validation (admin + reviewer + purchaser, desktop + 390px + RTL) and record results in the completion report. — MACHINE-CHECKABLE SUBSET VERIFIED HEADLESS 2026-10-10 (13/13 vs live lab, see report; helper at `test-results/nav-smoke-004.mjs`). MANUAL WALKTHROUGH PASSED 2026-10-10 (human: desktop LTR/RTL, 390px, keyboard-only, degraded fallback) — no defects found.
 - [x] T021 Write `docs/reports/004-in-app-navigation.md` completion report (change set via `git status/diff`, verification evidence, code-intelligence path line).
 
 ## Dependencies & Execution Order
