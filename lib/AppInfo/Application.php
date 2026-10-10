@@ -661,7 +661,8 @@ final class Application extends App implements IBootstrap
         $context->registerService(DashboardQuery::class, function ($c) {
             return new DashboardQuery(
                 $c->query(RoleAssignmentRepository::class),
-                $c->query(\OCA\PettyCash\Domain\Shared\Clock::class)
+                $c->query(\OCA\PettyCash\Domain\Shared\Clock::class),
+                $c->query(\OCA\PettyCash\Application\Port\AdministratorCheck::class)
             );
         });
 

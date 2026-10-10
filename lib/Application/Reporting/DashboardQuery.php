@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OCA\PettyCash\Application\Reporting;
 
 use InvalidArgumentException;
+use OCA\PettyCash\Application\Port\AdministratorCheck;
 use OCA\PettyCash\Domain\Configuration\Repository\RoleAssignmentRepository;
 use OCA\PettyCash\Domain\Shared\Enum\Role;
 use OCA\PettyCash\Domain\Shared\Clock;
@@ -36,7 +37,8 @@ final readonly class DashboardQuery
 {
     public function __construct(
         private RoleAssignmentRepository $roleAssignments,
-        private Clock $clock
+        private Clock $clock,
+        private AdministratorCheck $administrators
     ) {}
 
     /**
@@ -44,7 +46,12 @@ final readonly class DashboardQuery
      */
     public function scopeFor(string $actorUid): ReportScope
     {
-        return ReportScope::forActor($this->roleAssignments, $actorUid, $this->clock->now());
+        return ReportScope::forActor(
+            $this->roleAssignments,
+            $actorUid,
+            $this->clock->now(),
+            $this->administrators->isAdministrator($actorUid)
+        );
     }
 
     /**

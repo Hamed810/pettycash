@@ -6,6 +6,7 @@ namespace OCA\PettyCash\Tests\Unit\Reporting;
 
 use DateTimeImmutable;
 use InvalidArgumentException;
+use OCA\PettyCash\Application\Port\AdministratorCheck;
 use OCA\PettyCash\Application\Reporting\DashboardQuery;
 use OCA\PettyCash\Application\Reporting\ReportFilter;
 use OCA\PettyCash\Application\Reporting\ReportQuery;
@@ -42,13 +43,16 @@ final class ReportingQueryTest extends TestCase
     private FixedClock $clock;
     private ReportQuery $reports;
     private DashboardQuery $dashboard;
+    /** @var list<string> */
+    private array $platformAdmins = [];
 
     protected function setUp(): void
     {
         $this->assignments = new InMemoryRoleAssignmentRepository();
         $this->clock = new FixedClock(self::TODAY);
         $this->reports = new ReportQuery();
-        $this->dashboard = new DashboardQuery($this->assignments, $this->clock);
+        $this->platformAdmins = [];
+        $this->dashboard = $this->makeDashboard();
     }
 
     private function at(string $iso): DateTimeImmutable
@@ -227,6 +231,31 @@ final class ReportingQueryTest extends TestCase
             $this->dashboard->canDecide($scope),
             'FR-007: the administrator role confers visibility, not financial approval authority'
         );
+    }
+
+    public function testAPlatformAdministratorWithNoAssignmentsResolvesToAdministratorScope(): void
+    {
+        $this->givenPlatformAdministrator('platform-admin-1');
+
+        $scope = $this->dashboard->scopeFor('platform-admin-1');
+
+        self::assertTrue($scope->hasRole(Role::Administrator));
+        self::assertTrue($scope->administrator);
+        self::assertTrue($scope->seesOthers());
+        self::assertSame([], $scope->costCenterDbIds, 'platform status invents no managed cost centres');
+        self::assertFalse(
+            $this->dashboard->canDecide($scope),
+            'FR-007: visibility without decision authority, same as an assignment-based administrator'
+        );
+        self::assertContains('administration', $this->dashboard->sections($scope));
+    }
+
+    public function testANonPlatformAdministratorWithNoAssignmentsHasNoAdministratorRole(): void
+    {
+        $scope = $this->dashboard->scopeFor('purchaser-1');
+
+        self::assertFalse($scope->hasRole(Role::Administrator));
+        self::assertFalse($scope->administrator);
     }
 
     public function testAReviewerCanDecide(): void
@@ -784,6 +813,30 @@ final class ReportingQueryTest extends TestCase
     }
 
     // ===== Helpers =====
+
+    private function makeDashboard(): DashboardQuery
+    {
+        $admins = $this->platformAdmins;
+
+        return new DashboardQuery(
+            $this->assignments,
+            $this->clock,
+            new class ($admins) implements AdministratorCheck {
+                /** @param list<string> $admins */
+                public function __construct(private array $admins) {}
+                public function isAdministrator(string $uid): bool
+                {
+                    return in_array($uid, $this->admins, true);
+                }
+            }
+        );
+    }
+
+    private function givenPlatformAdministrator(string $uid): void
+    {
+        $this->platformAdmins[] = $uid;
+        $this->dashboard = $this->makeDashboard();
+    }
 
     private function givenAssignment(
         string $uid,
