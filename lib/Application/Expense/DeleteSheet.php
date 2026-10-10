@@ -80,6 +80,7 @@ final class DeleteSheet
      */
     public function execute(string $sheetId, string $commandId, int $expectedVersion): void
     {
+        $actorUid = $this->currentUser->uid();
         // FR-084 replay safety, and deliberately **not** the exemption `DELETE /transactions/{id}`
         // claims. That operation treats a draft-row delete as repeatable because the second attempt has
         // nothing left to remove. A sheet delete is different: without this gate a retried command
@@ -90,6 +91,9 @@ final class DeleteSheet
         // different command, not a retry.
         $this->idempotencyService->execute(
             $commandId,
+            $actorUid,
+            'sheet.delete',
+            $sheetId,
             [
                 'sheet_id' => $sheetId,
                 'expected_version' => $expectedVersion,
@@ -98,7 +102,8 @@ final class DeleteSheet
                 $this->deleteOnce($sheetId, $expectedVersion);
 
                 return ['deleted' => true, 'sheetId' => $sheetId];
-            }
+            },
+            204
         );
     }
 

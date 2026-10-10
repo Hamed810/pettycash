@@ -2007,7 +2007,7 @@ function scenarioCommand(
         'movement' => ['id' => 'mvmt-1', 'type' => 'CHARGE'],
     ];
 
-    $commandResults->save(new CommandResult($commandId, $hash, $response));
+    $commandResults->save(new CommandResult($commandId, $hash, $response, 'round-trip', 'roundtrip.probe', null, 200));
 
     $qb = $db->getQueryBuilder();
     $qb->select('id')

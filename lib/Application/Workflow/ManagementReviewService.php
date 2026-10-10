@@ -143,7 +143,7 @@ final readonly class ManagementReviewService
                 'command_id' => $commandId,
             ];
             
-            $this->idempotencyService->execute($commandId, $payload, function () use (
+            $this->idempotencyService->execute($commandId, $actorUid, 'review.decision.' . $stage->value, $transactionPublicId, $payload, function () use (
                 $transactionPublicId,
                 $actorUid,
                 $stage,
@@ -297,7 +297,7 @@ final readonly class ManagementReviewService
                 $this->transactionRepository->save($transaction);
 
                 return ['transaction_id' => $transactionPublicId];
-            });
+            }, 201);
 
             // Reload and return the transaction
             $transaction = $this->transactionRepository->findByPublicId($transactionPublicId);

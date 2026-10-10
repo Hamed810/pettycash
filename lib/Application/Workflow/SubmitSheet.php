@@ -54,7 +54,7 @@ final readonly class SubmitSheet
         return $this->transactionManager->transactional(function () use ($sheetId, $ownerUid, $commandId, $expectedVersion): ExpenseSheet {
             // Check idempotency
             $payload = ['sheet_id' => $sheetId, 'command_id' => $commandId];
-            $this->idempotencyService->execute($commandId, $payload, function () use ($sheetId, $ownerUid, $expectedVersion, $commandId): array {
+            $this->idempotencyService->execute($commandId, $ownerUid, 'sheet.submit', $sheetId, $payload, function () use ($sheetId, $ownerUid, $expectedVersion, $commandId): array {
                 $sheet = $this->sheetRepository->findByPublicId($sheetId);
 
                 if ($sheet === null || $sheet->ownerUid !== $ownerUid) {
@@ -206,7 +206,7 @@ final readonly class SubmitSheet
                 $this->sheetRepository->save($sheet);
 
                 return ['sheet_id' => $sheetId, 'submitted_total' => $submittedTotal];
-            });
+            }, 200);
 
             // Reload and return the sheet
             $sheet = $this->sheetRepository->findByPublicId($sheetId);

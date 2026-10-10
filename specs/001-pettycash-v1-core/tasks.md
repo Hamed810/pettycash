@@ -2647,7 +2647,7 @@ reproduced against the running container and database, not inferred.
 
 ### HIGH — the command-result table cannot satisfy the approved replay contract
 
-- [ ] T251 [HIGH] Add a forward-only migration that brings `pettycash_command_results` in line with the
+- [X] T251 [HIGH] Add a forward-only migration that brings `pettycash_command_results` in line with the
   `Command Result` entity in `data-model.md`, which requires `command_id`, `actor_uid`,
   `operation`, `target_public_id`, `payload_hash`, `result_status`, `result_json`, and
   `created_at`, together with the replay rule "Same command ID, actor, operation, target, and
@@ -2677,6 +2677,14 @@ reproduced against the running container and database, not inferred.
   `result_status` column exists, so a command ID replayed by a different actor, operation or target is not
   detected as a conflict, returns the first caller's stored response, and silently skips the second
   caller's operation. Only the identifier in this task's prose was wrong, not the finding.
+  **Delivered 2026-10-10.** New forward-only `Version010500Date20261010000000` adds nullable
+  `actor_uid`/`operation`/`target_public_id`/`result_json`/`result_status`, widens `payload_hash` to
+  128 via `modifyColumn`, keeps `response_json` (pre-migration rows replay verbatim; repository prefers
+  `result_json` with legacy fallback). `CommandResult` carries the four fields (nullable = legacy row,
+  which replays hash-only); `IdempotencyService::execute()` takes actor/operation/target/status and
+  conflicts on any mismatch; all 11 call sites pass verified per-endpoint values. No version bump
+  (repo practice: migrations land without one). Evidence: `IdempotencyServiceTest` 3/3 green incl. two
+  new actor/operation/target conflict cases; 16 changed/new PHP files `php -l` clean.
 
 ### MEDIUM — the approved legacy-table premise does not match this environment
 

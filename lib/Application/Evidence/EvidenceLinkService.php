@@ -120,6 +120,9 @@ final class EvidenceLinkService
 
         $result = $this->idempotency->execute(
             $commandId ?? ('link-create-' . Uuid::random()->__toString()),
+            $actorUid,
+            'evidence_link_create',
+            $evidencePublicId,
             [
                 'operation' => 'evidence_link_create',
                 'evidence_id' => $evidencePublicId,
@@ -201,6 +204,7 @@ final class EvidenceLinkService
                     'created_at' => ($link->createdAt ?? $this->clock->now())->format(DATE_ATOM),
                 ];
             },
+            201
         );
 
         return new CreatedEvidenceLink(
@@ -246,6 +250,9 @@ final class EvidenceLinkService
 
         $result = $this->idempotency->execute(
             $commandId ?? ('link-deactivate-' . Uuid::random()->__toString()),
+            $actorUid,
+            'evidence_link_deactivate',
+            $linkPublicId,
             [
                 'operation' => 'evidence_link_deactivate',
                 'link_id' => $linkPublicId,
@@ -275,6 +282,7 @@ final class EvidenceLinkService
 
                 return ['link_id' => $linkPublicId, 'active' => false];
             },
+            200
         );
 
         return [

@@ -62,7 +62,7 @@ class ResubmitCorrection
                 'action' => 'resubmit_correction'
             ];
 
-            return $this->idempotencyService->execute($commandId, $payload, function () use ($transactionPublicId, $actorUid, $commandId, $expectedVersion): array {
+            return $this->idempotencyService->execute($commandId, $actorUid, 'resubmit_correction', $transactionPublicId, $payload, function () use ($transactionPublicId, $actorUid, $commandId, $expectedVersion): array {
                 $transaction = $this->transactionRepository->findByPublicId($transactionPublicId);
 
                 if ($transaction === null) {
@@ -179,7 +179,7 @@ class ResubmitCorrection
                     'submitted_total' => $submittedTotal,
                     'revision_number' => $activeRevision->number(),
                 ];
-            });
+            }, 200);
         });
     }
 

@@ -100,9 +100,9 @@ final readonly class TransactionService
             'command_id' => $commandId,
         ];
 
-        return $this->transactionManager->transactional(function () use ($sheetId, $expenseDate, $amountMinor, $commandId, $description, $costCenterId, $expenseTypeId, $payload): ExpenseTransaction {
-            $stored = $this->idempotencyService->execute($commandId, $payload, function () use ($sheetId, $expenseDate, $amountMinor, $commandId, $description, $costCenterId, $expenseTypeId): array {
-                $ownerUid = $this->currentUser->uid();
+        $ownerUid = $this->currentUser->uid();
+        return $this->transactionManager->transactional(function () use ($sheetId, $expenseDate, $amountMinor, $commandId, $description, $costCenterId, $expenseTypeId, $payload, $ownerUid): ExpenseTransaction {
+            $stored = $this->idempotencyService->execute($commandId, $ownerUid, 'transaction.create', $sheetId, $payload, function () use ($sheetId, $expenseDate, $amountMinor, $commandId, $description, $costCenterId, $expenseTypeId, $ownerUid): array {
                 $sheet = $this->sheetRepository->findByPublicId($sheetId);
 
                 if ($sheet === null || $sheet->ownerUid !== $ownerUid) {
@@ -212,7 +212,7 @@ final readonly class TransactionService
                 ]);
 
                 return ['transaction_id' => $transaction->id];
-            });
+            }, 201);
 
             // Re-read the aggregate the command created, exactly as `SubmitSheet` re-reads its sheet.
             // On a replay `execute()` returned the stored response, so this resolves to the original
@@ -274,9 +274,9 @@ final readonly class TransactionService
             'command_id' => $commandId,
         ];
 
-        return $this->transactionManager->transactional(function () use ($transactionId, $expenseDate, $amountMinor, $description, $costCenterId, $expenseTypeId, $expectedVersion, $commandId, $payload): ExpenseTransaction {
-            $this->idempotencyService->execute($commandId, $payload, function () use ($transactionId, $expenseDate, $amountMinor, $description, $costCenterId, $expenseTypeId, $expectedVersion, $commandId): array {
         $ownerUid = $this->currentUser->uid();
+        return $this->transactionManager->transactional(function () use ($transactionId, $expenseDate, $amountMinor, $description, $costCenterId, $expenseTypeId, $expectedVersion, $commandId, $payload, $ownerUid): ExpenseTransaction {
+            $this->idempotencyService->execute($commandId, $ownerUid, 'transaction.update', $transactionId, $payload, function () use ($transactionId, $expenseDate, $amountMinor, $description, $costCenterId, $expenseTypeId, $expectedVersion, $commandId, $ownerUid): array {
         $transaction = $this->transactionRepository->findByPublicId($transactionId);
 
         if ($transaction === null || $transaction->ownerUid !== $ownerUid) {
@@ -475,7 +475,7 @@ final readonly class TransactionService
             ]);
 
                 return ['transaction_id' => $transaction->id];
-            });
+            }, 200);
 
             // Re-read, exactly as `SubmitSheet` re-reads its sheet and `createTransaction()` re-reads its
             // transaction. On a replay `execute()` returned the stored response, so this resolves to the

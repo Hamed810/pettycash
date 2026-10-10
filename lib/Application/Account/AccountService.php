@@ -396,6 +396,9 @@ final class AccountService
 
         return $this->idempotency->execute(
             $commandId,
+            $actorUid,
+            'account.charge',
+            $accountPublicId,
             [
                 'account_id' => $accountPublicId,
                 'amount_minor' => $amountMinor,
@@ -468,7 +471,8 @@ final class AccountService
                 ]);
 
                 return $this->payload->mutation($account, $movement);
-            }
+            },
+            201
         );
     }
 
