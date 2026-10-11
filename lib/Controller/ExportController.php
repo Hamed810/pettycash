@@ -15,6 +15,7 @@ use OCA\PettyCash\Application\Reporting\AuditSelectionQuery;
 use OCA\PettyCash\Application\Reporting\CompleteSheetExport;
 use OCA\PettyCash\Application\Reporting\EvidenceSelectionQuery;
 use OCA\PettyCash\Application\Reporting\ReportQuery;
+use OCA\PettyCash\Application\Reporting\ReportProjection;
 use OCA\PettyCash\Application\Reporting\ReportScope;
 use OCA\PettyCash\Infrastructure\Http\CommandId;
 use OCA\PettyCash\Infrastructure\Http\OcsErrorMapper;
@@ -65,18 +66,16 @@ class ExportController extends OCSController
     /**
      * FR-062 (T365): the flat sheet rows carry the three stage-approved figures beside the
      * submitted total, so the reachable export is measured against the same layout as the
-     * complete-sheet one. Named exactly as `COMPLETE_SHEET_COLUMNS` names them, so the two
-     * artifacts cannot drift into spelling the same figure two ways.
+     * complete-sheet one. The lists live in ReportProjection (T315) so the report and the
+     * export cannot hold two ideas of the row; these aliases exist so existing call sites
+     * read unchanged.
      */
-    private const SHEET_COLUMNS = ['id', 'title', 'ownerUid', 'status', 'currency', 'submittedTotalMinor', 'costCenterApprovedMinor', 'seniorApprovedMinor', 'financeApprovedMinor', 'createdAt'];
+    private const SHEET_COLUMNS = ReportProjection::SHEET_COLUMNS;
 
     /** The `SHEET_COLUMNS` entries that must be numeric cells in XLSX, not text. */
-    private const SHEET_NUMERIC_COLUMNS = ['submittedTotalMinor', 'costCenterApprovedMinor', 'seniorApprovedMinor', 'financeApprovedMinor'];
+    private const SHEET_NUMERIC_COLUMNS = ReportProjection::SHEET_NUMERIC_COLUMNS;
 
-    private const TRANSACTION_COLUMNS = [
-        'id', 'ownerUid', 'stage', 'status', 'sheetId', 'createdAt',
-        'costCenterDbId', 'costCenterCode', 'expenseTypeDbId', 'expenseTypeTitle', 'amountMinor', 'currency',
-    ];
+    private const TRANSACTION_COLUMNS = ReportProjection::TRANSACTION_COLUMNS;
 
     /**
      * How many rows an evidence or audit export may read.
@@ -542,21 +541,13 @@ class ExportController extends OCSController
             if ($sheet === null || !$scope->coversOwned($sheet->ownerUid)) {
                 throw new UnsupportedSelection("No sheet is available to you with id '{$id}'.");
             }
-            $rows[] = [
-                'id' => $sheet->publicId,
-                'title' => $sheet->title,
-                'ownerUid' => $sheet->ownerUid,
-                'status' => $sheet->status->value,
-                'currency' => (string) $sheet->currency,
-                'submittedTotalMinor' => $sheet->submittedTotalMinor,
-                // FR-062 (T365): the three stage-approved figures, computed by the same query the
-                // sheet detail renders — a senior approval that finance later rejects must stay
-                // visible as a senior approval in the export too, not collapse into one headline.
-                // One summary query per selected sheet: the selection is id-named and therefore
-                // bounded, so this is not the unbounded enumeration the row cap exists to prevent.
-                ...$this->stageApprovedTotals($sheet),
-                'createdAt' => $sheet->createdAt?->format(DATE_ATOM),
-            ];
+            // FR-062 (T365): the three stage-approved figures, computed by the same query the
+            // sheet detail renders — a senior approval that finance later rejects must stay
+            // visible as a senior approval in the export too, not collapse into one headline.
+            // One summary query per selected sheet: the selection is id-named and therefore
+            // bounded, so this is not the unbounded enumeration the row cap exists to prevent.
+            // The row shape itself is ReportProjection's (T315).
+            $rows[] = ReportProjection::sheetRowWithTotals($sheet, $this->stageApprovedTotals($sheet));
         }
 
         return $rows;
@@ -616,22 +607,7 @@ class ExportController extends OCSController
                 throw new UnsupportedSelection("No transaction is available to you with id '{$id}'.");
             }
 
-            $revision = $transaction->revision();
-
-            $rows[] = [
-                'id' => $transaction->publicId,
-                'ownerUid' => $transaction->ownerUid,
-                'stage' => $transaction->stage->value,
-                'status' => $transaction->status->value,
-                'sheetId' => $transaction->sheetId,
-                'createdAt' => $transaction->createdAt?->format(DATE_ATOM),
-                'costCenterDbId' => $revision->costCenterDbId,
-                'costCenterCode' => $revision->costCenterCode,
-                'expenseTypeDbId' => $revision->expenseTypeDbId,
-                'expenseTypeTitle' => $revision->expenseTypeTitle(),
-                'amountMinor' => $revision->amount()->minorUnits(),
-                'currency' => (string) $revision->amount()->currency(),
-            ];
+            $rows[] = ReportProjection::transactionRow($transaction);
         }
 
         return $rows;
