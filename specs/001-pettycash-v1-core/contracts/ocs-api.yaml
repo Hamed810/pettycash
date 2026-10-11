@@ -282,6 +282,11 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Account' }
+        '200':
+          description: Retired pair re-opened by an administrator (same Account shape, nothing created)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Account' }
 
   /accounts/{accountId}:
     # T409 / FR-013. Administrator deactivation and reactivation of an account. This operation did not

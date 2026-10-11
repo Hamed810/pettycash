@@ -53,6 +53,7 @@ final class AccountServiceTest extends TestCase
             $this->movements,
             $this->container->query(CurrencyRepository::class),
             $this->container->query(RoleAssignmentRepository::class),
+            new \OCA\PettyCash\Tests\TestDoubles\InMemoryAdministratorCheck(),
             $this->container->query(\OCA\PettyCash\Application\Command\IdempotencyService::class),
             $this->container->query(\OCA\PettyCash\Application\Port\CurrentUser::class),
             new AccountPayloadFormatter(),

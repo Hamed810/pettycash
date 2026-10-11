@@ -92,13 +92,14 @@ final class ExportServiceRealAdapterTest extends TestCase
         self::assertStringContainsString('scope', $this->report()['refusedReason']);
     }
 
-    public function testPdfIsRefusedAgainstRealAdaptersToo(): void
+    public function testPdfIsAllowedAgainstRealAdaptersSinceT109Delivered(): void
     {
         $report = $this->report();
 
-        self::assertFalse($report['pdfAllowed'], 'T109 is blocked, so pdf must be refused');
-        self::assertTrue($report['pdfReasonMentionsT109']);
-        self::assertTrue($report['pdfReasonMentionsFont'], 'the reason must say why, not just that');
+        self::assertTrue($report['pdfAllowed'], 'T109 delivered PDF export, so pdf must be allowed');
+        self::assertTrue($report['pdfGenerated'], 'a pdf export through real adapters must produce bytes');
+        self::assertGreaterThan(0, $report['pdfByteSize']);
+        self::assertTrue($report['pdfCleanupEmptiesStore'], 'cleanup must remove the generated artifact');
     }
 
     public function testAScopedManagerIsAllowedWhereAPurchaserIsRefused(): void

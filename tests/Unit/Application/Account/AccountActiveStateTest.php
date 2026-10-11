@@ -6,6 +6,7 @@ namespace OCA\PettyCash\Tests\Unit\Application\Account;
 
 use LogicException;
 use OCA\PettyCash\Application\Account\AccountService;
+use OCA\PettyCash\Application\Account\AccountAlreadyExists;
 use OCA\PettyCash\Application\Account\AccountPayloadFormatter;
 use OCA\PettyCash\Application\Account\StaleAccountVersion;
 use OCA\PettyCash\Application\Account\UnknownAccount;
@@ -70,6 +71,7 @@ final class AccountActiveStateTest extends TestCase
             new InMemoryAccountMovementRepository(),
             new InMemoryCurrencyRepository(),
             $roles,
+            new \OCA\PettyCash\Tests\TestDoubles\InMemoryAdministratorCheck(),
             new IdempotencyService(new InMemoryCommandResultRepository()),
             new InMemoryCurrentUser(self::ADMIN),
             new AccountPayloadFormatter(),
@@ -78,6 +80,24 @@ final class AccountActiveStateTest extends TestCase
     }
 
     // ===== the transitions =====
+
+    /**
+     * A platform administrator without an assignment row holds the
+     * Administrator role too: the session, report scope and configuration
+     * controllers all resolve it from the admin group, so an admin who can
+     * configure currencies but cannot deactivate an account is the
+     * contradiction FR-013 forbids. `test-admin` is the uid
+     * InMemoryAdministratorCheck recognises; it holds no assignment row here.
+     */
+    public function testAPlatformAdministratorWithoutAnAssignmentRowDeactivates(): void
+    {
+        $account = $this->openAccount();
+
+        $result = $this->service->setActive('test-admin', $account->id, false, 0);
+
+        self::assertFalse($this->accounts->findByPublicId($account->id)->active);
+        self::assertFalse($result['active'], 'the returned shape must show the new state');
+    }
 
     public function testAnAdministratorDeactivatesAnActiveAccount(): void
     {
@@ -88,6 +108,34 @@ final class AccountActiveStateTest extends TestCase
         self::assertFalse($this->accounts->findByPublicId($account->id)->active);
         self::assertSame(1, $this->accounts->findByPublicId($account->id)->lockVersion);
         self::assertFalse($result['active'], 'the returned shape must show the new state');
+    }
+
+    /**
+     * Re-opening is not a second account: `createFor()` on a retired pair
+     * reactivates it through the audited `setActive()` path — same public id,
+     * ledger and balance preserved — and reports `created: false` so the
+     * controller answers 200 rather than 201.
+     */
+    public function testAnAdministratorReopensARetiredPairThroughCreateFor(): void
+    {
+        $account = $this->openAccount();
+        $this->service->setActive(self::ADMIN, $account->id, false, 0);
+
+        $result = $this->service->createFor(self::ADMIN, self::HOLDER, 'IRR');
+
+        self::assertFalse($result['created'], 'a re-opened pair is not created');
+        self::assertSame($account->id, $result['account']['id'], 're-opening keeps the public id');
+        self::assertTrue($result['account']['active']);
+        self::assertCount(1, $this->reactivationEvents(), 're-opening records a reactivation, not a creation');
+    }
+
+    public function testTheHolderCannotSelfReactivateARetiredPair(): void
+    {
+        $account = $this->openAccount();
+        $this->service->setActive(self::ADMIN, $account->id, false, 0);
+
+        $this->expectException(AccountAlreadyExists::class);
+        $this->service->createFor(self::HOLDER, self::HOLDER, 'IRR');
     }
 
     public function testAnAdministratorReactivatesWithACallerSuppliedReason(): void

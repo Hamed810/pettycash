@@ -216,11 +216,11 @@ final class AtomicityFailureInjectionTest extends TestCase
         $payload2 = ['sheet_id' => 'sheet-b', 'command_id' => $commandId]; // Different sheet_id = different payload
         
         // First execution
-        $result1 = $idempotencyService->execute($commandId, 'test-actor', 'test.op', null, $payload1, static fn(): array => ['result' => 'first']);
+        $result1 = $idempotencyService->execute($commandId, 'test-actor', 'test.op', null, $payload1, static fn(): array => ['result' => 'first'], 200);
         
         // Second execution with different payload should throw CommandConflict
         $this->expectException(\OCA\PettyCash\Application\Command\CommandConflict::class);
-        $idempotencyService->execute($commandId, 'test-actor', 'test.op', null, $payload2, static fn(): array => ['result' => 'second']);
+        $idempotencyService->execute($commandId, 'test-actor', 'test.op', null, $payload2, static fn(): array => ['result' => 'second'], 200);
     }
 
     public function testSimultaneousApprovalsConcurrency(): void

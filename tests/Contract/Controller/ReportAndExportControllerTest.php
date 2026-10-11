@@ -505,10 +505,13 @@ final class ReportAndExportControllerTest extends TestCase
 
         $rows = $this->get('/reports/audit?pageSize=100')['data']['rows'];
         $this->assertNotEmpty($rows, 'there must be an audit event to filter');
-        $occurredAt = new \DateTimeImmutable($rows[0]['occurredAt']);
-
-        $before = $occurredAt->modify('-1 day')->format(DATE_ATOM);
-        $after = $occurredAt->modify('+1 day')->format(DATE_ATOM);
+        // Bounds derive from the min/max of what is actually present, not from
+        // rows[0] ± 1 day: the lab database accumulates events across runs and
+        // days, so a bound around one row cannot exclude (or include) the rest.
+        // min-1day excludes everything; max+1day includes everything.
+        $times = array_map(static fn (array $row): \DateTimeImmutable => new \DateTimeImmutable($row['occurredAt']), $rows);
+        $before = min($times)->modify('-1 day')->format(DATE_ATOM);
+        $after = max($times)->modify('+1 day')->format(DATE_ATOM);
 
         $this->assertGreaterThan(
             0,

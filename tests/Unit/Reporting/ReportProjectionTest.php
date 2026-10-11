@@ -6,8 +6,6 @@ namespace OCA\PettyCash\Tests\Unit\Reporting;
 
 use DateTimeImmutable;
 use OCA\PettyCash\Application\Reporting\ReportProjection;
-use OCA\PettyCash\Controller\ExportController;
-use OCA\PettyCash\Controller\ReportController;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -77,18 +75,21 @@ final class ReportProjectionTest extends TestCase
 
     public function testExportControllerSharesTheProjection(): void
     {
-        $ref = new \ReflectionClass(ExportController::class);
-        self::assertSame(
-            ReportProjection::SHEET_COLUMNS,
-            $ref->getConstant('SHEET_COLUMNS')
-        );
-        self::assertSame(
-            ReportProjection::TRANSACTION_COLUMNS,
-            $ref->getConstant('TRANSACTION_COLUMNS')
-        );
-        self::assertSame(
-            ReportProjection::SHEET_NUMERIC_COLUMNS,
-            $ref->getConstant('SHEET_NUMERIC_COLUMNS')
+        // Source scan, not reflection: controller classes extend Nextcloud's
+        // OCSController, which is not autoloadable in the unit-test context
+        // (no unit test loads a controller class), so reflecting on one
+        // fatals. The invariant — no column literals of its own — is what
+        // matters, and it is checkable as text.
+        $source = (string) file_get_contents(__DIR__ . '/../../../lib/Controller/ExportController.php');
+        self::assertStringContainsString('ReportProjection::SHEET_COLUMNS', $source);
+        self::assertStringContainsString('ReportProjection::TRANSACTION_COLUMNS', $source);
+        self::assertStringContainsString('ReportProjection::SHEET_NUMERIC_COLUMNS', $source);
+        self::assertStringContainsString('ReportProjection::sheetRowWithTotals', $source);
+        self::assertStringContainsString('ReportProjection::transactionRow', $source);
+        self::assertDoesNotMatchRegularExpression(
+            "/private const (SHEET_COLUMNS|TRANSACTION_COLUMNS|SHEET_NUMERIC_COLUMNS) = \\[/",
+            $source,
+            'ExportController must not declare its own column literals; they live in ReportProjection'
         );
     }
 

@@ -2501,7 +2501,8 @@ function scenarioExportService(): array
         new \OCA\PettyCash\Infrastructure\Export\XlsxExporter($store),
         new \OCA\PettyCash\Infrastructure\Export\EvidenceArchiveExporter($store),
         $store,
-        $evidenceStore
+        $evidenceStore,
+        new \OCA\PettyCash\Infrastructure\Export\PdfExporter()
     );
 
     $admin = new \OCA\PettyCash\Application\Reporting\ReportScope(
@@ -2542,11 +2543,14 @@ function scenarioExportService(): array
     $report['refusedReason'] = $refusedReason;
     $report['refusedAddedNothing'] = listingOf($appData) === $before;
 
-    // --- 2. PDF is refused while T109 is blocked, and writes nothing ---
+    // --- 2. PDF is allowed since T109 delivered, and generates through real adapters ---
     $pdfDecision = $service->authorization($admin, 'report', 'pdf');
     $report['pdfAllowed'] = $pdfDecision['allowed'];
-    $report['pdfReasonMentionsT109'] = str_contains($pdfDecision['reason'], 'T109');
-    $report['pdfReasonMentionsFont'] = str_contains($pdfDecision['reason'], 'font');
+    $pdf = $service->generate($admin, 'sheets', 'pdf', $rows);
+    $report['pdfGenerated'] = ($pdf['format'] === 'pdf' && $pdf['byteSize'] > 0);
+    $report['pdfByteSize'] = $pdf['byteSize'];
+    $service->cleanup();
+    $report['pdfCleanupEmptiesStore'] = listingOf($appData) === $before;
 
     // --- 3. CSV through real app storage, and the scratch really is removed ---
     $scratchBefore = glob(sys_get_temp_dir() . '/pettycash-export-*') ?: [];

@@ -157,6 +157,9 @@ final class DbExpenseTransactionRepository implements ExpenseTransactionReposito
                 ], IQueryBuilder::PARAM_STR_ARRAY)
             ))
             ->orderBy('created_at', 'ASC')
+            // Deterministic tiebreak: rows seeded in the same second share a
+            // created_at, and without it page N and page N+1 overlap.
+            ->addOrderBy('id', 'ASC')
             ->setFirstResult($offset)
             ->setMaxResults($limit);
         $rows = $qb->executeQuery()->fetchAllAssociative();
