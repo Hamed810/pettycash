@@ -1,5 +1,103 @@
-@media (max-width: 600px) {
+/**
+ * T120: responsive tables/cards + 390px no-horizontal-scroll floor (FR-071).
+ *
+ * The component contract: `ResponsiveTable.vue` renders a `<table>` on wide
+ * viewports and one card per row at narrow widths; `ReportTable.vue` follows
+ * the same breakpoint. These rules are the shared floor both rely on: nothing
+ * inside `.pettycash-shell` may force a horizontal scrollbar at 390px, and
+ * type never drops below the 16px floor to fit.
+ *
+ * Breakpoints:
+ * - <=640px: cards replace tables (matches ResponsiveTable).
+ * - <=480px: tight spacing pass for 390px devices.
+ */
+
+/* FR-071: every element visible without horizontal scroll at 390px. */
+.pettycash-shell {
+	max-inline-size: 100%;
+	overflow-wrap: anywhere;
+	word-break: normal;
+
+	img,
+	video,
+	canvas,
+	table {
+		max-inline-size: 100%;
+	}
+
+	/* Long identifiers (UUIDs, tokens) wrap rather than push past 390px. */
+	.monospace,
+	code,
+	.identifier {
+		overflow-wrap: anywhere;
+		word-break: break-all;
+	}
+}
+
+/* Desktop tables are the default; cards take over at narrow widths. */
+.responsive-table__cards {
+	display: none;
+}
+
+@media (max-width: 640px) {
 	.pettycash-shell {
 		padding: 12px;
 	}
+
+	.responsive-table__desktop {
+		display: none;
+	}
+
+	.responsive-table__cards {
+		display: flex;
+	}
+
+	/* Cards are full-width rows: label above value, both at the floor size. */
+	.responsive-table__card {
+		inline-size: 100%;
+		max-inline-size: 100%;
+		font-size: var(--font-size-floor);
+	}
+
+	.responsive-table__label,
+	.responsive-table__value {
+		font-size: var(--font-size-floor);
+		min-inline-size: 0;
+	}
+}
+
+/* 390px devices: tighter padding, never smaller type. */
+@media (max-width: 480px) {
+	.pettycash-shell {
+		padding: 8px;
+		font-size: var(--font-size-floor);
+	}
+
+	/* Status badges wrap rather than overflow. */
+	[data-testid^='status-'] {
+		max-inline-size: 100%;
+		overflow-wrap: anywhere;
+	}
+}
+
+/* Nextcloud theme variables with fallbacks so the app survives a host that
+   does not define them. Background/foreground pairs are chosen from the host
+   palette first (dark/high-contrast themes), with AA-safe literals behind. */
+.pettycash-shell {
+	color: var(--color-main-text, #1e1e1e);
+	background: var(--color-main-background, #fff);
+	border-color: var(--color-border, #dbdbdb);
+
+	--pettycash-status-success-fg: var(--color-success, #1a7f37);
+	--pettycash-status-error-fg: var(--color-error, #b42318);
+	--pettycash-status-warning-fg: var(--color-warning, #8a5a00);
+	--pettycash-status-info-fg: var(--color-info, #175cd3);
+}
+
+/* Status text at WCAG AA contrast: colour plus icon (see _rtl.scss), never
+   colour alone, and never below the type floor. */
+[data-testid^='status-'] {
+	font-size: var(--font-size-floor);
+	font-weight: 500;
+	color: var(--color-main-text, #1e1e1e);
 }
