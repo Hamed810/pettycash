@@ -26,6 +26,12 @@ async function ocs(page: Page, method: string, path: string, body?: unknown) {
 }
 
 test.describe('reporting and export journeys', () => {
+	// Every API-driven journey navigates first: `fetch` with a relative URL
+	// has no base on a fresh page, and Firefox refuses it outright.
+	async function apiPage(page: Page) {
+		await page.goto('/apps/pettycash/')
+	}
+
 	test('the dashboard renders with scope and totals', async ({ page }) => {
 		await page.goto('/apps/pettycash/#/reports')
 		await page.waitForSelector('[data-testid="report-view"], [data-testid="report-view-empty"], [data-testid="report-view-loading"]')
@@ -35,20 +41,26 @@ test.describe('reporting and export journeys', () => {
 	})
 
 	test('report filtering narrows the sheets rows', async ({ page }) => {
+		await apiPage(page)
 		const res: { status: number, json: { ocs?: { data?: { rows?: unknown[] } } } | null, ms: number } = await ocs(page, 'GET', '/reports/sheets?page=1&pageSize=25')
 		expect(res.status).toBeLessThan(300)
 		expect(res.ms, 'sheets report must answer within 3s').toBeLessThan(3000)
-		const filtered: typeof res = await ocs(page, 'GET', '/reports/sheets?page=1&pageSize=25&filters=' + encodeURIComponent(JSON.stringify({})))
+		const filtered: typeof res = await ocs(page, 'GET', '/reports/sheets?page=1&pageSize=25&filters=' + encodeURIComponent(JSON.stringify({ statuses: ['OPEN'] })))
 		expect(filtered.status).toBeLessThan(300)
+		const allTotal = (res.json?.ocs?.data as any)?.total ?? 0
+		const filteredTotal = (filtered.json?.ocs?.data as any)?.total ?? 0
+		expect(filteredTotal, 'a status filter must narrow, never widen').toBeLessThanOrEqual(allTotal)
 	})
 
 	test('report scope applies before aggregation', async ({ page }) => {
+		await apiPage(page)
 		const res: { status: number, json: { ocs?: { data?: { columns?: string[], rows?: unknown[] } } } | null } = await ocs(page, 'GET', '/reports/transactions?page=1&pageSize=25')
 		expect(res.status).toBeLessThan(300)
 		expect(res.json?.ocs?.data?.columns).toContain('ownerUid')
 	})
 
 	test('CSV export of a scoped selection produces a header row and cleans up', async ({ page }) => {
+		await apiPage(page)
 		const sheets: { status: number, json: { ocs?: { data?: { rows?: Array<{ id: string }> } } } | null } = await ocs(page, 'GET', '/reports/sheets?page=1&pageSize=5')
 		const rows = sheets.json?.ocs?.data?.rows ?? []
 		if (rows.length === 0) {
@@ -73,6 +85,7 @@ test.describe('reporting and export journeys', () => {
 	})
 
 	test('an export without a selection is refused rather than answered empty', async ({ page }) => {
+		await apiPage(page)
 		const exp: { status: number } = await page.evaluate(async () => {
 			const response = await fetch('/ocs/v2.php/apps/pettycash/api/v1/exports', {
 				method: 'POST',

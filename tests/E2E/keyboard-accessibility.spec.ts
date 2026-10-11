@@ -182,9 +182,13 @@ function journeyUnderTheme(themeName: string): void {
 
 			// Drive sheet creation entirely from the keyboard. Every assertion here is on a *keyboard*
 			// action, and there is no `.click()` in this test — which is what makes it a test of the
-			// criterion rather than of the selector.
+			// criterion rather than of the selector. Matched on the stable
+			// `create-sheet-button` hook first: button labels render through
+			// the l10n catalog and read as raw keys until it arrives, so a
+			// text-only predicate passes or fails on translation timing
+			// rather than on keyboard reachability.
 			const reachedCreate = await tabUntil(page, ({ text, testId }) =>
-				testId.includes('sheet-create') || /create sheet|new sheet|ایجاد/i.test(text))
+				testId.includes('create-sheet') || /create sheet|new sheet|ایجاد/i.test(text))
 
 			expect(
 				reachedCreate,
