@@ -61,18 +61,20 @@ Checked 2026-10-11 by grep + port inspection (each names where checked):
 ## Measurable criteria
 
 - RTL: 390px / AA / ≥12pt / keyboard+focus — static gates green
-  (typography 5/5, stylelint clean, 136 Rtl+Purchaser tests green);
-  browser-measured matrix blocked by workspace/mount cause (recorded, not
-  claimed).
-- Performance: p95/error-rate informational (T128); zero-data-loss via
-  atomicity suite; SC-008 deferred post-V1 (not claimed).
+  (typography 5/5, stylelint clean, Rtl+Purchaser suites green) and
+  browser-measured green on all four projects (`browser-matrix` 5/5 ×4,
+  `keyboard-accessibility` 6/6 ×4; 458/458 frontend unit).
+- Performance: p95/error-rate informational (T128: all views p95 ≤85ms);
+  zero-data-loss via atomicity suite + live exactly-once journeys;
+  SC-008 deferred post-V1 (not claimed).
 - Auth matrix, config-audit scope, advisory decisions, 100 MB limit, V2
-  deferrals, browser targets: verified in code + docs above.
+  deferrals, browser targets: verified in code + docs above, with
+  backend suites green (unit 842, integration 364, contract 416) and E2E
+  journeys green on all four projects.
 
-## Residual blockers (not release-blockers for static closure)
+## Residual blockers
 
-- T089 admin E2E: needs admin browser principal + credentials (lab-mutating).
-- T123 human acceptance matrix: genuinely human-only.
-- PHP/HTTP/browser runtime verification of this workspace: container mount
-  serves `/home/ubuntu/projects/pettycash`, not this workspace; runtime
-  evidence must be taken on a mounted tree (see quickstart-validation §6–§8).
+- T123 human acceptance matrix: genuinely human-only (see ui-acceptance.md).
+- Lab mount + E2E principals were temporary lab-only mutations for runtime
+  closure, restored/documented afterwards (see final report). No exceptions
+  to the constitution; no approved exceptions outstanding.
