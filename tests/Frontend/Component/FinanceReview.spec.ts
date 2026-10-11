@@ -619,9 +619,14 @@ describe('Finance Review - Vue Component Tests (US3)', () => {
       // two cannot disagree about what the scale is.
       const scale = readFileSync(join(process.cwd(), 'src/styles/app.scss'), 'utf8')
       const tokens = new Map<string, number>()
-      for (const match of scale.matchAll(/--([\w-]+):\s*([\d.]+)rem/g)) {
-        const [, name, value] = match
-        if (name !== undefined && value !== undefined) tokens.set(name, Number(value) * 16)
+      // Both spellings the scale uses: `1.125rem` (×16) and absolute `18px`
+      // (literal). The T120 follow-up moved the tokens from rem to px because
+      // Nextcloud's 15px root rendered `1rem` as 15px; a rem-only reader finds
+      // no scale at all after that move. Mirrors `typography.spec.ts`.
+      for (const match of scale.matchAll(/--([\w-]+):\s*([\d.]+)(rem|px)/g)) {
+        const [, name, value, unit] = match
+        if (name !== undefined && value !== undefined)
+          tokens.set(name, unit === 'px' ? Number(value) : Number(value) * 16)
       }
       expect(tokens.size, 'the app must declare a type scale to read through').toBeGreaterThan(0)
 

@@ -331,12 +331,12 @@ describe('FR-086 — deleting a draft sheet from the interface', () => {
 		await wrapper.find('[data-test="delete-sheet"]').trigger('click')
 		await flushPromises()
 		await wrapper.find('[data-test="confirm-delete-sheet"]').exists()
-		// The dialog names its own cancel control, so the assertion is that one exists rather than a
-		// non-null assertion: `find` returning `undefined` would otherwise throw inside `trigger` and read as
-		// an unrelated failure.
-		const cancel = wrapper.findAll('button').find(b => b.text() === 'Cancel')
-		expect(cancel).toBeDefined()
-		await cancel!.trigger('click')
+		// Found by hook, not by English text: since T119 the label renders
+		// through the catalog (`common.cancel`), so asserting the literal
+		// 'Cancel' pins the test to one locale rather than to the control.
+		const cancel = wrapper.find('[data-test="cancel-delete-sheet"]')
+		expect(cancel.exists()).toBe(true)
+		await cancel.trigger('click')
 		await flushPromises()
 
 		expect(ocsRequest).not.toHaveBeenCalled()

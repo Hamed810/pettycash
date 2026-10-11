@@ -79,8 +79,14 @@ describe('FR-071 / SC-009 keyboard-operability floor', () => {
 			const source = readFileSync(file, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
 
 			// Scoped to focus declarations only: a general `outline: none` on a non-focus rule is not what
-			// this test is about, and flagging one would train people to ignore it.
-			if (/(?::focus|:focus-visible)[^{]*\{[^}]*outline:\s*none/.test(source)) {
+			// this test is about, and flagging one would train people to ignore it. Whole rules carved
+			// to `:focus:not(:focus-visible)` are removed before scanning: they suppress the ring only
+			// when focus did not arrive by keyboard (e.g. the route heading's programmatic focus after
+			// a pointer click), while keyboard-arrived focus still matches `:focus-visible` and keeps
+			// its ring. Removing just the `:not(...)` would leave a bare `:focus` suppression behind,
+			// which is the exemption read backwards.
+			const scannable = source.replace(/[^{}]*:focus:not\(\s*:focus-visible\s*\)[^{]*\{[^}]*\}/g, '')
+			if (/(?::focus|:focus-visible)[^{]*\{[^}]*outline:\s*none/.test(scannable)) {
 				offenders.push(file.replace(join(__dirname, '..', '..'), ''))
 			}
 		}

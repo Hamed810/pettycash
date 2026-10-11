@@ -107,6 +107,7 @@ function confirm(): void {
 			<NcButton
 				ref="cancelButton"
 				:disabled="busy"
+				data-test="cancel-delete-sheet"
 				@click="close">
 				{{ t('pettycash', 'common.cancel') }}
 			</NcButton>
