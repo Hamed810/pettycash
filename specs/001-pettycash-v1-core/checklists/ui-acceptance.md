@@ -1,25 +1,30 @@
-# UI acceptance matrix (T123 — human-only)
+# UI acceptance (T123 — human verdict: PASS)
 
-Manual Persian RTL, installed Firefox (115+ ESR), accessibility, and
-representative-user first-attempt matrix. SC-008: not measured (post-V1).
-FR-073 error-rate figure: per `quickstart.md` §8.2 with its 1% ceiling — not
-asserted here. Browsers: Chrome 120+, Edge 120+ per FR-072 + installed
-Firefox 115+ ESR. Themes: default, dark, high-contrast. Viewports: 1440×900
-+ 390×844 (no horizontal scroll at 390px; status color/icon WCAG AA;
-text ≥12pt Persian font; keyboard-only primary journeys with visible focus).
+Final manual review of Feature 001, recorded 2026-10-11 from the reviewer's
+explicit PASS verdict. Only the verdicts below were supplied; no participant
+counts, timestamps, telemetry, or numeric measurements were provided, and none
+are recorded here.
 
-| # | Journey | Browser | Viewport | Theme | RTL | Focus visible | 1st-attempt | Result |
-|---|---------|---------|----------|-------|-----|---------------|-------------|--------|
-| 1 | Purchaser capture → submit | Firefox ESR | 1440×900 | default | n/a | yes |  | TODO |
-| 2 | Purchaser capture → submit | Firefox ESR | 390×844 | default | RTL | yes |  | TODO |
-| 3 | Manager review → decision | Chrome 120+ | 1440×900 | default | RTL | yes |  | TODO |
-| 4 | Senior review → return | Chrome 120+ | 390×844 | dark | RTL | yes |  | TODO |
-| 5 | Finance settlement | Edge 120+ | 1440×900 | default | RTL | yes |  | TODO |
-| 6 | Correction → resubmit | Firefox ESR | 390×844 | high-contrast | RTL | yes |  | TODO |
-| 7 | Reports → export | Chrome 120+ | 1440×900 | default | RTL | yes |  | TODO |
-| 8 | Evidence upload → links | Edge 120+ | 390×844 | dark | RTL | yes |  | TODO |
+- Persian RTL desktop usability: PASS
+- Persian RTL 390px usability: PASS
+- Chrome/Edge/Firefox visual review: PASS
+- Dark/high-contrast visual review: PASS
+- Keyboard-only journeys (1, 3, 5): PASS
+- Visible focus at every keyboard stop: PASS
+- No unacceptable clipping or horizontal overflow: PASS
+- Status understandable without relying on colour alone: PASS
+- Overall final human acceptance: PASS
 
-Keyboard-only pass (no pointer): journeys 1, 3, 5 — record PASS/FAIL + focus
-indicator present at every stop (computed outline-style ≠ none, width > 0).
+Dispositions (unchanged, previously established):
 
-Representative users (≥90% first-attempt): record n users, n pass, rate.
+- SC-008: not measured (post-V1).
+- FR-073 error-rate figure: not measured in V1. No quickstart §8.2 logging
+  session (PETTYCASH_REQUEST_LOG contract + E2E runs) was executed, so no
+  numerator, denominator, or excluded count exists to record; the clean-lab
+  mount used for runtime closure has been restored. Traceability keeps
+  FR-073 PARTIAL with measurement open. The >1% environment-contamination
+  condition of §8.2 step 5 was not established by a run and is not claimed.
+- Representative-user first-attempt rate: no n / pass count was supplied;
+  none is recorded. SC-010 permits an explicit not-measured record when
+  representative users are unavailable; that determination belongs to the
+  reviewer and is not inferred here.
