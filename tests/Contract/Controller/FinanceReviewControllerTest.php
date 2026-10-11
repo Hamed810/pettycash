@@ -55,7 +55,7 @@ final class FinanceReviewControllerTest extends TestCase
      */
     public function testFinanceQueueListsTheTransactionsAwaitingFinanceReview(): void
     {
-        $items = $this->queueItems();
+        $items = $this->allQueueItems();
 
         $byId = $this->byId($items);
         $this->assertArrayHasKey(ContractFixtures::transactionId(), $byId, 'the senior-approved transaction awaits finance');
@@ -77,9 +77,9 @@ final class FinanceReviewControllerTest extends TestCase
      */
     public function testTheFinanceQueueIsNotScopedToTheCallersCostCenters(): void
     {
-        $data = $this->queue();
+        $items = $this->allQueueItems();
 
-        $byId = $this->byId($data['items']);
+        $byId = $this->byId($items);
         $this->assertArrayHasKey(
             ContractFixtures::unmanagedFinanceTransactionId(),
             $byId,
@@ -99,8 +99,7 @@ final class FinanceReviewControllerTest extends TestCase
         foreach ([ContractFixtures::transactionId(), ContractFixtures::unmanagedFinanceTransactionId(), ContractFixtures::seniorRejectedFinanceTransactionId()] as $seeded) {
             $this->assertArrayHasKey($seeded, $byId, 'every seeded finance-stage transaction must be in the shared queue');
         }
-        $this->assertGreaterThanOrEqual(3, $data['total']);
-        $this->assertGreaterThanOrEqual(3, count($data['items']));
+        $this->assertGreaterThanOrEqual(3, count($items), 'the three seeded rows must all be present');
     }
 
     /**
@@ -109,7 +108,7 @@ final class FinanceReviewControllerTest extends TestCase
      */
     public function testTheFinanceQueueAlsoCarriesSeniorRejectedTransactions(): void
     {
-        $byId = $this->byId($this->queueItems());
+        $byId = $this->byId($this->allQueueItems());
 
         $this->assertArrayHasKey(
             ContractFixtures::seniorRejectedFinanceTransactionId(),
@@ -161,7 +160,7 @@ final class FinanceReviewControllerTest extends TestCase
      */
     public function testTheQueueCarriesTheSeniorDecisionFinanceIsDecidingOnTopOf(): void
     {
-        $byId = $this->byId($this->queueItems());
+        $byId = $this->byId($this->allQueueItems());
         $item = $byId[ContractFixtures::transactionId()];
 
         $this->assertIsArray($item['latestDecision'] ?? null, 'the senior decision is on the row');
@@ -243,8 +242,10 @@ final class FinanceReviewControllerTest extends TestCase
         // finance-stage rows from earlier runs are legitimately present and a
         // global emptiness assertion would fail on correct work. What this
         // test owns is that the submitted-state fixture transaction, which is
-        // awaiting cost-centre review, is absent from finance's queue.
-        $byId = $this->byId($data['items']);
+        // awaiting cost-centre review, is absent from finance's queue. The
+        // whole queue is walked: a page-one absence proves nothing once the
+        // shared queue holds more rows than one page.
+        $byId = $this->byId($this->allQueueItems());
         $this->assertArrayNotHasKey(
             ContractFixtures::transactionId(),
             $byId,
@@ -619,6 +620,36 @@ final class FinanceReviewControllerTest extends TestCase
     private function queueItems(string $query = ''): array
     {
         return $this->queue('finance', $query)['items'] ?? [];
+    }
+
+    /**
+     * Every row of the shared finance queue, across pages.
+     *
+     * Membership assertions must not read page one alone: the queue is
+     * shared, so earlier runs' finance-stage rows legitimately push fixtures
+     * beyond the default page. Walks pageSize=100 windows until a short
+     * page; a queue that never ends would fail here rather than hang,
+     * because the walk is bounded by the reported total.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function allQueueItems(): array
+    {
+        $items = [];
+        $page = 1;
+        for (;;) {
+            $data = $this->queue('finance', "?page={$page}&pageSize=100");
+            foreach ($data['items'] ?? [] as $item) {
+                $items[] = $item;
+            }
+            if (count($data['items'] ?? []) < 100) {
+                return $items;
+            }
+            $page++;
+            if ($page > 100) {
+                self::fail('the finance queue walk did not terminate');
+            }
+        }
     }
 
     /**

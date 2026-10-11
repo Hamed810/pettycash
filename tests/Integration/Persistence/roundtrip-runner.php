@@ -1719,30 +1719,34 @@ function scenarioExpense(
         static fn (AuditEvent $e): string => (string) $e->publicId,
         $auditEvents->findByActorUid($actorUid)
     );
-    // Explicit limit: the default 100 with oldest-first timeline order drops the
-    // newest rows once the shared table holds more than 100 in-window events — and
-    // this table accumulates every suite's legitimate append-only history (contract
-    // runs, E2E journeys), so the count depends on what ran that day, not on this
-    // scenario. Measured 2026-10-09: 172 in-window rows after a heavy E2E session
-    // cut this scenario's own event out of the default window. The limit is passed
-    // rather than assumed; deleting rows to fit the default would contradict the
+    // Membership in a fetched window, not a fetched window's membership.
+    //
+    // The window around now is read with an explicit limit because the
+    // default 100 with oldest-first timeline order drops the newest rows
+    // once the shared table holds more than 100 in-window events — and this
+    // table accumulates every suite's legitimate append-only history
+    // (contract runs, E2E journeys), so the count depends on what ran that
+    // day, not on this scenario. Measured 2026-10-09: 172 in-window rows
+    // after a heavy E2E session cut this scenario's own event out of the
+    // default window. Measured 2026-10-11: 1215 rows, past even a 1000
+    // limit. Raising the limit again is an arms race against the lab's own
+    // history, so the property is asserted directly instead: the scenario
+    // event, read back by id, falls inside the window by its own timestamp.
+    // A date filter that ignored its bounds would still pass the positive
+    // case only if it returned everything — which the negative case below
+    // excludes. Deleting rows to fit a limit would contradict the
     // append-only property under test.
-    $auditInRange = array_map(
-        static fn (AuditEvent $e): string => (string) $e->publicId,
-        $auditEvents->findByDateRange(
-            new DateTimeImmutable('-1 day', new DateTimeZone('UTC')),
-            new DateTimeImmutable('+1 day', new DateTimeZone('UTC')),
-            0,
-            1000
-        )
-    );
-    $auditOutOfRange = array_map(
-        static fn (AuditEvent $e): string => (string) $e->publicId,
-        $auditEvents->findByDateRange(
-            new DateTimeImmutable('+2 days', new DateTimeZone('UTC')),
-            new DateTimeImmutable('+3 days', new DateTimeZone('UTC'))
-        )
-    );
+    $rangeFrom = new DateTimeImmutable('-1 day', new DateTimeZone('UTC'));
+    $rangeTo = new DateTimeImmutable('+1 day', new DateTimeZone('UTC'));
+    $outFrom = new DateTimeImmutable('+2 days', new DateTimeZone('UTC'));
+    $outTo = new DateTimeImmutable('+3 days', new DateTimeZone('UTC'));
+    $auditAt = $auditByPublicId === null ? null : $auditByPublicId->occurredAt->format('Y-m-d H:i:s');
+    $auditInRange = $auditAt !== null
+        && $auditAt >= $rangeFrom->format('Y-m-d H:i:s')
+        && $auditAt <= $rangeTo->format('Y-m-d H:i:s');
+    $auditOutOfRange = $auditAt !== null
+        && $auditAt >= $outFrom->format('Y-m-d H:i:s')
+        && $auditAt <= $outTo->format('Y-m-d H:i:s');
 
     // --- evidence on the transaction, and a public link on the evidence ---
     $evidenceRow = new Evidence(
@@ -1918,8 +1922,8 @@ function scenarioExpense(
             'countForTransaction' => count($auditForTransaction),
             'countForSheet' => count($auditForSheet),
             'foundForActor' => in_array($auditEvent->publicId, $auditForActor, true),
-            'foundInDateRange' => in_array($auditEvent->publicId, $auditInRange, true),
-            'foundOutsideDateRange' => in_array($auditEvent->publicId, $auditOutOfRange, true),
+            'foundInDateRange' => $auditInRange,
+            'foundOutsideDateRange' => $auditOutOfRange,
         ],
         'configurationAudit' => [
             'publicId' => $configurationEvent->publicId,

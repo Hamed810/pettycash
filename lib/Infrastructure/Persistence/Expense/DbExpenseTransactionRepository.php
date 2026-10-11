@@ -7,6 +7,7 @@ namespace OCA\PettyCash\Infrastructure\Persistence\Expense;
 use DateTimeImmutable;
 use DateTimeZone;
 use RuntimeException;
+use OCA\PettyCash\Application\DataIntegrity\UnreadableRecordData;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Application\Port\UserDirectory;
 use OCA\PettyCash\Domain\Expense\ExpenseTransaction;
@@ -302,9 +303,16 @@ final class DbExpenseTransactionRepository implements ExpenseTransactionReposito
         // its domain invariant rejects revision numbers below one — so a
         // placeholder revision cannot be substituted here. The real one has to be
         // loaded or the transaction cannot be represented at all.
+        //
+        // An `UnreadableRecordData`, not a bare `RuntimeException`: a stored
+        // row whose revision never persisted (creation interrupted between the
+        // transaction insert and the revision insert) is a data fault, and
+        // FR-083 answers data faults with 422 naming the fault rather than a
+        // 500. The message names surrogate ids for the log; `OcsErrorMapper`
+        // withholds it from callers (T029).
         $activeRevision = $this->revisionRepository->findActiveByTransactionId($transactionDbId);
         if ($activeRevision === null) {
-            throw new RuntimeException(
+            throw new UnreadableRecordData(
                 'Transaction ' . $row['public_id'] . ' has no active revision'
             );
         }
