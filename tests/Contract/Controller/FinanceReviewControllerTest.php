@@ -55,7 +55,7 @@ final class FinanceReviewControllerTest extends TestCase
      */
     public function testFinanceQueueListsTheTransactionsAwaitingFinanceReview(): void
     {
-        $items = $this->queueItems();
+        $items = $this->allQueueItems();
 
         $byId = $this->byId($items);
         $this->assertArrayHasKey(ContractFixtures::transactionId(), $byId, 'the senior-approved transaction awaits finance');
@@ -77,9 +77,9 @@ final class FinanceReviewControllerTest extends TestCase
      */
     public function testTheFinanceQueueIsNotScopedToTheCallersCostCenters(): void
     {
-        $data = $this->queue();
+        $items = $this->allQueueItems();
 
-        $byId = $this->byId($data['items']);
+        $byId = $this->byId($items);
         $this->assertArrayHasKey(
             ContractFixtures::unmanagedFinanceTransactionId(),
             $byId,
@@ -90,8 +90,16 @@ final class FinanceReviewControllerTest extends TestCase
             $byId[ContractFixtures::unmanagedFinanceTransactionId()]['activeRevision']['costCenter']['code'] ?? null,
             'the unlisted row is the one in the unmanaged cost center'
         );
-        $this->assertCount(3, $data['items']);
-        $this->assertSame(3, $data['total']);
+        // The three seeded rows must all be present; the total is a lower
+        // bound, not an exact count, because the queue is shared (FR-006):
+        // other users' finance-stage transactions from earlier runs
+        // legitimately appear here too. A queue scoped to the caller's own
+        // cost centers would return two rows and drop CC-200, which the
+        // assertions above still catch.
+        foreach ([ContractFixtures::transactionId(), ContractFixtures::unmanagedFinanceTransactionId(), ContractFixtures::seniorRejectedFinanceTransactionId()] as $seeded) {
+            $this->assertArrayHasKey($seeded, $byId, 'every seeded finance-stage transaction must be in the shared queue');
+        }
+        $this->assertGreaterThanOrEqual(3, count($items), 'the three seeded rows must all be present');
     }
 
     /**
@@ -100,7 +108,7 @@ final class FinanceReviewControllerTest extends TestCase
      */
     public function testTheFinanceQueueAlsoCarriesSeniorRejectedTransactions(): void
     {
-        $byId = $this->byId($this->queueItems());
+        $byId = $this->byId($this->allQueueItems());
 
         $this->assertArrayHasKey(
             ContractFixtures::seniorRejectedFinanceTransactionId(),
@@ -152,7 +160,7 @@ final class FinanceReviewControllerTest extends TestCase
      */
     public function testTheQueueCarriesTheSeniorDecisionFinanceIsDecidingOnTopOf(): void
     {
-        $byId = $this->byId($this->queueItems());
+        $byId = $this->byId($this->allQueueItems());
         $item = $byId[ContractFixtures::transactionId()];
 
         $this->assertIsArray($item['latestDecision'] ?? null, 'the senior decision is on the row');
@@ -167,22 +175,41 @@ final class FinanceReviewControllerTest extends TestCase
      */
     public function testFinanceQueuePagingNarrowsThePageAndTotalCountsTheQueue(): void
     {
-        $all = $this->queue();
-        $this->assertSame(count($all['items']), $all['total']);
+        // Paging is computed from the live total, not from a fixed count of
+        // three: the queue is shared, so earlier runs' finance-stage rows are
+        // legitimately present. What must hold at any total is that pages
+        // narrow, total counts the queue rather than the page, and pages
+        // neither repeat nor drop rows.
+        $all = $this->queue('finance', '?page=1&pageSize=100');
+        $total = $all['total'];
+        $this->assertGreaterThan(2, $total, 'the finance fixture seeds at least three rows');
+        $this->assertCount($total, $all['items']);
 
         $first = $this->queue('finance', '?page=1&pageSize=2');
-        $this->assertCount(2, $first['items']);
+        $this->assertCount(min(2, $total), $first['items']);
         $this->assertSame(1, $first['page']);
         $this->assertSame(2, $first['pageSize']);
-        $this->assertSame($all['total'], $first['total'], 'total counts the queue, not the page');
+        $this->assertSame($total, $first['total'], 'total counts the queue, not the page');
 
         $second = $this->queue('finance', '?page=2&pageSize=2');
-        $this->assertCount(1, $second['items'], 'three items over two pages is two and one');
-        $this->assertNotSame(
-            $first['items'][0]['id'],
+        $this->assertCount(min(2, max(0, $total - 2)), $second['items']);
+        $seen = [$first['items'][0]['id']];
+        $this->assertNotContains(
             $second['items'][0]['id'],
+            $seen,
             'the second page must not repeat the first'
         );
+
+        $union = [];
+        $pages = (int) ceil($total / 2);
+        for ($page = 1; $page <= $pages; $page++) {
+            $slice = $this->queue('finance', "?page={$page}&pageSize=2");
+            $this->assertSame($total, $slice['total'], "page {$page} must report the whole queue's total");
+            foreach ($slice['items'] as $item) {
+                $union[] = $item['id'];
+            }
+        }
+        $this->assertCount($total, array_unique($union), 'every page walked must cover the queue exactly once');
     }
 
     /**
@@ -211,8 +238,19 @@ final class FinanceReviewControllerTest extends TestCase
 
         $data = $this->queue();
 
-        $this->assertSame([], $data['items'], 'a transaction awaiting cost-centre review is not finance\'s');
-        $this->assertSame(0, $data['total']);
+        // Relative, not absolute: the queue is shared, so other users'
+        // finance-stage rows from earlier runs are legitimately present and a
+        // global emptiness assertion would fail on correct work. What this
+        // test owns is that the submitted-state fixture transaction, which is
+        // awaiting cost-centre review, is absent from finance's queue. The
+        // whole queue is walked: a page-one absence proves nothing once the
+        // shared queue holds more rows than one page.
+        $byId = $this->byId($this->allQueueItems());
+        $this->assertArrayNotHasKey(
+            ContractFixtures::transactionId(),
+            $byId,
+            'a transaction awaiting cost-centre review is not finance\'s'
+        );
     }
 
     // ===== THE FINANCE DECISION RESPONSE =====
@@ -582,6 +620,36 @@ final class FinanceReviewControllerTest extends TestCase
     private function queueItems(string $query = ''): array
     {
         return $this->queue('finance', $query)['items'] ?? [];
+    }
+
+    /**
+     * Every row of the shared finance queue, across pages.
+     *
+     * Membership assertions must not read page one alone: the queue is
+     * shared, so earlier runs' finance-stage rows legitimately push fixtures
+     * beyond the default page. Walks pageSize=100 windows until a short
+     * page; a queue that never ends would fail here rather than hang,
+     * because the walk is bounded by the reported total.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function allQueueItems(): array
+    {
+        $items = [];
+        $page = 1;
+        for (;;) {
+            $data = $this->queue('finance', "?page={$page}&pageSize=100");
+            foreach ($data['items'] ?? [] as $item) {
+                $items[] = $item;
+            }
+            if (count($data['items'] ?? []) < 100) {
+                return $items;
+            }
+            $page++;
+            if ($page > 100) {
+                self::fail('the finance queue walk did not terminate');
+            }
+        }
     }
 
     /**

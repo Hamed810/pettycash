@@ -307,7 +307,10 @@ try {
 	    'public_id' => E2E_IDS['seniorRole'],
 	    'user_uid' => $userUid,
 	    'role' => 'SENIOR_MANAGER',
-	    'cost_center_id' => null,
+	    // T053 evidence: the domain requires a cost centre for manager roles
+	    // (RoleAssignment::create), senior included — a null centre makes /me
+	    // answer 422, as the contract seeder already does it with a centre.
+	    'cost_center_id' => $costCenterDbId,
 	    'valid_from' => $today,
 	    'valid_to' => null,
 	    'active' => true,
@@ -330,7 +333,7 @@ try {
 	    'owner_uid' => $userUid,
 	    'account_id' => e2eDbId($db, 'pettycash_accounts', E2E_IDS['account']),
 	    'currency_id' => $currencyDbId,
-	    'status' => 'DRAFT',
+	    'status' => 'OPEN',
 	    'submitted_total_minor' => 0,
 	    'created_at' => $now,
 	    'lock_version' => 0,

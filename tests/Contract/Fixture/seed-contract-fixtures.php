@@ -44,6 +44,12 @@ declare(strict_types=1);
  *              grants. Use it for the finance queue and finance decision assertions.
  *              Without it the finance endpoints can only be observed against an empty
  *              queue, which every implementation satisfies.
+ *   deactivated-rial
+ *              the `draft` baseline with both of the acting user's accounts retired:
+ *              zero **active** accounts while a rial record exists and is inactive.
+ *              Use it for FR-020's exists-but-inactive carve-out (T428), in which
+ *              provisioning MUST NOT fire and sheet creation MUST be refused with
+ *              `422` naming the account and the remedy.
  *
  * Every run is a reset, not just a first-time seed: the fixture rows are written
  * back to the requested baseline and the rows the suites create while exercising
@@ -73,8 +79,8 @@ if ($userUid === '') {
 }
 
 $state = $argv[2] ?? 'draft';
-if (!in_array($state, ['draft', 'submitted', 'correction', 'usd', 'scope', 'finance'], true)) {
-    fwrite(STDERR, "Unknown fixture state '{$state}'; expected draft, submitted, correction, usd, scope, or finance.\n");
+if (!in_array($state, ['draft', 'submitted', 'correction', 'usd', 'scope', 'finance', 'deactivated-rial'], true)) {
+    fwrite(STDERR, "Unknown fixture state '{$state}'; expected draft, submitted, correction, usd, scope, finance, or deactivated-rial.\n");
     exit(1);
 }
 
@@ -554,6 +560,41 @@ upsert($db, 'pettycash_accounts', 'public_id', FIXTURE_IDS['foreignAccount'], ar
 
 $accountDbId = scalar($db, 'pettycash_accounts', FIXTURE_IDS['account'], 'id');
 
+// --- Exists-but-inactive rial (T428 / FR-020) -----------------------------------
+//
+// The `deactivated-rial` state leaves the acting user with zero **active** accounts
+// while a rial record exists and is inactive — the exact precondition of FR-020's
+// carve-out, in which provisioning MUST NOT fire and sheet creation MUST be refused
+// with `422` naming the account and the remedy. Both of the acting user's accounts
+// are retired, because one remaining active account would resolve instead of
+// refusing and the suite would assert against the wrong rule. Every other state
+// upserts these rows with `'active' => true` above, so preparing any of them
+// restores the baseline and this state cannot leak into another suite.
+//
+// Written directly rather than through `PATCH /accounts/{id}`: deactivation is
+// administrator-only over HTTP (FR-013) and no principal the suites may use holds
+// the petty-cash Administrator assignment, so the endpoint is unreachable from
+// here by design rather than by omission. The configuration-audit row FR-017
+// requires for a real deactivation is therefore absent too — this row is fixture
+// state, not an administrative act, and the suites asserting the audit trail seed
+// through the service layer instead.
+if ($state === 'deactivated-rial') {
+    foreach ([FIXTURE_IDS['account'], FIXTURE_IDS['secondAccount']] as $retiredPublicId) {
+        $retire = $db->getQueryBuilder()->update('pettycash_accounts');
+        // `false` MUST be bound with an explicit boolean type: without one the
+        // value arrives as `''`, which strict MariaDB rejects for this column —
+        // the same reason `upsert()` above maps booleans to `PARAM_BOOL`.
+        $retire->set(
+            'active',
+            $retire->createNamedParameter(false, \OCP\DB\QueryBuilder\IQueryBuilder::PARAM_BOOL)
+        )
+            ->where($retire->expr()->eq('public_id', $retire->createNamedParameter($retiredPublicId)))
+            ->executeStatement();
+    }
+}
+
+$accountDbId = scalar($db, 'pettycash_accounts', FIXTURE_IDS['account'], 'id');
+
 // --- Management roles for the acting user ---------------------------------
 //
 // The decision assertions need a user who actually holds the review role for the
@@ -611,7 +652,7 @@ upsert($db, 'pettycash_role_assignments', 'public_id', FIXTURE_IDS['financeRole'
 // AWAITING_COST_CENTER_REVIEW: `SheetStatus` cannot represent the latter, and a row
 // carrying it fails to hydrate as soon as anything reads the sheet.
 $sheetBaseline = match ($state) {
-    'draft', 'usd' => ['status' => 'OPEN', 'submitted_total_minor' => null, 'first_submitted_at' => null],
+    'draft', 'usd', 'deactivated-rial' => ['status' => 'OPEN', 'submitted_total_minor' => null, 'first_submitted_at' => null],
     'correction' => ['status' => 'CORRECTION', 'submitted_total_minor' => 100000, 'first_submitted_at' => $now],
     'finance' => ['status' => 'FINANCE', 'submitted_total_minor' => 100000, 'first_submitted_at' => $now],
     default => ['status' => 'COST_CENTER', 'submitted_total_minor' => 100000, 'first_submitted_at' => $now],
@@ -634,7 +675,7 @@ upsert($db, 'pettycash_sheets', 'public_id', FIXTURE_IDS['sheet'], array_merge([
 $sheetDbId = scalar($db, 'pettycash_sheets', FIXTURE_IDS['sheet'], 'id');
 
 $transactionBaseline = match ($state) {
-    'draft', 'usd' => ['current_stage' => 'COST_CENTER', 'current_status' => 'DRAFT'],
+    'draft', 'usd', 'deactivated-rial' => ['current_stage' => 'COST_CENTER', 'current_status' => 'DRAFT'],
     'correction' => ['current_stage' => 'CORRECTION', 'current_status' => 'AWAITING_PURCHASER_CORRECTION'],
     // `SENIOR_APPROVED`, not `AWAITING_FINANCE_REVIEW`: a senior *approval* is what
     // routes a transaction to finance, and `findForFinanceQueue()` selects exactly

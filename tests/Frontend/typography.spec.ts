@@ -157,4 +157,20 @@ describe('FR-071 typography floor', () => {
 
 		expect(violations).toEqual([])
 	})
+
+	// T120 follow-up: the four scale tokens must be absolute lengths, not `rem`.
+	// `rem` resolves against the host page's root font size, which Nextcloud sets
+	// to 15px — so a `1rem` floor rendered 15px in production while this gate,
+	// assuming a 16px root, read it as compliant. Absolute tokens hold the floor
+	// under any host root; a future return to `rem` fails here, not in production.
+	it('defines the type scale in root-independent absolute lengths', () => {
+		const shell = readFileSync(join(SRC, 'styles/app.scss'), 'utf8')
+		for (const name of ['--font-size-floor', '--font-size-emphasis', '--font-size-section', '--font-size-title']) {
+			const match = shell.match(new RegExp(`${name.replace(/-/g, '\\-')}\\s*:\\s*([^;]+);`))
+			const declared = (match?.[1] ?? '').trim()
+			expect(declared, `${name} must be declared with a value`).not.toBe('')
+			expect(declared, `${name} must be absolute px so no host root size can move it`).toMatch(/^[\d.]+px$/)
+			expect(toPixels(declared), `${name} must be ≥ 16px`).toBeGreaterThanOrEqual(MIN_FONT_PX)
+		}
+	})
 })

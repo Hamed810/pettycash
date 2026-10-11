@@ -45,7 +45,7 @@ Before verifying the V1 baseline:
 2. Confirm the baseline migrations create the `pettycash_*` schema from an empty database; no
    rename migration and no mixed namespace exist.
 3. Confirm no migration reads, writes, renames, or drops prototype tables that may exist in the
-   shared database, and that no code references a `pc_` or `oc_pcash_*` name.
+   shared database, and that no code references a `pc_` or `oc_pc_*` name.
 4. Confirm identifiers stay within the declared V1 backends' limits (PostgreSQL 63 bytes, MySQL 64
    characters).
 
@@ -64,7 +64,7 @@ baseline executes from scratch. This is development-environment work and MUST sa
 - never deletes Docker volumes or the shared Nextcloud database;
 - clears the `pettycash` app-ID migration state as part of the reset;
 - discards current `pc_*` development data, which is disposable by design;
-- leaves residual prototype tables such as `oc_pcash_*` untouched, as unmanaged artifacts.
+- leaves residual prototype tables such as `oc_pc_*` untouched, as unmanaged artifacts.
 
 ## 3. Planned Dependency and Build Commands
 

@@ -436,7 +436,7 @@ describe('Transaction Correction - Vue Component Tests (RED: behavior not implem
 			expect(wrapper.find('[data-test="resubmit-correction-btn"]').exists()).toBe(false)
 		})
 
-		it('resubmits with the live version and navigates back to the list', async () => {
+		it('resubmits with the live version and navigates to the sheet detail', async () => {
 			givenCorrection(transactionFixture())
 
 			const wrapper = await mountView(TransactionFormView, '/transactions/tx-1/edit')
@@ -454,7 +454,9 @@ describe('Transaction Correction - Vue Component Tests (RED: behavior not implem
 			// a draft bumps the lock version, so a stale value is refused as a conflict.
 			expect(config.data?.expectedVersion).toBe(3)
 			expect(config.headers?.['X-PettyCash-Command-ID']).toBeTruthy()
-			expect(router.currentRoute.value.name).toBe('transactions')
+			// FR-088: a save terminates on the sheet detail, where the Submit control
+			// lives — never on the transactions list.
+			expect(router.currentRoute.value.name).toBe('sheet-detail')
 		})
 
 		it('surfaces the field error the server returns rather than a generic failure', async () => {

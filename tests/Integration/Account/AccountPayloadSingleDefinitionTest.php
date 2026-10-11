@@ -69,6 +69,7 @@ final class AccountPayloadSingleDefinitionTest extends TestCase
             $this->movements,
             $this->currencies,
             $this->roleAssignments,
+            new \OCA\PettyCash\Tests\TestDoubles\InMemoryAdministratorCheck(),
             new IdempotencyService(new InMemoryCommandResultRepository()),
             new InMemoryCurrentUser(self::PROBE_USER),
             new AccountPayloadFormatter(),
@@ -192,6 +193,8 @@ final class AccountPayloadSingleDefinitionTest extends TestCase
         $this->grantFinanceRole();
 
         $created = $this->service->createFor(self::PROBE_USER, self::PROBE_USER, self::PROBE_CODE);
+        self::assertTrue($created['created'], 'a new pair is created');
+        $created = $created['account'];
         $this->assertSame(
             (new AccountPayloadFormatter())->account($this->accounts->findByPublicId($created['id'])),
             $created,

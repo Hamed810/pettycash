@@ -292,11 +292,25 @@ final readonly class TransactionPayloadFormatter
             // then refused — the exact disagreement this method's own docblock claims cannot
             // happen. FR-039 draws the line between the two senior outcomes, so the capabilities
             // have to be drawn with it rather than as one "can decide" flag.
-            $policy = new FinanceDecisionPolicy();
-            $status = $transaction->status;
-            $actions['canApprove'] = $policy->canFinanceApprove($status);
-            $actions['canReject'] = $policy->canFinanceReject($status);
-            $actions['canReturn'] = $policy->canFinanceReturn($status);
+            //
+            // The finance policy below applies at the finance stage ONLY. It answers its
+            // senior-outcome rules against whatever status it is asked about, so applying it at
+            // the cost-center or senior stage offered a manager an empty decision form: a
+            // cost-center transaction is never senior-approved, and every capability read false.
+            // Management stages follow the command path's rule instead — a reviewer who may
+            // decide may record any of approve, reject or return (FR-033, FR-035; the explanation
+            // requirement for reject/return is endpoint validation, not a capability).
+            if ($transaction->stage === WorkflowStage::Finance) {
+                $policy = new FinanceDecisionPolicy();
+                $status = $transaction->status;
+                $actions['canApprove'] = $policy->canFinanceApprove($status);
+                $actions['canReject'] = $policy->canFinanceReject($status);
+                $actions['canReturn'] = $policy->canFinanceReturn($status);
+            } else {
+                $actions['canApprove'] = true;
+                $actions['canReject'] = true;
+                $actions['canReturn'] = true;
+            }
         }
 
         return $actions;

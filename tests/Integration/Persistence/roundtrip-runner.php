@@ -1692,6 +1692,13 @@ function scenarioExpense(
         static fn (AuditEvent $e): string => (string) $e->publicId,
         $auditEvents->findByActorUid($actorUid)
     );
+    // And the mirror: the configuration binding must not be able to read the
+    // transaction event, even though both events share the actor.
+    $transactionHiddenFromConfigStream = !in_array(
+        (string) $auditEvent->publicId,
+        $configurationByActor,
+        true
+    );
     $transmissionOfConfiguration = in_array(
         (string) $configurationEvent->publicId,
         $visibleToTransactionStream,
@@ -1712,20 +1719,34 @@ function scenarioExpense(
         static fn (AuditEvent $e): string => (string) $e->publicId,
         $auditEvents->findByActorUid($actorUid)
     );
-    $auditInRange = array_map(
-        static fn (AuditEvent $e): string => (string) $e->publicId,
-        $auditEvents->findByDateRange(
-            new DateTimeImmutable('-1 day', new DateTimeZone('UTC')),
-            new DateTimeImmutable('+1 day', new DateTimeZone('UTC'))
-        )
-    );
-    $auditOutOfRange = array_map(
-        static fn (AuditEvent $e): string => (string) $e->publicId,
-        $auditEvents->findByDateRange(
-            new DateTimeImmutable('+2 days', new DateTimeZone('UTC')),
-            new DateTimeImmutable('+3 days', new DateTimeZone('UTC'))
-        )
-    );
+    // Membership in a fetched window, not a fetched window's membership.
+    //
+    // The window around now is read with an explicit limit because the
+    // default 100 with oldest-first timeline order drops the newest rows
+    // once the shared table holds more than 100 in-window events — and this
+    // table accumulates every suite's legitimate append-only history
+    // (contract runs, E2E journeys), so the count depends on what ran that
+    // day, not on this scenario. Measured 2026-10-09: 172 in-window rows
+    // after a heavy E2E session cut this scenario's own event out of the
+    // default window. Measured 2026-10-11: 1215 rows, past even a 1000
+    // limit. Raising the limit again is an arms race against the lab's own
+    // history, so the property is asserted directly instead: the scenario
+    // event, read back by id, falls inside the window by its own timestamp.
+    // A date filter that ignored its bounds would still pass the positive
+    // case only if it returned everything — which the negative case below
+    // excludes. Deleting rows to fit a limit would contradict the
+    // append-only property under test.
+    $rangeFrom = new DateTimeImmutable('-1 day', new DateTimeZone('UTC'));
+    $rangeTo = new DateTimeImmutable('+1 day', new DateTimeZone('UTC'));
+    $outFrom = new DateTimeImmutable('+2 days', new DateTimeZone('UTC'));
+    $outTo = new DateTimeImmutable('+3 days', new DateTimeZone('UTC'));
+    $auditAt = $auditByPublicId === null ? null : $auditByPublicId->occurredAt->format('Y-m-d H:i:s');
+    $auditInRange = $auditAt !== null
+        && $auditAt >= $rangeFrom->format('Y-m-d H:i:s')
+        && $auditAt <= $rangeTo->format('Y-m-d H:i:s');
+    $auditOutOfRange = $auditAt !== null
+        && $auditAt >= $outFrom->format('Y-m-d H:i:s')
+        && $auditAt <= $outTo->format('Y-m-d H:i:s');
 
     // --- evidence on the transaction, and a public link on the evidence ---
     $evidenceRow = new Evidence(
@@ -1901,8 +1922,8 @@ function scenarioExpense(
             'countForTransaction' => count($auditForTransaction),
             'countForSheet' => count($auditForSheet),
             'foundForActor' => in_array($auditEvent->publicId, $auditForActor, true),
-            'foundInDateRange' => in_array($auditEvent->publicId, $auditInRange, true),
-            'foundOutsideDateRange' => in_array($auditEvent->publicId, $auditOutOfRange, true),
+            'foundInDateRange' => $auditInRange,
+            'foundOutsideDateRange' => $auditOutOfRange,
         ],
         'configurationAudit' => [
             'publicId' => $configurationEvent->publicId,
@@ -1929,6 +1950,7 @@ function scenarioExpense(
             'foundInDateRange' => in_array($configurationEvent->publicId, $configurationByRange, true),
             'rowCountInConfigurationTable' => count($configurationRows),
             'visibleToTransactionStream' => $transmissionOfConfiguration,
+            'transactionHiddenFromConfigStream' => $transactionHiddenFromConfigStream,
         ],
         'evidence' => [
             'publicId' => $evidenceRow->publicId,
@@ -1997,7 +2019,7 @@ function scenarioCommand(
         'movement' => ['id' => 'mvmt-1', 'type' => 'CHARGE'],
     ];
 
-    $commandResults->save(new CommandResult($commandId, $hash, $response));
+    $commandResults->save(new CommandResult($commandId, $hash, $response, 'round-trip', 'roundtrip.probe', null, 200));
 
     $qb = $db->getQueryBuilder();
     $qb->select('id')
@@ -2018,6 +2040,12 @@ function scenarioCommand(
             // that reshapes it would make a retry report something the first attempt never said.
             'response' => $found->response,
             'responseIsIdentical' => $found->response === $response,
+            // T251: the replay dimensions must round-trip exactly, or a retry
+            // could not be told apart from a conflicting reuse.
+            'actorUid' => $found->actorUid,
+            'operation' => $found->operation,
+            'targetPublicId' => $found->targetPublicId,
+            'resultStatus' => $found->resultStatus,
         ],
         'unknownCommandIdIsNull' => $unknown === null,
     ];
@@ -2477,7 +2505,8 @@ function scenarioExportService(): array
         new \OCA\PettyCash\Infrastructure\Export\XlsxExporter($store),
         new \OCA\PettyCash\Infrastructure\Export\EvidenceArchiveExporter($store),
         $store,
-        $evidenceStore
+        $evidenceStore,
+        new \OCA\PettyCash\Infrastructure\Export\PdfExporter()
     );
 
     $admin = new \OCA\PettyCash\Application\Reporting\ReportScope(
@@ -2518,11 +2547,14 @@ function scenarioExportService(): array
     $report['refusedReason'] = $refusedReason;
     $report['refusedAddedNothing'] = listingOf($appData) === $before;
 
-    // --- 2. PDF is refused while T109 is blocked, and writes nothing ---
+    // --- 2. PDF is allowed since T109 delivered, and generates through real adapters ---
     $pdfDecision = $service->authorization($admin, 'report', 'pdf');
     $report['pdfAllowed'] = $pdfDecision['allowed'];
-    $report['pdfReasonMentionsT109'] = str_contains($pdfDecision['reason'], 'T109');
-    $report['pdfReasonMentionsFont'] = str_contains($pdfDecision['reason'], 'font');
+    $pdf = $service->generate($admin, 'sheets', 'pdf', $rows);
+    $report['pdfGenerated'] = ($pdf['format'] === 'pdf' && $pdf['byteSize'] > 0);
+    $report['pdfByteSize'] = $pdf['byteSize'];
+    $service->cleanup();
+    $report['pdfCleanupEmptiesStore'] = listingOf($appData) === $before;
 
     // --- 3. CSV through real app storage, and the scratch really is removed ---
     $scratchBefore = glob(sys_get_temp_dir() . '/pettycash-export-*') ?: [];

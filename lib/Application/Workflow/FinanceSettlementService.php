@@ -161,7 +161,7 @@ final readonly class FinanceSettlementService
                 'command_id' => $commandId,
             ];
 
-            $storedResult = $this->idempotencyService->execute($commandId, $payload, function () use (
+            $storedResult = $this->idempotencyService->execute($commandId, $actorUid, 'review.decision.FINANCE', $transactionPublicId, $payload, function () use (
                 $transactionPublicId,
                 $actorUid,
                 $decision,
@@ -420,7 +420,7 @@ final readonly class FinanceSettlementService
                     'transaction_id' => $transactionPublicId,
                     'movement_id' => $recordedMovement?->id,
                 ];
-            });
+            }, 201);
 
             // Reload and return the transaction
             $transaction = $this->transactionRepository->findByPublicId($transactionPublicId);

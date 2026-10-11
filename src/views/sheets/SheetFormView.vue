@@ -280,7 +280,7 @@ onMounted(() => {
 
 		<div v-if="sheetStore.error" class="alert alert--error" role="alert">
 			<span>{{ sheetStore.error }}</span>
-			<button type="button" @click="sheetStore.clearError" aria-label="Dismiss">
+			<button type="button" @click="sheetStore.clearError" :aria-label="t('pettycash', 'common.dismiss')">
 				×
 			</button>
 		</div>

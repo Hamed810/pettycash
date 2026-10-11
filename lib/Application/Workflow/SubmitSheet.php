@@ -54,7 +54,7 @@ final readonly class SubmitSheet
         return $this->transactionManager->transactional(function () use ($sheetId, $ownerUid, $commandId, $expectedVersion): ExpenseSheet {
             // Check idempotency
             $payload = ['sheet_id' => $sheetId, 'command_id' => $commandId];
-            $this->idempotencyService->execute($commandId, $payload, function () use ($sheetId, $ownerUid, $expectedVersion, $commandId): array {
+            $this->idempotencyService->execute($commandId, $ownerUid, 'sheet.submit', $sheetId, $payload, function () use ($sheetId, $ownerUid, $expectedVersion, $commandId): array {
                 $sheet = $this->sheetRepository->findByPublicId($sheetId);
 
                 if ($sheet === null || $sheet->ownerUid !== $ownerUid) {
@@ -117,6 +117,17 @@ final readonly class SubmitSheet
 
                 // Submit the sheet (domain logic)
                 $submittedTotal = $sheet->submit();
+
+                // Persist the routed transactions, not just the sheet. `$sheet->submit()`
+                // transitions every transaction in memory (`activate()` moves each to
+                // COST_CENTER / AWAITING_COST_CENTER_REVIEW), but the sheet repository
+                // does not compose transactions — so saving only the sheet kept the
+                // 200 response while every transaction row stayed DRAFT, and no
+                // review queue ever filled. Inside the same database transaction,
+                // so a failed write rolls the sheet back with them (FR-042).
+                foreach ($sheet->transactions() as $routedTransaction) {
+                    $this->transactionRepository->save($routedTransaction);
+                }
 
                 // Create audit event for submission.
                 //
@@ -195,7 +206,7 @@ final readonly class SubmitSheet
                 $this->sheetRepository->save($sheet);
 
                 return ['sheet_id' => $sheetId, 'submitted_total' => $submittedTotal];
-            });
+            }, 200);
 
             // Reload and return the sheet
             $sheet = $this->sheetRepository->findByPublicId($sheetId);

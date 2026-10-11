@@ -10,6 +10,7 @@ use OCA\PettyCash\Application\Port\TransientExportStore;
 use OCA\PettyCash\Infrastructure\Export\CsvExporter;
 use OCA\PettyCash\Infrastructure\Export\EvidenceArchiveExporter;
 use OCA\PettyCash\Infrastructure\Export\EvidenceArchiveEntry;
+use OCA\PettyCash\Infrastructure\Export\PdfExporter;
 use OCA\PettyCash\Infrastructure\Export\XlsxExporter;
 use OCA\PettyCash\Infrastructure\Export\XlsxSheet;
 use RuntimeException;
@@ -30,13 +31,12 @@ use RuntimeException;
  * `tests/Unit/Reporting/ExportServiceTest.php` asserts the negative directly: a refused export leaves
  * **no artifact** in the transient store and **no scratch file** behind.
  *
- * ## PDF is refused rather than half-produced
+ * ## PDF renders Persian RTL through a vendored font
  *
- * `format: pdf` is in the contract's enum, but T109 is blocked: the installed `tc-lib-pdf` ships no
- * fonts and the only Persian-capable font on this host is a system font, so there is no portable way to
- * render the Persian the contract requires. `generate()` therefore refuses PDF with an explanation
- * rather than emitting a document that cannot be read. A missing format is a recorded gap, not a silent
- * empty file.
+ * `format: pdf` renders with `PdfExporter`, which embeds a subset of the vendored
+ * Vazirmatn font (OFL, beside the exporter) and relies on the library's bidi
+ * reordering plus Arabic contextual shaping. A system font would make the output
+ * depend on the host, so the font travels with the app instead.
  *
  * ## Cleanup is the service's, not the caller's
  *
@@ -55,6 +55,7 @@ final readonly class ExportService
     public const SUPPORTED_FORMATS = [
         self::FORMAT_CSV,
         self::FORMAT_XLSX,
+        self::FORMAT_PDF,
         self::FORMAT_ZIP,
     ];
 
@@ -75,17 +76,14 @@ final readonly class ExportService
         self::RESOURCE_EVIDENCE,
     ];
 
-    private string $pdfUnavailableReason;
-
     public function __construct(
         private CsvExporter $csv,
         private XlsxExporter $xlsx,
         private EvidenceArchiveExporter $archive,
         private TransientExportStore $store,
-        private PrivateFileStore $fileStore
+        private PrivateFileStore $fileStore,
+        private PdfExporter $pdf
     ) {
-        $this->pdfUnavailableReason = 'T109 is blocked: the installed PDF library ships no fonts and no '
-            . 'portable Persian-capable font is available, so the contract\'s Persian RTL PDF cannot be produced';
     }
 
     /**
@@ -119,6 +117,7 @@ final readonly class ExportService
         return match ($format) {
             self::FORMAT_CSV => $this->generateCsv($rows, $columns),
             self::FORMAT_XLSX => $this->generateXlsx($rows, $columns, $numericColumns),
+            self::FORMAT_PDF => $this->generatePdf($rows, $columns),
             self::FORMAT_ZIP => $this->generateZip($entries),
             // Unreachable: authorize() refuses every other format, PDF included.
             default => throw new InvalidArgumentException("Unsupported export format '{$format}'"),
@@ -142,10 +141,6 @@ final readonly class ExportService
                 'reason' => "Unknown export resource '{$resource}'; expected one of "
                     . implode(', ', self::SUPPORTED_RESOURCES),
             ];
-        }
-
-        if ($format === self::FORMAT_PDF) {
-            return ['allowed' => false, 'reason' => $this->pdfUnavailableReason];
         }
 
         if (!in_array($format, self::SUPPORTED_FORMATS, true)) {
@@ -226,6 +221,38 @@ final readonly class ExportService
             throw new InvalidArgumentException($decision['reason']);
         }
     }
+
+    /**
+     * @param list<array<string, mixed>> $rows
+     * @param list<string> $columns
+     * @return array{artifactName: string, mediaType: string, format: string, byteSize: int, rowCount: int}
+     */
+    private function generatePdf(array $rows, array $columns = []): array
+    {
+        $name = 'export-' . bin2hex(random_bytes(8)) . '.pdf';
+        $pdf = $this->pdf->export($rows, $columns === [] ? null : $columns);
+
+        // Same scratch discipline as `generateCsv()`: the transient store streams
+        // out of the scratch file and does not remove it, so the leftover is deleted
+        // here in a `finally`, failed persist included.
+        $scratch = $this->writeScratch($name, $pdf);
+        try {
+            $this->store->persist($name, $scratch);
+        } finally {
+            if (is_file($scratch)) {
+                unlink($scratch);
+            }
+        }
+
+        return [
+            'artifactName' => $name,
+            'mediaType' => $this->pdf->mediaType(),
+            'format' => self::FORMAT_PDF,
+            'byteSize' => $this->store->size($name) ?? strlen($pdf),
+            'rowCount' => count($rows),
+        ];
+    }
+
 
     /**
      * @param list<array<string, mixed>> $rows

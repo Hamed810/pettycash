@@ -65,6 +65,7 @@ use OCA\PettyCash\Infrastructure\Nextcloud\NextcloudAdministratorCheck;
 use OCA\PettyCash\Infrastructure\Nextcloud\NextcloudCurrentUser;
 use OCA\PettyCash\Infrastructure\Export\CsvExporter;
 use OCA\PettyCash\Infrastructure\Export\EvidenceArchiveExporter;
+use OCA\PettyCash\Infrastructure\Export\PdfExporter;
 use OCA\PettyCash\Infrastructure\Export\XlsxExporter;
 use OCA\PettyCash\Infrastructure\Http\EvidenceContentPolicy;
 use OCA\PettyCash\Infrastructure\Nextcloud\NextcloudRequestTimeZone;
@@ -407,6 +408,20 @@ final class Application extends App implements IBootstrap
             return new AuthorizationService();
         });
 
+        // T093 / FR-051 / FR-055: role-scoped reads over one transaction's
+        // history. Registered explicitly rather than autowired, matching every
+        // other application service here: the visibility rule it shares with
+        // `EvidenceVisibility` must resolve to the same bound instance the
+        // evidence paths use, not to a second one reflection happens to build.
+        $context->registerService(\OCA\PettyCash\Application\Audit\AuditQueryService::class, function ($c) {
+            return new \OCA\PettyCash\Application\Audit\AuditQueryService(
+                $c->query(ExpenseTransactionRepository::class),
+                $c->query(AuditEventRepository::class),
+                $c->query(TransactionRevisionRepository::class),
+                $c->query(\OCA\PettyCash\Application\Evidence\EvidenceVisibility::class)
+            );
+        });
+
         // Idempotency service
         $context->registerService(IdempotencyService::class, function ($c) {
             return new IdempotencyService($c->query(CommandResultRepository::class));
@@ -701,7 +716,8 @@ final class Application extends App implements IBootstrap
                 new XlsxExporter($c->query(TransientExportStore::class)),
                 new EvidenceArchiveExporter($c->query(TransientExportStore::class)),
                 $c->query(TransientExportStore::class),
-                $c->query(PrivateFileStore::class)
+                $c->query(PrivateFileStore::class),
+                new PdfExporter()
             );
         });
 

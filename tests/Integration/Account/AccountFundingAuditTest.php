@@ -89,6 +89,7 @@ final class AccountFundingAuditTest extends TestCase
             $this->movements,
             new InMemoryCurrencyRepository(),
             $this->roleAssignments,
+            new \OCA\PettyCash\Tests\TestDoubles\InMemoryAdministratorCheck(),
             new IdempotencyService(new InMemoryCommandResultRepository()),
             new InMemoryCurrentUser(self::FINANCE),
             new AccountPayloadFormatter(),

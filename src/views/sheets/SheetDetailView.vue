@@ -6,6 +6,7 @@ import type { SheetStatus, TransactionSummary } from '@/types/api'
 import { NcBreadcrumbs, NcNoteCard, NcButton, NcChip, NcIconSvgWrapper } from '@nextcloud/vue'
 import { mdiPencil, mdiPlus, mdiSend, mdiEye, mdiLock, mdiDelete } from '@mdi/js'
 import { t } from '@nextcloud/l10n'
+import { stageKey, statusKey } from '@/l10n'
 import { formatMoney } from '@/utils/money'
 import ResponsiveTable from '@/components/shared/ResponsiveTable.vue'
 import DeleteSheetDialog from '@/components/shared/DeleteSheetDialog.vue'
@@ -17,13 +18,16 @@ const sheetStore = useSheetStore()
 
 const sheetId = computed(() => route.params.id as string)
 
+// The domain's `SheetStatus` values (FR-037): the `AWAITING_*` names this map carried before are
+// `TransactionStatus` values, and every submitted sheet rendered an undefined chip because of it.
 const statusLabels: Record<SheetStatus, string> = {
-	OPEN: 'pettycash.status.open',
-	AWAITING_COST_CENTER_REVIEW: 'pettycash.status.awaitingCostCenter',
-	AWAITING_SENIOR_REVIEW: 'pettycash.status.awaitingSenior',
-	AWAITING_FINANCE_REVIEW: 'pettycash.status.awaitingFinance',
-	COMPLETED: 'pettycash.status.completed',
-	COMPLETED_WITH_REJECTIONS: 'pettycash.status.completedWithRejections'
+	OPEN: 'status.open',
+	COST_CENTER: 'status.costCenter',
+	CORRECTION: 'status.correction',
+	SENIOR: 'status.senior',
+	FINANCE: 'status.finance',
+	COMPLETED: 'status.completed',
+	COMPLETED_WITH_REJECTIONS: 'status.completedWithRejections'
 }
 
 const isSubmitted = computed(() => sheetStore.currentSheet?.status !== 'OPEN')
@@ -107,14 +111,14 @@ onUnmounted(() => { sheetStore.clearCurrentSheet() })
 watch(sheetId, (newId) => { loadSheet(newId) })
 
 const transactionHeaders = [
-	{ key: 'expenseDate', label: 'pettycash.transactions.expenseDate', sortable: true },
-	{ key: 'amount', label: 'pettycash.transactions.amount', sortable: true },
-	{ key: 'costCenter', label: 'pettycash.transactions.costCenter', sortable: true },
-	{ key: 'expenseType', label: 'pettycash.transactions.expenseType', sortable: true },
-	{ key: 'stage', label: 'pettycash.transactions.stage', sortable: true },
-	{ key: 'status', label: 'pettycash.transactions.status', sortable: true },
-	{ key: 'evidenceCount', label: 'pettycash.transactions.evidenceCount', sortable: false },
-	{ key: 'actions', label: 'pettycash.transactions.actions', sortable: false }
+	{ key: 'expenseDate', label: 'transactions.expenseDate', sortable: true },
+	{ key: 'amount', label: 'transactions.amount', sortable: true },
+	{ key: 'costCenter', label: 'transactions.costCenter', sortable: true },
+	{ key: 'expenseType', label: 'transactions.expenseType', sortable: true },
+	{ key: 'stage', label: 'transactions.stage', sortable: true },
+	{ key: 'status', label: 'transactions.status', sortable: true },
+	{ key: 'evidenceCount', label: 'transactions.evidenceCount', sortable: false },
+	{ key: 'actions', label: 'transactions.actions', sortable: false }
 ]
 
 /**
@@ -172,14 +176,14 @@ function transactionCell(item: TransactionSummary, column: { key: string }): VNo
 	case 'expenseType':
 		return h('span', null, item.activeRevision.expenseType.name)
 	case 'stage':
-		return h(NcChip, null, () => t('pettycash', 'stage.' + item.stage.toLowerCase()))
+		return h(NcChip, null, () => t('pettycash', stageKey(item.stage)))
 	case 'status':
 		// The hook is `data-test`, matching the table this replaces, so every existing assertion that
 		// found the status badge keeps finding it.
 		return h(
 			NcChip,
 			{ 'data-test': 'transaction-status-badge' },
-			() => t('pettycash', 'status.' + item.status.toLowerCase().replace(/_/g, '-'))
+			() => t('pettycash', statusKey(item.status))
 		)
 	case 'evidenceCount':
 		return h('span', { 'data-test': 'evidence-count' }, item.evidenceCount)

@@ -7,7 +7,6 @@ namespace OCA\PettyCash\Tests\Unit\Workflow;
 use PHPUnit\Framework\TestCase;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
-use RuntimeException;
 use SplFileInfo;
 
 /**
@@ -48,42 +47,44 @@ final class TaskStateConsistencyTest extends TestCase
 
     public function testTheTaskArtifactIsReadable(): void
     {
-        self::assertNotNull(
-            $this->tasksFile(),
+        self::assertNotEmpty(
+            $this->tasksFiles(),
             'no tasks.md was found under specs/; this test cannot audit what it cannot read'
         );
     }
 
     public function testNoTaskNoteClaimsACompletionThatNeverHappened(): void
     {
-        $file = $this->tasksFile();
-        $contents = (string) file_get_contents($file);
-        $shortName = basename(dirname(dirname($file))) . '/' . basename($file);
+        $allFalseClaims = [];
+        foreach ($this->tasksFiles() as $file) {
+            $contents = (string) file_get_contents($file);
+            $shortName = basename(dirname(dirname($file))) . '/' . basename($file);
 
-        $states = $this->taskStates($contents);
-        self::assertNotEmpty($states, "no task lines were parsed out of {$shortName}");
+            $states = $this->taskStates($contents);
+            self::assertNotEmpty($states, "no task lines were parsed out of {$shortName}");
 
-        $falseClaims = [];
-        foreach (preg_match_all(self::COMPLETION_CLAIM, $contents, $matches) ? $matches[1] : [] as $index => $id) {
-            $id = (int) $id;
-            if (!array_key_exists($id, $states)) {
-                // The claim points at a task that does not exist, which is a different defect and is
-                // reported rather than silently skipped.
-                $falseClaims[] = sprintf('T%03d — claimed complete by a note, but no such task exists', $id);
-                continue;
-            }
-            if (!$states[$id]) {
-                $falseClaims[] = sprintf(
-                    'T%03d — claimed complete by a note, but it is `[ ]`',
-                    $id
-                );
+            foreach (preg_match_all(self::COMPLETION_CLAIM, $contents, $matches) ? $matches[1] : [] as $index => $id) {
+                $id = (int) $id;
+                if (!array_key_exists($id, $states)) {
+                    // The claim points at a task that does not exist, which is a different defect and is
+                    // reported rather than silently skipped.
+                    $allFalseClaims[] = sprintf('%s: T%03d — claimed complete by a note, but no such task exists', $shortName, $id);
+                    continue;
+                }
+                if (!$states[$id]) {
+                    $allFalseClaims[] = sprintf(
+                        '%s: T%03d — claimed complete by a note, but it is `[ ]`',
+                        $shortName,
+                        $id
+                    );
+                }
             }
         }
 
         self::assertSame(
             [],
-            $falseClaims,
-            "These notes assert a task is complete when it is not:\n  - " . implode("\n  - ", $falseClaims)
+            $allFalseClaims,
+            "These notes assert a task is complete when it is not:\n  - " . implode("\n  - ", $allFalseClaims)
             . "\n\nA reader trusting the note skips verification, and if the *noting* task is itself `[x]` the"
             . ' error has already propagated. Either mark the task complete on real evidence, or correct the note to'
             . ' say what is actually true and why. T298 is the precedent: case 1 marked T067/T068 complete because'
@@ -93,23 +94,26 @@ final class TaskStateConsistencyTest extends TestCase
 
     public function testEveryClaimedTaskIsActuallyMentionedInTheSameFile(): void
     {
-        $file = $this->tasksFile();
-        $contents = (string) file_get_contents($file);
-        $states = $this->taskStates($contents);
+        $allDangling = [];
+        foreach ($this->tasksFiles() as $file) {
+            $contents = (string) file_get_contents($file);
+            $shortName = basename(dirname(dirname($file))) . '/' . basename($file);
+            $states = $this->taskStates($contents);
 
-        preg_match_all(self::COMPLETION_CLAIM, $contents, $matches);
-        $dangling = array_values(array_filter(
-            array_map('intval', $matches[1] ?? []),
-            static fn (int $id): bool => !array_key_exists($id, $states)
-        ));
+            preg_match_all(self::COMPLETION_CLAIM, $contents, $matches);
+            $dangling = array_values(array_filter(
+                array_map('intval', $matches[1] ?? []),
+                static fn (int $id): bool => !array_key_exists($id, $states)
+            ));
+            foreach (array_unique($dangling) as $id) {
+                $allDangling[] = sprintf('%s: T%03d', $shortName, $id);
+            }
+        }
 
         self::assertSame(
             [],
-            $dangling,
-            'Notes reference task IDs that do not exist: ' . implode(', ', array_map(
-                static fn (int $id): string => sprintf('T%03d', $id),
-                array_unique($dangling)
-            ))
+            $allDangling,
+            'Notes reference task IDs that do not exist: ' . implode(', ', $allDangling)
         );
     }
 
@@ -133,16 +137,20 @@ final class TaskStateConsistencyTest extends TestCase
     }
 
     /**
-     * The active feature's `tasks.md`, discovered rather than hardcoded.
+     * Every feature ledger under specs/, discovered rather than hardcoded.
      *
-     * Globbed so the test follows the feature directory instead of pinning one, which would make it
-     * fail the moment a second feature is branched.
+     * Audited per file (each note checked against its own ledger) so the test
+     * follows the feature directories instead of pinning one — which would
+     * fail the moment a second feature is branched — and instead of throwing
+     * the moment it does. Sorted for deterministic failure output.
+     *
+     * @return list<string>
      */
-    private function tasksFile(): ?string
+    private function tasksFiles(): array
     {
         $root = __DIR__ . '/../../../specs';
         if (!is_dir($root)) {
-            return null;
+            return [];
         }
 
         $found = [];
@@ -153,17 +161,8 @@ final class TaskStateConsistencyTest extends TestCase
                 $found[] = $file->getPathname();
             }
         }
+        sort($found);
 
-        if ($found === []) {
-            return null;
-        }
-        if (count($found) > 1) {
-            throw new RuntimeException(
-                'Found more than one tasks.md under specs/ (' . implode(', ', $found) . '); this test audits the'
-                . ' active feature and cannot tell which one that is. Point it at the right file.'
-            );
-        }
-
-        return $found[0];
+        return array_values($found);
     }
 }

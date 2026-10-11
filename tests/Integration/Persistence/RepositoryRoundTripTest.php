@@ -835,6 +835,10 @@ final class RepositoryRoundTripTest extends TestCase
             'the transaction binding must not be able to read a configuration event; if both '
             . 'streams resolved to one table the two audit trails are indistinguishable'
         );
+        $this->assertTrue(
+            $config['transactionHiddenFromConfigStream'],
+            'the configuration binding must not be able to read a transaction event'
+        );
     }
 
     public function testAuditEventPointsAtItsSheetTransactionRevisionAndDecision(): void
@@ -959,6 +963,11 @@ final class RepositoryRoundTripTest extends TestCase
         );
         $this->assertSame('CHARGE', $command['found']['response']['movement']['type']);
         $this->assertTrue($command['unknownCommandIdIsNull'], 'an unissued command id must find nothing');
+        // T251: the replay dimensions round-trip through the new columns.
+        $this->assertSame('round-trip', $command['found']['actorUid']);
+        $this->assertSame('roundtrip.probe', $command['found']['operation']);
+        $this->assertNull($command['found']['targetPublicId']);
+        $this->assertSame(200, $command['found']['resultStatus']);
     }
 
     // ===== T332: `GET /sheets` reports a real `total` =====

@@ -70,8 +70,21 @@ interface Props {
 
 const props = defineProps<Props>()
 
+/**
+ * T053: whether a decision renders as advisory.
+ *
+ * The router delivers stages lowercase and hyphenated (`senior`, `cost-center`)
+ * while decisions carry uppercase enum stages (`SENIOR`, `COST_CENTER`), and both
+ * spellings reach this prop depending on the caller — so both sides are
+ * normalized before comparing. Comparing raw values silently never matched
+ * through real routing, hiding every advisory badge in production.
+ */
+function normalizeStage(stage: string | null | undefined): string {
+	return (stage ?? '').replace(/-/g, '_').toUpperCase()
+}
+
 function isAdvisory(decision: Props['decisions'][number]): boolean {
-	return decision.stage === 'COST_CENTER' && props.currentStage === 'SENIOR'
+	return normalizeStage(decision.stage) === 'COST_CENTER' && normalizeStage(props.currentStage) === 'SENIOR'
 }
 
 function formatDateTime(dateStr: string): string {

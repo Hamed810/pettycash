@@ -350,6 +350,97 @@ $revision = TransactionRevision::draft(
         self::assertEquals(\OCA\PettyCash\Domain\Workflow\WorkflowStage::CostCenter, $txB->stage);
     }
 
+    public function testSubmitSheetServicePersistsRoutedTransactionStages(): void
+    {
+        // A submit that answers 200 while leaving every transaction row DRAFT
+        // fills no review queue: the queue selects `current_stage =
+        // COST_CENTER`, which only the persisted transition satisfies. The
+        // domain moves the transitions in memory (`activate()`), so only a
+        // test that observes the repository — not the aggregates — can see the
+        // write go missing. The spy records update-saves (rows that already
+        // have a `dbId`); without the persistence loop it records nothing.
+        $purchaserUid = 'test-user';
+        $currencyCode = CurrencyCode::fromString('IRR');
+
+        $sheet = ExpenseSheet::open('sheet-persist', $purchaserUid, 'acc-1', $currencyCode, 'Test Sheet');
+        $sheet->publicId = 'sheet-persist';
+
+        $makeTx = static function (string $id, string $revId) use ($purchaserUid): ExpenseTransaction {
+            $revision = TransactionRevision::draft(
+                $revId,
+                1,
+                new DateTimeImmutable('2026-09-20', new DateTimeZone('UTC')),
+                Money::positive(50000, CurrencyCode::fromString('IRR'))
+            );
+            $revision->complete('Description', 'CC001', 'CC001', 'Engineering', 1, 'Office Supplies', 1, true);
+
+            return new ExpenseTransaction($id, $purchaserUid, $revision);
+        };
+
+        $container = \TestContainerAccessor::getInstance();
+        $sheetRepo = $container->query(\OCA\PettyCash\Domain\Expense\Repository\ExpenseSheetRepository::class);
+        $sheetRepo->save($sheet);
+        $savedSheet = $sheetRepo->findByPublicId('sheet-persist');
+        self::assertNotNull($savedSheet);
+
+        // A recording decorator over the real in-memory repository: the double
+        // returns the same object references it holds, so re-reading state
+        // cannot tell a persisted transition from an in-memory one. What
+        // distinguishes them is whether `save()` was ever called for an
+        // already-persisted row — without the persistence loop it never is.
+        $inner = new InMemoryExpenseTransactionRepository();
+        $updates = [];
+        $spy = $this->createMock(\OCA\PettyCash\Domain\Expense\Repository\ExpenseTransactionRepository::class);
+        $spy->method('save')->willReturnCallback(
+            static function (ExpenseTransaction $transaction) use ($inner, &$updates): void {
+                if ($transaction->dbId !== null) {
+                    $updates[] = $transaction->id;
+                }
+                $inner->save($transaction);
+            }
+        );
+        $spy->method('findBySheetId')->willReturnCallback(
+            static fn (int $sheetId): array => $inner->findBySheetId($sheetId)
+        );
+        $spy->method('findByPublicId')->willReturnCallback(
+            static fn (string $publicId): ?ExpenseTransaction => $inner->findByPublicId($publicId)
+        );
+
+        foreach (['tx-p1' => 'rev-p1', 'tx-p2' => 'rev-p2'] as $txId => $revId) {
+            $tx = $makeTx($txId, $revId);
+            $tx->sheetId = $savedSheet->dbId;
+            $spy->save($tx);
+        }
+        $updates = [];
+
+        $submitSheet = new \OCA\PettyCash\Application\Workflow\SubmitSheet(
+            $container->query(\OCA\PettyCash\Application\Port\TransactionManager::class),
+            $sheetRepo,
+            $container->query(\OCA\PettyCash\Application\Port\AuditWriter::class),
+            $container->query(\OCA\PettyCash\Application\Command\IdempotencyService::class),
+            $container->query(\OCA\PettyCash\Application\Port\CurrentUser::class),
+            $container->query(\OCA\PettyCash\Domain\Configuration\Repository\CostCenterRepository::class),
+            $spy,
+            $container->query(\OCA\PettyCash\Domain\Configuration\Repository\RoleAssignmentRepository::class)
+        );
+
+        $commandId = 'test-command-' . \OCA\PettyCash\Domain\Shared\Uuid::random();
+        $submitSheet->execute('sheet-persist', $commandId, 0);
+
+        self::assertEqualsCanonicalizing(
+            ['tx-p1', 'tx-p2'],
+            $updates,
+            'submitting must persist every routed transaction, not just the sheet'
+        );
+
+        foreach (['tx-p1', 'tx-p2'] as $txId) {
+            $stored = $inner->findByPublicId($txId);
+            self::assertNotNull($stored);
+            self::assertEquals(\OCA\PettyCash\Domain\Workflow\WorkflowStage::CostCenter, $stored->stage);
+            self::assertEquals(\OCA\PettyCash\Domain\Workflow\TransactionStatus::AwaitingCostCenterReview, $stored->status);
+        }
+    }
+
     public function testSubmitSheetServiceCompensatesAppDataOnMetadataFailure(): void
     {
         // Given: A sheet that will cause a metadata failure

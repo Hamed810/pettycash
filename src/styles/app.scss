@@ -15,10 +15,16 @@
  *
  * | Token                    | Value      | Use                                                |
  * |--------------------------|------------|----------------------------------------------------|
- * | `--font-size-floor`      | `1rem`     | body text, table cells, captions, meta lines      |
- * | `--font-size-emphasis`   | `1.125rem` | a value that must outrank the label beside it     |
- * | `--font-size-section`    | `1.25rem`  | a section heading within a card                   |
- * | `--font-size-title`      | `1.5rem`   | the page title                                     |
+ * | `--font-size-floor`      | `16px`     | body text, table cells, captions, meta lines      |
+ * | `--font-size-emphasis`   | `18px`     | a value that must outrank the label beside it     |
+ * | `--font-size-section`    | `20px`     | a section heading within a card                   |
+ * | `--font-size-title`      | `24px`     | the page title                                     |
+ *
+ * Absolute pixels, not `rem`: the tokens must resolve to the floor no matter
+ * what root font size the Nextcloud host page sets (measured 15px, so `1rem`
+ * rendered 15px and the whole scale sat 1px under the requirement). The pixel
+ * values equal the old `rem` scale at a standard 16px root, so nothing changes
+ * there; under this host they are now exact rather than inherited.
  *
  * Declared on `.pettycash-shell` rather than on `:root` so the scale belongs to the app and is
  * inherited by every component beneath it, and so a host page's own root font size is not silently
@@ -27,10 +33,10 @@
  * `@use`, and a scale that each component has to import individually is not one scale.
  */
 .pettycash-shell {
-	--font-size-floor: 1rem;
-	--font-size-emphasis: 1.125rem;
-	--font-size-section: 1.25rem;
-	--font-size-title: 1.5rem;
+	--font-size-floor: 16px;
+	--font-size-emphasis: 18px;
+	--font-size-section: 20px;
+	--font-size-title: 24px;
 
 	box-sizing: border-box;
 	max-inline-size: 1200px;

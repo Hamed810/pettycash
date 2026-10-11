@@ -25,6 +25,10 @@ export async function uploadEvidence(
 	const response = await fetch(`/ocs/v2.php/apps/pettycash/api/v1/transactions/${transactionId}/evidence`, {
 		method: 'POST',
 		headers: {
+			// Without an explicit JSON Accept, OCS answers XML and the `response.json()`
+			// below throws `Unexpected token '<'` — every browser upload failed on
+			// parsing, never on the file. Found by the T171 purchaser journey.
+			'Accept': 'application/json',
 			'OCS-APIRequest': 'true',
 			'X-PettyCash-Command-ID': id
 		},

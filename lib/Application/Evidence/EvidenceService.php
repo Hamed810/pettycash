@@ -193,7 +193,7 @@ final readonly class EvidenceService
     {
         $actorUid = $this->currentUser->uid();
 
-        $result = $this->idempotencyService->execute($commandId, ['evidence_id' => $evidencePublicId, 'reason' => $reason], function () use ($evidencePublicId, $actorUid, $reason, $commandId): array {
+        $result = $this->idempotencyService->execute($commandId, $actorUid, 'evidence.deactivate', $evidencePublicId, ['evidence_id' => $evidencePublicId, 'reason' => $reason], function () use ($evidencePublicId, $actorUid, $reason, $commandId): array {
             $evidence = $this->evidenceRepository->findByPublicId($evidencePublicId);
 
             if ($evidence === null) {
@@ -286,7 +286,7 @@ final readonly class EvidenceService
             ]);
 
             return ['evidence_id' => $evidencePublicId];
-        });
+        }, 200);
 
         // Re-read rather than returning the aggregate from inside the closure.
         //

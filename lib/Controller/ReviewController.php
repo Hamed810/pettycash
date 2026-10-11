@@ -8,6 +8,7 @@ use OCA\PettyCash\Infrastructure\Http\CommandId;
 use InvalidArgumentException;
 use LogicException;
 use OCA\PettyCash\Application\Account\AccountPayloadFormatter;
+use OCA\PettyCash\Application\DataIntegrity\UnreadableRecordData;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Application\Workflow\DecisionOutcome;
 use OCA\PettyCash\Application\Workflow\FinanceQueue;
@@ -249,6 +250,14 @@ class ReviewController extends OCSController
             // so they answer 422 with a stable code and field errors rather than a
             // bare 400 body.
             return $this->ocsErrorMapper->validation($e->getMessage(), $commandId, $this->fieldErrorsFor($e));
+        } catch (UnreadableRecordData $e) {
+            // A stored row that cannot be hydrated (e.g. a transaction whose
+            // revision never persisted) is a data fault, not an authorisation
+            // refusal: without this arm the `LogicException` arm below would
+            // answer it 403 forbidden (T029's defect class), because this type
+            // extends it. Unreachable in healthy operation; reachable the
+            // moment a creation is interrupted between its two inserts.
+            return $this->ocsErrorMapper->map($e, $commandId, ['publicId' => $transactionId]);
         } catch (LogicException $e) {
             return $this->ocsErrorMapper->forbidden($e->getMessage(), $commandId);
         } catch (\Throwable $e) {

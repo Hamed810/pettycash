@@ -12,6 +12,7 @@ use OCA\PettyCash\Application\Reporting\ReportFilterFactory;
 use OCA\PettyCash\Application\Reporting\AuditSelectionQuery;
 use OCA\PettyCash\Application\Reporting\EvidenceSelectionQuery;
 use OCA\PettyCash\Application\Reporting\ReportQuery;
+use OCA\PettyCash\Application\Reporting\ReportProjection;
 use OCA\PettyCash\Application\Reporting\ChargedAccountScope;
 use OCA\PettyCash\Application\Account\AccountPayloadFormatter;
 use OCA\PettyCash\Application\Reporting\ReportScope;
@@ -227,15 +228,7 @@ class ReportController extends OCSController
     private function sheetsReport(ReportScope $scope, string $uid): array
     {
         $rows = array_map(
-            fn ($sheet): array => [
-                'id' => $sheet->publicId,
-                'title' => $sheet->title,
-                'ownerUid' => $sheet->ownerUid,
-                'status' => $sheet->status->value,
-                'currency' => (string) $sheet->currency,
-                'submittedTotalMinor' => $sheet->submittedTotalMinor,
-                'createdAt' => $sheet->createdAt?->format(DATE_ATOM),
-            ],
+            static fn ($sheet): array => ReportProjection::sheetRow($sheet),
             $scope->administrator
                 ? $this->sheets->findByStatus(\OCA\PettyCash\Domain\Workflow\SheetStatus::Open, 0, self::BOUND)
                 : $this->sheets->findByOwnerUid($uid, null, 0, self::BOUND)
@@ -246,7 +239,7 @@ class ReportController extends OCSController
             // Ownership is the scope test. `coversOwned()` is what grants finance visibility of a sheet
             // that reached their stage, so it is the single definition and is not restated here.
             static fn (array $row, ReportScope $s): bool => $s->coversOwned((string) ($row['ownerUid'] ?? '')),
-            ['id', 'title', 'ownerUid', 'status', 'currency', 'submittedTotalMinor', 'createdAt'],
+            ReportProjection::SHEET_BASE_COLUMNS,
             ['rowsRead' => count($rows), 'rowsBoundedBy' => self::BOUND],
         ];
     }
@@ -264,38 +257,16 @@ class ReportController extends OCSController
             // FR-064 fixes the source of each transaction facet: "a transaction's **cost center** is
             // the one recorded on that transaction's own active revision -- not the sheet's, because a
             // sheet may hold transactions for several cost centres (FR-028)", and its "expense type"
-            // and "amount" also come from the active revision. So all three are read from
-            // `$transaction->revision()` rather than joined from the sheet, and a draft revision that
-            // has not been completed carries nulls -- which is honest, and is why the amount filter
-            // excludes a null rather than treating it as zero.
-            static function ($transaction): array {
-                $revision = $transaction->revision();
-
-                return [
-                    'id' => $transaction->publicId,
-                    'ownerUid' => $transaction->ownerUid,
-                    'stage' => $transaction->stage->value,
-                    'status' => $transaction->status->value,
-                    'sheetId' => $transaction->sheetId,
-                    'createdAt' => $transaction->createdAt?->format(DATE_ATOM),
-                    'costCenterDbId' => $revision->costCenterDbId,
-                    'costCenterCode' => $revision->costCenterCode,
-                    'expenseTypeDbId' => $revision->expenseTypeDbId,
-                    'expenseTypeTitle' => $revision->expenseTypeTitle(),
-                    'amountMinor' => $revision->amount()->minorUnits(),
-                    'currency' => (string) $revision->amount()->currency(),
-                ];
-            },
+            // and "amount" also come from the active revision. The builder lives in
+            // ReportProjection so the export cannot hold a second idea of the row.
+            static fn ($transaction): array => ReportProjection::transactionRow($transaction),
             $candidates
         );
 
         return [
             $rows,
             static fn (array $row, ReportScope $s): bool => $s->coversOwned((string) ($row['ownerUid'] ?? '')),
-            [
-                'id', 'ownerUid', 'stage', 'status', 'sheetId', 'createdAt', 'costCenterDbId',
-                'costCenterCode', 'expenseTypeDbId', 'expenseTypeTitle', 'amountMinor', 'currency',
-            ],
+            ReportProjection::TRANSACTION_COLUMNS,
             ['rowsRead' => count($rows), 'rowsBoundedBy' => self::BOUND],
         ];
     }

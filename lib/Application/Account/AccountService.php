@@ -8,6 +8,7 @@ use InvalidArgumentException;
 use LogicException;
 use OCA\PettyCash\Application\Audit\ConfigurationEventType;
 use OCA\PettyCash\Application\Command\IdempotencyService;
+use OCA\PettyCash\Application\Port\AdministratorCheck;
 use OCA\PettyCash\Application\Port\AuditWriter;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Domain\Account\Repository\AccountMovementRepository;
@@ -46,6 +47,7 @@ final class AccountService
         private AccountMovementRepository $movements,
         private CurrencyRepository $currencies,
         private RoleAssignmentRepository $roleAssignments,
+        private AdministratorCheck $administrators,
         private IdempotencyService $idempotency,
         private CurrentUser $currentUser,
         private AccountPayloadFormatter $payload,
@@ -163,10 +165,13 @@ final class AccountService
      *
      * One account per user and currency, enforced by the table's unique index and reported here as a
      * conflict rather than left to surface as a database error. Re-opening the account a user already
-     * has is not a second account; the contract has no idempotent answer for a create, and the
-     * command id is the caller's key if they meant to repeat one.
+     * has is not a second account: when the pair exists in retired (inactive) form, an administrator
+     * re-opens it through the same audited `setActive()` path deactivation uses — ledger, balance and
+     * public id preserved — and the call reports `created: false` so the controller answers 200
+     * rather than 201. The holder cannot self-reactivate (same gate as `setActive()`); the pair
+     * still conflicts for them, and they reach an administrator the same way deactivation requires one.
      *
-     * @return array<string, mixed> the contract's `Account`
+     * @return array{account: array<string, mixed>, created: bool} the contract's `Account`, plus whether it was created (`true`) or re-opened (`false`)
      */
     public function createFor(string $actorUid, string $userUid, string $currencyCode): array
     {
@@ -181,6 +186,24 @@ final class AccountService
         $currency = $this->currencies->findActiveByCode($currencyCode);
         if ($currency === null) {
             throw new InvalidArgumentException('Currency is not a supported active currency');
+        }
+
+        if ($this->accounts->findActiveByUserAndCurrency($userUid, CurrencyCode::fromString($currency->code())) !== []) {
+            throw new AccountAlreadyExists('This user already has an active account for that currency');
+        }
+
+        $retired = array_values(array_filter(
+            $this->accounts->findAllByUserUid($userUid),
+            static fn ($a): bool => (string) $a->currencyCode() === (string) $currency->code() && !$a->active
+        ));
+        if ($retired !== []) {
+            if (!$this->hasRole($actorUid, Role::Administrator)) {
+                throw new AccountAlreadyExists('This user already has an account for that currency; an administrator can re-open it');
+            }
+            $row = $retired[0];
+            $account = $this->setActive($actorUid, $row->id, true, $row->lockVersion, 'Re-opened by an administrator for another user');
+
+            return ['account' => $account, 'created' => false];
         }
 
         if ($this->accounts->findActiveByUserAndCurrency($userUid, CurrencyCode::fromString($currency->code())) !== []) {
@@ -208,7 +231,7 @@ final class AccountService
 
         $this->recordCreationAudit($account, $actorUid, $userUid, $currency->code());
 
-        return $this->payload->account($account);
+        return ['account' => $this->payload->account($account), 'created' => true];
     }
 
     /**
@@ -396,6 +419,9 @@ final class AccountService
 
         return $this->idempotency->execute(
             $commandId,
+            $actorUid,
+            'account.charge',
+            $accountPublicId,
             [
                 'account_id' => $accountPublicId,
                 'amount_minor' => $amountMinor,
@@ -468,12 +494,23 @@ final class AccountService
                 ]);
 
                 return $this->payload->mutation($account, $movement);
-            }
+            },
+            201
         );
     }
 
     private function hasRole(string $userUid, Role $role): bool
     {
+        // A platform administrator holds the Administrator role even without
+        // an assignment row: SessionController, ReportScope and the
+        // configuration controllers all resolve it that way, and an admin who
+        // can configure currencies but cannot open an account for a user is a
+        // contradiction FR-013 forbids. Scoped to Administrator only — finance
+        // powers still require an assignment row, so an admin-alone caller
+        // gains no finance decision power (FR-007).
+        if ($role === Role::Administrator && $this->administrators->isAdministrator($userUid)) {
+            return true;
+        }
         $now = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
         foreach ($this->roleAssignments->findActiveByUserUid($userUid, $now) as $assignment) {
             if ($assignment->active && $assignment->role === $role) {

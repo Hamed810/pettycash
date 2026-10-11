@@ -87,6 +87,7 @@ final class AccountOpenAuditTest extends TestCase
             new InMemoryAccountMovementRepository(),
             $this->currencies,
             $this->roleAssignments,
+            new \OCA\PettyCash\Tests\TestDoubles\InMemoryAdministratorCheck(),
             new IdempotencyService(new InMemoryCommandResultRepository()),
             new InMemoryCurrentUser($actorUid),
             new AccountPayloadFormatter(),
@@ -203,7 +204,7 @@ final class AccountOpenAuditTest extends TestCase
         // `ChargedAccountScope` resolves `entity_id` through `findByPublicId()`, so a surrogate key
         // would silently produce an empty scope rather than an error — which is why this asserts
         // against the returned id rather than merely asserting the key is present.
-        self::assertSame($payload['id'], $events[0]->entityId);
+        self::assertSame($payload['account']['id'], $events[0]->entityId);
     }
 
     public function testARefusedOpenRecordsNothing(): void

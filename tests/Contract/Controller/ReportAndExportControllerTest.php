@@ -505,10 +505,13 @@ final class ReportAndExportControllerTest extends TestCase
 
         $rows = $this->get('/reports/audit?pageSize=100')['data']['rows'];
         $this->assertNotEmpty($rows, 'there must be an audit event to filter');
-        $occurredAt = new \DateTimeImmutable($rows[0]['occurredAt']);
-
-        $before = $occurredAt->modify('-1 day')->format(DATE_ATOM);
-        $after = $occurredAt->modify('+1 day')->format(DATE_ATOM);
+        // Bounds derive from the min/max of what is actually present, not from
+        // rows[0] ± 1 day: the lab database accumulates events across runs and
+        // days, so a bound around one row cannot exclude (or include) the rest.
+        // min-1day excludes everything; max+1day includes everything.
+        $times = array_map(static fn (array $row): \DateTimeImmutable => new \DateTimeImmutable($row['occurredAt']), $rows);
+        $before = min($times)->modify('-1 day')->format(DATE_ATOM);
+        $after = max($times)->modify('+1 day')->format(DATE_ATOM);
 
         $this->assertGreaterThan(
             0,
@@ -932,15 +935,19 @@ final class ReportAndExportControllerTest extends TestCase
     }
 
     /**
-     * PDF is in the contract's format enum but T109 is blocked on the font asset, so it is refused
-     * with a reason rather than producing a document that cannot render the contract's Persian.
+     * PDF is generated with the embedded subset font (T109): the artifact must be
+     * a real PDF carrying the selected sheet, like the CSV twin below.
      */
-    public function testPdfIsRefusedWithTheRecordedReason(): void
+    public function testPdfExportGeneratesADocument(): void
     {
-        $response = $this->post('/exports', ['resource' => 'sheets', 'fileFormat' => 'pdf'], $this->commandId());
+        $response = $this->post('/exports', ['resource' => 'sheets', 'fileFormat' => 'pdf', 'ids' => [self::FIXTURE_SHEET_ID]], $this->commandId());
 
-        $this->assertEquals(422, $response['status']);
-        $this->assertStringContainsString('T109', $response['message']);
+        $this->assertEquals(200, $response['status'], json_encode($response['data']));
+        $this->assertSame(1, $response['data']['rowCount'], 'exactly the selected sheet must be exported');
+        $this->assertSame('application/pdf', $response['data']['mediaType']);
+
+        $pdf = (string) base64_decode((string) $response['data']['data'], true);
+        $this->assertStringStartsWith('%PDF-', $pdf, 'the artifact must be a PDF document');
     }
 
     // ===== FR-068: the selection is honoured, or refused =====

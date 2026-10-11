@@ -75,6 +75,7 @@ final class AccountChargeAuthorizationTest extends TestCase
             $this->movements,
             new InMemoryCurrencyRepository(),
             $this->roleAssignments,
+            new \OCA\PettyCash\Tests\TestDoubles\InMemoryAdministratorCheck(),
             new IdempotencyService(new InMemoryCommandResultRepository()),
             new InMemoryCurrentUser(self::OWNER),
             new AccountPayloadFormatter(),

@@ -712,7 +712,7 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 				ownerId: 'employee7',
 				ownerDisplayName: 'Employee Seven',
 				currency: 'IRR',
-				status: 'AWAITING_SENIOR_REVIEW',
+				status: 'SENIOR',
 				transactionCount: 4,
 				totals: {
 					current: money(1_000_000),
@@ -2513,7 +2513,7 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 		}
 
 		it('should show read-only indicators on submitted sheets', async () => {
-			const wrapper = await mountSheet('AWAITING_COST_CENTER_REVIEW')
+			const wrapper = await mountSheet('COST_CENTER')
 			expect(wrapper.find('[data-test="read-only-badge"]').exists()).toBe(true)
 		})
 
@@ -2521,7 +2521,7 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 		// sheet view has ever emitted — the transaction detail view is where that hook lives, and the
 		// second slice established `read-only-badge` here.
 		it('should withhold every editing affordance on a submitted sheet', async () => {
-			const wrapper = await mountSheet('AWAITING_COST_CENTER_REVIEW')
+			const wrapper = await mountSheet('COST_CENTER')
 			expect(wrapper.find('[data-test="read-only-badge"]').exists()).toBe(true)
 			expect(wrapper.findAll('[data-test="edit-sheet-btn"]')).toHaveLength(0)
 			expect(wrapper.findAll('[data-test="create-transaction-btn"]')).toHaveLength(0)
@@ -2575,7 +2575,7 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 		})
 
 		it('should hide create transaction button after submission', async () => {
-			const wrapper = await mountSheet('AWAITING_COST_CENTER_REVIEW')
+			const wrapper = await mountSheet('COST_CENTER')
 			expect(wrapper.findAll('[data-test="create-transaction-btn"]')).toHaveLength(0)
 		})
 
@@ -2616,7 +2616,7 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 		// submission is what locks the form, so the two cannot disagree.
 		it('should disable transaction editing for a submitted sheet', async () => {
 			const submitted = transactionSummaryFixture({ id: 'tx-1', status: 'AWAITING_COST_CENTER_REVIEW', stage: 'COST_CENTER' })
-			setSheetDetail(sheetFixture('IRR', { status: 'AWAITING_COST_CENTER_REVIEW', transactions: [submitted] }))
+			setSheetDetail(sheetFixture('IRR', { status: 'COST_CENTER', transactions: [submitted] }))
 			// The form asks the server for the transaction and locks off the status it is given, so the
 			// detail is seeded too. Deriving the lock from the *sheet* instead would be a second source
 			// of truth for the same fact, and the two could disagree.
@@ -2647,7 +2647,7 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 			const wrapper = await mountSheetList([
 				sheetRow({ id: 'sh-1', title: 'March travel', status: 'OPEN' }),
 				sheetRow({ id: 'sh-2', title: 'April supplies', status: 'OPEN' }),
-				sheetRow({ id: 'sh-3', title: 'February review', status: 'AWAITING_COST_CENTER_REVIEW' })
+				sheetRow({ id: 'sh-3', title: 'February review', status: 'COST_CENTER' })
 			])
 
 			const open = wrapper.find('[data-test="open-sheets"]')

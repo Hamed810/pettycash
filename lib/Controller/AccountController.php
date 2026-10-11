@@ -65,8 +65,9 @@ class AccountController extends OCSController
      *
      * `userId` is the one identifier in this controller taken from a request rather than from the
      * trusted session, so the service refuses a `userId` that is neither the caller nor an
-     * administrator (FR-013, FR-014). The answer is 201 with the contract's `Account`; a pair that
-     * already has an active account in that currency is a 409, and an unsupported or inactive
+     * administrator (FR-013, FR-014). The answer is 201 with the contract's `Account` when created,
+     * 200 with the same shape when an administrator re-opened a retired pair (re-opening is not a
+     * second account); a pair that already has an active account in that currency is a 409, and an unsupported or inactive
      * currency a 422 — a refusal that must not be a bare 500, because the caller's next action
      * differs in each case.
      */
@@ -84,9 +85,15 @@ class AccountController extends OCSController
                 return $this->ocsErrorMapper->forbidden('No authenticated user in session');
             }
 
-            $account = $this->accountService->createFor($uid, $userId, $currency);
+            $result = $this->accountService->createFor($uid, $userId, $currency);
 
-            return new DataResponse($account, Http::STATUS_CREATED);
+            // 201 when created, 200 when an administrator re-opened a retired
+            // pair: re-opening is not a second account, and answering 201 for
+            // it would claim something came into existence that did not.
+            return new DataResponse(
+                $result['account'],
+                $result['created'] ? Http::STATUS_CREATED : Http::STATUS_OK
+            );
         } catch (\InvalidArgumentException $e) {
             return $this->ocsErrorMapper->validation(
                 $e->getMessage(),

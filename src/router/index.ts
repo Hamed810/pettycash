@@ -15,12 +15,17 @@ const TransactionReviewDetailView = () => import('../views/reviews/TransactionRe
 const ReturnsQueueView = () => import('../views/reviews/ReturnsQueueView.vue')
 const FinanceReviewView = () => import('../views/reviews/FinanceReviewView.vue')
 const AccountView = () => import('../views/accounts/AccountView.vue')
+const ReportView = () => import('../views/reports/ReportView.vue')
 // US5 administration (T088). Two views rather than one: reference data (currencies, cost centers,
 // expense types, finance assignments) and funding (open, charge, retire/restore) are different
 // journeys with different server surfaces, and one combined form would be a page that does everything
 // badly. Reachable by URL; there is no navigation shell in this app to extend.
 const ConfigurationView = () => import('../views/admin/ConfigurationView.vue')
 const FundingView = () => import('../views/admin/FundingView.vue')
+// US6 history (T098). The formal per-transaction audit timeline plus revisions
+// and evidence state. Reachable by URL and linked from the transaction detail;
+// like the admin views there is no navigation shell to extend.
+const AuditView = () => import('../views/audit/AuditView.vue')
 
 /**
  * A route that renders nothing, for a path this app has no view for.
@@ -55,6 +60,7 @@ export const routes: RouteRecordRaw[] = [
 	{ path: '/sheets/:sheetId/transactions/create', name: 'transaction-create', component: TransactionFormView },
 	{ path: '/transactions/:id', name: 'transaction-detail', component: TransactionDetailView },
 	{ path: '/transactions/:id/edit', name: 'transaction-edit', component: TransactionFormView },
+	{ path: '/audit/:transactionId', name: 'transaction-audit', component: AuditView },
 
 	// Review queues
 	{ path: '/reviews/cost-center', name: 'review-queue-cost-center', component: CostCenterQueueView },
@@ -75,6 +81,10 @@ export const routes: RouteRecordRaw[] = [
 
 	// Purchaser balance and ledger (US3, T065).
 	{ path: '/accounts', name: 'accounts', component: AccountView },
+
+	// Reports (US7, T113). The view existed with no route, so no URL could reach
+	// it; it now resolves like every other primary view.
+	{ path: '/reports', name: 'reports', component: ReportView },
 
 	// Administration (US5, T088). No navigation shell exists to extend, so these are reached by URL;
 	// the server still enforces every role the interface does not show.
