@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
+import { recordResponses } from './record-responses'
 
 /**
  * US4 transaction-correction journeys (T076): manager/senior/finance return
@@ -55,7 +56,8 @@ async function decide(page: Page, action: 'APPROVE' | 'REJECT' | 'RETURN', expla
 	let picked = false
 	for (let i = 0; i < count; i++) {
 		const text = ((await options.nth(i).innerText()) || '').toUpperCase()
-		if (text.includes(action)) {
+		const FA = { APPROVE: ['APPROVE', 'تأیید'], REJECT: ['REJECT', 'رد'], RETURN: ['RETURN', 'بازگشت'] } as const
+		if (FA[action].some((s) => text.includes(s))) {
 			await options.nth(i).click()
 			picked = true
 			break
@@ -182,6 +184,15 @@ async function decideOwn(page: Page, navTestId: string, stage: string, sheetId: 
 	}
 	throw new Error(`UI ${action} on ${txId} never left stage ${fromStage} (deciding as ${explanation})`)
 }
+
+/** FR-073: count every response this spec's browser sees, so the error-rate
+ * figure covers the whole end-to-end suite and not only the specs that
+ * happened to opt in. Attached per page rather than in `global-setup` so it
+ * stays visible at the call site. No-op unless PETTYCASH_REQUEST_LOG is set.
+ */
+test.beforeEach(async ({ page }) => {
+	recordResponses(page)
+})
 
 test.describe('transaction correction journeys', () => {
 	test('a manager return lands in the returns queue with revision history intact', async ({ page }) => {

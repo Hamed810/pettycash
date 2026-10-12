@@ -71,6 +71,11 @@ function createProbe(tag: string, admin = false): { uid: string; password: strin
 	stamp(`occ-setting-start ${uid}`)
 	sh('scripts/dev/occ', ['user:setting', uid, 'firstrunwizard', 'show', version])
 	stamp(`occ-setting-done ${uid}`)
+	// Persian UI for the probe: journey assertions read translated labels
+	// (e.g. sheet-status 'مرکز هزینه'), and a fresh account defaults to the
+	// instance language, under which the catalog keys render raw. Per-user,
+	// like the wizard suppression above; reverted by purgeProbe deleting it.
+	sh('scripts/dev/occ', ['user:setting', uid, 'core', 'lang', 'fa'])
 	return { uid, password }
 }
 
@@ -245,8 +250,8 @@ async function createSheet(page: Page, title: string): Promise<void> {
 	await page.fill('[data-test="sheet-title-input"]', title)
 	await pickSelectOption(page, 'sheet-account-select', /.+/)
 	await page.click('[data-test="sheet-create-submit"]')
-	await expect(page.locator('[data-test="sheet-list-item"]', { hasText: title }).first()).toBeVisible()
-	await page.locator('[data-test="sheet-list-item"]', { hasText: title }).first().click()
+	await expect(page.locator('[data-test="sheet-list-item"]:visible', { hasText: title }).first()).toBeVisible()
+	await page.locator('[data-test="sheet-list-item"]:visible', { hasText: title }).first().click()
 	// Wait for the navigation to commit: callers read `page.url()` off this
 	// helper, and a click that has only been dispatched leaves them holding
 	// the list URL — which made an authorization probe open the wrong page
@@ -300,7 +305,7 @@ async function fillTransaction(page: Page, description: string, amount: string, 
 
 /** Upload evidence on the transaction detail (the create form has no transaction id yet). */
 async function uploadEvidence(page: Page, name: string, mimeType: string): Promise<void> {
-	await page.click('[data-test="view-transaction"]')
+	await page.locator('[data-test="view-transaction"]:visible').first().click()
 	await page.click('[data-test="upload-evidence-btn"]')
 	await page.setInputFiles('[data-test="evidence-upload-input"]', {
 		name,
@@ -325,8 +330,11 @@ test.describe('Audit and evidence journeys', () => {
 	// Multi-identity setup is slow: each test mints probe users through the
 	// container, signs sessions in through the real login form, and drives
 	// full purchaser flows. The default 30s budget expires mid-setup and reads
-	// as a product failure, so this file budgets per test instead.
-	test.describe.configure({ timeout: 180000 })
+	// as a product failure, so this file budgets per test instead. 360s on a
+	// shared lab: container execs and queue-depth-driven page loads both slow
+	// down as lab history accumulates, and a timeout here measures the lab,
+	// not the product.
+	test.describe.configure({ timeout: 360000 })
 	test('immutable history across return and correction', async ({ browser }) => {
 		const purchaser = createProbe('hist')
 		const ccCode = `AECC${Date.now().toString(36).toUpperCase()}`
@@ -335,13 +343,15 @@ test.describe('Audit and evidence journeys', () => {
 		// itself: shared centers would entangle this suite with the contract
 		// fixtures' manager assignments. Created (and later retired) by the
 		// persistent admin over the configuration API.
+		// One admin session for setup and teardown: a second login at the
+		// end of a long journey crashed the browser process here
+		// (Target-closed at newContext), failing an otherwise green test in
+		// cleanup rather than on any product assertion.
 		const admin = await loginAs(browser, adminCreds().user, adminCreds().password)
+		let costCenterCreated = false
 		try {
 			await createCostCenter(admin.page, ccCode, ccName, purchaser.uid)
-		} finally {
-			await admin.close()
-		}
-		try {
+			costCenterCreated = true
 			const session = await loginAs(browser, purchaser.uid, purchaser.password)
 			await ensureOwnAccount(session.page, purchaser.uid)
 			const page = session.page
@@ -357,16 +367,16 @@ test.describe('Audit and evidence journeys', () => {
 					// manager role and scope for this cost center, so it returns its
 					// own transaction without a second account.
 					await page.goto('/apps/pettycash/#/reviews/cost-center')
-					await page.locator('[data-testid^="queue-row-"]', { hasText: ccName }).first().locator('[data-testid="view-details-btn"]').click()
-					await pickSelectOption(page, 'decision-select', /return/i)
+					await page.locator('[data-testid^="queue-row-"]:visible', { hasText: ccName }).first().locator('[data-testid="view-details-btn"]').click()
+					await pickSelectOption(page, 'decision-select', /(return|بازگشت)/i)
 					await page.fill('[data-testid="explanation-input"]', 'Needs a clearer description')
 					await page.click('[data-testid="submit-decision"]')
 
 					// Correct and resubmit from the transaction form.
 					await page.goto('/apps/pettycash/#/sheets')
-					await page.locator('[data-test="sheet-list-item"]', { hasText: title }).first().click()
+					await page.locator('[data-test="sheet-list-item"]:visible', { hasText: title }).first().click()
 					await expect(page.locator('[data-test="sheet-detail-view"]')).toBeVisible()
-					await page.click('[data-test="view-transaction"]')
+					await page.locator('[data-test="view-transaction"]:visible').first().click()
 					// A returned transaction is corrected, not edited: the detail
 					// offers `create-correction-btn`, and the form resubmits the
 					// correction draft (FR-047/FR-048).
@@ -377,16 +387,16 @@ test.describe('Audit and evidence journeys', () => {
 					// does not persist form edits itself. Saving lands back on
 					// the sheet detail (FR-088), so return through the row.
 					await page.click('[data-test="transaction-save-draft"]')
-					await page.click('[data-test="view-transaction"]')
+					await page.locator('[data-test="view-transaction"]:visible').first().click()
 					await page.click('[data-test="create-correction-btn"]')
 					await page.click('[data-test="resubmit-correction-btn"]')
 
 					// History assertions: two immutable revisions, the RETURN
 					// decision with its explanation and actor preserved.
-					await page.click('[data-test="view-transaction"]')
+					await page.locator('[data-test="view-transaction"]:visible').first().click()
 					await expect(page.locator('[data-test="revision-tab"]')).toHaveCount(2)
 					const decisions = page.locator('[data-test="decision-item"]')
-					await expect(decisions.filter({ hasText: 'RETURN' })).toHaveCount(1)
+					await expect(decisions.filter({ hasText: /(RETURN|بازگشت)/ })).toHaveCount(1)
 					await expect(decisions.filter({ hasText: 'Needs a clearer description' })).toHaveCount(1)
 					await expect(decisions.filter({ hasText: purchaser.uid })).toHaveCount(1)
 
@@ -394,14 +404,34 @@ test.describe('Audit and evidence journeys', () => {
 					await page.click('[data-test="view-audit-btn"]')
 					await expect(page.locator('[data-test="audit-event"]', { hasText: 'SUBMITTED' }).first()).toBeVisible()
 				} finally {
-					await session.close()
+					await session.close().catch(() => {
+					// Best-effort: the browser may already be gone after a long journey.
+				})
 				}
 		} finally {
-			const adminClose = await loginAs(browser, adminCreds().user, adminCreds().password)
+			// Best-effort teardown with a cap: deactivation is dropdown
+			// hygiene for later runs (unique names keep selection exact
+			// regardless), while probe-purge below must always run. A hung
+			// deactivate on a loaded lab must not fail an otherwise green
+			// journey, so it races a 60s clock and any failure is logged,
+			// never thrown.
 			try {
-				await deactivateCostCenter(adminClose.page, ccCode)
-			} finally {
-				await adminClose.close()
+				if (costCenterCreated) {
+					const timeout = new Promise<never>((_, reject) => {
+						setTimeout(() => reject(new Error('cost-center deactivation timed out after 60s')), 60000)
+					})
+					await Promise.race([deactivateCostCenter(admin.page, ccCode), timeout])
+				}
+			} catch (e) {
+				// eslint-disable-next-line no-console
+				console.log(`[T099 teardown] cost-center ${ccCode} not retired: ${(e as Error).message}`)
+			}
+			try {
+				await admin.close().catch(() => {
+					// Best-effort: see session.close above.
+				})
+			} catch {
+				// The browser may already be gone; user purge below is node-side.
 			}
 			purgeProbe(purchaser.uid)
 		}
@@ -424,7 +454,7 @@ test.describe('Audit and evidence journeys', () => {
 				// No removal control exists post-submission by design (FR-058 is
 				// pre-submission only), so deactivation goes through the endpoint
 				// the control would call, as this signed-in purchaser.
-				await page.click('[data-test="view-transaction"]')
+				await page.locator('[data-test="view-transaction"]:visible').first().click()
 				const evidenceId: string = await page.evaluate(async () => {
 					const headers = { 'OCS-APIRequest': 'true', 'Accept': 'application/json' }
 					const txId = location.hash.match(/\/transactions\/([^/#?]+)/)?.[1] ?? ''
@@ -445,7 +475,9 @@ test.describe('Audit and evidence journeys', () => {
 				await expect(page.locator('[data-test="evidence-list-item"]', { hasText: 'receipt.pdf' })).toBeVisible()
 				await expect(page.locator('[data-test="deactivation-info"]').first()).toBeVisible()
 			} finally {
-				await session.close()
+				await session.close().catch(() => {
+					// Best-effort: the browser may already be gone after a long journey.
+				})
 			}
 		} finally {
 			purgeProbe(purchaser.uid)
@@ -461,7 +493,9 @@ test.describe('Audit and evidence journeys', () => {
 		try {
 			await createCostCenter(admin.page, ccCode, ccName, manager.uid)
 		} finally {
-			await admin.close()
+			await admin.close().catch(() => {
+					// Best-effort: see session.close above.
+				})
 		}
 		try {
 			const purchaserSession = await loginAs(browser, purchaser.uid, purchaser.password)
@@ -483,7 +517,7 @@ test.describe('Audit and evidence journeys', () => {
 				const mgrSession = await loginAs(browser, manager.uid, manager.password)
 				try {
 					await mgrSession.page.goto('/apps/pettycash/#/reviews/cost-center')
-					await mgrSession.page.locator('[data-testid^="queue-row-"]', { hasText: ccName }).first().locator('[data-testid="view-details-btn"]').click()
+					await mgrSession.page.locator('[data-testid^="queue-row-"]:visible', { hasText: ccName }).first().locator('[data-testid="view-details-btn"]').click()
 					await expect(mgrSession.page.locator('[data-testid="transaction-detail"]')).toBeVisible()
 					// The review surface renders the disabled purchaser's
 					// transaction history rather than blanking it; the
@@ -507,7 +541,9 @@ test.describe('Audit and evidence journeys', () => {
 			try {
 				await deactivateCostCenter(adminClose.page, ccCode)
 			} finally {
-				await adminClose.close()
+				await adminClose.close().catch(() => {
+					// Best-effort: see session.close above.
+				})
 			}
 			purgeProbe(manager.uid)
 			purgeProbe(purchaser.uid)
@@ -558,7 +594,7 @@ test.describe('Audit and evidence journeys', () => {
 				await backToSheet(page)
 
 				// Link administration lives on the audit view (admin-only controls).
-				await page.click('[data-test="view-transaction"]')
+				await page.locator('[data-test="view-transaction"]:visible').first().click()
 				await page.click('[data-test="view-audit-btn"]')
 				await page.click('[data-test="create-link-btn"]')
 				const linkUrl = await page.locator('[data-test="public-link-url"]').textContent()

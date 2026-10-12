@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test'
+import { recordResponses } from './record-responses'
 
 /**
  * US8 browser matrix (T122): desktop and mobile-sized viewports, dark and
@@ -15,6 +16,15 @@ import { test, expect } from '@playwright/test'
  * 4xx/409/422 and environment-induced responses are excluded from any rate;
  * this spec provokes none and asserts none.
  */
+
+/** FR-073: count every response this spec's browser sees, so the error-rate
+ * figure covers the whole end-to-end suite and not only the specs that
+ * happened to opt in. Attached per page rather than in `global-setup` so it
+ * stays visible at the call site. No-op unless PETTYCASH_REQUEST_LOG is set.
+ */
+test.beforeEach(async ({ page }) => {
+	recordResponses(page)
+})
 
 test.describe('browser matrix', () => {
 	test('the sheet list shows no horizontal scroll at a 390px viewport', async ({ page }) => {

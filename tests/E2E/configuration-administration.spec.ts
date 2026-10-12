@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
+import { recordResponses } from './record-responses'
 
 /**
  * US5 configuration-administration journeys (T089): configuration,
@@ -27,10 +28,20 @@ async function ocsAs(page: Page, method: string, path: string, body?: unknown, c
 	}, { method, path, body, commandId })
 }
 
+/** FR-073: count every response this spec's browser sees, so the error-rate
+ * figure covers the whole end-to-end suite and not only the specs that
+ * happened to opt in. Attached per page rather than in `global-setup` so it
+ * stays visible at the call site. No-op unless PETTYCASH_REQUEST_LOG is set.
+ */
+test.beforeEach(async ({ page }) => {
+	recordResponses(page)
+})
+
 test.describe('configuration administration journeys', () => {
 	test('an administrator opens the configuration view and sees the currency catalog', async ({ browser }) => {
 		const adminCtx = await browser.newContext({ storageState: 'test-results/.auth/e2e-admin-storage-state.json' })
 		const admin = await adminCtx.newPage()
+		recordResponses(admin)
 		try {
 			await admin.goto('/apps/pettycash/#/admin/configuration')
 			await admin.waitForSelector('[data-test="configuration-view"]')
@@ -55,6 +66,7 @@ test.describe('configuration administration journeys', () => {
 		// NOT the boundary here -- FR-013 puts funding with administrators.
 		const adminCtx = await browser.newContext({ storageState: 'test-results/.auth/e2e-admin-storage-state.json' })
 		const admin = await adminCtx.newPage()
+		recordResponses(admin)
 		try {
 			await admin.goto('/apps/pettycash/')
 			expect(await admin.locator('[data-test="nav-review-finance"]').count()).toBe(0)
@@ -74,6 +86,7 @@ test.describe('configuration administration journeys', () => {
 	test('the default currency is rial (IRR)', async ({ browser }) => {
 		const adminCtx = await browser.newContext({ storageState: 'test-results/.auth/e2e-admin-storage-state.json' })
 		const admin = await adminCtx.newPage()
+		recordResponses(admin)
 		try {
 			await admin.goto('/apps/pettycash/')
 			const res: { status: number, json: { ocs?: { data?: { items?: Array<{ code?: string }> } | Array<{ code?: string }> } } | null } = await ocsAs(admin, 'GET', '/configuration/currencies')
@@ -98,6 +111,7 @@ test.describe('configuration administration journeys', () => {
 		// another user's ledger -- which is itself a boundary).
 		const adminCtx = await browser.newContext({ storageState: 'test-results/.auth/e2e-admin-storage-state.json' })
 		const admin = await adminCtx.newPage()
+		recordResponses(admin)
 		try {
 			await admin.goto('/apps/pettycash/#/admin/funding')
 			await admin.waitForSelector('[data-test="funding-view"]')
@@ -143,6 +157,7 @@ test.describe('configuration administration journeys', () => {
 	test('deactivation retains the record for history (no destructive removal)', async ({ browser }) => {
 		const adminCtx = await browser.newContext({ storageState: 'test-results/.auth/e2e-admin-storage-state.json' })
 		const admin = await adminCtx.newPage()
+		recordResponses(admin)
 		try {
 			await admin.goto('/apps/pettycash/')
 			const before: { status: number, json: { ocs?: { data?: { items?: Array<{ code?: string, active?: boolean }> } } } | null } = await ocsAs(admin, 'GET', '/configuration/cost-centers')
