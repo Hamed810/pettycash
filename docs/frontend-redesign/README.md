@@ -17,7 +17,7 @@
 
 **نحوه افزودن به مخزن (از ریشه Repository):** محتویات این پوشه را به مسیر `docs/frontend-redesign/` منتقل کن، سپس وضعیت Git را بررسی و فقط فایل‌های مستندات را commit کن. این بسته هیچ کد اپلیکیشن را تغییر نمی‌دهد.
 
-**یادآوری مهم:** F0 در گفتگو تصویب شده، اما تا زمان commit این اسناد، ادعا نکن که در Git ثبت شده‌اند. F1 هنوز شروع نشده و هیچ مأموریت پیاده‌سازی مجاز نشده است.
+**یادآوری مهم:** این بسته با PR شماره ۷ در Git ثبت شد (main در 18921c7). F1 آغاز شده و F1.1 تکمیل شده است؛ F1.2 (فقط‌خواندنی) گام بعدی است و هیچ مأموریت پیاده‌سازی مجاز نشده است.
 
 ## English
 
@@ -34,4 +34,4 @@ This folder preserves decisions across long chats, model swaps, and changing too
 
 **Add to repository:** copy this directory into `docs/frontend-redesign/` at the Pettycash repository root, review Git status, and commit only the intended documentation files. This kit makes no application-code changes.
 
-**State caveat:** F0 was approved in conversation, not yet committed. F1 has not started, and implementation is not authorized.
+**State note:** This package is now recorded in Git (PR #7, main at 18921c7). F1 has started and F1.1 is complete; F1.2 (read-only) is next, and implementation is not authorized.
