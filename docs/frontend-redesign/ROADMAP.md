@@ -2,7 +2,7 @@
 
 **Version / نسخه:** 1.0 · **Date / تاریخ:** 2026-10-11  
 **Authoritative scope / مرجع دامنه:** [`CHARTER.md`](CHARTER.md)  
-**Overall state / وضعیت کلی:** F0 approved in conversation; F1 next, not yet executed. / فاز F0 در گفتگو تصویب شده؛ F1 مرحله بعد است و هنوز اجرا نشده است.
+**Overall state / وضعیت کلی:** F0 committed to Git (PR #7); F1 started — F1.1 complete, F1.2 next. / فاز F0 در Git ثبت شد (PR شماره ۷)؛ F1 آغاز شده — F1.1 تکمیل شد، F1.2 مرحله بعد است.
 
 > **Gate rule / قانون عبور:** Deliverables and product-owner acceptance are required before moving to the next phase. / برای ورود به هر فاز، تحویل خروجی و تأیید مالک محصول ضروری است.
 
@@ -12,8 +12,8 @@
 
 | فاز | وضعیت | کار اصلی | تحویل‌دادنی‌ها | شرط خروج |
 |---|---|---|---|---|
-| **F0 — منشور** | ✅ تصویب در گفتگو؛ ثبت Git معلق | توافق بر اصول، Scope، بودجه، نقش‌ها | همین چهار سند حاکمیتی | تأیید توافق‌ها؛ ثبت فایل‌ها در مخزن |
-| **F1 — شناخت و Audit** | ⬜ شروع نشده | تحلیل Pettycash و Budget، مرور کارکرد و تصاویر | Audit مبتنی بر شواهد، نقشه صفحات/نقش‌ها/گردش‌کارها، تحلیل مرجع Budget، فهرست شکاف‌ها و اولویت‌ها | تأیید گزارش و محدوده F2 |
+| **F0 — منشور** | ✅ تصویب و ثبت در Git (PR شماره ۷) | توافق بر اصول، Scope، بودجه، نقش‌ها | همین چهار سند حاکمیتی | تأیید توافق‌ها؛ ثبت فایل‌ها در مخزن |
+| **F1 — شناخت و Audit** | ▶ شروع شده — F1.1 تکمیل شد؛ F1.2 مرحله بعد | تحلیل Pettycash و Budget، مرور کارکرد و تصاویر | Audit مبتنی بر شواهد، نقشه صفحات/نقش‌ها/گردش‌کارها، تحلیل مرجع Budget، فهرست شکاف‌ها و اولویت‌ها | تأیید گزارش و محدوده F2 |
 | **F2 — تثبیت زیرساخت UI** | ⬜ شروع نشده | اصلاح باگ‌های بنیادیِ *تأییدشده* مطابق Scope مصوب | اصلاحات محدود، شواهد علت ریشه‌ای، تست‌های مرتبط | تأیید سلامت مبانی نمایش و نبود رگرسیون |
 | **F3 — معماری UX** | ⬜ شروع نشده | طراحی مسیرهای کاربر، سلسله‌مراتب، ناوبری و وضعیت‌های UI | User flows، ساختار اطلاعات، page specs و قرارداد رفتار | تأیید UX توسط مالک محصول |
 | **F4 — طراحی بصری و Prototype** | ⬜ شروع نشده | بازآفرینی نزدیک زبان بصری Budget برای نیازهای Pettycash | الگوی طراحی، نمونه قابل مشاهده، طراحی دو زبان/دو جهت/دو Theme | تأیید نمونه‌ها پیش از اجرا |
@@ -22,7 +22,7 @@
 
 ### F1 — گام‌های پیشنهادی بدون تغییر کد
 
-1. **F1.1 — Baseline:** ثبت SHA/branch مخزن و تفاوت‌های نسخه محلی با GitHub؛ مرور `AGENTS.md`، Spec Kit و تنظیمات واقعی؛ ثبت وضعیت تست‌ها. هیچ تغییری در این گام مجاز نیست.
+1. **F1.1 — Baseline:** ✅ تکمیل شد (baseline: main در 18921c7) — ثبت SHA/branch مخزن و تفاوت‌های نسخه محلی با GitHub؛ مرور `AGENTS.md`، Spec Kit و تنظیمات واقعی؛ ثبت وضعیت تست‌ها. هیچ تغییری در این گام مجاز نبود.
 2. **F1.2 — Pettycash inventory:** تهیه نقشه صفحات، نقش‌ها، مسیرها، فرم‌ها، کامپوننت‌ها، API interactionها و نقاط بحرانی workflow.
 3. **F1.3 — UI foundation audit:** بررسی Localization، Theme/CSS variables، کاربرد کامپوننت‌های Nextcloud، Layout/Navigation، RTL/LTR و حالت‌های Loading/Error/Empty. برای هر ایراد، محل کد، شدت، شواهد و روش بازآزمایی ثبت شود.
 4. **F1.4 — Visual/behavioral audit:** بررسی اسکرین‌شات‌ها و در صورت فراهم‌بودن محیط آزمایشی، مرور عملی دسکتاپ/موبایل، Light/Dark و فارسی/انگلیسی. نمایش کلید ترجمه، کادرهای هشدار و کنتراست ضعیف **مشاهدات اولیه** هستند، نه علت‌های اثبات‌شده.
@@ -52,8 +52,8 @@
 
 | Phase | Status | Main work | Deliverables | Exit gate |
 |---|---|---|---|---|
-| **F0 — Charter** | ✅ Approved in chat; Git commit pending | Agree on principles, scope, budget, roles | Four governance documents | Approval and repository record |
-| **F1 — Discovery & audit** | ⬜ Not started | Study Pettycash and Budget, browser evidence | Evidence-based audit, page/role/flow inventory, Budget study, prioritized gaps | Product-owner acceptance of audit and F2 scope |
+| **F0 — Charter** | ✅ Approved and committed to Git (PR #7) | Agree on principles, scope, budget, roles | Four governance documents | Approval and repository record |
+| **F1 — Discovery & audit** | ▶ Started — F1.1 complete; F1.2 next | Study Pettycash and Budget, browser evidence | Evidence-based audit, page/role/flow inventory, Budget study, prioritized gaps | Product-owner acceptance of audit and F2 scope |
 | **F2 — UI foundation stabilization** | ⬜ Not started | Fix confirmed foundational defects in approved scope | Bounded fixes, root-cause evidence, relevant tests | Foundation checks pass, no unaccepted regressions |
 | **F3 — UX architecture** | ⬜ Not started | User journeys, information hierarchy, navigation, UI states | User flows, information architecture, page/behavior specifications | UX approval |
 | **F4 — Visual design & prototypes** | ⬜ Not started | Closely adapt Budget's visual language to Pettycash | Design patterns, reviewable prototypes, bilingual/bidirectional/two-theme variants | Explicit visual approval before coding |
@@ -62,7 +62,7 @@
 
 ### F1 — proposed read-only work packages
 
-1. **F1.1 — Establish a baseline:** record branch/commit and local-vs-GitHub differences; inspect `AGENTS.md`, Spec Kit, actual configuration, and current test evidence. No modifications.
+1. **F1.1 — Establish a baseline:** ✅ Complete (baseline: main at 18921c7) — recorded branch/commit and local-vs-GitHub differences; inspected `AGENTS.md`, Spec Kit, actual configuration, and current test evidence. No modifications were made.
 2. **F1.2 — Inventory Pettycash:** map views, roles, routes, forms, components, API interactions, and critical user journeys.
 3. **F1.3 — Audit UI foundations:** localization, theme/CSS variables, Nextcloud component semantics, layout/navigation, RTL/LTR, and loading/error/empty states. Each defect needs severity, code location, evidence, and verification method.
 4. **F1.4 — Audit actual behavior:** study screenshots and, if a test environment is available, inspect desktop/mobile, light/dark and Persian/English behavior. Literal translation keys, warning-style containers, and low contrast are **initial observations**, not verified root causes.
