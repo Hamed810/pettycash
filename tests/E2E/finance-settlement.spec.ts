@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
+import { recordResponses } from './record-responses'
 
 /**
  * US3 finance-settlement journeys (T066): shared queue, restriction,
@@ -59,7 +60,8 @@ async function decideUI(page: Page, action: 'APPROVE' | 'REJECT'): Promise<numbe
 	const count = await options.count()
 	for (let i = 0; i < count; i++) {
 		const text = ((await options.nth(i).innerText()) || '').toUpperCase()
-		if (text.includes(action)) {
+		const FA = { APPROVE: ['APPROVE', 'تأیید'], REJECT: ['REJECT', 'رد'], RETURN: ['RETURN', 'بازگشت'] } as const
+		if (FA[action].some((s) => text.includes(s))) {
 			await options.nth(i).click()
 			break
 		}
@@ -167,6 +169,15 @@ async function openQueueRow(page: Page, txId: string): Promise<void> {
 	throw new Error(`queue row for transaction ${txId} not found on any page`)
 }
 
+/** FR-073: count every response this spec's browser sees, so the error-rate
+ * figure covers the whole end-to-end suite and not only the specs that
+ * happened to opt in. Attached per page rather than in `global-setup` so it
+ * stays visible at the call site. No-op unless PETTYCASH_REQUEST_LOG is set.
+ */
+test.beforeEach(async ({ page }) => {
+	recordResponses(page)
+})
+
 test.describe('finance settlement journeys', () => {
 	test('the finance queue is shared and settles an approved transaction', async ({ page }) => {
 		const title = `T066 Settle ${Date.now()}`
@@ -212,6 +223,7 @@ test.describe('finance settlement journeys', () => {
 		// no rows); the enforced boundary is the DECISION, which is refused.
 		const adminCtx = await browser.newContext({ storageState: 'test-results/.auth/e2e-admin-storage-state.json' })
 		const admin = await adminCtx.newPage()
+		recordResponses(admin)
 		try {
 			await admin.goto('/apps/pettycash/')
 			expect(await admin.locator('[data-test="nav-review-finance"]').count()).toBe(0)

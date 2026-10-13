@@ -80,13 +80,13 @@ async function createSheet(page: Page, title: string): Promise<string> {
 	// store array: `[data-test="open-sheets"]` holds the `OPEN` rows as their own actionable region
 	// (FR-018) and `[data-test="sheets"]` holds every row, so a newly created open sheet legitimately
 	// appears in both and a title-scoped locator is a strict-mode violation.
-	await expect(page.locator('[data-test="sheet-list-item"]', { hasText: title }).first()).toBeVisible()
+	await expect(page.locator('[data-test="sheet-list-item"]:visible', { hasText: title }).first()).toBeVisible()
 	return title
 }
 
 /** Opens the sheet this test just created, addressed by its title rather than by list position. */
 async function openSheet(page: Page, title: string): Promise<void> {
-	await page.locator('[data-test="sheet-list-item"]', { hasText: title }).first().click()
+	await page.locator('[data-test="sheet-list-item"]:visible', { hasText: title }).first().click()
 }
 
 /**
@@ -104,7 +104,7 @@ async function openSheet(page: Page, title: string): Promise<void> {
  * and uploads there — the product's own order, not a workaround.
  */
 async function uploadEvidenceFile(page: Page): Promise<void> {
-	await page.click('[data-test="view-transaction"]')
+	await page.locator('[data-test="view-transaction"]:visible').first().click()
 	await page.click('[data-test="upload-evidence-btn"]')
 	await page.setInputFiles('[data-test="evidence-upload-input"]', {
 		name: 'receipt.pdf',
@@ -158,7 +158,8 @@ async function backToSheet(page: Page): Promise<void> {
  * the product claim, and the label spelling stays T119's concern.
  */
 async function expectDraftTransaction(page: Page, expectedCurrency: string): Promise<void> {
-	const row = page.locator('[data-test="sheet-transaction-row"]').first()
+	// Either layout: the desktop table row or the narrow-viewport card.
+	const row = page.locator('[data-test="sheet-transaction-row"]:visible, [data-test^="sheet-transaction-card-"]:visible').first()
 	await expect(row).toBeVisible()
 	await expect(row).toContainText(expectedCurrency)
 	await expect(row.locator('[data-test="transaction-status-badge"]')).toBeVisible()
@@ -222,7 +223,7 @@ test.describe('Purchaser Capture and Submission', () => {
 		const title = await createSheet(page, 'Test Expense Sheet')
 
 		// Verify the sheet appears in the list under its own title.
-		await expect(page.locator('[data-test="sheet-list-item"]', { hasText: title }).first()).toContainText(title)
+		await expect(page.locator('[data-test="sheet-list-item"]:visible', { hasText: title }).first()).toContainText(title)
 	})
 
 	test('should add a draft transaction with minimum data', async ({ page }) => {
@@ -297,7 +298,7 @@ test.describe('Purchaser Capture and Submission', () => {
 		await page.fill('[data-test="sheet-title-input"]', 'Complete Sheet')
 		await page.click('[data-test="sheet-create-submit"]')
 		
-		await page.click('[data-test="sheet-list-item"]:first-child')
+		await page.locator('[data-test="sheet-list-item"]:visible').first().click()
 		await page.click('[data-test="create-transaction-btn"]')
 		
 		await page.fill('[data-test="expense-date-input"]', '2026-09-20')
@@ -389,7 +390,7 @@ test.describe('Audit Trail Verification', () => {
 		// sheet-level audit view; the transaction audit timeline itself is T098's
 		// open scope). What this journey observes instead is the transaction's own
 		// history surface: the submitted revision must be present and selected.
-		await page.click('[data-test="view-transaction"]')
+		await page.locator('[data-test="view-transaction"]:visible').first().click()
 		await expect(page.locator('[data-test="revision-history"]')).toBeVisible()
 		await expect(page.locator('[data-test="revision-tab"]').first()).toBeVisible()
 	})

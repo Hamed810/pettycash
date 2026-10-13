@@ -7,6 +7,7 @@ namespace OCA\PettyCash\Infrastructure\Persistence\Account;
 use DateTimeImmutable;
 use DateTimeZone;
 use InvalidArgumentException;
+use OCA\PettyCash\Application\DataIntegrity\UnreadableRecordData;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Application\Port\UserDirectory;
 use OCA\PettyCash\Domain\Account\AccountMovement;
@@ -274,6 +275,24 @@ final class DbAccountMovementRepository implements AccountMovementRepository
     private function mapRow(array $row): AccountMovement
     {
         $currency = CurrencyCode::fromString((string) $row['currency_code']);
+
+        // A consumption naming a revision that resolves to nothing is a data
+        // fault, not a validation failure and not something to skip: the
+        // money moved, the reference did not survive, and FR-083 answers
+        // that shape with 422 naming the fault rather than a 500 or a
+        // silently partial ledger. Charges carry no such reference.
+        if (
+            MovementType::from($row['movement_type']) === MovementType::Consumption
+            && $row['source_revision_id'] !== null
+            && !isset($row['source_revision_public_id'])
+        ) {
+            throw new UnreadableRecordData(sprintf(
+                'Consumption movement %s references revision id %d, which matches no row in '
+                . 'pettycash_transaction_revisions.',
+                $row['public_id'],
+                (int) $row['source_revision_id']
+            ));
+        }
 
         return new AccountMovement(
             $row['public_id'],

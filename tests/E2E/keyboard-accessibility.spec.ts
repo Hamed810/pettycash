@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { recordResponses } from './record-responses'
 
 /**
  * FR-071 (clarified 2026-10-07) and SC-009: the keyboard-operability floor, measured as the browser
@@ -105,7 +106,16 @@ async function tabUntil(page: Page, predicate: (info: { tag: string; text: strin
  * three runs cannot drift apart — which is what a hand-copied third variant always does eventually.
  */
 function journeyUnderTheme(themeName: string): void {
-	test.describe(themeName, () => {
+	/** FR-073: count every response this spec's browser sees, so the error-rate
+ * figure covers the whole end-to-end suite and not only the specs that
+ * happened to opt in. Attached per page rather than in `global-setup` so it
+ * stays visible at the call site. No-op unless PETTYCASH_REQUEST_LOG is set.
+ */
+test.beforeEach(async ({ page }) => {
+	recordResponses(page)
+})
+
+test.describe(themeName, () => {
 		test('every element reached by keyboard shows a visible focus indicator', async ({ page }) => {
 			await page.goto('/apps/pettycash/#/sheets')
 			await page.waitForLoadState('networkidle')

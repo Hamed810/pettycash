@@ -8,6 +8,7 @@ use OCA\PettyCash\Infrastructure\Http\CommandId;
 use OCA\PettyCash\Application\Account\AccountAlreadyExists;
 use OCA\PettyCash\Application\Account\AccountService;
 use OCA\PettyCash\Application\Account\UnknownAccount;
+use OCA\PettyCash\Application\DataIntegrity\UnreadableRecordData;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Infrastructure\Http\OcsErrorMapper;
 use OCP\AppFramework\Http;
@@ -214,6 +215,12 @@ class AccountController extends OCSController
                 $commandId,
                 ['amountMinor' => [$e->getMessage()]]
             );
+        } catch (UnreadableRecordData $e) {
+            // A ledger row that cannot be mapped (e.g. a consumption whose
+            // source revision no longer exists) is a data fault, not an
+            // authorisation refusal: without this arm the `LogicException`
+            // arm below would answer it 403 forbidden (T029's defect class).
+            return $this->ocsErrorMapper->map($e, $commandId, ['publicId' => $accountId]);
         } catch (\LogicException $e) {
             return $this->ocsErrorMapper->forbidden($e->getMessage(), $commandId);
         } catch (\Throwable $e) {
@@ -313,6 +320,14 @@ class AccountController extends OCSController
                 $e->getMessage(),
                 $this->request->getHeader('X-PettyCash-Command-ID'),
                 ['page' => [$e->getMessage()]]
+            );
+        } catch (UnreadableRecordData $e) {
+            // Same data-fault guard as above: a ledger that cannot be mapped
+            // must not read as a missing account.
+            return $this->ocsErrorMapper->map(
+                $e,
+                $this->request->getHeader('X-PettyCash-Command-ID'),
+                ['publicId' => $accountId]
             );
         } catch (\LogicException $e) {
             return $this->ocsErrorMapper->notFound(

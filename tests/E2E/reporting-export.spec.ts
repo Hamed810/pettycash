@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
+import { recordResponses } from './record-responses'
 
 /**
  * US7 reporting/export journeys (T114): dashboard, filtering, totals,
@@ -24,6 +25,15 @@ async function ocs(page: Page, method: string, path: string, body?: unknown) {
 		return { status: response.status, json, ms: Date.now() - started }
 	}, { method, path, body })
 }
+
+/** FR-073: count every response this spec's browser sees, so the error-rate
+ * figure covers the whole end-to-end suite and not only the specs that
+ * happened to opt in. Attached per page rather than in `global-setup` so it
+ * stays visible at the call site. No-op unless PETTYCASH_REQUEST_LOG is set.
+ */
+test.beforeEach(async ({ page }) => {
+	recordResponses(page)
+})
 
 test.describe('reporting and export journeys', () => {
 	// Every API-driven journey navigates first: `fetch` with a relative URL

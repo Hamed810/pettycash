@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
+import { recordResponses } from './record-responses'
 
 /**
  * US2 management-review journeys (T054): scope, self-review, disagreement,
@@ -30,7 +31,7 @@ async function createSheet(page: Page, title: string): Promise<void> {
 	await page.click('[data-test="sheet-account-select"]')
 	await pickFirstOption(page)
 	await page.click('[data-test="sheet-create-submit"]')
-	await expect(page.locator('[data-test="sheet-list-item"]', { hasText: title }).first()).toBeVisible()
+	await expect(page.locator('[data-test="sheet-list-item"]:visible', { hasText: title }).first()).toBeVisible()
 }
 
 /** Adds one E2E-CC-1 transaction to the sheet opened at its detail view. */
@@ -52,7 +53,7 @@ async function submitSheet(page: Page): Promise<void> {
 
 async function openSheetByTitle(page: Page, title: string): Promise<void> {
 	await page.goto('/apps/pettycash/#/sheets')
-	await page.locator('[data-test="sheet-list-item"]', { hasText: title }).first().click()
+	await page.locator('[data-test="sheet-list-item"]:visible', { hasText: title }).first().click()
 	await page.waitForSelector('[data-test="sheet-detail-view"]')
 }
 
@@ -63,8 +64,10 @@ async function decide(page: Page, action: 'APPROVE' | 'REJECT' | 'RETURN', expla
 	const count = await options.count()
 	let picked = false
 	for (let i = 0; i < count; i++) {
+		// Language-independent like the T066/T076 helpers: decision options render through the l10n catalog (APPROVE/تأیید, REJECT/رد, RETURN/بازگشت), and the E2E session runs in Persian.
 		const text = ((await options.nth(i).innerText()) || '').toUpperCase()
-		if (text.includes(action)) {
+		const FA = { APPROVE: ['APPROVE', 'تأیید'], REJECT: ['REJECT', 'رد'], RETURN: ['RETURN', 'بازگشت'] } as const
+		if (FA[action].some((s) => text.includes(s))) {
 			await options.nth(i).click()
 			picked = true
 			break
@@ -81,6 +84,15 @@ async function openFirstQueueRow(page: Page): Promise<void> {
 	await page.locator('[data-testid="view-details-btn"]:visible').first().click()
 	await page.waitForSelector('[data-testid="transaction-detail"]')
 }
+
+/** FR-073: count every response this spec's browser sees, so the error-rate
+ * figure covers the whole end-to-end suite and not only the specs that
+ * happened to opt in. Attached per page rather than in `global-setup` so it
+ * stays visible at the call site. No-op unless PETTYCASH_REQUEST_LOG is set.
+ */
+test.beforeEach(async ({ page }) => {
+	recordResponses(page)
+})
 
 test.describe('management review journeys', () => {
 	test('a manager sees their own scope queue with the submitted transaction', async ({ page }) => {
