@@ -1,8 +1,9 @@
 # Pettycash Frontend Redesign — Roadmap / نقشه راه بازطراحی فرانت‌اند
 
-**Version / نسخه:** 1.0 · **Date / تاریخ:** 2026-10-11  
+**Version / نسخه:** 1.0 + هم‌راستاسازی ۲۰۲۶-۱۰-۱۹ · **Date / تاریخ:** 2026-10-11 (به‌روزشده ۲۰۲۶-۱۰-۱۹)  
 **Authoritative scope / مرجع دامنه:** [`CHARTER.md`](CHARTER.md)  
-**Overall state / وضعیت کلی:** F0 committed to Git (PR #7); F1 started — F1.1 complete, F1.2 next. / فاز F0 در Git ثبت شد (PR شماره ۷)؛ F1 آغاز شده — F1.1 تکمیل شد، F1.2 مرحله بعد است.
+**Canonical ledger / دفتر وضعیت رسمی:** [`specs/005-purchaser-ui-redesign/tasks.md`](../../specs/005-purchaser-ui-redesign/tasks.md)  
+**Overall state / وضعیت کلی:** F0 ثبت شده؛ F1 با مسیر سریع به بسته ممیزی رسیده (پذیرش مالک در انتظار)؛ Batch A در درخت کاری پیاده شده اما ثبت‌نشده؛ Batch B آغاز نشده. / F0 committed; F1 delivered as the audit package under the fast-track (owner acceptance pending); Batch A implemented but uncommitted; Batch B not started.
 
 > **Gate rule / قانون عبور:** Deliverables and product-owner acceptance are required before moving to the next phase. / برای ورود به هر فاز، تحویل خروجی و تأیید مالک محصول ضروری است.
 
@@ -13,11 +14,11 @@
 | فاز | وضعیت | کار اصلی | تحویل‌دادنی‌ها | شرط خروج |
 |---|---|---|---|---|
 | **F0 — منشور** | ✅ تصویب و ثبت در Git (PR شماره ۷) | توافق بر اصول، Scope، بودجه، نقش‌ها | همین چهار سند حاکمیتی | تأیید توافق‌ها؛ ثبت فایل‌ها در مخزن |
-| **F1 — شناخت و Audit** | ▶ شروع شده — F1.1 تکمیل شد؛ F1.2 مرحله بعد | تحلیل Pettycash و Budget، مرور کارکرد و تصاویر | Audit مبتنی بر شواهد، نقشه صفحات/نقش‌ها/گردش‌کارها، تحلیل مرجع Budget، فهرست شکاف‌ها و اولویت‌ها | تأیید گزارش و محدوده F2 |
-| **F2 — تثبیت زیرساخت UI** | ⬜ شروع نشده | اصلاح باگ‌های بنیادیِ *تأییدشده* مطابق Scope مصوب | اصلاحات محدود، شواهد علت ریشه‌ای، تست‌های مرتبط | تأیید سلامت مبانی نمایش و نبود رگرسیون |
-| **F3 — معماری UX** | ⬜ شروع نشده | طراحی مسیرهای کاربر، سلسله‌مراتب، ناوبری و وضعیت‌های UI | User flows، ساختار اطلاعات، page specs و قرارداد رفتار | تأیید UX توسط مالک محصول |
-| **F4 — طراحی بصری و Prototype** | ⬜ شروع نشده | بازآفرینی نزدیک زبان بصری Budget برای نیازهای Pettycash | الگوی طراحی، نمونه قابل مشاهده، طراحی دو زبان/دو جهت/دو Theme | تأیید نمونه‌ها پیش از اجرا |
-| **F5 — پیاده‌سازی تدریجی** | ⬜ شروع نشده | تغییر در برش‌های کوچک بر اساس طراحی مصوب | کد، گزارش تغییرات، آزمون، تصاویر قبل/بعد | تأیید هر برش طبق Definition of Done |
+| **F1 — شناخت و Audit** | ◐ بسته ممیزی تحویل شد (مسیر سریع ۲۰۲۶-۱۰-۱۵)؛ پذیرش مالک در دروازه F1.7 در انتظار | تحلیل Pettycash و Budget، مرور کارکرد و تصاویر | Audit مبتنی بر شواهد، نقشه صفحات/نقش‌ها/گردش‌کارها، تحلیل مرجع Budget، فهرست شکاف‌ها و اولویت‌ها | تأیید گزارش و محدوده F2 |
+| **F2 — تثبیت زیرساخت UI** | ▶ بخشی اجرا شد — Batch A در درخت کاری (ثبت‌نشده) | اصلاح باگ‌های بنیادیِ *تأییدشده* مطابق Scope مصوب | اصلاحات محدود، شواهد علت ریشه‌ای، تست‌های مرتبط | تأیید سلامت مبانی نمایش و نبود رگرسیون |
+| **F3 — معماری UX** | ◐ بخشی روشن شد — تصمیم‌های D-01/D-11 (کارگاه سه‌تبی و دیالوگ تغییرات ذخیره‌نشده) ثبت شده‌اند؛ خروجی F3 پذیرفته نشده | طراحی مسیرهای کاربر، سلسله‌مراتب، ناوبری و وضعیت‌های UI | User flows، ساختار اطلاعات، page specs و قرارداد رفتار | تأیید UX توسط مالک محصول |
+| **F4 — طراحی بصری و Prototype** | ◐ نمونه‌ها موجودند (سه صفحه مرجع + ۹ تصویر موبایل)؛ تأیید بصری ثبت نشده | بازآفرینی نزدیک زبان بصری Budget برای نیازهای Pettycash | الگوی طراحی، نمونه قابل مشاهده، طراحی دو زبان/دو جهت/دو Theme | تأیید نمونه‌ها پیش از اجرا |
+| **F5 — پیاده‌سازی تدریجی** | ▶ محدود آغاز شد — فقط Batch A؛ بقیه کارت‌ها تأییدنشده و Batch B آغاز نشده | تغییر در برش‌های کوچک بر اساس طراحی مصوب | کد، گزارش تغییرات، آزمون، تصاویر قبل/بعد | تأیید هر برش طبق Definition of Done |
 | **F6 — تأیید نهایی** | ⬜ شروع نشده | سناریوهای کامل، رگرسیون، دسترس‌پذیری، بازبینی و آماده‌سازی انتشار | ماتریس شواهد و گزارش پذیرش نهایی | پذیرش صریح مالک محصول |
 
 ### F1 — گام‌های پیشنهادی بدون تغییر کد
@@ -29,6 +30,8 @@
 5. **F1.5 — Budget reference study:** تحلیل Screenshot، ساختار صفحات، ناوبری، کارت‌ها، فرم‌ها، جدول‌ها، فاصله‌گذاری و رفتار تعاملی Budget در حد منابع قابل دسترس و رایگان. اگر نصب آزمایشی ممکن بود از آن استفاده شود؛ نصب Budget پیش‌نیاز قطعی پروژه نیست.
 6. **F1.6 — Gap matrix:** نگاشت «صفحه/گردش‌کار Pettycash → مشکل → الگوی مناسب Budget → محدودیت Nextcloud → طرح اقدام → روش راستی‌آزمایی». اولویت‌بندی بر اساس شدت، فراوانی، اثر بر کاربر، ریسک و هزینه.
 7. **F1.7 — Gate review:** ارائه یافته‌ها با شواهد، موارد حل‌نشده و Scope دقیق F2؛ **توقف برای تأیید مالک محصول** قبل از تغییر کد.
+
+> **یادداشت ۲۰۲۶-۱۰-۱۹:** بر اساس دستور مالک محصول در الحاقیه تحویل سریع (۲۰۲۶-۱۰-۱۵)، توالی طولانی F1.2 تا F1.6 با گام‌های مسیر سریع («rapid discovery + reference lock» و «task-pack freeze») جایگزین شد و خروجی آن به‌صورت بسته ممیزی زیر `docs/frontend-redesign/review/deepseek/` تحویل شده است. دروازه F1.7 (پذیرش مالک محصول) همچنان باز است.
 
 **حداقل خروجی F1:** `audit/pettycash/FRONTEND-AUDIT.md`، `audit/budget/REFERENCE-ANALYSIS.md`، `audit/GAP-MATRIX.md`، نقشه صفحه/گردش‌کار و مجموعه تصاویر پاک‌سازی‌شده. نام فایل‌های زیر Audit پیشنهاد ساختار هستند و تا شروع F1 فایل واقعی محسوب نمی‌شوند.
 
@@ -53,11 +56,11 @@
 | Phase | Status | Main work | Deliverables | Exit gate |
 |---|---|---|---|---|
 | **F0 — Charter** | ✅ Approved and committed to Git (PR #7) | Agree on principles, scope, budget, roles | Four governance documents | Approval and repository record |
-| **F1 — Discovery & audit** | ▶ Started — F1.1 complete; F1.2 next | Study Pettycash and Budget, browser evidence | Evidence-based audit, page/role/flow inventory, Budget study, prioritized gaps | Product-owner acceptance of audit and F2 scope |
-| **F2 — UI foundation stabilization** | ⬜ Not started | Fix confirmed foundational defects in approved scope | Bounded fixes, root-cause evidence, relevant tests | Foundation checks pass, no unaccepted regressions |
-| **F3 — UX architecture** | ⬜ Not started | User journeys, information hierarchy, navigation, UI states | User flows, information architecture, page/behavior specifications | UX approval |
-| **F4 — Visual design & prototypes** | ⬜ Not started | Closely adapt Budget's visual language to Pettycash | Design patterns, reviewable prototypes, bilingual/bidirectional/two-theme variants | Explicit visual approval before coding |
-| **F5 — Incremental implementation** | ⬜ Not started | Implement approved slices | Code, change reports, tests, before/after screenshots | Definition of Done + slice approval |
+| **F1 — Discovery & audit** | ◐ Audit package delivered (fast-track, 2026-10-15); owner acceptance pending at the F1.7 gate | Study Pettycash and Budget, browser evidence | Evidence-based audit, page/role/flow inventory, Budget study, prioritized gaps | Product-owner acceptance of audit and F2 scope |
+| **F2 — UI foundation stabilization** | ▶ Partially executed — Batch A in the working tree (uncommitted) | Fix confirmed foundational defects in approved scope | Bounded fixes, root-cause evidence, relevant tests | Foundation checks pass, no unaccepted regressions |
+| **F3 — UX architecture** | ◐ Partially resolved — decisions D-01/D-11 (tabbed workspace, unsaved-changes dialog) are recorded; no accepted F3 deliverable | User journeys, information hierarchy, navigation, UI states | User flows, information architecture, page/behavior specifications | UX approval |
+| **F4 — Visual design & prototypes** | ◐ Samples exist (three reference screens + 9 mobile images); no recorded visual approval | Closely adapt Budget's visual language to Pettycash | Design patterns, reviewable prototypes, bilingual/bidirectional/two-theme variants | Explicit visual approval before coding |
+| **F5 — Incremental implementation** | ▶ Started in a bounded way — Batch A only; every other card unapproved and Batch B not started | Implement approved slices | Code, change reports, tests, before/after screenshots | Definition of Done + slice approval |
 | **F6 — Final verification** | ⬜ Not started | End-to-end, regression, accessibility, release readiness | Evidence matrix and acceptance report | Explicit product-owner sign-off |
 
 ### F1 — proposed read-only work packages
@@ -69,6 +72,8 @@
 5. **F1.5 — Study Budget:** analyze available screenshots and navigation, cards, forms, tables, spacing, interaction patterns. A free test installation may help but is **not a mandatory dependency**.
 6. **F1.6 — Build a gap matrix:** map “Pettycash page/flow → issue → relevant Budget pattern → Nextcloud constraint → proposal → verification”; prioritize by severity, frequency, user impact, risk, and effort.
 7. **F1.7 — Review gate:** present evidence, open questions, and the exact F2 fix scope; **stop for product-owner approval** before code changes.
+
+> **2026-10-19 note:** under the product owner's direction in the fast-track delivery addendum (2026-10-15), the long F1.2–F1.6 sequence was replaced by the fast-track steps ("rapid discovery + reference lock" and "task-pack freeze"), and its output has been delivered as the audit package under `docs/frontend-redesign/review/deepseek/`. The F1.7 gate (product-owner acceptance) remains open.
 
 **Minimum F1 outputs:** `audit/pettycash/FRONTEND-AUDIT.md`, `audit/budget/REFERENCE-ANALYSIS.md`, `audit/GAP-MATRIX.md`, page/flow inventory, and sanitized screenshots. These are future proposed paths, not claims that audit artifacts already exist.
 
@@ -83,6 +88,24 @@
 ### Recurring control point
 
 At each gate: (1) deliver evidence, (2) record issues and risks, (3) obtain explicit accept/reject decision, (4) update `STATUS.md`, and (5) record new decisions in `DECISIONS.md`. Never mark Done based on agent self-report alone.
+
+---
+
+## هم‌راستاسازی ۲۰۲۶-۱۰-۱۹ / 2026-10-19 reconciliation
+
+**فارسی — جایگاه واقعی فازها و مرجع وضعیت:**
+
+- جدول بالا **وضعیت** را با شواهد جاری نشان می‌دهد؛ **هیچ دروازه فازی باز نشده و هیچ فازی مصوب اعلام نشده است**.
+- بسته ممیزی (`review/deepseek/**`) و گزارش Batch A (`review/bunny/**`) شواهد محسوب می‌شوند؛ منبع دوم الزامات نیستند.
+- کارت‌های `UI-PUR-001…016` و `BE-CR-001…006` بازطراحی خریدار با شناسه‌های اصلی خود ذیل `specs/005-purchaser-ui-redesign/` ثبت شده‌اند؛ **دفتر وضعیت رسمی** `specs/005-purchaser-ui-redesign/tasks.md` است و دروازه هر کارت در همان‌جا آمده است.
+- هیچ کارت Batch B تأیید یا آغاز نشده و هیچ `BE-CR` تأیید نشده است.
+
+**English — where the phases actually stand, and the status authority:**
+
+- The table above shows the **status** against current evidence; **no phase gate has opened and no phase is declared approved**.
+- The audit package (`review/deepseek/**`) and the Batch A report (`review/bunny/**`) are evidence; they are not a second requirement source.
+- The purchaser redesign cards `UI-PUR-001…016` and `BE-CR-001…006` are registered with their original IDs under `specs/005-purchaser-ui-redesign/`; the **canonical ledger** is `specs/005-purchaser-ui-redesign/tasks.md`, which carries each card's gate.
+- No Batch B card is approved or started, and no `BE-CR` is approved.
 
 ---
 

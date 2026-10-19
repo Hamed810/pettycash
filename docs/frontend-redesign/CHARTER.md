@@ -1,7 +1,7 @@
 # Pettycash Frontend Redesign — Project Charter / منشور پروژه بازطراحی فرانت‌اند Pettycash
 
-**Version / نسخه:** 1.0  
-**Date / تاریخ:** 2026-10-11  
+**Version / نسخه:** 1.0 (+ الحاقیه اجرایی ۷، ۲۰۲۶-۱۰-۱۹ — بدون تغییر اصول)  
+**Date / تاریخ:** 2026-10-11 · **آخرین الحاقیه / last addendum:** 2026-10-19  
 **Approval / تصویب:** Approved by the product owner in conversation; repository commit pending. / مورد تأیید مالک محصول در گفتگو؛ ثبت در مخزن هنوز انجام نشده است.  
 **Scope / دامنه:** Pettycash frontend within Nextcloud / فرانت‌اند Pettycash در محیط Nextcloud
 
@@ -65,6 +65,18 @@ Pettycash باید به یک نرم‌افزار مالی حرفه‌ای، خو
 
 برای اعلام اتمام یک برش: (۱) مسئله و Scope ثبت شده، (۲) طراحی/مشخصات مصوب موجود است، (۳) تغییرات فقط در محدوده مجاز بوده‌اند، (۴) آزمون‌های مناسب اجرا و نتایج ثبت شده‌اند، (۵) حالت‌های Dark/Light، فارسی/انگلیسی، RTL/LTR، Responsive و Loading/Error/Empty متناسب با آن بخش بررسی شده‌اند، (۶) شواهد Screenshot یا تست مرورگر موجود است، (۷) هیچ رگرسیون شناخته‌شده حل‌نشده بدون پذیرش رسمی باقی نمانده و (۸) `STATUS.md` و در صورت لزوم `DECISIONS.md` به‌روز شده‌اند.
 
+### ۷. الحاقیه اجرایی (۲۰۲۶-۱۰-۱۹) — ثبت بازطراحی تحت Spec Kit
+
+این بند **اصل جدیدی اضافه نمی‌کند و هیچ‌یک از اصول ۱ تا ۱۲ یا دروازه‌های فاز را تغییر نمی‌دهد**؛ فقط تکلیف مدیریتی و مسیر شواهد را ثبت می‌کند.
+
+1. **مالکیت Spec Kit:** بازطراحی فرانت‌اند خریدار با شناسه `005-purchaser-ui-redesign` تحت `specs/005-purchaser-ui-redesign/` ثبت شده است. `spec.md` مرجع الزامات این قلمرو و `tasks.md` **دفتر وضعیت رسمی** کارهای UI-PUR/BE-CR است.
+2. **بسته ممیزی به‌عنوان شاهد:** `docs/frontend-redesign/review/deepseek/**` و گزارش Batch A ذیل `review/bunny/**` بسته **شواهد** باقی می‌مانند، نه منبع دوم الزامات و نه منبع موازی وضعیت. کارت‌ها با شناسه‌های اصلی خود (`UI-PUR-001…016`، `BE-CR-001…006`) حفظ شده‌اند.
+3. **تأیید جزء‌به‌جزء:** تأیید `spec.md`، `plan.md` یا `tasks.md` به‌معنای تأیید هیچ کارت، هیچ Batch و هیچ `BE-CR` نیست. کارت‌های `READY_FOR_OWNER_APPROVAL` تأییدنشده‌اند.
+4. **عدم دور زدن موانع:** هیچ تغییر Backend/قرارداد/مشخصات برای رفع انسداد مجاز نیست؛ سه کارت وابسته (`UI-PUR-003`، `007`، `014`) و لایه شواهد `UI-PUR-016` تا تأیید صریح مالک مسدود می‌مانند (`BE-CR-001…006`).
+5. **تفکیک سطوح شواهد:** «اجراشده در همین گذر»، «ثبت‌شده در گزارش»، «تأییدشده در سورس» و «هنوز به‌دست‌نیامده» هرگز یکی نمی‌شوند؛ «تأیید فنی» جای «پذیرش بصری مالک محصول» را نمی‌گیرد.
+6. **حاصل‌کار Git مجوزدار:** هیچ نوشتن Git بخشی از این الحاقیه نیست؛ هر عملیات Git نیازمند طرح شماره‌دار و تأیید صریح مالک است.
+7. **به‌روزرسانی مستندات حاکمیتی فقط با شواهد:** هر ادعای بدون شاهد به‌صورت `Proposed`/`Open`/`Blocked` ثبت می‌شود، نه `Accepted`.
+
 ---
 
 ## English
@@ -122,6 +134,18 @@ Each phase must produce reviewed outputs before its gate opens. **F2 or any sour
 ### 6. Definition of Done for an implementation slice
 
 A slice is complete only when (1) problem and scope are documented, (2) approved specs/design exist, (3) changes stay within scope, (4) relevant tests were run and results recorded, (5) applicable light/dark, Persian/English, RTL/LTR, responsive, and loading/error/empty states were checked, (6) browser or screenshot evidence exists, (7) unresolved known regressions have explicit disposition, and (8) `STATUS.md` and, when necessary, `DECISIONS.md` are updated.
+
+### 7. Execution addendum (2026-10-19) — the redesign registered under Spec Kit
+
+This clause **adds no principle and changes none of principles 1–12 or any phase gate**; it records the management assignment and the evidence path only.
+
+1. **Spec Kit ownership:** the purchaser frontend redesign is registered as `005-purchaser-ui-redesign` under `specs/005-purchaser-ui-redesign/`. `spec.md` is the requirement authority for this scope and `tasks.md` is the **canonical status ledger** for the `UI-PUR`/`BE-CR` work.
+2. **The audit package is evidence:** `docs/frontend-redesign/review/deepseek/**` and the Batch A report under `review/bunny/**` remain the **evidence** package — not a second requirement source and not a parallel status source. Cards keep their original IDs (`UI-PUR-001…016`, `BE-CR-001…006`).
+3. **Card-by-card approval:** approving `spec.md`, `plan.md`, or `tasks.md` approves no card, no batch, and no `BE-CR`. `READY_FOR_OWNER_APPROVAL` cards are not approved.
+4. **No bypassing a block:** no backend, contract, or specification edit may unblock an item; the three dependent cards (`UI-PUR-003`, `UI-PUR-007`, `UI-PUR-014`) and the evidence tier of `UI-PUR-016` stay blocked until the owner explicitly approves the matching `BE-CR-001…006`.
+5. **Evidence tiers stay separate:** "re-executed in this pass", "report-recorded", "source-verified", and "not yet obtained" are never collapsed; "technically verified" never stands in for product-owner visual acceptance.
+6. **Git output is licensed:** no Git write is part of this addendum; every Git operation requires a numbered plan and explicit owner approval.
+7. **Governance documents change only on evidence:** any claim without evidence is recorded as `Proposed`/`Open`/`Blocked`, never `Accepted`.
 
 ---
 
