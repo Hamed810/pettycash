@@ -1,0 +1,37 @@
+ETTYCASH — NEW MANUS ACCOUNT: COMPLETE THE APPROVED DESIGN & BUILD ONE PROTOTYPE
+You are continuing an existing Pettycash UI/UX redesign in a NEW Manus account. The old Manus account's credits have been exhausted, and its conversation history cannot be assumed to carry over. The product owner communicates in Persian; you may reply in Persian. All UI copy, designs, technical documents and prototype screens must be ENGLISH LTR for now. Persian/RTL visual work is paused, but the end product still requires bilingual EN/FA support.
+STEP 0 — Inspect everything before doing anything creative
+You have been provided a handoff ZIP and separately uploaded latest mobile screenshots (up to eight; if missing, ask for them). Read in this order:
+1. 00_START_HERE_FA.md and 01_PROJECT_CONTRACT_EN.md.
+2. 02_DOMAIN_RECOVERY_SUMMARY_EN.md, 03_QA_AND_KNOWN_MOCKUP_ERRORS.md.
+3. 04_DESIGN_INVENTORY_AND_MISSING_ASSETS.md, 05_PROTOTYPE_DELIVERY_ACCEPTANCE.md.
+4. All eleven approved_desktop_references/*.png and EVERY mobile screenshot uploaded separately by the owner.
+5. legacy_reference_notes/DESIGN_REFERENCES.md, then any latest Manus source ZIP that the owner uploaded. Older sources under legacy_prototypes/ are available for reuse, but they are NOT final designs.
+Do not claim to have received or inspected the eight latest mobile images unless they were actually uploaded to this new Manus conversation. Do NOT replace them with older mobile references.
+STEP 1 — One short Persian inventory, not a redesign
+Before generating any images or code, respond in Persian with a compact coverage matrix:
+- Screen name; Purchaser scenario; desktop reference filename; mobile filename; light/dark; approved / visually accepted / needs owner confirmation / missing.
+- Specifically identify OPEN, submitted/mixed Cost Center decisions, correction, completed (approved), completed-with-rejections, Add Transaction, Edit Draft, Correct Returned, View Transaction, Revisions/History, Unsaved Changes, Sheets List.
+- Explicitly flag incorrect sample data or nonexistent fields from older images (but DO NOT redesign accepted visual identity).
+- Name only genuine remaining critical visual gaps, if any; do not ask for unnecessary new pages.
+If critical, unapproved visual gaps exist: propose the absolute minimum number of PNGs required, ask the owner to approve the scope and generate those PNGs one at a time. Do not code those screens until the owner approves their PNGs. If all essential screens are covered and owner-approved, proceed to Step 2 after owner confirms the inventory. Unsaved Changes was ALREADY APPROVED: do NOT waste credits regenerating it.
+STEP 2 — Build one unified, runnable purchaser prototype
+Use the existing approved reference style rather than redesigning from scratch. Deliver fully runnable/editable prototype source, not just a preview. Keep everything consistent with approved Spec Kit business semantics documented in the ZIP. Prototype screens/behaviors must pass 05_PROTOTYPE_DELIVERY_ACCEPTANCE.md.
+Priority flows:
+A. Purchaser Sheets List → select row → large Sheet Detail Modal (mobile full-screen) → close to unchanged list state.
+B. OPEN sheet (never submitted; every transaction DRAFT) → add individual transaction → save transaction → optional evidence upload → return to sheet → authorized Submit Sheet.
+C. Submitted/in-review sheet → mixed transaction-specific Cost Center approvals/rejections/returns/pending; stage-specific count/amount summaries shown under the corresponding workflow stage, no global stage 'Total' card; read-only except allowed transaction correction.
+D. Returned transaction → edit through correction revision workflow → individual Save → separate Resubmit action; preserve prior revisions and decisions.
+E. COMPLETED / COMPLETED_WITH_REJECTIONS → only terminal statuses, accurate final approved/rejected figures, read-only sheet/transaction details with audit and revisions.
+F. Dirty editing → approved Unsaved Changes confirmation for every exit path; simulated save errors keep form open.
+G. Responsive 390px English LTR mobile; global independent Jalali/Gregorian preference; accurate date examples.
+Domain rules: Cost Center belongs to each transaction (not sheet). Use Expense Type, not Category. Never fake partial-amount approval. No unsupported Vendor/Notes or restrictive file type/size claims. No global Sheet Save All. No Add Transaction after submit. No generic Edit Sheet button. User permissions/status drive controls. No manager/finance/admin UIs now. Do not modify Nextcloud/Pettycash repository or backend/API.
+STEP 3 — Deliverables and handoff
+Deliver ALL of the following:
+1. Runnable/exportable ZIP containing original editable source, assets, fixtures, and package setup; no external account auth required to preview if practicable.
+2. Working preview URL (if available) plus ZIP, not URL alone.
+3. README with exact local run commands, tested viewport sizes, and key interactions.
+4. PNG exports of major desktop and mobile screens as built, and an explicit mapping back to approved reference images.
+5. Short CHANGELOG; a DESIGN_TO_DOMAIN_MAPPING.md distinguishing real approved business contract from illustrative mock behavior; a KNOWN_GAPS.md for actions not modeled in the prototype.
+6. Report in Persian with what was actually done and what requires owner confirmation. STOP and wait for owner review. Do not implement Bunny tasks or production code.
+Be economical with Manus credits. No fresh branding, unnecessary Persian screens, or repeated approved PNGs. If original mobile files or sources are missing, state exactly which and request upload BEFORE proceeding.

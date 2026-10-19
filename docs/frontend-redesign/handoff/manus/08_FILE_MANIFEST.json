@@ -1,0 +1,168 @@
+{
+  "title": "Pettycash Manus new-account handoff",
+  "version": "2026-10-19",
+  "latest_eight_mobile_images_bundled": false,
+  "file_count_excluding_manifest": 32,
+  "files": [
+    {
+      "relative_path": "02_DOMAIN_RECOVERY_SUMMARY_EN.md",
+      "size": 3159,
+      "sha256": "2b78d323884eaeec288636aa4f4d5f02c6ce2cf40ce9925f403bbf450a553110"
+    },
+    {
+      "relative_path": "00_START_HERE_FA.md",
+      "size": 3365,
+      "sha256": "8e744ff3354ca6b2c3f36b14505d9475d16fa69a69b2c905d55447fd62c515b1"
+    },
+    {
+      "relative_path": "03_QA_AND_KNOWN_MOCKUP_ERRORS.md",
+      "size": 2165,
+      "sha256": "b4c41b339c35e8721a94d9d6929de9e1a74ac090ab1c2de8f3b58b41f3058b71"
+    },
+    {
+      "relative_path": "01_PROJECT_CONTRACT_EN.md",
+      "size": 6871,
+      "sha256": "14d2d02a0e2d73fe79098e042efc7a453117b36908b52b4522c976a7fa569554"
+    },
+    {
+      "relative_path": "06_TRANSFER_CHECKLIST_FA.md",
+      "size": 1529,
+      "sha256": "6f1b1f2d9e3d9bdd6be22267997a815200f789368b50c360a8ba887092e4b584"
+    },
+    {
+      "relative_path": "04_DESIGN_INVENTORY_AND_MISSING_ASSETS.md",
+      "size": 2368,
+      "sha256": "101179632ba5a58734fe270189b5f371dde3ed049cd34ca7111a8db7243895e3"
+    },
+    {
+      "relative_path": "07_PASTE_TO_NEW_MANUS.md",
+      "size": 5776,
+      "sha256": "418424d7ca9badab68a03743f8ea414fb777d588dd6047dc9392da5601928c56"
+    },
+    {
+      "relative_path": "05_PROTOTYPE_DELIVERY_ACCEPTANCE.md",
+      "size": 3019,
+      "sha256": "998b15ee3045dac66e9153fdbc4f8fbbee2c9ec5d83575f03b9180e761e251ef"
+    },
+    {
+      "relative_path": "latest_mobile_upload_separately/PLACE_NEW_MANUS_MOBILE_PNGS_HERE.txt",
+      "size": 232,
+      "sha256": "ac3c267ed346846b764257416e86d057740f6b3a6f2f7622cac073585f6f0bc9"
+    },
+    {
+      "relative_path": "legacy_prototypes/pettycash-sheets-modal-prototype-v2.zip",
+      "size": 1036506,
+      "sha256": "0fd4b8bb8d91cd47eb959c3d7064f84a23a14acaa0bc33655a6e4c3cc7983233"
+    },
+    {
+      "relative_path": "legacy_prototypes/pettycash-ui-prototype-original-manus.zip",
+      "size": 1625467,
+      "sha256": "86317076bcb58983d35ded6c02cf7f6f6bb84efe28d03276dde9f32bfe3c823f"
+    },
+    {
+      "relative_path": "legacy_reference_notes/DESIGN_REFERENCES.md",
+      "size": 2831,
+      "sha256": "72d7dfd0dbfb5ddbd130ad8d9d58159b83c1185f7945ec50a6b7edb6ea9a303e"
+    },
+    {
+      "relative_path": "legacy_reference_notes/DECISION_ADDENDUM_DRAFT.md",
+      "size": 5202,
+      "sha256": "6e4f5aabbf149f1d9862720afea49afa3dd690162768ced93de3b15195fc29dc"
+    },
+    {
+      "relative_path": "legacy_reference_notes/DESIGN_ISSUES_TO_FIX.md",
+      "size": 3489,
+      "sha256": "5318364704311c51fe8a9d8094e1e8761b456b540a673800f7438f039775566d"
+    },
+    {
+      "relative_path": "governance_snapshot/README.md",
+      "size": 3367,
+      "sha256": "a93be849f90c09fc96e3495c4710d6ef703692b4f821e1cf570acc5bfc783f41"
+    },
+    {
+      "relative_path": "governance_snapshot/DECISIONS.md",
+      "size": 8403,
+      "sha256": "20e7799838b2e5b6bccbe2bac277c292c6982953005ad1258073ab43a2f9052b"
+    },
+    {
+      "relative_path": "governance_snapshot/STATUS.md",
+      "size": 7370,
+      "sha256": "a0c0f2968c254d3f5d2d64f58bd2d935de86a767d901b0bab125fd87fcb38b4e"
+    },
+    {
+      "relative_path": "governance_snapshot/FRONTEND_TASK_BACKLOG.md",
+      "size": 7619,
+      "sha256": "1b2752da5f61a3619ae29730373c6981e23eef696c5eae747d1bd7eaf8bb5087"
+    },
+    {
+      "relative_path": "governance_snapshot/FAST_TRACK_ADDENDUM.md",
+      "size": 6902,
+      "sha256": "8608c24b6e5442c8f2c7be8f27dcc9f0d77a355cd489a2e5359ec4900d8d910a"
+    },
+    {
+      "relative_path": "governance_snapshot/ROADMAP.md",
+      "size": 12041,
+      "sha256": "0d46d390fc8586f474d7f5055de185f0594dee955675f2974207a1c0c69238f2"
+    },
+    {
+      "relative_path": "governance_snapshot/CHARTER.md",
+      "size": 14977,
+      "sha256": "f946fbd6ab82470988d216d2de6b87a3b123c60c3804ed21fd8b418ea0e9fe26"
+    },
+    {
+      "relative_path": "approved_desktop_references/04_sheet_detail_completed_workflow_EN_reference.png",
+      "size": 1467431,
+      "sha256": "0f5846e52663583416b6dde6d00a31472e74cb1c9ab845cd38bff6acd5d3e0e4"
+    },
+    {
+      "relative_path": "approved_desktop_references/03_sheet_detail_submitted_cc_EN_reference.png",
+      "size": 1451295,
+      "sha256": "e3c7f276a6ded848b6f938fca07455cf402574f002858be5ba7fcbdac0bd486e"
+    },
+    {
+      "relative_path": "approved_desktop_references/05_sheet_approvals_tab_EN_reference.png",
+      "size": 1516690,
+      "sha256": "3bfa4b80180f08841d2db9a28a1fb848918f7eab9c8bb3eb05b5f1a0d865e764"
+    },
+    {
+      "relative_path": "approved_desktop_references/01_sheets_list_desktop_EN_approved.png",
+      "size": 1261383,
+      "sha256": "98b510ebd76d2d33ec282f4d89103447033ee99c44776e1edb77549c99a705da"
+    },
+    {
+      "relative_path": "approved_desktop_references/06_sheet_overview_tab_EN_reference.png",
+      "size": 1429031,
+      "sha256": "bdd65302742f73155df344dd77c92937ab25e61a41c1482534390e297dd8ba79"
+    },
+    {
+      "relative_path": "approved_desktop_references/02_sheet_detail_open_EN_reference.png",
+      "size": 1395871,
+      "sha256": "7596831907f79a7ce506ff86eaf904955c6b2a4de3ddefa34182d9b75b3b903e"
+    },
+    {
+      "relative_path": "approved_desktop_references/08_transaction_create_EN_reference.png",
+      "size": 1341091,
+      "sha256": "37db9e9ef22f7eb4cd4f11d9c11b29243158e144e4ce7d6c906ec0f322f549d3"
+    },
+    {
+      "relative_path": "approved_desktop_references/10_transaction_read_only_EN_reference.png",
+      "size": 1393013,
+      "sha256": "a435feb8402623d8fd0f2190310603ffcfa13c692a725a2f50931178d184e97d"
+    },
+    {
+      "relative_path": "approved_desktop_references/11_transaction_read_only_revisions_EN_reference.png",
+      "size": 1412874,
+      "sha256": "2f38d97688464560720a1302bfe34e389de866bb7a6275a855f79137fbb2d9e7"
+    },
+    {
+      "relative_path": "approved_desktop_references/07_sheet_history_tab_EN_reference.png",
+      "size": 1513502,
+      "sha256": "6cf399ce1033cd5d548e62941e34e387dcba34fd5ee26bebbd421b8f26e71cf1"
+    },
+    {
+      "relative_path": "approved_desktop_references/09_transaction_correction_EN_reference.png",
+      "size": 1368679,
+      "sha256": "d9dec46ea57eed02e58260457e507945a3bd6fa858d8b20fe11e89427ab9cecb"
+    }
+  ]
+}
