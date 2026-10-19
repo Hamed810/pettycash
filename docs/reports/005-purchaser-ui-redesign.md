@@ -2,14 +2,14 @@
 
 **Date:** 2026-10-19
 **Spec:** `specs/005-purchaser-ui-redesign/` (imported audit cards → spec → research/plan/data-model/contracts/quickstart/checklist → canonical task ledger)
-**Status:** management baseline complete; **no application code changed in this pass**; Batch B unstarted; all `BE-CR-001…006` blocked; no Git write performed
+**Status:** management baseline complete; **no application code changed in this pass**; Batch B unstarted; all `BE-CR-001…006` blocked; the separate `GIT-PLAN-001-R1` checkpoint recorded C1–C6
 
 ## Problem
 
 The Purchaser UI Redesign existed as three unreconciled artifacts and no single status authority:
 
 - an audit package under `docs/frontend-redesign/review/deepseek/` (22 task cards, a gap matrix, owner-decision reconciliation, a blocked-items register, an execution plan);
-- a Batch A execution report under `docs/frontend-redesign/review/bunny/` describing uncommitted working-tree implementation of four cards;
+- a Batch A execution report under `docs/frontend-redesign/review/bunny/` describing the implementation now recorded in C5;
 - four governance documents (`CHARTER.md`, `DECISIONS.md`, `STATUS.md`, `ROADMAP.md`) whose `STATUS.md`/`ROADMAP.md` still described F1 as in progress with "no code changes".
 
 There was no canonical requirement set, no canonical status ledger, no traceability from the audit's card IDs to repository artifacts, and no explicit Git boundary for the work.
@@ -51,14 +51,16 @@ There was no canonical requirement set, no canonical status ledger, no traceabil
 3. **Source-verified** — `src/utils/{direction,locale,calendar,date,number,money,sheetListSession}.ts`, `SheetListView.vue`, `AppRoot.vue`, `router/index.ts`; test files under `tests/Frontend/`.
 4. **Not obtained** — English catalog, English visual acceptance, live calendar surface (AC2), mutating negative test (AC5), owner visual acceptance, any Batch B evidence.
 
+**R1 execution check (separate pass):** `PurchaserFlow`, `RtlAccessibility`, `SheetDeletion`, `routeNameIntegrity`, `localeFormatting`, `FinanceReview`, and `ManagementReview` passed as **7 files / 241 tests** on 2026-10-19.
+
 No aggregate gate is claimed as executed by this pass.
 
-## Working-tree state (unchanged by this pass, for the Git plan)
+## Checkpoint result (R1)
 
-- Branch `feat/pettycash-purchaser-ui-batch-a`, HEAD `6006f28400e8962909afab0744460152353c12fe` (identical to `origin/main`); no upstream configured.
+- Branch `feat/pettycash-purchaser-ui-batch-a`; baseline HEAD `6006f28400e8962909afab0744460152353c12fe`; C1–C6 recorded; C7 records this report. No upstream; no push.
 - No `*.php` entry in `git status`; `lib/` and `appinfo/` clean.
-- Generated `js/`/`css/` build output dominates the tree (317 tracked deletions + their untracked replacements). `GIT-PLAN-001-R1` records it in a dedicated build-sync commit (C6) after a repeat build is byte-identical.
-- Pre-existing user changes preserved: `AGENTS.md`, `CLAUDE.md`, `.claude/`, `docs/Review uploaded pasted content.zip`, untracked `docs/frontend-redesign/**` trees.
+- Generated `js/`/`css/` output is recorded in C6 (`8869fc6`) after `npm run build` produced output byte-identical to the pre-build backup.
+- Pre-existing user changes remain unstaged and preserved: `AGENTS.md`, `CLAUDE.md`, `.claude/`, `docs/Review uploaded pasted content.zip`, Feature 004 tests/reports, the 10 excluded desktop references, generated mobile duplicates, the mobile contact sheet, `_archives/`, screenshots, `test-results/`, and `.env.testing`.
 - `l10n/fa.js` and `l10n/fa.json` both carry 362 keys.
 
 ## Risks carried forward
@@ -68,8 +70,8 @@ No aggregate gate is claimed as executed by this pass.
 | Blocked cards being approximated client-side | Recorded as `FR-005-012/019/020` prohibitions; no workaround task exists in the ledger |
 | Contract edited to match implementation | `specs/001-*` and both contracts are named out of scope |
 | Report-recorded evidence upgraded to re-executed | Four-tier separation is stated in spec, plan, quickstart, and this report |
-| Generated assets staged with documentation | `GIT-PLAN-001-R1` isolates them in C6; documentation commits contain no `js/` or `css/` |
-| Uncommitted Batch A work lost | `GIT-PLAN-001-R1` is the approved path to persistence; no write occurs outside its exact allowlists |
+| Generated assets mixed with documentation | Resolved: C6 contains only `js/`/`css/`; C1–C5 contain no build output |
+| Batch A work loss | Resolved: C5 (`fae7bce`) records the source, tests, and l10n; the working tree retains only excluded Feature 004/user changes |
 
 ## Asset availability
 
@@ -92,7 +94,8 @@ The three generated mobile duplicates and `references/contact-sheets/mobile_cont
 
 ## Next actions
 
-1. Product owner: `GIT-PLAN-001-R1` was approved on 2026-10-19; its execution records the checkpoint.
+1. `GIT-PLAN-001-R1` executed: C1–C6 recorded; C7 records this status. Push/PR is deferred to `GIT-PLAN-002`.
 2. Product owner: decide `REC-01`, `P-008` (calendar surface), and the `READY_FOR_OWNER_APPROVAL` cards individually.
 3. Product owner: answer the `BE-CR-001/002/003` questions and scope `BE-CR-004/005/006`.
 4. Then, and only then, Batch B can be scheduled; no Batch B work is authorized today.
+5. Push/merge is not authorized; prepare `GIT-PLAN-002` if the branch should be published.

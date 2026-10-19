@@ -1,6 +1,6 @@
 # GIT-PLAN-001-R1 — Purchaser UI Redesign Checkpoint
 
-**Status:** Approved by the product owner on 2026-10-19. Execution results are recorded only after success.
+**Status:** Approved by the product owner on 2026-10-19 and executed on 2026-10-19. Results are recorded in section 10.
 **Branch:** `feat/pettycash-purchaser-ui-batch-a` (existing branch; no switch).
 **Baseline:** HEAD `6006f28400e8962909afab0744460152353c12fe`, identical to `origin/main`; no upstream configured.
 **Supersedes:** `GIT-PLAN-001` and the checkpoint scope in `research.md` Decision 8.
@@ -283,4 +283,26 @@ Included in C4: `01_sheets_list_desktop_EN_approved.png`, the unsaved-changes di
 
 ## 10. Execution result
 
-Pending. C7 records the actual SHAs, commit subjects, validation results, and final `git status` only after C1–C6 succeed.
+Executed on 2026-10-19 on `feat/pettycash-purchaser-ui-batch-a`.
+
+| Phase | Commit | Subject | Result |
+|---|---|---|---|
+| C1 | `7e9fe77` | `docs(spec): register Spec Kit feature 005 for the purchaser UI redesign` | 8 files, +1,395 |
+| C2 | `f8bf1d3` | `docs(governance): reconcile redesign status and record the R1 checkpoint plan` | 6 files, +513/−47 |
+| C3 | `7307e41` | `docs(evidence): preserve the DeepSeek audit, task cards, and Batch A report` | 36 files, +4,360 |
+| C4 | `62dcd59` | `docs(design): preserve Manus intake, handoff notes, prototype code, and inspected references` | 53 files, +2,446 |
+| C5 | `fae7bce` | `feat(frontend): implement purchaser UI Batch A` | 54 files, +1,753/−481 |
+| C6 | `8869fc6` | `chore(frontend): synchronize generated build assets` | 381 net files (638 raw), +346/−337 |
+| C7 | this commit | `docs(status): record the executed R1 checkpoint` | 5 documentation files |
+
+**Verification**
+
+- Targeted Vitest before C5: 7 files / 241 tests passed.
+- C5: 54 staged paths; exactly one hunk in each patched test; zero `FR-004` additions.
+- V4: `npm run build` succeeded; `js/` and `css/` were byte-identical to the pre-build backup.
+- C6: 638 raw paths; 381 net after rename detection; no source, test, or documentation path.
+- Forbidden prefixes: none in any commit.
+- No push, merge, tag, branch switch, or Batch B work.
+- The working tree still contains the excluded Feature 004 and pre-existing user changes.
+
+Final `git status` and the C7 SHA are reported after this commit. No push.

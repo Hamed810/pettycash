@@ -62,7 +62,7 @@ The following facts are evidence-based. They describe the working tree at the ti
 |---|---|
 | Branch / HEAD | `feat/pettycash-purchaser-ui-batch-a` at `6006f28400e8962909afab0744460152353c12fe`, identical to `origin/main`; no upstream configured. |
 | Batch A scope | `UI-PUR-001`, `UI-PUR-002`, `UI-PUR-008`, `UI-PUR-004`, in that order. |
-| Batch A commits | None. The work is uncommitted in the working tree. |
+| Batch A commits | `fae7bce` (C5 source/tests/l10n) and `8869fc6` (C6 generated build). The management checkpoint is C1–C4; C7 records this status. No push. |
 | Batch A backend impact | None. No `lib/` or `appinfo/` change; `git status` contains no `*.php` entry. |
 | `UI-PUR-001` | **PARTIAL**. Direction/locale/calendar/date/number/money mechanism is implemented and was browser-verified by the Batch A report. A user-facing calendar-change surface (card AC2) and a mutating negative test (card AC5) remain outstanding. English content is blocked by `REC-01`. |
 | `UI-PUR-002` | **PARTIAL**. Six Persian columns, title above ID, amount semantics, status labels, and `AsyncState` are implemented and browser-verified. English labels are blocked by `REC-01`; the date-filter labels do not yet name the creation date (`REC-06`); product-owner visual acceptance remains outstanding. |
@@ -354,13 +354,13 @@ Status vocabulary: `DONE_VERIFIED` (technical verification only), `PARTIAL`, `RE
 
 ## Assumptions
 
-- Batch A's uncommitted working-tree implementation is the baseline for any later Batch B work and must be preserved. This feature does not require it to be committed first.
+- Batch A's implementation is recorded in C5 (`fae7bce`) and is the baseline for any later Batch B work. The working tree still contains the excluded Feature 004 and pre-existing user changes.
 - The approved UI stack remains Vue 3 + TypeScript + `@nextcloud/vue` 9.x + `@nextcloud/l10n`; no parallel framework is introduced.
 - The Nextcloud lab remains available for browser evidence at batch boundaries, but this management migration did not use it.
 - `specs/001-pettycash-v1-core/` remains authoritative for domain behavior. Any needed change to it is a separate, owner-approved change request.
 - The DeepSeek audit package remains the evidence base. Its task cards are not duplicated into Spec Kit; their IDs are imported and mapped.
 - The product owner approves each implementation card individually. Approving this specification, the plan, or the task ledger is **not** approving Batch B or any `BE-CR`.
-- The existing branch and working tree are preserved; no Git write is part of this feature's management baseline.
+- The existing branch is preserved. The management baseline itself performs no Git write; `GIT-PLAN-001-R1` is a separate approved checkpoint.
 
 ---
 

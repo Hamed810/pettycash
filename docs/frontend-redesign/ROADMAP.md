@@ -3,7 +3,7 @@
 **Version / نسخه:** 1.0 + هم‌راستاسازی ۲۰۲۶-۱۰-۱۹ · **Date / تاریخ:** 2026-10-11 (به‌روزشده ۲۰۲۶-۱۰-۱۹)  
 **Authoritative scope / مرجع دامنه:** [`CHARTER.md`](CHARTER.md)  
 **Canonical ledger / دفتر وضعیت رسمی:** [`specs/005-purchaser-ui-redesign/tasks.md`](../../specs/005-purchaser-ui-redesign/tasks.md)  
-**Overall state / وضعیت کلی:** F0 ثبت شده؛ F1 با مسیر سریع به بسته ممیزی رسیده (پذیرش مالک در انتظار)؛ Batch A در درخت کاری پیاده شده اما ثبت‌نشده؛ Batch B آغاز نشده. / F0 committed; F1 delivered as the audit package under the fast-track (owner acceptance pending); Batch A implemented but uncommitted; Batch B not started.
+**Overall state / وضعیت کلی:** F0 committed; F1 delivered as the audit package under the fast-track (owner acceptance pending); Batch A recorded by `GIT-PLAN-001-R1` (C5 `fae7bce`); Batch B not started.
 
 > **Gate rule / قانون عبور:** Deliverables and product-owner acceptance are required before moving to the next phase. / برای ورود به هر فاز، تحویل خروجی و تأیید مالک محصول ضروری است.
 
@@ -15,7 +15,7 @@
 |---|---|---|---|---|
 | **F0 — منشور** | ✅ تصویب و ثبت در Git (PR شماره ۷) | توافق بر اصول، Scope، بودجه، نقش‌ها | همین چهار سند حاکمیتی | تأیید توافق‌ها؛ ثبت فایل‌ها در مخزن |
 | **F1 — شناخت و Audit** | ◐ بسته ممیزی تحویل شد (مسیر سریع ۲۰۲۶-۱۰-۱۵)؛ پذیرش مالک در دروازه F1.7 در انتظار | تحلیل Pettycash و Budget، مرور کارکرد و تصاویر | Audit مبتنی بر شواهد، نقشه صفحات/نقش‌ها/گردش‌کارها، تحلیل مرجع Budget، فهرست شکاف‌ها و اولویت‌ها | تأیید گزارش و محدوده F2 |
-| **F2 — تثبیت زیرساخت UI** | ▶ بخشی اجرا شد — Batch A در درخت کاری (ثبت‌نشده) | اصلاح باگ‌های بنیادیِ *تأییدشده* مطابق Scope مصوب | اصلاحات محدود، شواهد علت ریشه‌ای، تست‌های مرتبط | تأیید سلامت مبانی نمایش و نبود رگرسیون |
+| **F2 — تثبیت زیرساخت UI** | ▶ Partially executed — Batch A recorded in C5 (`fae7bce`) | اصلاح باگ‌های بنیادیِ *تأییدشده* مطابق Scope مصوب | اصلاحات محدود، شواهد علت ریشه‌ای، تست‌های مرتبط | تأیید سلامت مبانی نمایش و نبود رگرسیون |
 | **F3 — معماری UX** | ◐ بخشی روشن شد — تصمیم‌های D-01/D-11 (کارگاه سه‌تبی و دیالوگ تغییرات ذخیره‌نشده) ثبت شده‌اند؛ خروجی F3 پذیرفته نشده | طراحی مسیرهای کاربر، سلسله‌مراتب، ناوبری و وضعیت‌های UI | User flows، ساختار اطلاعات، page specs و قرارداد رفتار | تأیید UX توسط مالک محصول |
 | **F4 — طراحی بصری و Prototype** | ◐ نمونه‌ها موجودند (سه صفحه مرجع + ۹ تصویر موبایل)؛ تأیید بصری ثبت نشده | بازآفرینی نزدیک زبان بصری Budget برای نیازهای Pettycash | الگوی طراحی، نمونه قابل مشاهده، طراحی دو زبان/دو جهت/دو Theme | تأیید نمونه‌ها پیش از اجرا |
 | **F5 — پیاده‌سازی تدریجی** | ▶ محدود آغاز شد — فقط Batch A؛ بقیه کارت‌ها تأییدنشده و Batch B آغاز نشده | تغییر در برش‌های کوچک بر اساس طراحی مصوب | کد، گزارش تغییرات، آزمون، تصاویر قبل/بعد | تأیید هر برش طبق Definition of Done |
@@ -57,7 +57,7 @@
 |---|---|---|---|---|
 | **F0 — Charter** | ✅ Approved and committed to Git (PR #7) | Agree on principles, scope, budget, roles | Four governance documents | Approval and repository record |
 | **F1 — Discovery & audit** | ◐ Audit package delivered (fast-track, 2026-10-15); owner acceptance pending at the F1.7 gate | Study Pettycash and Budget, browser evidence | Evidence-based audit, page/role/flow inventory, Budget study, prioritized gaps | Product-owner acceptance of audit and F2 scope |
-| **F2 — UI foundation stabilization** | ▶ Partially executed — Batch A in the working tree (uncommitted) | Fix confirmed foundational defects in approved scope | Bounded fixes, root-cause evidence, relevant tests | Foundation checks pass, no unaccepted regressions |
+| **F2 — UI foundation stabilization** | ▶ Partially executed — Batch A recorded in C5 (`fae7bce`) | Fix confirmed foundational defects in approved scope | Bounded fixes, root-cause evidence, relevant tests | Foundation checks pass, no unaccepted regressions |
 | **F3 — UX architecture** | ◐ Partially resolved — decisions D-01/D-11 (tabbed workspace, unsaved-changes dialog) are recorded; no accepted F3 deliverable | User journeys, information hierarchy, navigation, UI states | User flows, information architecture, page/behavior specifications | UX approval |
 | **F4 — Visual design & prototypes** | ◐ Samples exist (three reference screens + 9 mobile images); no recorded visual approval | Closely adapt Budget's visual language to Pettycash | Design patterns, reviewable prototypes, bilingual/bidirectional/two-theme variants | Explicit visual approval before coding |
 | **F5 — Incremental implementation** | ▶ Started in a bounded way — Batch A only; every other card unapproved and Batch B not started | Implement approved slices | Code, change reports, tests, before/after screenshots | Definition of Done + slice approval |
