@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { direction } from '@/utils/direction'
 import { computed, onMounted } from 'vue'
 import { RouterLink } from 'vue-router'
 import { t } from '@nextcloud/l10n'
@@ -38,7 +39,7 @@ onMounted(onLoad)
 </script>
 
 <template>
-	<section class="dashboard" dir="rtl" aria-labelledby="dashboard-title" data-testid="dashboard-view">
+	<section class="dashboard" :dir="direction" aria-labelledby="dashboard-title" data-testid="dashboard-view">
 		<h2 id="dashboard-title" class="dashboard__title">
 			{{ t('pettycash', 'dashboard.title') }}
 		</h2>

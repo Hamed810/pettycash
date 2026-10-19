@@ -57,7 +57,6 @@ function metricText(metric: DashboardMetric): string {
 <template>
 	<article
 		class="dashboard-card"
-		dir="rtl"
 		:aria-busy="loading"
 		:aria-labelledby="`dashboard-card-title-${role}`"
 		:data-testid="`dashboard-card-${role}`"

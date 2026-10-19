@@ -62,7 +62,7 @@ async function deactivate() {
 </script>
 
 <template>
-	<div v-if="isAdministrator" class="link-management" dir="rtl" data-test="link-management">
+	<div v-if="isAdministrator" class="link-management" data-test="link-management">
 		<NcTextField
 			:model-value="expiresAt"
 			:label="t('pettycash', 'evidence.linkExpiry')"

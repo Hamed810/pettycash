@@ -1,5 +1,5 @@
 <template>
-	<div class="transaction-review-detail-view" dir="rtl" data-testid="transaction-detail">
+	<div class="transaction-review-detail-view" :dir="direction" data-testid="transaction-detail">
 		<nav class="breadcrumbs" :aria-label="t('pettycash', 'common.breadcrumbs')">
 			<ol class="breadcrumbs__list">
 				<li class="breadcrumbs__item">
@@ -74,6 +74,7 @@
 </template>
 
 <script setup lang="ts">
+import { direction } from '@/utils/direction'
 import { computed, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { t } from '@nextcloud/l10n'

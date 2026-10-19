@@ -32,6 +32,17 @@ import { join } from 'node:path'
 // place, which then issued a live request.
 const ocsRequest = vi.hoisted(() => vi.fn())
 
+/**
+ * UI-PUR-001: the queue views now derive their `dir` from the running language instead of pinning
+ * `dir="rtl"`, so this file must declare the language it renders in. `importOriginal` keeps the real
+ * `t`/`n` (this file asserts catalogue keys, not translations) and pins only the two language
+ * readers, which is exactly the environment the "Persian RTL" assertions describe.
+ */
+vi.mock('@nextcloud/l10n', async (importOriginal) => {
+	const actual = await importOriginal<typeof import('@nextcloud/l10n')>()
+	return { ...actual, getLanguage: () => 'fa', isRTL: () => true }
+})
+
 vi.mock('@nextcloud/axios', () => ({
   default: {
     request: (...args: unknown[]) => ocsRequest(...args),

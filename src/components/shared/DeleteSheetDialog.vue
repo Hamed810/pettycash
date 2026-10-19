@@ -84,14 +84,14 @@ function confirm(): void {
 
 <template>
 	<NcDialog
-		:name="`delete-sheet-${sheetId}`"
+		:name="t('pettycash', 'Delete this sheet?')"
 		size="normal"
 		:open="open"
 		:can-close="!busy"
 		@update:open="(value: boolean) => !value && close()">
-		<h2 class="delete-sheet-dialog__heading">
-			{{ t('pettycash', 'Delete this sheet?') }}
-		</h2>
+		<!-- The dialog header carries the question; the raw sheet id that used to be passed as
+		     `name` was rendered visibly in it, so the first line of the confirmation read
+		     `delete-sheet-<uuid>` instead of naming the action. -->
 		<p class="delete-sheet-dialog__body">
 			{{
 				t(
@@ -123,11 +123,6 @@ function confirm(): void {
 </template>
 
 <style scoped>
-.delete-sheet-dialog__heading {
-	font-weight: bold;
-	margin-block-end: 8px;
-}
-
 .delete-sheet-dialog__body {
 	margin-block-end: 8px;
 }

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { t } from '@nextcloud/l10n'
+import { formatNumber } from '@/utils/number'
 import PeriodDisclosure from '@/components/reports/PeriodDisclosure.vue'
 import {
 	REPORT_PERIOD_DISCLOSURE_KEYS,
@@ -61,14 +62,14 @@ function summaryLabel(key: string): string {
 function formatCell(value: unknown): string {
 	if (value === null || value === undefined || value === '') return '—'
 	if (typeof value === 'boolean') return value ? t('pettycash', 'common.yes') : t('pettycash', 'common.no')
-	if (typeof value === 'number') return value.toLocaleString('fa-IR')
+	if (typeof value === 'number') return formatNumber(value)
 	if (typeof value === 'string') return value
 	return '—'
 }
 </script>
 
 <template>
-	<div class="report-table" dir="rtl" data-testid="report-table">
+	<div class="report-table" data-testid="report-table">
 		<!--
 			Above the totals and outside the summary list: the disclosure describes the *request*, so
 			rendering it in the same row as the figures would invite a reader to reconcile a period

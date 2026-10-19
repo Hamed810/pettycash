@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { direction } from '@/utils/direction'
 import { onMounted, computed, h, type VNode } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useSheetStore } from '@/stores/sheets'
@@ -129,7 +130,7 @@ function transactionCell(item: TransactionSummary, column: { key: string }): VNo
 </script>
 
 <template>
-	<div class="transaction-list-view" dir="rtl" data-test="transaction-list-view">
+	<div class="transaction-list-view" :dir="direction" data-test="transaction-list-view">
 		<div class="header-row mb-4">
 			<NcBreadcrumbs
 				:items="[

@@ -8,6 +8,7 @@ import NcIconSvgWrapper from '@nextcloud/vue/components/NcIconSvgWrapper'
 import NcNoteCard from '@nextcloud/vue/components/NcNoteCard'
 import { mdiImage, mdiFilePdfBox, mdiFileDocument, mdiFile, mdiDownload, mdiDelete, mdiFileOutline } from '@mdi/js'
 import { t } from '@nextcloud/l10n'
+import { formatSheetDateTime } from '@/utils/date'
 
 interface Props {
 	evidence: Evidence[]
@@ -28,8 +29,7 @@ function formatFileSize(bytes: number) {
 }
 
 function formatTimestamp(value: string): string {
-	const parsed = new Date(value)
-	return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString('fa-IR')
+	return formatSheetDateTime(value)
 }
 
 function getMediaTypeIcon(mediaType: string) {
@@ -72,7 +72,7 @@ async function handleDelete(ev: Evidence) {
 </script>
 
 <template>
-	<div class="evidence-list" dir="rtl" data-test="evidence-list">
+	<div class="evidence-list" data-test="evidence-list">
 		<!--
 			A plain list rather than `NcListItem`.
 
@@ -124,8 +124,8 @@ async function handleDelete(ev: Evidence) {
 						v-if="ev.active"
 						variant="tertiary"
 						:aria-label="t('pettycash', 'evidence.downloadNamed', { name: ev.name })"
-						@click="handleDownload(ev)"
 						data-test="download-evidence-btn"
+						@click="handleDownload(ev)"
 					>
 						<NcIconSvgWrapper :path="mdiDownload" :size="16" />
 					</NcButton>
@@ -136,8 +136,8 @@ async function handleDelete(ev: Evidence) {
 						:aria-label="t('pettycash', 'evidence.removeNamed', { name: ev.name })"
 						:disabled="deleting === ev.id"
 						:loading="deleting === ev.id"
-						@click="handleDelete(ev)"
 						data-test="delete-evidence-btn"
+						@click="handleDelete(ev)"
 					>
 						<NcIconSvgWrapper :path="mdiDelete" :size="16" />
 					</NcButton>

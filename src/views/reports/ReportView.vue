@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { direction } from '@/utils/direction'
 import { computed, onMounted } from 'vue'
 import { t } from '@nextcloud/l10n'
 import NcButton from '@nextcloud/vue/components/NcButton'
@@ -69,7 +70,7 @@ onMounted(onLoad)
 </script>
 
 <template>
-	<section class="report-view" dir="rtl" aria-labelledby="report-view-title" data-testid="report-view">
+	<section class="report-view" :dir="direction" aria-labelledby="report-view-title" data-testid="report-view">
 		<header class="report-view__header">
 			<h2 id="report-view-title" class="report-view__title">
 				{{ t('pettycash', 'reports.title') }}

@@ -1,5 +1,5 @@
 <template>
-	<div class="queue-view" dir="rtl" data-testid="finance-queue">
+	<div class="queue-view" :dir="direction" data-testid="finance-queue">
 		<nav class="breadcrumbs" :aria-label="t('pettycash', 'common.breadcrumbs')">
 			<ol class="breadcrumbs__list">
 				<li class="breadcrumbs__item">
@@ -77,6 +77,7 @@
 </template>
 
 <script setup lang="ts">
+import { direction } from '@/utils/direction'
 import { computed, h, onMounted, type VNode } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { t } from '@nextcloud/l10n'

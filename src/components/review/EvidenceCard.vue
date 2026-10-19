@@ -12,7 +12,8 @@
 			class="evidence-preview"
 			:src="previewObjectUrl"
 			:alt="evidence.name"
-			data-testid="evidence-preview">
+			data-testid="evidence-preview"
+		>
 
 		<div v-else-if="previewLoading" class="evidence-icon" data-testid="preview-loading">
 			<NcIconSvgWrapper :path="fileIcon" :size="48" />
@@ -30,7 +31,8 @@
 				class="deactivated-badge"
 				:icon-path="mdiCancel"
 				:text="t('pettycash', 'reviews.deactivated')"
-				data-testid="deactivated-badge" />
+				data-testid="deactivated-badge"
+			/>
 		</div>
 
 		<div class="file-meta">
@@ -44,7 +46,8 @@
 				v-if="evidence.active"
 				variant="tertiary"
 				data-testid="evidence-preview-btn"
-				@click="preview">
+				@click="preview"
+			>
 				<template #icon>
 					<NcIconSvgWrapper :path="mdiEye" />
 				</template>
@@ -53,7 +56,8 @@
 			<NcButton
 				variant="tertiary"
 				data-testid="evidence-download-btn"
-				@click="download">
+				@click="download"
+			>
 				<template #icon>
 					<NcIconSvgWrapper :path="mdiDownload" />
 				</template>
@@ -70,7 +74,8 @@
 			v-if="previewError"
 			class="evidence-error"
 			role="alert"
-			data-testid="evidence-error">
+			data-testid="evidence-error"
+		>
 			{{ previewError }}
 		</p>
 	</div>
@@ -93,6 +98,7 @@ import NcButton from '@nextcloud/vue/components/NcButton'
 import NcChip from '@nextcloud/vue/components/NcChip'
 import NcIconSvgWrapper from '@nextcloud/vue/components/NcIconSvgWrapper'
 import type { Evidence } from '@/types/api'
+import { formatSheetDate } from '@/utils/date'
 
 interface Props {
 	/** The shared `Evidence` type, not a copy of it — see the note on `EvidenceList.vue`. */
@@ -226,16 +232,11 @@ function formatFileSize(bytes: number): string {
 	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
+/** UI-PUR-001: field set only; the shared helper owns locale, calendar and absence. */
 function formatDate(dateStr: string): string {
-	try {
-		return new Date(dateStr).toLocaleDateString('fa-IR', {
-			year: 'numeric',
-			month: 'short',
-			day: 'numeric',
-		})
-	} catch {
-		return dateStr
-	}
+	return formatSheetDate(dateStr, {
+		options: { year: 'numeric', month: 'short', day: 'numeric' },
+	})
 }
 </script>
 

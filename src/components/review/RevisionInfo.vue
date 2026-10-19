@@ -31,7 +31,8 @@
 				<span class="info-value">
 					<NcChip
 						:variant="hasEvidence ? 'success' : 'warning'"
-						:text="hasEvidence ? t('pettycash', 'common.yes') : t('pettycash', 'common.no')" />
+						:text="hasEvidence ? t('pettycash', 'common.yes') : t('pettycash', 'common.no')"
+					/>
 				</span>
 			</div>
 			<div class="info-item">
@@ -48,6 +49,8 @@
 import { t } from '@nextcloud/l10n'
 import NcChip from '@nextcloud/vue/components/NcChip'
 import type { Revision } from '@/types/api'
+import { formatMoney } from '@/utils/money'
+import { formatSheetDate, formatSheetDateTime } from '@/utils/date'
 
 interface Props {
 	revision: Revision
@@ -56,39 +59,25 @@ interface Props {
 
 defineProps<Props>()
 
-function formatMoney(money: { amountMinor: number; currency: string; minorUnit: number }): string {
-	const divisor = 10 ** money.minorUnit
-	const formatted = (money.amountMinor / divisor).toLocaleString('fa-IR', {
-		minimumFractionDigits: money.minorUnit,
-		maximumFractionDigits: money.minorUnit,
-	})
-	return `${formatted} ${money.currency}`
+/**
+ * UI-PUR-001: only the field set is local. The shared helpers own the locale, the calendar and
+ * the absence rule, so this component cannot drift from the other surfaces.
+ */
+const LONG_DATE: Intl.DateTimeFormatOptions = { year: 'numeric', month: 'long', day: 'numeric' }
+const SHORT_DATE_TIME: Intl.DateTimeFormatOptions = {
+	year: 'numeric',
+	month: 'short',
+	day: 'numeric',
+	hour: '2-digit',
+	minute: '2-digit',
 }
 
 function formatDate(dateStr: string): string {
-	try {
-		return new Date(dateStr).toLocaleDateString('fa-IR', {
-			year: 'numeric',
-			month: 'long',
-			day: 'numeric',
-		})
-	} catch {
-		return dateStr
-	}
+	return formatSheetDate(dateStr, { options: LONG_DATE })
 }
 
 function formatDateTime(dateStr: string): string {
-	try {
-		return new Date(dateStr).toLocaleString('fa-IR', {
-			year: 'numeric',
-			month: 'short',
-			day: 'numeric',
-			hour: '2-digit',
-			minute: '2-digit',
-		})
-	} catch {
-		return dateStr
-	}
+	return formatSheetDateTime(dateStr, { options: SHORT_DATE_TIME })
 }
 </script>
 

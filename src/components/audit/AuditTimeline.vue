@@ -24,7 +24,7 @@ function hasDiff(event: AuditEvent): boolean {
 </script>
 
 <template>
-	<div class="audit-timeline" dir="rtl" data-test="audit-timeline">
+	<div class="audit-timeline" data-test="audit-timeline">
 		<ul v-if="events.length > 0" class="audit-timeline__list">
 			<li
 				v-for="event in events"

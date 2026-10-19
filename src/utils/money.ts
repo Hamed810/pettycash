@@ -1,4 +1,5 @@
 import type { Money } from '@/types/api'
+import { formatNumber } from '@/utils/number'
 
 /**
  * Formats an amount at its own currency's configured scale.
@@ -12,11 +13,15 @@ import type { Money } from '@/types/api'
  * The currency is appended as a code rather than requested from `Intl` with `style: 'currency'`,
  * because the instance's supported currencies are administrator-configured and `Intl` resolves an
  * unknown code to a symbol that means nothing to the reader.
+ *
+ * UI-PUR-001: the digits follow the active locale through {@link formatNumber} instead of a literal
+ * `'fa-IR'`, so an English session prints Latin digits and a Persian one prints Persian digits. The
+ * decimal places still come from the payload's `minorUnit`, which is the only correct source.
  */
 export function formatMoney(money: Money | null | undefined): string {
 	if (!money) return ''
 	const divisor = 10 ** money.minorUnit
-	const formatted = (money.amountMinor / divisor).toLocaleString('fa-IR', {
+	const formatted = formatNumber(money.amountMinor / divisor, {
 		minimumFractionDigits: money.minorUnit,
 		maximumFractionDigits: money.minorUnit
 	})

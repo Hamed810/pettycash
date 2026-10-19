@@ -1,10 +1,12 @@
 <script setup lang="ts">
+import { direction } from '@/utils/direction'
 import { onMounted, ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useSheetStore } from '@/stores/sheets'
 import { useAccountStore } from '@/stores/accounts'
 import type { SheetCreate } from '@/types/api'
 import { selectOptionKey, selectOptionValue } from '@/utils/selectOption'
+import { formatNumber } from '@/utils/number'
 import NcButton from '@nextcloud/vue/components/NcButton'
 import NcNoteCard from '@nextcloud/vue/components/NcNoteCard'
 import NcSelect from '@nextcloud/vue/components/NcSelect'
@@ -61,7 +63,7 @@ const availableCurrencyOptions = computed(() =>
  */
 function formatBalance(account: { balance: { amountMinor: number; currency: string; minorUnit: number } }): string {
 	const factor = 10 ** account.balance.minorUnit
-	return `${account.balance.currency} ${(account.balance.amountMinor / factor).toLocaleString('fa-IR')}`
+	return `${account.balance.currency} ${formatNumber(account.balance.amountMinor / factor)}`
 }
 
 /**
@@ -167,12 +169,11 @@ onMounted(() => {
 </script>
 
 <template>
-	<div class="sheet-form-view" dir="rtl" data-test="sheet-form-view">
-		<div class="mb-4">
-		</div>
+	<div class="sheet-form-view" :dir="direction" data-test="sheet-form-view">
+		<div class="mb-4" />
 
 		<NcNoteCard :heading="isEditing ? t('pettycash', 'sheets.edit') : t('pettycash', 'sheets.create')">
-			<form @submit.prevent="handleSubmit" data-test="sheet-form">
+			<form data-test="sheet-form" @submit.prevent="handleSubmit">
 				<!-- A summary as well as the per-field messages: after a refused submit the purchaser
 				     needs to see what is missing without hunting for each red field. -->
 				<div
@@ -233,7 +234,7 @@ onMounted(() => {
 					</div>
 				</div>
 
-				<div class="form-row" v-if="hasMultipleAccounts">
+				<div v-if="hasMultipleAccounts" class="form-row">
 					<div class="form-col">
 						<NcSelect
 							v-model="currency"
@@ -248,7 +249,7 @@ onMounted(() => {
 					</div>
 				</div>
 
-				<div class="form-row" v-else>
+				<div v-else class="form-row">
 					<div class="form-col">
 						<NcTextField
 							v-model="currency"
@@ -280,7 +281,7 @@ onMounted(() => {
 
 		<div v-if="sheetStore.error" class="alert alert--error" role="alert">
 			<span>{{ sheetStore.error }}</span>
-			<button type="button" @click="sheetStore.clearError" :aria-label="t('pettycash', 'common.dismiss')">
+			<button type="button" :aria-label="t('pettycash', 'common.dismiss')" @click="sheetStore.clearError">
 				×
 			</button>
 		</div>

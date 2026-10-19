@@ -1,6 +1,7 @@
 import type { Money } from '@/types/api'
 import type { DashboardBucket, DashboardMetric, DashboardNote } from '@/types/dashboard'
 import { formatMoney } from './money'
+import { formatNumber } from './number'
 
 /**
  * A value the projection sent as a `Money` rather than as a bare number.
@@ -114,7 +115,7 @@ export function dashboardNotes(bucket: DashboardBucket | undefined): DashboardNo
  */
 function metric(key: string, value: unknown): DashboardMetric {
 	if (typeof value === 'number') {
-		return { key, kind: 'count', text: value.toLocaleString('fa-IR') }
+		return { key, kind: 'count', text: formatNumber(value) }
 	}
 	if (isMoney(value)) {
 		return { key, kind: 'money', text: formatMoney(value) }

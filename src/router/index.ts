@@ -1,5 +1,7 @@
 import { defineComponent, h } from 'vue'
 import { createRouter, createWebHashHistory, type Router, type RouteRecordRaw } from 'vue-router'
+import { direction } from '../utils/direction'
+import { installSheetListReturnTracking } from '../utils/sheetListSession'
 
 const DashboardView = () => import('../views/DashboardView.vue')
 const SheetListView = () => import('../views/sheets/SheetListView.vue')
@@ -38,7 +40,7 @@ const NotFoundView = defineComponent({
 	name: 'NotFoundView',
 	setup() {
 		return () =>
-			h('div', { dir: 'rtl', 'data-testid': 'route-not-found' }, 'صفحه مورد نظر یافت نشد')
+			h('div', { dir: direction.value, 'data-testid': 'route-not-found' }, 'صفحه مورد نظر یافت نشد')
 	}
 })
 
@@ -95,7 +97,12 @@ export const routes: RouteRecordRaw[] = [
 ]
 
 export function createAppRouter(): Router {
-	return createRouter({ history: createWebHashHistory(), routes })
+	const router = createRouter({ history: createWebHashHistory(), routes })
+	// UI-PUR-004: records whether an arrival at the list is a return from a sheet surface. Installed
+	// here rather than in the view so the fact is recorded for every navigation, including the ones
+	// that happen while the list is not mounted.
+	installSheetListReturnTracking(router)
+	return router
 }
 
 export default createAppRouter()

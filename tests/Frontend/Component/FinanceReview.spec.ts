@@ -27,6 +27,16 @@ import { routes } from '@/router'
 // so a store method this file did not think to stub cannot reach the network and hang the run.
 const ocsRequest = vi.hoisted(() => vi.fn())
 
+/**
+ * UI-PUR-001: number and date rendering now follows the active locale, so the assertions that expect
+ * Persian digits have to declare a Persian session. `importOriginal` keeps the real `t`/`n` — this
+ * file asserts amounts and states, not translations — and pins only the two language readers.
+ */
+vi.mock('@nextcloud/l10n', async (importOriginal) => {
+	const actual = await importOriginal<typeof import('@nextcloud/l10n')>()
+	return { ...actual, getLanguage: () => 'fa', isRTL: () => true }
+})
+
 vi.mock('@nextcloud/axios', () => ({
   default: {
     request: (...args: unknown[]) => ocsRequest(...args),

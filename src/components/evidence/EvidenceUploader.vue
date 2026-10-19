@@ -98,7 +98,7 @@ function removeFile() {
 </script>
 
 <template>
-	<div class="evidence-uploader" dir="rtl" data-test="evidence-uploader">
+	<div class="evidence-uploader" data-test="evidence-uploader">
 		<!-- FR-025 permits adding evidence before submission; FR-026 forbids it afterwards, with the
 		     single exception of a correction of a returned transaction, which the server models as a
 		     new revision rather than as an edit of this one. The prop previously existed and was never

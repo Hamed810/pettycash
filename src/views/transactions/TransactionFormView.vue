@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { direction } from '@/utils/direction'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { t } from '@nextcloud/l10n'
@@ -278,7 +279,7 @@ onMounted(() => {
 </script>
 
 <template>
-	<div class="transaction-form-view" dir="rtl" data-test="transaction-form-view">
+	<div class="transaction-form-view" :dir="direction" data-test="transaction-form-view">
 		<nav class="breadcrumbs" :aria-label="t('pettycash', 'common.breadcrumbs')">
 			<ol class="breadcrumbs__list">
 				<li class="breadcrumbs__item">

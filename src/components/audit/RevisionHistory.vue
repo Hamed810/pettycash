@@ -36,7 +36,7 @@ function select(id: string) {
 </script>
 
 <template>
-	<div class="revision-history" dir="rtl" data-test="revision-history">
+	<div class="revision-history" data-test="revision-history">
 		<div v-if="revisions.length > 0" class="revision-tabs" data-test="revision-tabs" role="tablist">
 			<button
 				v-for="revision in revisions"

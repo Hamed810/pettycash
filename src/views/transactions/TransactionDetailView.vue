@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { direction } from '@/utils/direction'
 import { onMounted, computed, watch, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useTransactionStore } from '@/stores/transactions'
@@ -10,6 +11,7 @@ import EvidenceList from '@/components/evidence/EvidenceList.vue'
 import { t } from '@nextcloud/l10n'
 import { decisionKey, stageKey } from '@/l10n'
 import { formatMoney } from '@/utils/money'
+import { formatSheetDate, formatSheetDateTime } from '@/utils/date'
 import { selectOptionKey, selectOptionValue } from '@/utils/selectOption'
 
 const route = useRoute()
@@ -159,7 +161,7 @@ watch(transactionId, () => { loadData() })
 </script>
 
 <template>
-	<div class="transaction-detail-view" dir="rtl" data-test="transaction-detail-view">
+	<div class="transaction-detail-view" :dir="direction" data-test="transaction-detail-view">
 		<div class="mb-4">
 			<NcBreadcrumbs
 				:items="[
@@ -199,24 +201,24 @@ watch(transactionId, () => { loadData() })
 			<div class="card-header-row">
 				<h2 class="mb-0">{{ t('pettycash', 'transactions.detail') }}</h2>
 				<div class="d-flex gap-2">
-					<NcButton v-if="canEdit" variant="secondary" @click="goToEdit" data-test="edit-transaction-btn">
+					<NcButton v-if="canEdit" variant="secondary" data-test="edit-transaction-btn" @click="goToEdit">
 						<NcIconSvgWrapper :path="mdiPencil" :size="16" class="mr-2" />
 						{{ t('pettycash', 'common.edit') }}
 					</NcButton>
-					<NcButton v-if="canCreateCorrection" variant="secondary" @click="goToCreateCorrection" data-test="create-correction-btn">
+					<NcButton v-if="canCreateCorrection" variant="secondary" data-test="create-correction-btn" @click="goToCreateCorrection">
 						<NcIconSvgWrapper :path="mdiUndoVariant" :size="16" class="mr-2" />
 						{{ t('pettycash', 'transactions.createCorrection') }}
 					</NcButton>
-					<NcButton variant="tertiary" @click="goToAudit" data-test="view-audit-btn">
+					<NcButton variant="tertiary" data-test="view-audit-btn" @click="goToAudit">
 						{{ t('pettycash', 'transactions.viewHistory') }}
 					</NcButton>
 				</div>
 			</div>
 
-			<div class="card-details" v-if="transactionStore.currentTransaction">
+			<div v-if="transactionStore.currentTransaction" class="card-details">
 				<div class="detail-item">
 					<strong>{{ t('pettycash', 'transactions.expenseDate') }}</strong>
-					<div>{{ new Date(transactionStore.currentTransaction.activeRevision.expenseDate).toLocaleDateString('fa-IR') }}</div>
+					<div>{{ formatSheetDate(transactionStore.currentTransaction.activeRevision.expenseDate) }}</div>
 				</div>
 				<div class="detail-item">
 					<strong>{{ t('pettycash', 'transactions.amount') }}</strong>
@@ -279,8 +281,8 @@ watch(transactionId, () => { loadData() })
 						:class="['tab-button', { active: selectedRevisionIndex === i }]"
 						role="tab"
 						:aria-selected="selectedRevisionIndex === i"
-						@click="selectedRevisionId = rev.id"
 						data-test="revision-tab"
+						@click="selectedRevisionId = rev.id"
 					>
 						{{ t('pettycash', 'transactions.revision') }} {{ rev.number }}
 					</button>
@@ -290,7 +292,7 @@ watch(transactionId, () => { loadData() })
 					<div class="card-details">
 						<div class="detail-item">
 							<strong>{{ t('pettycash', 'transactions.expenseDate') }}</strong>
-							<div>{{ new Date(selectedRevision.expenseDate).toLocaleDateString('fa-IR') }}</div>
+							<div>{{ formatSheetDate(selectedRevision.expenseDate) }}</div>
 						</div>
 						<div class="detail-item">
 							<strong>{{ t('pettycash', 'transactions.amount') }}</strong>
@@ -310,7 +312,7 @@ watch(transactionId, () => { loadData() })
 						</div>
 						<div class="detail-item">
 							<strong>{{ t('pettycash', 'transactions.createdAt') }}</strong>
-							<div>{{ new Date(selectedRevision.createdAt).toLocaleString('fa-IR') }}</div>
+							<div>{{ formatSheetDateTime(selectedRevision.createdAt) }}</div>
 						</div>
 						<div class="detail-item">
 							<strong>{{ t('pettycash', 'transactions.origin') }}</strong>
@@ -333,11 +335,11 @@ watch(transactionId, () => { loadData() })
 				<li v-for="rev in priorRevisions" :key="rev.id" class="prior-revision" data-test="prior-revision">
 					<div class="prior-revision__header">
 						<strong>{{ t('pettycash', 'transactions.revision') }} {{ rev.number }}</strong>
-						<small>{{ new Date(rev.createdAt).toLocaleString('fa-IR') }}</small>
+						<small>{{ formatSheetDateTime(rev.createdAt) }}</small>
 					</div>
 					<dl class="prior-revision__fields">
 						<dt>{{ t('pettycash', 'transactions.expenseDate') }}</dt>
-						<dd>{{ new Date(rev.expenseDate).toLocaleDateString('fa-IR') }}</dd>
+						<dd>{{ formatSheetDate(rev.expenseDate) }}</dd>
 						<dt>{{ t('pettycash', 'transactions.amount') }}</dt>
 						<dd>{{ formatMoney(rev.amount) }}</dd>
 						<dt>{{ t('pettycash', 'transactions.costCenter') }}</dt>
@@ -361,7 +363,7 @@ watch(transactionId, () => { loadData() })
 							{{ t('pettycash', decisionKey(decision.decision)) }}
 						</NcChip>
 						<span>{{ t('pettycash', stageKey(decision.stage)) }}</span>
-						<small>{{ new Date(decision.decidedAt).toLocaleString('fa-IR') }}</small>
+						<small>{{ formatSheetDateTime(decision.decidedAt) }}</small>
 					</div>
 					<div class="decision-meta">
 						<!-- FR-052: the actor is a snapshot, not a live user lookup. The display name and
@@ -383,7 +385,7 @@ watch(transactionId, () => { loadData() })
 		<NcNoteCard data-test="evidence-list">
 			<div class="card-header-row">
 				<span>{{ t('pettycash', 'evidence.list') }} ({{ evidenceItems.length }})</span>
-				<NcButton v-if="!isSubmitted" variant="primary" @click="showEvidenceUploader = true" data-test="upload-evidence-btn">
+				<NcButton v-if="!isSubmitted" variant="primary" data-test="upload-evidence-btn" @click="showEvidenceUploader = true">
 					<NcIconSvgWrapper :path="mdiPlus" :size="16" class="mr-2" />
 					{{ t('pettycash', 'evidence.upload') }}
 				</NcButton>
@@ -405,7 +407,8 @@ watch(transactionId, () => { loadData() })
 			name="evidence-upload"
 			size="normal"
 			:open="showEvidenceUploader"
-			@update:open="showEvidenceUploader = $event">
+			@update:open="showEvidenceUploader = $event"
+		>
 			<EvidenceUploader
 				:transaction-id="transactionId"
 				:is-draft="!isSubmitted"
@@ -415,7 +418,7 @@ watch(transactionId, () => { loadData() })
 
 		<div v-if="transactionStore.error" class="alert alert--error" role="alert">
 			<span>{{ transactionStore.error }}</span>
-			<button type="button" @click="transactionStore.clearError" :aria-label="t('pettycash', 'common.dismiss')">×</button>
+			<button type="button" :aria-label="t('pettycash', 'common.dismiss')" @click="transactionStore.clearError">×</button>
 		</div>
 	</div>
 </template>

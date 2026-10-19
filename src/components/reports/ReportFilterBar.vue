@@ -212,7 +212,6 @@ function reset(): void {
 <template>
 	<form
 		class="report-filter-bar"
-		dir="rtl"
 		:aria-label="t('pettycash', 'reports.filters')"
 		data-testid="report-filter-bar"
 		@submit.prevent="apply"

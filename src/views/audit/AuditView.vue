@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { direction } from '@/utils/direction'
 import { computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { t } from '@nextcloud/l10n'
@@ -61,7 +62,7 @@ async function loadEvidence() {
 </script>
 
 <template>
-	<div class="audit-view" dir="rtl" data-test="audit-view">
+	<div class="audit-view" :dir="direction" data-test="audit-view">
 		<NcNoteCard v-if="auditStore.error" type="error" data-test="audit-load-error">
 			{{ auditStore.error }}
 		</NcNoteCard>

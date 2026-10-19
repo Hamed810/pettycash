@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { direction } from '@/utils/direction'
 /**
  * T088: the funding surface — open an account, fund it, retire or restore it.
  *
@@ -86,7 +87,7 @@ async function flipActive() {
 </script>
 
 <template>
-	<div class="funding-view" dir="rtl" data-test="funding-view">
+	<div class="funding-view" :dir="direction" data-test="funding-view">
 		<nav :aria-label="t('pettycash', 'navigation.title')" data-test="funding-breadcrumb">
 			<RouterLink :to="{ name: 'dashboard' }" data-test="funding-back-dashboard">{{ t('pettycash', 'navigation.dashboard') }}</RouterLink>
 		</nav>

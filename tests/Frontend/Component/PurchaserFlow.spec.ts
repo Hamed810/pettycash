@@ -1,7 +1,13 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createWebHashHistory, type Router } from 'vue-router'
+import { t } from '@nextcloud/l10n'
+import { nextTick } from 'vue'
+import {
+	installSheetListReturnTracking,
+	resetSheetListSession,
+} from '@/utils/sheetListSession'
 
 // The account picker is driven by the caller's real accounts from the OCS accounts endpoint, so the
 // store is stubbed here. Mocking the store (rather than the service) is required because the store
@@ -192,6 +198,22 @@ vi.mock('@nextcloud/vue', () => ({
 		name: 'NcButton',
 		props: ['variant', 'disabled', 'loading', 'type', 'size'],
 		template: '<button :type="type" :disabled="disabled" :class="[variant, size]" data-test="nc-button"><slot /></button>'
+	},
+	/*
+	 * UI-PUR-008: the row menu is a real `NcActions`/`NcActionButton` pair. The double keeps the
+	 * structure the assertions need — one labelled trigger per row, with the items rendered beside it —
+	 * instead of a menu that only exists after a popover opens (which jsdom cannot show).
+	 */
+	NcActions: {
+		name: 'NcActions',
+		props: ['forceMenu', 'ariaLabel'],
+		template: '<div class="nc-actions"><button type="button" :aria-label="ariaLabel" data-test="nc-actions-trigger" /><div class="nc-actions-menu"><slot /></div></div>'
+	},
+	NcActionButton: {
+		name: 'NcActionButton',
+		props: [],
+		emits: ['click'],
+		template: '<button type="button" data-test="nc-action-button" @click="$emit(\'click\')"><slot /></button>'
 	},
 	NcTextField: {
 		name: 'NcTextField',
@@ -742,7 +764,15 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 		}
 
 
-	describe('FR-063 sheet list completeness', () => {
+	/**
+	 * UI-PUR-002: the list is six columns, in the order the approved surface names them.
+	 *
+	 * The previous table had eleven. The four that left — owner, currency, active revision number and
+	 * the key-date group — were not removed from the payload and are still rendered on the detail and
+	 * transaction surfaces; what changed is that the *list* answers the six questions the card names,
+	 * in the order it names them, instead of restating the record.
+	 */
+	describe('FR-063 / UI-PUR-002 sheet list columns', () => {
 		async function mountWithFullSheet() {
 			setSheetList([fullSheetFixture()])
 			const wrapper = createWrapper(SheetListView)
@@ -751,10 +781,33 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 			return wrapper
 		}
 
-		it('shows the owner the payload carries', async () => {
+		it('renders the six contractual columns, in the approved order', async () => {
 			const wrapper = await mountWithFullSheet()
+			const headers = wrapper
+				.findAll('[data-test="sheet-list-table"] thead th')
+				.map((header) => header.text())
 
-			expect(wrapper.find('[data-test="sheet-list-owner"]').text()).toBe('Employee Seven')
+			expect(headers).toEqual([
+				'sheets.sheet',
+				'sheets.status',
+				'sheets.transactionCount',
+				'sheets.currentTotal',
+				'sheets.effectiveApproved',
+				'sheets.firstSubmitted',
+			])
+			// No creator column and no redundant row-action column: the menu lives in the sheet cell.
+			expect(headers).not.toContain('sheets.owner')
+			expect(headers).not.toContain('sheets.actions')
+		})
+
+		it('shows the title above the sheet id, and no creator cell', async () => {
+			const wrapper = await mountWithFullSheet()
+			const id = wrapper.find('[data-test="sheet-list-id"]')
+
+			expect(id.text()).toBe('sh-full')
+			// The title is the id's previous sibling inside the same text column, so it reads first.
+			expect(id.element.previousElementSibling?.textContent).toContain('Mordad travel')
+			expect(wrapper.find('[data-test="sheet-list-owner"]').exists()).toBe(false)
 		})
 
 		/**
@@ -777,25 +830,6 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 			expect(current).not.toBe(submitted)
 		})
 
-		/**
-		 * T385: the same latest active revision number on the **list**, printed as `0` for an empty sheet.
-		 *
-		 * The two surfaces are required to show the same value by the amended FR-063 clause, so the list
-		 * asserts it rather than being left to follow the detail view. `0` is a real answer rather than an
-		 * absence — unlike the dates, which use the absent-marker — so the assertion pins the literal.
-		 */
-		it('shows the latest active revision number on the list too', async () => {
-			setSheetList([fullSheetFixture()])
-			const wrapper = createWrapper(SheetListView)
-			await flushPromises()
-
-			// The fixture's value is 7 while its `transactionCount` is 4, so this distinguishes the two
-			// readings the amended clause is about — a count would render 4.
-			expect(wrapper.find('[data-test="sheet-list-active-revision"]').text().trim()).toBe('7')
-			// The zero case is asserted on the detail surface above; mounting the list twice in one test
-			// reads the first wrapper's store and silently reports its value for the second.
-		})
-
 		it('shows the three summary amounts of the latest effective outcome', async () => {
 			const wrapper = await mountWithFullSheet()
 
@@ -805,59 +839,70 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 			expect(group.find('[data-test="sheet-list-effective-pending"]').text()).not.toBe('')
 		})
 
-		it('shows every key date the payload carries, each in its own hook', async () => {
+		it('shows the first-submitted date in its own column and drops the other key dates', async () => {
 			const wrapper = await mountWithFullSheet()
 
-			// Four dates, four hooks. Asserted as a set rather than as "the dates cell is not empty",
-			// because one missing date and four rendered dates produce an equally non-empty cell.
-			for (const hook of [
-				'sheet-list-created-at',
-				'sheet-list-submitted-at',
-				'sheet-list-completed-at',
-				'sheet-list-expense-range'
-			]) {
-				expect(wrapper.find(`[data-test="${hook}"]`).exists(), `${hook} must be rendered`).toBe(true)
-			}
+			const submitted = wrapper.find('[data-test="sheet-list-submitted-at"]')
+			expect(submitted.exists()).toBe(true)
+			expect(submitted.text()).not.toBe(ABSENT_MARKER)
 
-			// The three this fixture populates carry a date rather than the absent-marker.
-			expect(wrapper.find('[data-test="sheet-list-created-at"]').text()).not.toBe('—')
-			expect(wrapper.find('[data-test="sheet-list-submitted-at"]').text()).not.toBe('—')
-			expect(wrapper.find('[data-test="sheet-list-expense-range"]').text()).not.toBe('—')
+			for (const removed of [
+				'sheet-list-created-at',
+				'sheet-list-completed-at',
+				'sheet-list-expense-range',
+			]) {
+				expect(
+					wrapper.find(`[data-test="${removed}"]`).exists(),
+					`${removed} is no longer a list column`
+				).toBe(false)
+			}
 		})
 
 		/**
-		 * A nullable date renders as a dash, **not** as 1 January 1970.
+		 * UI-PUR-002 AC5: a never-submitted sheet has no submitted total and no first submission.
 		 *
-		 * `new Date(null).toLocaleDateString('fa-IR')` is 1970, so a sheet that was never completed would
-		 * carry a confident date beside it. `completedAt` is null on this fixture, and FR-063's "key dates"
-		 * must not fill that cell with a date the sheet never had.
+		 * The dash is not cosmetic: the payload's `submitted_total_minor` is `0` until the first
+		 * submission, so printing the amount would state "0 IRR" as if a submission of nothing had
+		 * succeeded. The date is null at the same time, which is the fact that distinguishes the two
+		 * readings, and the assertion pins both.
 		 */
-		it('renders a null date as a dash rather than the Unix epoch', async () => {
-			const wrapper = await mountWithFullSheet()
+		it('renders a never-submitted sheet as a dash, never as 1970 or as a zero amount', async () => {
+			setSheetList([{ ...fullSheetFixture(), status: 'OPEN', submittedAt: null }])
+			const wrapper = createWrapper(SheetListView)
+			await flushPromises()
 
-			expect(wrapper.find('[data-test="sheet-list-completed-at"]').text()).toBe('—')
+			expect(wrapper.find('[data-test="sheet-list-submitted-at"]').text()).toBe(ABSENT_MARKER)
+			const submittedTotal = wrapper.find('[data-test="sheet-list-submitted-total"]').text()
+			expect(submittedTotal).toContain(ABSENT_MARKER)
+			// The fixture's submitted total is 900_000; a dash must not be the amount either.
+			expect(submittedTotal).not.toContain('۹۰۰')
 			expect(wrapper.text()).not.toContain('۱۹۷۰')
 			expect(wrapper.text()).not.toContain('1970')
 		})
 
+		it('prints a zero transaction count rather than a dash', async () => {
+			setSheetList([{ ...fullSheetFixture(), transactionCount: 0 }])
+			const wrapper = createWrapper(SheetListView)
+			await flushPromises()
+
+			const count = wrapper.find('[data-test="sheet-list-transaction-count"]').text()
+			expect(count).not.toBe(ABSENT_MARKER)
+			expect(count).toContain('۰')
+		})
+
 		/**
-		 * FR-062's three stage-approved figures are **T365's**, and this list now carries them.
+		 * FR-062's three stage-approved figures are **T365's**, and this list still carries them.
 		 *
 		 * Proven by *value* rather than by hook presence alone: the fixture gives the three distinctive
 		 * amounts (11_111, 22_222, 33_333), so any column rendering them puts those formatted strings
-		 * into the row. Before T365 this same test asserted their absence — it was written to fail when
-		 * T365 landed — and a hook-based check would pass for a column that used a different attribute
-		 * name entirely, which is why the amounts themselves are asserted.
+		 * into the row. The figures moved inside the "Latest Approved Amount" cell (D-04) but each keeps
+		 * its own label and hook, which is what the assertion checks.
 		 */
-		it('carries FR-062’s three stage-approved figures beside the latest-effective column', async () => {
+		it('carries FR-062’s three stage-approved figures beside the latest-effective group', async () => {
 			const wrapper = await mountWithFullSheet()
 
 			const rows = wrapper.findAll('[data-test="sheet-row"]')
 			expect(rows).toHaveLength(1)
-			// Narrowed explicitly rather than with `!`: under `noUncheckedIndexedAccess` the index is
-			// `T | undefined`, and an assertion here would otherwise be made on `undefined` while
-			// type-checking clean — which is the same shape as the vacuous assertions this file already
-			// had to be reopened for.
 			const row = rows[0]
 			expect(row).toBeDefined()
 			const group = row?.find('[data-test="sheet-list-stage-approved"]')
@@ -871,11 +916,258 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 				expect(cell?.exists(), `${hook} must be rendered`).toBe(true)
 				expect(cell?.text()).toContain(amountMinor.toLocaleString('fa-IR'))
 			}
-			// The latest-effective group this surface already owned is still present, so the new
-			// column sits beside it rather than replacing it — FR-062 distinguishes the two.
+			// The latest-effective group this surface already owned is still present, so the stage
+			// figures sit beside it rather than replacing it — FR-062 distinguishes the two.
 			expect(row?.find('[data-test="sheet-list-effective-outcome"]').exists()).toBe(true)
 		})
 	})
+
+	describe('UI-PUR-002: empty states', () => {
+		it('says there are no sheets yet when no filter is applied', async () => {
+			const wrapper = createWrapper(SheetListView)
+			await flushPromises()
+
+			expect(wrapper.text()).toContain('sheets.emptyAll')
+			expect(wrapper.text()).not.toContain('sheets.emptyFiltered')
+		})
+
+		it('says nothing matched when a filter is applied, rather than inviting a first sheet', async () => {
+			const wrapper = createWrapper(SheetListView)
+			await flushPromises()
+
+			await wrapper.find('[data-test="sheet-filter-currency"]').setValue('IRR')
+			await wrapper.find('[data-test="sheet-filters"]').trigger('submit')
+			await flushPromises()
+
+			expect(wrapper.text()).toContain('sheets.emptyFiltered')
+			expect(wrapper.text()).not.toContain('sheets.emptyAll')
+		})
+	})
+
+	/**
+	 * UI-PUR-008: one overflow menu per row, with only the actions the row's state allows.
+	 *
+	 * The real `NcActions` renders its items inside a popover, which jsdom cannot open; the module
+	 * double renders the trigger and the items together so the *set of items* can be asserted. The
+	 * trigger itself is a real `<button>` in both, and its accessible name is asserted through the
+	 * mock's recorded `t` call because this file's `t` double returns the key without substituting
+	 * `{name}`.
+	 */
+	describe('UI-PUR-008: sheet row actions', () => {
+		async function mountWithSheet(status: 'OPEN' | 'SENIOR') {
+			setSheetList([{ ...fullSheetFixture(), status }])
+			const wrapper = createWrapper(SheetListView)
+			await flushPromises()
+
+			return wrapper
+		}
+
+		it('names the sheet on the trigger and on every item', async () => {
+			const wrapper = await mountWithSheet('OPEN')
+			const menu = wrapper.find('[data-test="sheet-list-table"] [data-test="sheet-actions-trigger"]')
+
+			expect(menu.exists()).toBe(true)
+			expect(menu.find('[data-test="nc-actions-trigger"]').attributes('aria-label'))
+				.toBe('sheets.actionsNamed')
+
+			expect(vi.mocked(t)).toHaveBeenCalledWith('pettycash', 'sheets.actionsNamed', { name: 'Mordad travel' })
+			for (const key of ['sheets.viewNamed', 'sheets.editNamed', 'sheets.deleteNamed']) {
+				expect(vi.mocked(t)).toHaveBeenCalledWith('pettycash', key, { name: 'Mordad travel' })
+			}
+		})
+
+		it('offers view, edit and delete on an open sheet', async () => {
+			const wrapper = await mountWithSheet('OPEN')
+			const menu = wrapper.find('[data-test="sheet-list-table"] [data-test="sheet-actions-trigger"]')
+
+			expect(menu.find('[data-test="view-sheet"]').exists()).toBe(true)
+			expect(menu.find('[data-test="edit-sheet"]').exists()).toBe(true)
+			expect(menu.find('[data-test="delete-sheet"]').exists()).toBe(true)
+		})
+
+		it('offers only view on a submitted sheet, which the server refuses to edit or delete', async () => {
+			const wrapper = await mountWithSheet('SENIOR')
+			const menu = wrapper.find('[data-test="sheet-list-table"] [data-test="sheet-actions-trigger"]')
+
+			expect(menu.find('[data-test="view-sheet"]').exists()).toBe(true)
+			expect(menu.find('[data-test="edit-sheet"]').exists()).toBe(false)
+			expect(menu.find('[data-test="delete-sheet"]').exists()).toBe(false)
+		})
+
+		it('renders exactly one trigger per row — the table has no actions column', async () => {
+			setSheetList([
+				{ ...fullSheetFixture(), status: 'OPEN' },
+				{ ...fullSheetFixture(), id: 'sh-second', title: 'Second sheet', status: 'SENIOR' },
+			])
+			const wrapper = createWrapper(SheetListView)
+			await flushPromises()
+
+			const rows = wrapper.findAll('[data-test="sheet-list-table"] tbody tr[data-test="sheet-row"]')
+			expect(rows).toHaveLength(2)
+			for (const row of rows) {
+				expect(row.findAll('[data-test="sheet-actions-trigger"]')).toHaveLength(1)
+			}
+		})
+	})
+
+	/**
+	 * UI-PUR-004: what "back" means for this list.
+	 *
+	 * The list is remounted on return, so the context has to live outside the component: the store keeps
+	 * the applied filters and page, and the session module keeps the scroll offset and the router's
+	 * return decision. These tests mount the real view against a real (test) router with the tracking
+	 * installed, so the decision under test is the navigation pair, not a mocked boolean.
+	 */
+	describe('UI-PUR-004: list context on return', () => {
+		const manySheets = () =>
+			Array.from({ length: 15 }, (_, index) => ({
+				...fullSheetFixture(),
+				id: `sh-${index}`,
+				title: `Sheet ${index}`,
+			}))
+
+		function mountList(pinia: ReturnType<typeof createPinia>, router: Router) {
+			// Mounted inside the element that scrolls in the real layout (`#pettycash-app`). The view
+			// resolves its scroll container from its own root and falls back to this wrapper, so the
+			// test exercises the same resolution the browser does instead of a detached div.
+			return mount(SheetListView, {
+				...mountOptions(pinia, router, {}),
+				attachTo: scrollContainer(),
+			})
+		}
+
+		function scrollContainer(): HTMLElement {
+			const existing = document.getElementById('pettycash-app')
+			if (existing) return existing
+			const app = document.createElement('div')
+			app.id = 'pettycash-app'
+			document.body.appendChild(app)
+			return app
+		}
+
+		beforeEach(() => {
+			resetSheetListSession()
+			scrollContainer().scrollTop = 0
+		})
+
+		afterEach(() => {
+			document.getElementById('pettycash-app')?.remove()
+			resetSheetListSession()
+		})
+
+		it('restores the page, the applied filters and the scroll position on return', async () => {
+			setSheetList(manySheets())
+			const pinia = createPinia()
+			const router = createTestRouter()
+			installSheetListReturnTracking(router)
+			setActivePinia(pinia)
+			await router.push('/sheets')
+			await router.isReady()
+
+			const first = mountList(pinia, router)
+			await flushPromises()
+
+			const content = scrollContainer()
+			content.scrollTop = 140
+			await first.find('[data-test="sheet-list-item"]').trigger('click')
+			await flushPromises()
+			expect(router.currentRoute.value.name).toBe('sheet-detail')
+
+			// The context the visit leaves behind. The store outlives the unmounted view, which is what
+			// makes "restore" possible without a cache of the rows themselves.
+			const store = useSheetStore()
+			store.pagination.pageSize = 10
+			store.pagination.page = 2
+			store.filters = { currency: 'IRR' }
+			// Return while the first list is still mounted, then replace it with the remount a route
+			// change performs in the application (the test mounts the view directly, without a RouterView).
+			// Unmounting *before* the return would reset the router to its start location, because Vue
+			// Router clears the last installed app's route on unmount — a test-only sequence.
+			await router.push('/sheets')
+			await flushPromises()
+			first.unmount()
+
+			ocsRequest.mockClear()
+			const second = mountList(pinia, router)
+			await flushPromises()
+			await nextTick()
+
+			const urls = ocsRequest.mock.calls.map((call) =>
+				String((call[0] as { url?: string }).url ?? '')
+			)
+			expect(
+				urls.some((url) => url.includes('page=2') && url.includes('IRR')),
+				'the return must ask the server for the same page and filters, not replay cached rows'
+			).toBe(true)
+			expect(
+				(second.find('[data-test="sheet-filter-currency"]').element as HTMLInputElement).value
+			).toBe('IRR')
+			expect(useSheetStore().pagination.page).toBe(2)
+			expect(content.scrollTop).toBe(140)
+		})
+
+		it('starts from page 1, no filters and the top on a fresh visit', async () => {
+			setSheetList(manySheets())
+			const pinia = createPinia()
+			const router = createTestRouter()
+			installSheetListReturnTracking(router)
+			setActivePinia(pinia)
+			await router.push('/sheets')
+			await router.isReady()
+
+			const store = useSheetStore()
+			store.pagination.pageSize = 10
+			store.pagination.page = 2
+			store.filters = { currency: 'IRR' }
+			scrollContainer().scrollTop = 140
+
+			// From the dashboard, not from a sheet: an arrival, not a return.
+			await router.push('/')
+			await router.push('/sheets')
+
+			ocsRequest.mockClear()
+			mountList(pinia, router)
+			await flushPromises()
+			await nextTick()
+
+			const urls = ocsRequest.mock.calls.map((call) =>
+				String((call[0] as { url?: string }).url ?? '')
+			)
+			expect(urls.some((url) => url.includes('page=1'))).toBe(true)
+			expect(urls.some((url) => url.includes('IRR'))).toBe(false)
+			expect(useSheetStore().filters).toEqual({})
+			expect(scrollContainer().scrollTop).toBe(0)
+		})
+
+		it('falls back to the last page and says so when the stored page no longer exists', async () => {
+			setSheetList(manySheets().slice(0, 10))
+			const pinia = createPinia()
+			const router = createTestRouter()
+			installSheetListReturnTracking(router)
+			setActivePinia(pinia)
+			await router.push('/sheets/sh-0')
+			await router.push('/sheets')
+			await router.isReady()
+
+			const store = useSheetStore()
+			store.pagination.pageSize = 10
+			store.pagination.page = 2
+
+			ocsRequest.mockClear()
+			const wrapper = mountList(pinia, router)
+			await flushPromises()
+			await nextTick()
+
+			const pages = ocsRequest.mock.calls
+				.map((call) => String((call[0] as { url?: string }).url ?? ''))
+				.map((url) => /page=(\d+)/.exec(url)?.[1])
+				.filter((page): page is string => page !== undefined)
+			expect(pages.slice(0, 2)).toEqual(['2', '1'])
+			expect(store.pagination.page).toBe(1)
+			expect(wrapper.find('[data-test="sheet-page-clamped"]').exists()).toBe(true)
+		})
+	})
+
 	/**
 	 * T382: FR-064's four sheet facets and a pager, both of which the surface had no control for.
 	 *
@@ -921,16 +1213,12 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 			const card = wrapper.find('[data-test="sheet-row-card"]')
 
 			for (const key of [
-				'title',
-				'owner',
-				'currency',
+				'sheet',
 				'status',
 				'transactionCount',
-				'activeRevision',
-				'totals',
-				'latestEffective',
-				'keyDates',
-				'actions'
+				'recordedAmount',
+				'latestApproved',
+				'firstSubmitted'
 			]) {
 				expect(
 					card.find(`[data-test="sheet-list-card-field-${key}"]`).exists(),
@@ -951,14 +1239,17 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 			const card = wrapper.find('[data-test="sheet-row-card"]')
 
 			for (const name of [
-				'owner',
+				'id',
 				'current-total',
 				'submitted-total',
-				'active-revision',
-				'created-at',
 				'submitted-at',
-				'completed-at',
-				'expense-range'
+				'transaction-count',
+				'effective-approved',
+				'effective-rejected',
+				'effective-pending',
+				'cost-center-approved',
+				'senior-approved',
+				'finance-approved'
 			]) {
 				const fromTable = wrapper.find(`[data-test="sheet-list-${name}"]`).text()
 				const fromCard = card.find(`[data-test="sheet-list-${name}"]`).text()

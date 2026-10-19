@@ -332,21 +332,10 @@ describe('component reachability', () => {
 
 		const orphans = componentFiles.filter((f) => !reachable.has(f)).map((f) => f.replace(COMPONENTS + '/', ''))
 
-		// Pending-migration targets, not inert copies. `shared/AsyncState.vue`
-		// is T121's canonical loading/error/empty primitive (spec 9/9 green);
-		// existing views keep their working states until migrated one by one,
-		// and wiring it into a view merely to satisfy reachability would be
-		// the churn T121 forbids — the exact opposite of what this test guards
-		// against (T360: a duplicate surface certified by tests while the user
-		// reaches the other copy). Each exemption must still be an orphan:
-		// the day a view imports it, the exemption is stale and must go.
-		const PENDING_MIGRATION = new Set(['shared/AsyncState.vue'])
-		const staleExemptions = [...PENDING_MIGRATION].filter((f) => !orphans.includes(f))
-		expect(
-			staleExemptions,
-			`these migration exemptions are stale (now reachable) and must be removed: ${staleExemptions.join(', ') || 'none'}`,
-		).toEqual([])
-		const unexplained = orphans.filter((f) => !PENDING_MIGRATION.has(f))
+		// UI-PUR-002 migrated `shared/AsyncState.vue` into the sheet list. It was the last
+		// pending-migration exemption — a component whose tests were green while no view rendered it —
+		// so every component under src/components must now be reachable from a view.
+		const unexplained = orphans
 
 		expect(
 			unexplained,

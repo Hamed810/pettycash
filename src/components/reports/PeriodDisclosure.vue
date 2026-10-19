@@ -50,7 +50,6 @@ const isComplete = computed(() => {
 		class="report-period-disclosure"
 		role="status"
 		aria-live="polite"
-		dir="rtl"
 		data-testid="report-period-disclosure"
 	>
 		<span class="report-period-disclosure__label">

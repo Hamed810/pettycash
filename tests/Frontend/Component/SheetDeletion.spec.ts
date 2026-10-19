@@ -81,6 +81,22 @@ vi.mock('@nextcloud/vue', () => ({
 			'<button :type="type" :disabled="disabled" :class="[variant, size]" v-bind="$attrs" ' +
 			'@click="$emit(\'click\', $event)"><slot /></button>'
 	},
+	/*
+	 * UI-PUR-008: the delete action now lives in the row's overflow menu. The double renders the
+	 * trigger and its items so the existing `delete-sheet` hook (and its confirm flow) is reachable
+	 * without opening a popover.
+	 */
+	NcActions: {
+		name: 'NcActions',
+		props: ['forceMenu', 'ariaLabel'],
+		template: '<div class="nc-actions"><button type="button" :aria-label="ariaLabel" data-test="nc-actions-trigger" /><div class="nc-actions-menu"><slot /></div></div>'
+	},
+	NcActionButton: {
+		name: 'NcActionButton',
+		props: [],
+		emits: ['click'],
+		template: '<button type="button" data-test="nc-action-button" @click="$emit(\'click\')"><slot /></button>'
+	},
 	NcDialog: {
 		name: 'NcDialog',
 		props: ['name', 'size', 'open', 'canClose'],

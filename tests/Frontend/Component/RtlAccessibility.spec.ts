@@ -137,14 +137,32 @@ describe('T116: RTL logical alignment', () => {
 		).toEqual([])
 	})
 
-	it('marks every view as RTL', () => {
-		const missing = VIEWS.filter((f) => !/dir\s*=\s*"(rtl|ltr)"/.test(templateSource(f))).map(rel)
+	it('declares a direction on every view, derived from the shared language source', () => {
+		// UI-PUR-001: the direction is no longer a literal. A view may still declare `dir="rtl"`/
+		// `dir="ltr"` (an intentionally fixed island), but the purchaser surfaces bind the shared,
+		// language-derived value. Both spellings declare a direction; what is forbidden is *omitting*
+		// it — an omitted `dir` inherits the browser default, which is how a Persian view renders
+		// left-aligned in production while every unit test passes.
+		const DECLARED = /(?::dir\s*=\s*"direction"|dir\s*=\s*"(?:rtl|ltr)")/
+		const missing = VIEWS.filter((f) => !DECLARED.test(templateSource(f))).map(rel)
 		expect(
 			missing,
-			'each view must declare its own direction. It otherwise inherits from the mount point, which '
-				+ 'in a browser is LTR by default — a Persian view rendered left-aligned in production '
-				+ 'while every unit test passes'
+			'each view must declare its own direction, either as a literal or as `:dir="direction"` '
+				+ 'from `@/utils/direction`'
 		).toEqual([])
+
+		// And it must not pin one language's direction where the shared value is meant to follow the
+		// running language (UI-PUR-001 / AC1).
+		const hardcoded = VIEWS.filter((f) => /dir\s*=\s*"rtl"/.test(templateSource(f))).map(rel)
+		expect(hardcoded, 'the derived direction replaced the hardcoded `dir="rtl"` on the views').toEqual([])
+
+		// A view that binds the shared value must import it, or it renders no direction at all — which
+		// is the failure this test exists to catch, dressed as a passing binding.
+		const unimported = VIEWS
+			.filter((f) => /:dir\s*=\s*"direction"/.test(templateSource(f)))
+			.filter((f) => !/from '@\/utils\/direction'/.test(templateSource(f)))
+			.map(rel)
+		expect(unimported, 'a `:dir="direction"` binding needs the import from `@/utils/direction`').toEqual([])
 	})
 })
 

@@ -129,7 +129,7 @@ function cardRowHook(index: number): string | undefined {
 </script>
 
 <template>
-	<div class="responsive-table" dir="rtl" :data-test="testId">
+	<div class="responsive-table" :data-test="testId">
 		<div class="responsive-table__desktop">
 			<table :aria-busy="loading || undefined" :aria-label="caption">
 				<caption class="responsive-table__caption">{{ caption }}</caption>

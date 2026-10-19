@@ -68,7 +68,7 @@ async function download() {
 </script>
 
 <template>
-	<div class="evidence-preview" dir="rtl" data-test="evidence-preview">
+	<div class="evidence-preview" data-test="evidence-preview">
 		<img
 			v-if="kind === 'image' && objectUrl"
 			:src="objectUrl"

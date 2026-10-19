@@ -84,7 +84,7 @@ function run(): void {
 </script>
 
 <template>
-	<div class="export-controls" dir="rtl" data-testid="export-controls">
+	<div class="export-controls" data-testid="export-controls">
 		<div class="export-controls__row">
 			<NcSelect
 				v-model="selected"

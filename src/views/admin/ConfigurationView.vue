@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { direction } from '@/utils/direction'
 /**
  * T088: the administrator's reference-data surface.
  *
@@ -165,7 +166,7 @@ async function saveAssignment() {
 </script>
 
 <template>
-	<div class="configuration-view" dir="rtl" data-test="configuration-view">
+	<div class="configuration-view" :dir="direction" data-test="configuration-view">
 		<nav :aria-label="t('pettycash', 'navigation.title')" data-test="configuration-breadcrumb">
 			<RouterLink :to="{ name: 'dashboard' }" data-test="configuration-back-dashboard">{{ t('pettycash', 'navigation.dashboard') }}</RouterLink>
 		</nav>

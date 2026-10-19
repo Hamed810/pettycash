@@ -2,6 +2,7 @@
 import { nextTick, useTemplateRef, watch } from 'vue'
 import { RouterView, useRoute } from 'vue-router'
 import AppNavigation from '@/components/navigation/AppNavigation.vue'
+import { direction } from '@/utils/direction'
 
 /**
  * T118: route-heading focus.
@@ -33,7 +34,7 @@ watch(
 </script>
 
 <template>
-	<main class="pettycash-shell" aria-labelledby="pettycash-heading">
+	<main class="pettycash-shell" :dir="direction" aria-labelledby="pettycash-heading">
 		<h1 id="pettycash-heading" ref="heading" tabindex="-1" class="pettycash-shell__heading">
 			Petty Cash
 		</h1>

@@ -5,14 +5,16 @@
 		<NcEmptyContent
 			v-if="decisions.length === 0"
 			:description="t('pettycash', 'reviews.noPriorDecisions')"
-			:name="t('pettycash', 'reviews.priorDecisions')" />
+			:name="t('pettycash', 'reviews.priorDecisions')"
+		/>
 
 		<ul v-else class="decision-history" data-testid="decision-history-list">
 			<li
 				v-for="decision in decisions"
 				:key="decision.id"
 				class="decision-item"
-				:data-testid="`decision-item-${decision.id}`">
+				:data-testid="`decision-item-${decision.id}`"
+			>
 				<div class="decision-header">
 					<span class="decision-stage" data-testid="decision-stage">
 						{{ t('pettycash', `reviews.stage.${decision.stage.toLowerCase()}`) }}
@@ -22,11 +24,13 @@
 						variant="warning"
 						class="advisory-badge"
 						data-testid="advisory-badge"
-						:text="t('pettycash', 'reviews.advisory')" />
+						:text="t('pettycash', 'reviews.advisory')"
+					/>
 					<span
 						class="decision-type"
 						:class="`decision-${decision.decision.toLowerCase()}`"
-						data-testid="decision-type">
+						data-testid="decision-type"
+					>
 						{{ t('pettycash', `reviews.decision.${decision.decision.toLowerCase()}`) }}
 					</span>
 				</div>
@@ -49,6 +53,7 @@
 import { t } from '@nextcloud/l10n'
 import NcChip from '@nextcloud/vue/components/NcChip'
 import NcEmptyContent from '@nextcloud/vue/components/NcEmptyContent'
+import { formatSheetDateTime } from '@/utils/date'
 
 type WorkflowDecision = 'APPROVE' | 'REJECT' | 'RETURN'
 
@@ -87,18 +92,17 @@ function isAdvisory(decision: Props['decisions'][number]): boolean {
 	return normalizeStage(decision.stage) === 'COST_CENTER' && normalizeStage(props.currentStage) === 'SENIOR'
 }
 
+/** UI-PUR-001: field set only; the shared helper owns locale, calendar and absence. */
+const SHORT_DATE_TIME: Intl.DateTimeFormatOptions = {
+	year: 'numeric',
+	month: 'short',
+	day: 'numeric',
+	hour: '2-digit',
+	minute: '2-digit',
+}
+
 function formatDateTime(dateStr: string): string {
-	try {
-		return new Date(dateStr).toLocaleString('fa-IR', {
-			year: 'numeric',
-			month: 'short',
-			day: 'numeric',
-			hour: '2-digit',
-			minute: '2-digit',
-		})
-	} catch {
-		return dateStr
-	}
+	return formatSheetDateTime(dateStr, { options: SHORT_DATE_TIME })
 }
 </script>
 
