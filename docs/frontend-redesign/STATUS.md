@@ -1,11 +1,11 @@
 # Pettycash Frontend Redesign — Live Status / وضعیت جاری پروژه
 
-**As of / تاریخ وضعیت:** 2026-10-19  
+**As of / تاریخ وضعیت:** 2026-10-20  
 **Charter / منشور:** v1.0 + الحاقیه اجرایی ۷ (Spec Kit) / v1.0 + execution addendum 7 (Spec Kit)  
-**Current phase / فاز جاری:** **F1/F2 materially advanced — the audit and Batch A are recorded by `GIT-PLAN-001-R1`; Batch B not started**  
-**Code changes / تغییرات کد:** **Batch A recorded by `GIT-PLAN-001-R1` (C5 `fae7bce`); no backend change; no Batch B card; no push**  
+**Current phase / فاز جاری:** **F1/F2 materially advanced — Batch A is recorded; the Batch B frontend (`T029–T038`, `T022`) is implemented and verified on 2026-10-20; owner visual acceptance and Git are pending**  
+**Code changes / تغییرات کد:** **Batch A recorded by `GIT-PLAN-001-R1` (C5 `fae7bce`); Batch B frontend source/tests/l10n/docs are uncommitted; generated `js/`/`css/` refreshed; no backend change; no Git write; no push**  
 **Canonical ledger / دفتر وضعیت رسمی:** [`specs/005-purchaser-ui-redesign/tasks.md`](../../specs/005-purchaser-ui-redesign/tasks.md)  
-**Repository sync / ثبت در مخزن:** **C1 `7e9fe77`, C2 `f8bf1d3`, C3 `7307e41`, C4 `62dcd59`, C5 `fae7bce`, C6 `8869fc6`; this status update is C7; no push**
+**Repository sync / ثبت در مخزن:** **C1 `7e9fe77`, C2 `f8bf1d3`, C3 `7307e41`, C4 `62dcd59`, C5 `fae7bce`, C6 `8869fc6`; the 2026-10-19 status was C7; the Batch B update is uncommitted; no push**
 
 > این سند جای وضعیت تاریخ ۲۰۲۶-۱۰-۱۱ را می‌گیرد. متن پیشین از طریق تاریخچه Git قابل بازیابی است. هیچ اصلی از منشور تغییر نکرده و هیچ فازی مصوب اعلام نشده است. / This file replaces the 2026-10-11 status; the previous text is recoverable from Git history. No charter principle changed and no phase is declared approved.
 
@@ -21,22 +21,23 @@
 2. **Batch A recorded in C5 (`fae7bce`):** `UI-PUR-008` and `UI-PUR-004` are technically verified; `UI-PUR-001` and `UI-PUR-002` are partial. Evidence: `review/bunny/BATCH_A_EXECUTION_REPORT.md`, a re-executed 4-file/168-test run, and the R1 pre-commit 7-file/241-test run on 2026-10-19.
 3. **ثبت تحت Spec Kit:** `specs/005-purchaser-ui-redesign/` (مشخصات، طرح، تحقیق، مدل داده، قرارداد، quickstart، چک‌لیست و دفتر وظایف) ایجاد شد و `.specify/feature.json` به آن اشاره می‌کند.
 4. **حاکمیت هم‌راستا شد:** این فایل، `CHARTER.md` (الحاقیه ۷)، `DECISIONS.md` (D-016…D-019 و P-005…P-010) و `ROADMAP.md` فقط با شواهد به‌روز شدند.
+5. **Batch B frontend (2026-10-20):** با دستور مالک، `T029–T038` و `T022` پیاده‌سازی و راستی‌آزمایی شدند: `npm run check` سبز (۵۲۴/۵۲۴ در اجرای دوم؛ ۹ فایل/۲۲۲ تست هدفمند)؛ فارسی RTL زنده (پوشش دیالوگ، ۴ تب، ۳ مرحله تأیید، ۳ رویداد تاریخچه، ۳۹۰×۸۴۴ بدون خطا/سرریز) و انگلیسی LTR (`dir=ltr`، بدون سرریز، کلیدهای خام چون `REC-01` باز است)؛ استقلال تقویم تأیید شد (فارسی+میلادی در برابر فارسی+جلالی). هیچ نوشتن Git انجام نشد.
 
-**Not done:** product-owner visual acceptance of Batch A; the live calendar-change surface (AC2); the mutating negative test (AC5); an English catalog (`REC-01`); creation-date filter labels (`REC-06`); every Batch B card; all six `BE-CR`s.
+**Not done:** product-owner visual acceptance of Batch A and Batch B (`T051`); the live calendar-change surface (AC2/`T017`); the mutating negative test (AC5/`T018`); an English catalog and English visual acceptance (`REC-01`/`T023`); the backend-blocked cards (`T028`/`T039`/`T040`/`T044`); all six `BE-CR`s.
 
-**وضعیت کارت‌ها:** ۲ کارت `DONE_VERIFIED` فنی (`UI-PUR-004`، `UI-PUR-008`)، ۲ کارت `PARTIAL` (`UI-PUR-001`، `UI-PUR-002`)، ۱۳ کارت `READY_FOR_OWNER_APPROVAL` (تأییدنشده)، ۳ کارت `BLOCKED_BY_BACKEND` (`UI-PUR-003`، `007`، `014`) و شش `BE-CR` در وضعیت `BLOCKED_PENDING_OWNER_APPROVAL`. جزئیات و دروازه هر کارت در دفتر وضعیت رسمی است.
+**وضعیت کارت‌ها:** ۱۱ کارت `DONE_VERIFIED` (`UI-PUR-004`/`008` و Batch B شامل `005`، `006`، `009`–`013`، `015`، و `016` در سطح سرور)، ۲ کارت `PARTIAL` (`UI-PUR-001`، `UI-PUR-002`)، ۳ کارت `BLOCKED_BY_BACKEND` (`UI-PUR-003`، `007`، `014`) و شش `BE-CR` در وضعیت `BLOCKED_PENDING_OWNER_APPROVAL`. پذیرش بصری مالک (`T051`) برای کارت‌های تکمیل‌شده باز است. جزئیات و دروازه هر کارت در دفتر وضعیت رسمی است.
 
 ### اقدام دقیق بعدی
 
-1. **تصمیم مالک محصول** درباره `REC-01` (منبع کاتالوگ انگلیسی) — دروازه هر پذیرش بصری انگلیسی.
-2. **تأیید یا رد کارت‌به‌کارت** کارت‌های `READY_FOR_OWNER_APPROVAL` و سطح زنده تقویم (`P-008`).
-3. **پاسخ پرسش‌های باز `BE-CR-001/002/003`** و تعیین دامنه `BE-CR-004/005/006` (`P-007`، `P-009`).
-4. **`GIT-PLAN-001-R1` executed** — C1–C6 are recorded; C7 records this status; no push.
-5. Batch B تنها پس از تأیید کارت‌به‌کارت آغاز شود.
+1. **پذیرش بصری مالک (`T051`)** بر پایه اسکرین‌شات‌ها و شواهد زنده؛ این پذیرش را نمی‌توان خودکار اعلام کرد.
+2. **تصمیم مالک محصول** درباره `REC-01`/`P-005`، سطح زنده تقویم (`P-008`) و `T017`/`T018`.
+3. **تصویب طرح Git** (`GIT-PLAN-002-R1`) برای مجموعه تغییرات Batch B (سورس/تست/کاتالوگ/مستندات)، تصمیم درباره `js/`/`css/` تولیدشده و `G-BB-ASSETS`; هیچ add/commit/push انجام نشده است.
+4. **پاسخ پرسش‌های باز `BE-CR-001/002/003`** و تعیین دامنه `BE-CR-004/005/006` (`P-007`، `P-009`).
+5. Push/merge مجاز نیست؛ `GIT-PLAN-003` برای push/PR تهیه نشده است (طرح چک‌پوینت `GIT-PLAN-002-R1` پیشنهاد شده است).
 
-**Blockers / موانع:** `BE-CR-001/002/003` (کارت‌های وابسته)، `REC-01` (پذیرش انگلیسی)، سطح کاربری تقویم (AC2)، آزمون منفی AC5، و پذیرش بصری Batch A.
+**Blockers / موانع:** `BE-CR-001/002/003` (کارت‌های وابسته)، `REC-01` (پذیرش انگلیسی)، سطح کاربری تقویم (AC2/`T017`)، آزمون منفی AC5/`T018`، و پذیرش بصری Batch A/Batch B.
 
-**Next gate / دروازه بعد:** decisions `P-005…P-009`; `GIT-PLAN-002` for push/PR.
+**Next gate / دروازه بعد:** `T051` visual acceptance; decisions `P-005`/`P-008`; Git approval; `BE-CR` answers; `GIT-PLAN-003` for push/PR.
 
 ## English — restart handoff
 
@@ -50,22 +51,23 @@
 2. **Batch A recorded in C5 (`fae7bce`):** `UI-PUR-008` and `UI-PUR-004` are technically verified; `UI-PUR-001` and `UI-PUR-002` are partial. Evidence: `review/bunny/BATCH_A_EXECUTION_REPORT.md`, a re-executed 4-file/168-test run, and the R1 pre-commit 7-file/241-test run on 2026-10-19.
 3. **Spec Kit registration:** `specs/005-purchaser-ui-redesign/` (spec, plan, research, data model, contract, quickstart, checklist, task ledger) created; `.specify/feature.json` points at it.
 4. **Governance reconciled:** this file, `CHARTER.md` (addendum 7), `DECISIONS.md` (D-016…D-019, P-005…P-010), and `ROADMAP.md` updated with evidence only.
+5. **Batch B frontend (2026-10-20):** under the owner directive, `T029–T038` and `T022` are implemented and verified: `npm run check` passed (524/524 on rerun; targeted 9 files/222 tests); live Persian RTL (overlay, 4 tabs, 3 approval stages, 3 history events, 390×844, no errors/overflow) and English LTR (`dir=ltr`, no overflow, raw keys because `REC-01` is open); calendar independence confirmed (Persian+Gregorian vs Persian+Jalali). No Git write.
 
-**Not done:** product-owner visual acceptance of Batch A; the live calendar-change surface (AC2); the mutating negative test (AC5); an English catalog (`REC-01`); creation-date filter labels (`REC-06`); every Batch B card; all six `BE-CR`s.
+**Not done:** product-owner visual acceptance of Batch A and Batch B (`T051`); the live calendar-change surface (AC2/`T017`); the mutating negative test (AC5/`T018`); an English catalog and English visual acceptance (`REC-01`/`T023`); the backend-blocked cards (`T028`/`T039`/`T040`/`T044`); all six `BE-CR`s.
 
-**Card states:** 2 technically `DONE_VERIFIED` (`UI-PUR-004`, `UI-PUR-008`), 2 `PARTIAL` (`UI-PUR-001`, `UI-PUR-002`), 13 `READY_FOR_OWNER_APPROVAL` (not approved), 3 `BLOCKED_BY_BACKEND` (`UI-PUR-003`, `007`, `014`), and six `BE-CR`s `BLOCKED_PENDING_OWNER_APPROVAL`. Per-card gates live in the canonical ledger.
+**Card states:** 11 technically `DONE_VERIFIED` (`UI-PUR-004`/`008` plus Batch B `005`, `006`, `009`–`013`, `015`, and `016` server tier), 2 `PARTIAL` (`UI-PUR-001`, `UI-PUR-002`), 3 `BLOCKED_BY_BACKEND` (`UI-PUR-003`, `007`, `014`), and six `BE-CR`s `BLOCKED_PENDING_OWNER_APPROVAL`. Owner visual acceptance (`T051`) is open for the completed visual cards. Per-card gates live in the canonical ledger.
 
 ### Exact next actions
 
-1. **Owner decision** on `REC-01` (English catalog sourcing) — it gates every English visual acceptance.
-2. **Approve or reject** each `READY_FOR_OWNER_APPROVAL` card individually, plus the live calendar surface (`P-008`).
-3. **Answer the open `BE-CR-001/002/003` questions** and scope `BE-CR-004/005/006` (`P-007`, `P-009`).
-4. **`GIT-PLAN-001-R1` executed** — C1–C6 are recorded; C7 records this status; no push.
-5. Start Batch B only after card-by-card approval.
+1. **Owner visual acceptance (`T051`)** based on the screenshots and live evidence; it cannot be self-certified.
+2. **Owner decision** on `REC-01`/`P-005`, the live calendar surface (`P-008`), and `T017`/`T018`.
+3. **Approve the Git plan** (`GIT-PLAN-002-R1`) for the Batch B source/test/l10n/docs change set, the generated `js/`/`css/` include/exclude decision, and `G-BB-ASSETS`; no staging, commit, or push has been performed.
+4. **Answer the open `BE-CR-001/002/003` questions** and scope `BE-CR-004/005/006` (`P-007`, `P-009`).
+5. Push/merge is unauthorized; `GIT-PLAN-003` for push/PR is not prepared (the checkpoint plan `GIT-PLAN-002-R1` is proposed).
 
-**Blockers:** `BE-CR-001/002/003` (dependent cards), `REC-01` (English acceptance), the calendar surface (AC2), the AC5 negative test, and Batch A visual acceptance.
+**Blockers:** `BE-CR-001/002/003` (dependent cards), `REC-01` (English acceptance), the calendar surface (AC2/`T017`), the AC5/`T018` negative test, and Batch A/Batch B visual acceptance.
 
-**Next gate:** decisions `P-005…P-009`; `GIT-PLAN-002` for push/PR.
+**Next gate:** `T051` visual acceptance; decisions `P-005`/`P-008`; Git approval; `BE-CR` answers; `GIT-PLAN-003` for push/PR.
 
 ---
 

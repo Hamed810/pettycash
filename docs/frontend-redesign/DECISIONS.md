@@ -1,6 +1,6 @@
 # Pettycash Frontend Redesign — Decision Log / دفتر تصمیمات
 
-**Version / نسخه:** 1.0 · **Consolidated / تاریخ تنظیم:** 2026-10-11 · **آخرین افزوده / last addition:** 2026-10-19 (D-016…D-019، P-005…P-010)  
+**Version / نسخه:** 1.0 · **Consolidated / تاریخ تنظیم:** 2026-10-11 · **آخرین افزوده / last addition:** 2026-10-20 (D-021؛ به‌روزرسانی P-006)  
 **Decision authority / مرجع تصویب:** Product owner / مالک محصول  
 **Statuses / وضعیت‌ها:** `Accepted / مصوب` · `Proposed / پیشنهادی` · `Superseded / جایگزین‌شده`
 
@@ -37,6 +37,13 @@
 - **Relationship to D-019:** D-019's approval requirement and its exclusion of pre-existing user changes remain in force. D-020 supersedes only D-019's exclusion of build output for this checkpoint; C6 records it after a repeat build is byte-identical.
 - **Record rule:** Commit SHAs and outcomes are recorded in C7 only after C1–C6 succeed.
 
+### D-021 — Purchaser Batch B frontend directive (Accepted 2026-10-20)
+
+- **Status:** Accepted. The product owner directed implementation of the approved Purchaser frontend redesign on 2026-10-20.
+- **Decision:** The authorization covers the **frontend** Batch B cards `T029–T038` and `T022`, implemented in the real Nextcloud app and verified in the running lab. Backend changes (`lib/`, `appinfo/`, API/contracts), the English catalog (`REC-01`), and **all Git writes** remain blocked. No visible calendar toggle is authorized (`FR-005-004` / T017); the T018 mutating negative test remains owner-gated.
+- **Relationship to D-018/D-019:** D-018's `BE-CR` block and D-019's Git approval requirement remain in force. D-021 does not approve any `BE-CR`, a Git plan, or an English catalog.
+- **Evidence:** `specs/005-purchaser-ui-redesign/tasks.md` Batch B evidence section and `docs/reports/005-purchaser-ui-redesign.md` §Batch B.
+
 ## موضوعات باز و پیشنهادها / Open items and proposals
 
 | ID | فارسی — موضوع نیازمند تصمیم | English — decision still required | Status / gate |
@@ -51,7 +58,7 @@
 | ID | فارسی — موضوع نیازمند تصمیم | English — decision still required | Status / gate |
 |---|---|---|---|
 | **P-005** | منبع کاتالوگ انگلیسی (`REC-01`): ساخت `l10n/en.*` یا اکتفا به مراجع ایستا برای بازبینی انگلیسی؟ تا این تصمیم، هیچ پذیرش بصری انگلیسی قابل‌سنجش نیست و کاتالوگ ناقص/دستی ممنوع است. | English catalog sourcing (`REC-01`): author `l10n/en.*`, or review English against static references only? Until then no English visual acceptance is verifiable and a partial/stub catalog is prohibited. | **Open — blocks English acceptance** |
-| **P-006** | تصویب کارت‌به‌کارت Scope «Batch B» (۱۳ کارت `READY_FOR_OWNER_APPROVAL`). تصویب یک صف یا طرح، تصویب کارت نیست. | Approve Batch B scope card by card (13 `READY_FOR_OWNER_APPROVAL` cards). Approving a queue or a plan is not approving a card. | **Open — before any Batch B work** |
+| **P-006** | دامنه Batch B: دستور ۲۰۲۶-۱۰-۲۰ کارت‌های **فرانت‌اند** `T029–T038` و `T022` را مجاز کرد؛ کارت‌های وابسته به Backend و نوشتن Git همچنان مسدودند. تصویب یک صف فرانت‌اند، تصویب کارت Backend نیست. | Batch B scope: the 2026-10-20 directive authorizes the **frontend** cards `T029–T038` and `T022`; backend-dependent cards and Git writes remain blocked. Approving a frontend queue does not approve a backend card. | **Accepted — frontend only (2026-10-20)** |
 | **P-007** | پاسخ به پرسش‌های باز `BE-CR-001/002/003`: قاعده ارز هنگام تغییر حساب؛ خوانش مجوز؛ ترتیب داخل گروه OPEN و tie-breaker؛ معنای `REC-03` و شکل payload. | Answer the open `BE-CR-001/002/003` questions: currency rule on account change; permission reading; intra-OPEN ordering and tie-breaker; `REC-03` semantics and payload shape. | **Open — required before those approvals** |
 | **P-008** | آیا سطح کاربری تغییر تقویم (`UI-PUR-001` AC2) مجاز است؟ امروز فقط سازوکار پیاده شده و هیچ toggle نمایانی مجاز نبوده است. | Is a user-facing calendar-change surface authorized (`UI-PUR-001` AC2)? Only the mechanism exists today; no visible toggle was authorized. | **Open — owner** |
 | **P-009** | دامنه `BE-CR-004/005/006`: آیا این سه تغییر انطباق با مشخصات اصلاً در دامنه این بازطراحی هستند؟ پاسخ `BE-CR-004` دروازه لایه شواهد `UI-PUR-016` است. | Scope of `BE-CR-004/005/006`: are these three spec-compliance changes in this redesign's scope at all? The `BE-CR-004` answer gates `UI-PUR-016`'s evidence tier. | **Open — owner** |

@@ -1,9 +1,9 @@
 # Pettycash Frontend Redesign — Roadmap / نقشه راه بازطراحی فرانت‌اند
 
-**Version / نسخه:** 1.0 + هم‌راستاسازی ۲۰۲۶-۱۰-۱۹ · **Date / تاریخ:** 2026-10-11 (به‌روزشده ۲۰۲۶-۱۰-۱۹)  
+**Version / نسخه:** 1.0 + هم‌راستاسازی ۲۰۲۶-۱۰-۱۹ و ۲۰۲۶-۱۰-۲۰ · **Date / تاریخ:** 2026-10-11 (به‌روزشده ۲۰۲۶-۱۰-۲۰)  
 **Authoritative scope / مرجع دامنه:** [`CHARTER.md`](CHARTER.md)  
 **Canonical ledger / دفتر وضعیت رسمی:** [`specs/005-purchaser-ui-redesign/tasks.md`](../../specs/005-purchaser-ui-redesign/tasks.md)  
-**Overall state / وضعیت کلی:** F0 committed; F1 delivered as the audit package under the fast-track (owner acceptance pending); Batch A recorded by `GIT-PLAN-001-R1` (C5 `fae7bce`); Batch B not started.
+**Overall state / وضعیت کلی:** F0 committed; F1 delivered as the audit package under the fast-track (owner acceptance pending); Batch A recorded by `GIT-PLAN-001-R1` (C5 `fae7bce`); Batch B **frontend** (`T029–T038`, `T022`) implemented and verified on 2026-10-20; owner visual acceptance and Git pending; backend cards unapproved.
 
 > **Gate rule / قانون عبور:** Deliverables and product-owner acceptance are required before moving to the next phase. / برای ورود به هر فاز، تحویل خروجی و تأیید مالک محصول ضروری است.
 
@@ -15,10 +15,10 @@
 |---|---|---|---|---|
 | **F0 — منشور** | ✅ تصویب و ثبت در Git (PR شماره ۷) | توافق بر اصول، Scope، بودجه، نقش‌ها | همین چهار سند حاکمیتی | تأیید توافق‌ها؛ ثبت فایل‌ها در مخزن |
 | **F1 — شناخت و Audit** | ◐ بسته ممیزی تحویل شد (مسیر سریع ۲۰۲۶-۱۰-۱۵)؛ پذیرش مالک در دروازه F1.7 در انتظار | تحلیل Pettycash و Budget، مرور کارکرد و تصاویر | Audit مبتنی بر شواهد، نقشه صفحات/نقش‌ها/گردش‌کارها، تحلیل مرجع Budget، فهرست شکاف‌ها و اولویت‌ها | تأیید گزارش و محدوده F2 |
-| **F2 — تثبیت زیرساخت UI** | ▶ Partially executed — Batch A recorded in C5 (`fae7bce`) | اصلاح باگ‌های بنیادیِ *تأییدشده* مطابق Scope مصوب | اصلاحات محدود، شواهد علت ریشه‌ای، تست‌های مرتبط | تأیید سلامت مبانی نمایش و نبود رگرسیون |
+| **F2 — تثبیت زیرساخت UI** | ▶ Batch A recorded; Batch B frontend forms/workspace/list implemented and verified (2026-10-20) | اصلاح باگ‌های بنیادیِ *تأییدشده* مطابق Scope مصوب | اصلاحات محدود، شواهد علت ریشه‌ای، تست‌های مرتبط | تأیید سلامت مبانی نمایش و نبود رگرسیون |
 | **F3 — معماری UX** | ◐ بخشی روشن شد — تصمیم‌های D-01/D-11 (کارگاه سه‌تبی و دیالوگ تغییرات ذخیره‌نشده) ثبت شده‌اند؛ خروجی F3 پذیرفته نشده | طراحی مسیرهای کاربر، سلسله‌مراتب، ناوبری و وضعیت‌های UI | User flows، ساختار اطلاعات، page specs و قرارداد رفتار | تأیید UX توسط مالک محصول |
 | **F4 — طراحی بصری و Prototype** | ◐ نمونه‌ها موجودند (سه صفحه مرجع + ۹ تصویر موبایل)؛ تأیید بصری ثبت نشده | بازآفرینی نزدیک زبان بصری Budget برای نیازهای Pettycash | الگوی طراحی، نمونه قابل مشاهده، طراحی دو زبان/دو جهت/دو Theme | تأیید نمونه‌ها پیش از اجرا |
-| **F5 — پیاده‌سازی تدریجی** | ▶ محدود آغاز شد — فقط Batch A؛ بقیه کارت‌ها تأییدنشده و Batch B آغاز نشده | تغییر در برش‌های کوچک بر اساس طراحی مصوب | کد، گزارش تغییرات، آزمون، تصاویر قبل/بعد | تأیید هر برش طبق Definition of Done |
+| **F5 — پیاده‌سازی تدریجی** | ▶ Batch A recorded; Batch B frontend (`T029–T038`, `T022`) implemented/verified 2026-10-20; backend cards and owner acceptance pending | تغییر در برش‌های کوچک بر اساس طراحی مصوب | کد، گزارش تغییرات، آزمون، تصاویر قبل/بعد | تأیید هر برش طبق Definition of Done |
 | **F6 — تأیید نهایی** | ⬜ شروع نشده | سناریوهای کامل، رگرسیون، دسترس‌پذیری، بازبینی و آماده‌سازی انتشار | ماتریس شواهد و گزارش پذیرش نهایی | پذیرش صریح مالک محصول |
 
 ### F1 — گام‌های پیشنهادی بدون تغییر کد
@@ -57,10 +57,10 @@
 |---|---|---|---|---|
 | **F0 — Charter** | ✅ Approved and committed to Git (PR #7) | Agree on principles, scope, budget, roles | Four governance documents | Approval and repository record |
 | **F1 — Discovery & audit** | ◐ Audit package delivered (fast-track, 2026-10-15); owner acceptance pending at the F1.7 gate | Study Pettycash and Budget, browser evidence | Evidence-based audit, page/role/flow inventory, Budget study, prioritized gaps | Product-owner acceptance of audit and F2 scope |
-| **F2 — UI foundation stabilization** | ▶ Partially executed — Batch A recorded in C5 (`fae7bce`) | Fix confirmed foundational defects in approved scope | Bounded fixes, root-cause evidence, relevant tests | Foundation checks pass, no unaccepted regressions |
+| **F2 — UI foundation stabilization** | ▶ Batch A recorded; Batch B frontend forms/workspace/list implemented and verified (2026-10-20) | Fix confirmed foundational defects in approved scope | Bounded fixes, root-cause evidence, relevant tests | Foundation checks pass, no unaccepted regressions |
 | **F3 — UX architecture** | ◐ Partially resolved — decisions D-01/D-11 (tabbed workspace, unsaved-changes dialog) are recorded; no accepted F3 deliverable | User journeys, information hierarchy, navigation, UI states | User flows, information architecture, page/behavior specifications | UX approval |
 | **F4 — Visual design & prototypes** | ◐ Samples exist (three reference screens + 9 mobile images); no recorded visual approval | Closely adapt Budget's visual language to Pettycash | Design patterns, reviewable prototypes, bilingual/bidirectional/two-theme variants | Explicit visual approval before coding |
-| **F5 — Incremental implementation** | ▶ Started in a bounded way — Batch A only; every other card unapproved and Batch B not started | Implement approved slices | Code, change reports, tests, before/after screenshots | Definition of Done + slice approval |
+| **F5 — Incremental implementation** | ▶ Batch A recorded; Batch B frontend (`T029–T038`, `T022`) implemented/verified 2026-10-20; backend cards and owner acceptance pending | Implement approved slices | Code, change reports, tests, before/after screenshots | Definition of Done + slice approval |
 | **F6 — Final verification** | ⬜ Not started | End-to-end, regression, accessibility, release readiness | Evidence matrix and acceptance report | Explicit product-owner sign-off |
 
 ### F1 — proposed read-only work packages
@@ -98,14 +98,32 @@ At each gate: (1) deliver evidence, (2) record issues and risks, (3) obtain expl
 - جدول بالا **وضعیت** را با شواهد جاری نشان می‌دهد؛ **هیچ دروازه فازی باز نشده و هیچ فازی مصوب اعلام نشده است**.
 - بسته ممیزی (`review/deepseek/**`) و گزارش Batch A (`review/bunny/**`) شواهد محسوب می‌شوند؛ منبع دوم الزامات نیستند.
 - کارت‌های `UI-PUR-001…016` و `BE-CR-001…006` بازطراحی خریدار با شناسه‌های اصلی خود ذیل `specs/005-purchaser-ui-redesign/` ثبت شده‌اند؛ **دفتر وضعیت رسمی** `specs/005-purchaser-ui-redesign/tasks.md` است و دروازه هر کارت در همان‌جا آمده است.
-- هیچ کارت Batch B تأیید یا آغاز نشده و هیچ `BE-CR` تأیید نشده است.
+- تا ۲۰۲۶-۱۰-۱۹ هیچ کارت Batch B تأیید یا آغاز نشده بود و هیچ `BE-CR` تأیید نشده است؛ بخش ۲۰۲۶-۱۰-۲۰ این جمله را فقط برای کارت‌های فرانت‌اند جایگزین می‌کند.
 
 **English — where the phases actually stand, and the status authority:**
 
 - The table above shows the **status** against current evidence; **no phase gate has opened and no phase is declared approved**.
 - The audit package (`review/deepseek/**`) and the Batch A report (`review/bunny/**`) are evidence; they are not a second requirement source.
 - The purchaser redesign cards `UI-PUR-001…016` and `BE-CR-001…006` are registered with their original IDs under `specs/005-purchaser-ui-redesign/`; the **canonical ledger** is `specs/005-purchaser-ui-redesign/tasks.md`, which carries each card's gate.
-- No Batch B card is approved or started, and no `BE-CR` is approved.
+- As of 2026-10-19, no Batch B card was approved or started, and no `BE-CR` is approved; the 2026-10-20 section supersedes this for the frontend cards only.
+
+---
+
+## هم‌راستاسازی ۲۰۲۶-۱۰-۲۰ / 2026-10-20 reconciliation
+
+**فارسی:**
+
+- **دستور مالک (`D-021`):** Batch B **فرانت‌اند** `T029–T038` و `T022` در اپ واقعی پیاده‌سازی و در lab راستی‌آزمایی شد؛ Backend، کاتالوگ انگلیسی (`REC-01`) و همه نوشتن‌های Git مسدود ماندند. این دستور، جمله «هیچ کارت Batch B تأیید یا آغاز نشده» را فقط برای کارت‌های فرانت‌اند جایگزین می‌کند.
+- **نتیجه:** `npm run check` سبز (۵۲۴/۵۲۴ در اجرای دوم؛ ۹ فایل/۲۲۲ تست هدفمند)؛ فارسی RTL و انگلیسی LTR زنده بدون خطا/سرریز؛ استقلال تقویم تأیید شد. `T051` پذیرش بصری مالک باز است.
+- **بدون تغییر:** `P-005` (کاتالوگ انگلیسی)، `P-008` (سطح تقویم)، `P-007`/`P-009` (BE-CR)، و شش `BE-CR`.
+- **Git:** هیچ نوشتن Git انجام نشد؛ طرح شماره‌دار [`GIT-PLAN-002-R1`](../reports/GIT-PLAN-002-R1.md) پیشنهاد شده و تصویب مالک لازم است.
+
+**English:**
+
+- **Owner directive (`D-021`):** Batch B **frontend** `T029–T038` and `T022` were implemented in the real app and verified in the lab; backend, the English catalog (`REC-01`), and all Git writes remained blocked. This supersedes the 2026-10-19 "no Batch B card" statement for the frontend cards only.
+- **Result:** `npm run check` passed (524/524 on rerun; 9 files/222 targeted); live Persian RTL and English LTR with no errors/overflow; calendar independence confirmed. `T051` owner visual acceptance is open.
+- **Unchanged:** `P-005` (English catalog), `P-008` (calendar surface), `P-007`/`P-009` (BE-CRs), and all six `BE-CR`s.
+- **Git:** no Git write performed; the numbered plan [`GIT-PLAN-002-R1`](../reports/GIT-PLAN-002-R1.md) is proposed and needs owner approval.
 
 ---
 
