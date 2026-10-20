@@ -37,6 +37,7 @@ function formatFileSize(bytes: number) {
 const fileInput = useTemplateRef<HTMLInputElement>('fileInput')
 
 function openFilePicker() {
+	if (!props.isDraft || !props.transactionId) return
 	fileInput.value?.click()
 }
 
@@ -44,7 +45,7 @@ function onFileSelected(event: Event) {
 	// FR-025 allows evidence to be added before submission and FR-026 forbids it afterwards, so the
 	// input is not even rendered for a submitted transaction. The guard is repeated here because a
 	// file can also arrive by assignment rather than by a click.
-	if (!props.isDraft) return
+	if (!props.isDraft || !props.transactionId) return
 	const input = event.target as HTMLInputElement
 	if (input.files && input.files.length > 0) {
 		const selectedFile = input.files[0]
@@ -66,7 +67,7 @@ function onFileSelected(event: Event) {
 }
 
 async function handleUpload() {
-	if (!file.value || !props.isDraft) return
+	if (!file.value || !props.isDraft || !props.transactionId) return
 	uploading.value = true
 	progress.value = 0
 	error.value = null
@@ -106,6 +107,12 @@ function removeFile() {
 		<div v-if="!isDraft" class="evidence-locked" data-test="evidence-locked">
 			<NcIconSvgWrapper :path="mdiLock" :size="20" />
 			<span>{{ t('pettycash', 'evidence.lockedAfterSubmission') }}</span>
+		</div>
+
+		<!-- UI-PUR-010: fail closed when there is no stored transaction id. -->
+		<div v-else-if="!transactionId" class="evidence-locked" data-test="evidence-save-first">
+			<NcIconSvgWrapper :path="mdiLock" :size="20" />
+			<span>{{ t('pettycash', 'evidence.saveFirst') }}</span>
 		</div>
 
 		<template v-else>

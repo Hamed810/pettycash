@@ -47,6 +47,19 @@
 	font-size: var(--font-size-floor);
 }
 
+/*
+ * The Nextcloud content column is a flex item whose automatic minimum size is its content's
+ * min-content width. At 390px the shell's 24px padding plus a wide child (the filter grid before
+ * it became one column) gave the shell a 461px min-content width, so Nextcloud painted its left
+ * 71px outside the viewport and clipped it. Capping the shell to the viewport lets its block
+ * children shrink; the header row then wraps its action and the filter grid stacks.
+ */
+@media (width <= 640px) {
+	.pettycash-shell {
+		max-inline-size: 100%;
+	}
+}
+
 /**
  * The keyboard-operability floor (FR-071, clarified 2026-10-07; SC-009).
  *

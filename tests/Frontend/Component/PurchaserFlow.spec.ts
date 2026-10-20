@@ -1919,6 +1919,12 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 			return wrapper.find(`[data-test="${testId}"] input`)
 		}
 
+		/** The value the cost-center combobox is holding, as the form would submit it. */
+		function selectedCostCenter(wrapper: VueWrapper): unknown {
+			const target = wrapper.findComponent('[data-test="cost-center-select"]') as VueWrapper
+			return (target.vm as unknown as { modelValue?: unknown }).modelValue
+		}
+
 		/**
 		 * The text a control announces, resolved through its own `aria-describedby`.
 		 *
@@ -2201,6 +2207,247 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 			// handed, and `findByPublicId('Office Supplies')` returns null.
 			expect(body?.expenseTypeId).not.toBe('Office Supplies')
 			expect(body?.costCenterId).toBe(COST_CENTER_ENGINEERING)
+		})
+
+		// UI-PUR-009: the newest *saved* transaction's cost center, not the first row and not the
+		// latest expense date. Getting this wrong routes the new expense to the wrong manager.
+		it('preselects the cost center of the most recently saved transaction on the create route', async () => {
+			setSheetDetail(sheetFixture('IRR', {
+				transactions: [
+					// Deliberately first in the array and later by expense date, but older by save time.
+					transactionSummaryFixture({
+						id: 'tx-older',
+						activeRevision: revisionFixture({
+							createdAt: '2026-01-10T08:00:00+00:00',
+							expenseDate: '2026-02-01',
+							costCenter: { id: COST_CENTER_MARKETING, code: 'MKT', name: 'Marketing' }
+						})
+					}),
+					transactionSummaryFixture({
+						id: 'tx-newer',
+						activeRevision: revisionFixture({
+							createdAt: '2026-01-20T08:00:00+00:00',
+							expenseDate: '2026-01-05',
+							costCenter: { id: COST_CENTER_ENGINEERING, code: 'ENG', name: 'Engineering' }
+						})
+					}),
+				],
+				transactionCount: 2
+			}))
+			const wrapper = await createWrapperAtRoute(TransactionFormView, '/sheets/sh-1/transactions/create')
+			expect(selectedCostCenter(wrapper)).toBe(COST_CENTER_ENGINEERING)
+		})
+
+		it('leaves the cost center blank when the latest transaction names a retired one', async () => {
+			setSheetDetail(sheetFixture('IRR', {
+				transactions: [transactionSummaryFixture({
+					id: 'tx-retired',
+					activeRevision: revisionFixture({
+						createdAt: '2026-01-20T08:00:00+00:00',
+						costCenter: { id: 'cc-retired', code: 'OLD', name: 'Retired' }
+					})
+				})],
+				transactionCount: 1
+			}))
+			const wrapper = await createWrapperAtRoute(TransactionFormView, '/sheets/sh-1/transactions/create')
+			expect(selectedCostCenter(wrapper)).toBe('')
+		})
+
+		it('treats a save-time tie as ambiguous rather than picking whichever row arrived first', async () => {
+			const sameTime = '2026-01-20T08:00:00+00:00'
+			setSheetDetail(sheetFixture('IRR', {
+				transactions: [
+					transactionSummaryFixture({
+						id: 'tx-a',
+						activeRevision: revisionFixture({ createdAt: sameTime, costCenter: { id: COST_CENTER_ENGINEERING, code: 'ENG', name: 'Engineering' } })
+					}),
+					transactionSummaryFixture({
+						id: 'tx-b',
+						activeRevision: revisionFixture({ createdAt: sameTime, costCenter: { id: COST_CENTER_MARKETING, code: 'MKT', name: 'Marketing' } })
+					}),
+				],
+				transactionCount: 2
+			}))
+			const wrapper = await createWrapperAtRoute(TransactionFormView, '/sheets/sh-1/transactions/create')
+			expect(selectedCostCenter(wrapper)).toBe('')
+		})
+
+		it('never overwrites the cost center of the transaction it edits', async () => {
+			setTransactionDetail(transactionFixture({ activeRevision: revisionFixture({ costCenter: { id: COST_CENTER_ENGINEERING, code: 'ENG', name: 'Engineering' } }) }))
+			setSheetDetail(sheetFixture('IRR', {
+				transactions: [transactionSummaryFixture({
+					id: 'tx-newer',
+					activeRevision: revisionFixture({ createdAt: '2026-03-01T08:00:00+00:00', costCenter: { id: COST_CENTER_MARKETING, code: 'MKT', name: 'Marketing' } })
+				})]
+			}))
+			const wrapper = await createWrapperAtRoute(TransactionFormView, '/transactions/tx-1/edit')
+			expect(selectedCostCenter(wrapper)).toBe(COST_CENTER_ENGINEERING)
+		})
+
+		// UI-PUR-010: evidence is attached to a stored transaction, so the create route offers the
+		// catalogued explanation rather than a control that could only fail.
+		it('offers no file control on the create route, only the save-first hint', async () => {
+			const wrapper = await createWrapperAtRoute(TransactionFormView, '/sheets/sh-1/transactions/create')
+			expect(wrapper.find('[data-test="evidence-upload-area"]').exists()).toBe(true)
+			expect(wrapper.find('[data-test="evidence-after-save-hint"]').text()).toBe('transactions.evidenceAfterSave')
+			expect(wrapper.find('[data-test="evidence-upload-input"]').exists()).toBe(false)
+			expect(wrapper.find('[data-test="evidence-uploader"]').exists()).toBe(false)
+		})
+
+		it('fails closed when the uploader is mounted without a stored transaction id', () => {
+			const wrapper = createWrapper(EvidenceUploader, { props: { transactionId: '' } })
+			expect(wrapper.find('[data-test="evidence-save-first"]').exists()).toBe(true)
+			expect(wrapper.find('[data-test="evidence-upload-input"]').exists()).toBe(false)
+			expect(wrapper.find('[data-test="evidence-upload-btn"]').exists()).toBe(false)
+		})
+
+		// UI-PUR-011: deletion is a DRAFT-only action, confirmed by name, and carries the version the
+		// purchaser actually saw. Cancel must not send anything at all.
+		it('deletes a draft only after a confirmation that names it, sending one versioned DELETE', async () => {
+			setTransactionDetail(transactionFixture({ version: 4 }))
+			const { wrapper, router } = await createWrapperWithRouter(TransactionFormView, '/transactions/tx-1/edit')
+
+			await wrapper.find('[data-test="delete-transaction-btn"]').trigger('click')
+			expect(wrapper.find('[data-test="delete-transaction-dialog"]').text()).toContain('transactions.deleteDraftTitle')
+			// The mock renders keys, so the name is proven through the message parameters rather than
+			// through a sentence the catalog would normally interpolate.
+			const messageCall = (t as unknown as { mock: { calls: Array<[string, string, Record<string, string>?]> } }).mock.calls
+				.find((call) => call[1] === 'transactions.deleteDraftMessage')
+			expect(messageCall?.[2]).toEqual({ description: 'Taxi' })
+
+			await wrapper.find('[data-test="cancel-delete-transaction"]').trigger('click')
+			await flushPromises()
+			expect(wrapper.find('[data-test="delete-transaction-dialog"]').exists()).toBe(false)
+			expect(ocsRequest.mock.calls.filter((call: unknown[]) =>
+				(call[0] as { method?: string })?.method === 'DELETE')).toHaveLength(0)
+
+			await wrapper.find('[data-test="delete-transaction-btn"]').trigger('click')
+			await wrapper.find('[data-test="confirm-delete-transaction"]').trigger('click')
+			await flushPromises()
+
+			const deletes = ocsRequest.mock.calls.filter((call: unknown[]) =>
+				(call[0] as { method?: string })?.method === 'DELETE')
+			expect(deletes).toHaveLength(1)
+			const request = deletes[0]?.[0] as { url?: string; data?: { expectedVersion?: number }; headers?: Record<string, string> }
+			expect(request.data?.expectedVersion).toBe(4)
+			expect(request.headers?.['X-PettyCash-Command-ID']).toBeTruthy()
+			expect(router.currentRoute.value.name).toBe('sheet-detail')
+			expect(router.currentRoute.value.params.id).toBe('sh-1')
+		})
+
+		it('offers no delete control once the transaction is no longer a draft', async () => {
+			setTransactionDetail(transactionFixture({ status: 'AWAITING_COST_CENTER_REVIEW', version: 4 }))
+			const wrapper = await createWrapperAtRoute(TransactionFormView, '/transactions/tx-1/edit')
+			expect(wrapper.find('[data-test="delete-transaction-btn"]').exists()).toBe(false)
+		})
+
+		// UI-PUR-012: the form stays put until the purchaser answers. Discard sends nothing; Save sends
+		// the draft and then leaves; Stay leaves the typed value intact.
+		it('guards a dirty form on Cancel and stays when asked to stay', async () => {
+			setTransactionDetail(transactionFixture({ version: 3 }))
+			const { wrapper, router } = await createWrapperWithRouter(TransactionFormView, '/transactions/tx-1/edit')
+			await wrapper.find('[data-test="description-input"]').setValue('My unsaved edit')
+
+			await wrapper.find('[data-test="transaction-cancel"]').trigger('click')
+			await flushPromises()
+			expect(wrapper.find('[data-test="unsaved-changes-dialog"]').exists()).toBe(true)
+			expect(router.currentRoute.value.name).toBe('transaction-edit')
+
+			await wrapper.find('[data-test="unsaved-stay"]').trigger('click')
+			await flushPromises()
+			expect(wrapper.find('[data-test="unsaved-changes-dialog"]').exists()).toBe(false)
+			expect((wrapper.find('[data-test="description-input"]').element as HTMLInputElement).value).toBe('My unsaved edit')
+			expect(ocsRequest.mock.calls.filter((call: unknown[]) =>
+				(call[0] as { method?: string })?.method === 'PATCH')).toHaveLength(0)
+		})
+
+		it('discards without writing anything and leaves for the fallback route', async () => {
+			setTransactionDetail(transactionFixture({ version: 3 }))
+			const { wrapper, router } = await createWrapperWithRouter(TransactionFormView, '/transactions/tx-1/edit')
+			await wrapper.find('[data-test="description-input"]').setValue('Throw this away')
+
+			await wrapper.find('[data-test="transaction-cancel"]').trigger('click')
+			await flushPromises()
+			await wrapper.find('[data-test="unsaved-discard"]').trigger('click')
+			await flushPromises()
+
+			expect(router.currentRoute.value.name).toBe('transactions')
+			expect(ocsRequest.mock.calls.filter((call: unknown[]) =>
+				(call[0] as { method?: string })?.method === 'PATCH')).toHaveLength(0)
+		})
+
+		it('saves the draft from the guard before leaving', async () => {
+			setTransactionDetail(transactionFixture({ version: 3 }))
+			const { wrapper, router } = await createWrapperWithRouter(TransactionFormView, '/transactions/tx-1/edit')
+			await wrapper.find('[data-test="description-input"]').setValue('Save me')
+
+			await wrapper.find('[data-test="transaction-cancel"]').trigger('click')
+			await flushPromises()
+			await wrapper.find('[data-test="unsaved-save"]').trigger('click')
+			await flushPromises()
+
+			const patches = ocsRequest.mock.calls.filter((call: unknown[]) =>
+				(call[0] as { method?: string })?.method === 'PATCH')
+			expect(patches).toHaveLength(1)
+			expect((patches[0]?.[0] as { data?: { description?: string; expectedVersion?: number } }).data?.description).toBe('Save me')
+			expect((patches[0]?.[0] as { data?: { expectedVersion?: number } }).data?.expectedVersion).toBe(3)
+			expect(router.currentRoute.value.name).toBe('transactions')
+		})
+
+		// UI-PUR-012's conflict rule: refetch the stored record and repopulate the form from it; do not
+		// merge the other writer's fields into what is still on screen, and do not retry the PATCH.
+		it('refetches and replaces the draft on 409 instead of merging or retrying', async () => {
+			const storedBefore = transactionFixture({ version: 3, activeRevision: revisionFixture({ description: 'Before' }) })
+			const storedAfter = transactionFixture({ version: 4, activeRevision: revisionFixture({ description: 'Stored elsewhere' }) })
+			let transactionGets = 0
+			ocsRequest.mockImplementation((config: { url?: string; method?: string }) => {
+				const method = config?.method ?? 'GET'
+				if (method === 'PATCH') return ocsErrorResponse(409, { code: 'CONFLICT', message: 'stale version' })
+				if (method === 'GET' && /\/transactions\/tx-1(\?|$)/.test(config?.url ?? '')) {
+					transactionGets += 1
+					const body = transactionGets === 1 ? storedBefore : storedAfter
+					return Promise.resolve({ status: 200, data: { ocs: { meta: { status: 'ok', statuscode: 200 }, data: body } } })
+				}
+				return Promise.resolve(emptyOcsResponse(config))
+			})
+
+			const { wrapper, router } = await createWrapperWithRouter(TransactionFormView, '/transactions/tx-1/edit')
+			await wrapper.find('[data-test="description-input"]').setValue('My conflicting edit')
+			await submitTransactionForm(wrapper)
+			await flushPromises()
+
+			expect(wrapper.find('[data-test="conflict-message"]').text()).toBe('guard.conflict')
+			expect((wrapper.find('[data-test="description-input"]').element as HTMLInputElement).value).toBe('Stored elsewhere')
+			expect(router.currentRoute.value.name).toBe('transaction-edit')
+			const patches = ocsRequest.mock.calls.filter((call: unknown[]) =>
+				(call[0] as { method?: string })?.method === 'PATCH')
+			expect(patches).toHaveLength(1)
+			expect(transactionGets).toBe(2)
+		})
+
+		// UI-PUR-013: a returned transaction is corrected through the canonical PATCH carrying the live
+		// version. It must not create another correction draft, and the prior revision stays published.
+		it('corrects through PATCH with the live version and creates no second correction draft', async () => {
+			setTransactionDetail(transactionFixture({
+				status: 'AWAITING_PURCHASER_CORRECTION',
+				version: 7,
+				activeRevision: revisionFixture({ number: 2, description: 'Returned' })
+			}))
+			const wrapper = await createWrapperAtRoute(TransactionFormView, '/transactions/tx-1/edit')
+			await wrapper.find('[data-test="description-input"]').setValue('Corrected')
+			await submitTransactionForm(wrapper)
+			await flushPromises()
+
+			const patches = ocsRequest.mock.calls.filter((call: unknown[]) =>
+				(call[0] as { method?: string })?.method === 'PATCH')
+			expect(patches).toHaveLength(1)
+			expect((patches[0]?.[0] as { data?: { expectedVersion?: number } }).data?.expectedVersion).toBe(7)
+			const correctionPosts = ocsRequest.mock.calls.filter((call: unknown[]) => {
+				const request = call[0] as { method?: string; url?: string }
+				return request.method === 'POST' && /\/corrections(\?|$)/.test(request.url ?? '')
+			})
+			expect(correctionPosts).toHaveLength(0)
+			expect(useTransactionStore().currentTransaction?.activeRevision.number).toBe(2)
 		})
 	})
 
@@ -2675,7 +2922,9 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 		})
 
 		it('should enforce 100 MB maximum file size', async () => {
-			const wrapper = createWrapper(EvidenceUploader)
+			const wrapper = createWrapper(EvidenceUploader, {
+				props: { transactionId: 'test-tx-1', isDraft: true }
+			})
 			await selectFile(wrapper, fileOfSize(101 * 1024 * 1024))
 			expect(wrapper.find('[data-test="file-size-error"]').exists()).toBe(true)
 		})
@@ -2683,7 +2932,9 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 		// The boundary is inclusive: a file of exactly the limit is allowed. Only `> MAX` is refused,
 		// and an off-by-one here silently rejects a legitimate 100 MB receipt.
 		it('should accept a file of exactly the maximum size', async () => {
-			const wrapper = createWrapper(EvidenceUploader)
+			const wrapper = createWrapper(EvidenceUploader, {
+				props: { transactionId: 'test-tx-1', isDraft: true }
+			})
 			await selectFile(wrapper, fileOfSize(100 * 1024 * 1024))
 			expect(wrapper.find('[data-test="file-size-error"]').exists()).toBe(false)
 			expect(wrapper.find('[data-test="upload-btn"]').exists()).toBe(true)
@@ -2693,7 +2944,9 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 		// The message key carried a `{max}` placeholder that no source ever filled, so the number was
 		// never shown.
 		it('should reject oversized files with clear error message', async () => {
-			const wrapper = createWrapper(EvidenceUploader)
+			const wrapper = createWrapper(EvidenceUploader, {
+				props: { transactionId: 'test-tx-1', isDraft: true }
+			})
 			await selectFile(wrapper, fileOfSize(101 * 1024 * 1024))
 
 			const error = wrapper.find('[data-test="file-size-error"]')

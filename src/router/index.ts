@@ -5,7 +5,6 @@ import { installSheetListReturnTracking } from '../utils/sheetListSession'
 
 const DashboardView = () => import('../views/DashboardView.vue')
 const SheetListView = () => import('../views/sheets/SheetListView.vue')
-const SheetDetailView = () => import('../views/sheets/SheetDetailView.vue')
 const SheetFormView = () => import('../views/sheets/SheetFormView.vue')
 const TransactionListView = () => import('../views/transactions/TransactionListView.vue')
 const TransactionFormView = () => import('../views/transactions/TransactionFormView.vue')
@@ -56,7 +55,10 @@ export const routes: RouteRecordRaw[] = [
 	{ path: '/', name: 'dashboard', component: DashboardView },
 	{ path: '/sheets', name: 'sheets', component: SheetListView },
 	{ path: '/sheets/create', name: 'sheet-create', component: SheetFormView },
-	{ path: '/sheets/:id', name: 'sheet-detail', component: SheetDetailView },
+	// UI-PUR-005: the sheet workspace is an overlay **over the list**, not a separate page. Both
+	// records render the list so the rows underneath survive opening and closing a sheet; the
+	// `:id` record stays addressable and still resolves by the `sheet-detail` name every caller uses.
+	{ path: '/sheets/:id', name: 'sheet-detail', component: SheetListView },
 	{ path: '/sheets/:id/edit', name: 'sheet-edit', component: SheetFormView },
 	{ path: '/sheets/:sheetId/transactions', name: 'transactions', component: TransactionListView },
 	{ path: '/sheets/:sheetId/transactions/create', name: 'transaction-create', component: TransactionFormView },

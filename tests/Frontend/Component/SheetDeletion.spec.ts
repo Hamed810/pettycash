@@ -212,7 +212,9 @@ const OPEN_SHEET: SheetSummary = {
 const SUBMITTED_SHEET: SheetSummary = {
 	...OPEN_SHEET,
 	id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
-	status: 'SUBMITTED' as SheetStatus,
+	// A real submitted state, not the invented `SUBMITTED`: the sheet status vocabulary starts at
+	// `COST_CENTER` once the purchaser has submitted it.
+	status: 'COST_CENTER' as SheetStatus,
 	submittedAt: '2026-03-03T00:00:00+00:00'
 }
 
@@ -249,6 +251,10 @@ describe('FR-086 — deleting a draft sheet from the interface', () => {
 	beforeEach(() => {
 		pinia = createPinia()
 		setActivePinia(pinia)
+		// `createWebHashHistory()` reads `window.location.hash`, which jsdom shares across the file.
+		// Without this reset a list test starts on the detail route left by the previous test and
+		// mounts the workspace over the list.
+		window.location.hash = ''
 		router = createRouter({ history: createWebHashHistory(), routes })
 		ocsRequest.mockReset()
 	})
@@ -403,6 +409,9 @@ describe('FR-086 — deleting a draft sheet from the interface', () => {
 	 */
 	it('clears the stored sheet when the detail view goes away, so a deleted sheet cannot be re-read', async () => {
 		const wrapper = await mountDetail(OPEN_SHEET)
+		// Bind to the Pinia the component actually used. `useSheetStore()` without an argument can
+		// resolve through a leaked injection context once several apps have been mounted in one file.
+		const store = useSheetStore(pinia)
 
 		await wrapper.find('[data-test="delete-sheet-btn"]').trigger('click')
 		await flushPromises()
@@ -418,6 +427,6 @@ describe('FR-086 — deleting a draft sheet from the interface', () => {
 		wrapper.unmount()
 		await flushPromises()
 
-		expect(useSheetStore().currentSheet).toBeNull()
+		expect(store.currentSheet).toBeNull()
 	})
 })

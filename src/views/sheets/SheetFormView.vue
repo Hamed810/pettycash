@@ -4,13 +4,15 @@ import { onMounted, ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useSheetStore } from '@/stores/sheets'
 import { useAccountStore } from '@/stores/accounts'
-import type { SheetCreate } from '@/types/api'
+import { ApiError, type SheetCreate } from '@/types/api'
 import { selectOptionKey, selectOptionValue } from '@/utils/selectOption'
 import { formatNumber } from '@/utils/number'
 import NcButton from '@nextcloud/vue/components/NcButton'
 import NcNoteCard from '@nextcloud/vue/components/NcNoteCard'
 import NcSelect from '@nextcloud/vue/components/NcSelect'
 import NcTextField from '@nextcloud/vue/components/NcTextField'
+import UnsavedChangesDialog from '@/components/shared/UnsavedChangesDialog.vue'
+import { useUnsavedChangesGuard } from '@/composables/useUnsavedChangesGuard'
 import { t } from '@nextcloud/l10n'
 
 const route = useRoute()
@@ -112,6 +114,78 @@ const validationErrors = computed(() => {
 
 const isSubmittable = computed(() => Object.keys(validationErrors.value).length === 0)
 
+/* ------------------------------------------------------------------ *
+ * UI-PUR-012: unsaved-change guard and 409 refetch-without-merge
+ * ------------------------------------------------------------------ */
+
+const baseline = ref('')
+const conflictMessage = ref('')
+
+function snapshotBaseline(): void { baseline.value = JSON.stringify(form.value) }
+const isDirty = computed(() => JSON.stringify(form.value) !== baseline.value)
+
+async function reloadAfterConflict(): Promise<void> {
+	if (!isEditing.value) return
+	try {
+		await sheetStore.loadSheet(sheetId.value)
+		if (sheetStore.currentSheet) {
+			form.value.title = sheetStore.currentSheet.title
+			snapshotBaseline()
+		}
+	} catch {
+		// The store records the reload failure; the conflict message still explains what happened.
+	}
+}
+
+/**
+ * Stores the sheet. Returns `false` when it was refused, so the guard stays on the form.
+ * Navigation is the caller's decision, not part of saving.
+ */
+async function persist(): Promise<boolean> {
+	sheetStore.clearError()
+	conflictMessage.value = ''
+	try {
+		if (isEditing.value) {
+			const version = sheetStore.currentSheet?.version
+			if (version === undefined) {
+				await reloadAfterConflict()
+				conflictMessage.value = t('pettycash', 'guard.conflict')
+				return false
+			}
+			await sheetStore.updateExistingSheet(sheetId.value, form.value, version)
+		} else {
+			await sheetStore.createNewSheet(buildCreateRequest())
+		}
+		snapshotBaseline()
+		return true
+	} catch (error: unknown) {
+		if (error instanceof ApiError && error.status === 409) {
+			await reloadAfterConflict()
+			conflictMessage.value = t('pettycash', 'guard.conflict')
+		}
+		return false
+	}
+}
+
+async function saveForGuard(): Promise<boolean> {
+	if (!validateForm()) return false
+	return persist()
+}
+
+const {
+	open: guardOpen,
+	saving: guardSaving,
+	saveFailed: guardSaveFailed,
+	ask: askLeave,
+	stay: stayOnForm,
+	saveAndLeave,
+	discard: discardChanges,
+} = useUnsavedChangesGuard({
+	isDirty: () => isDirty.value,
+	save: saveForGuard,
+	fallback: () => ({ name: 'sheets' }),
+})
+
 async function loadAccounts() {
 	await accountStore.loadAccounts()
 	if (accounts.value.length > 0 && !form.value.accountId) {
@@ -146,16 +220,8 @@ function buildCreateRequest(): SheetCreate {
 
 async function handleSubmit() {
 	if (!validateForm()) return
-	sheetStore.clearError()
-	try {
-		if (isEditing.value) {
-			await sheetStore.updateExistingSheet(sheetId.value, form.value, sheetStore.currentSheet!.version)
-		} else {
-			await sheetStore.createNewSheet(buildCreateRequest())
-		}
-		router.push({ name: 'sheets' })
-	} catch {
-		// Error handled in store
+	if (await persist()) {
+		await router.push({ name: 'sheets' })
 	}
 }
 
@@ -163,8 +229,11 @@ onMounted(() => {
 	// The stores record a failure in their own `error` ref, which this view renders in its alert.
 	// A mount-time load has no caller to react to the rejection, so it is absorbed here rather than
 	// surfacing as an unhandled promise rejection in the user's console.
-	if (isEditing.value) loadSheetForEdit().catch(() => undefined)
-	else loadAccounts().catch(() => undefined)
+	if (isEditing.value) {
+		loadSheetForEdit().then(() => { snapshotBaseline() }).catch(() => undefined)
+	} else {
+		loadAccounts().then(() => { snapshotBaseline() }).catch(() => undefined)
+	}
 })
 </script>
 
@@ -263,7 +332,7 @@ onMounted(() => {
 				</div>
 
 				<div class="form-actions">
-					<NcButton variant="secondary" @click="router.push({ name: 'sheets' })">
+					<NcButton variant="secondary" @click="askLeave()">
 						{{ t('pettycash', 'common.cancel') }}
 					</NcButton>
 					<NcButton
@@ -285,6 +354,18 @@ onMounted(() => {
 				×
 			</button>
 		</div>
+
+		<NcNoteCard v-if="conflictMessage" type="warning" role="alert" data-test="conflict-message">
+			{{ conflictMessage }}
+		</NcNoteCard>
+
+		<UnsavedChangesDialog
+			:open="guardOpen"
+			:saving="guardSaving"
+			:save-failed="guardSaveFailed"
+			@stay="stayOnForm"
+			@discard="discardChanges"
+			@save="saveAndLeave" />
 	</div>
 </template>
 
@@ -335,14 +416,14 @@ onMounted(() => {
 	justify-content: space-between;
 	align-items: center;
 	padding: 0.75rem 1rem;
-	background-color: var(--nc-color-error-container, #fce4ec);
-	color: var(--nc-color-on-error-container, #c62828);
-	border-radius: 4px;
+	background-color: var(--color-background-hover);
+	color: var(--color-error);
+	border-radius: var(--border-radius-small);
 }
 
 .alert--error {
-	background-color: var(--nc-color-error-container, #fce4ec);
-	color: var(--nc-color-on-error-container, #c62828);
+	background-color: var(--color-background-hover);
+	color: var(--color-error);
 }
 
 .alert button {

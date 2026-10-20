@@ -203,11 +203,31 @@ function cardRowHook(index: number): string | undefined {
 	width: 100%;
 }
 
+/*
+ * Nextcloud core gives table cells `white-space: nowrap`. That is right for a fixed-content table,
+ * but this component's contract is that the same cells must reflow into cards at 390px and stay
+ * inside the shell at desktop widths. Let long labels wrap; the narrow layout then has nothing
+ * that can force a horizontal scrollbar.
+ */
+.responsive-table__desktop th,
+.responsive-table__desktop td {
+	white-space: normal;
+	overflow-wrap: anywhere;
+}
+
 .responsive-table__caption {
 	/* Visually the caption is redundant with the surrounding card's heading, but a table without one is
-	   announced without a name by a screen reader. */
-	text-align: start;
+	   announced without a name by a screen reader. Keep it available to assistive technology without
+	   printing it as a second heading above the table. */
+	position: absolute;
+	inline-size: 1px;
+	block-size: 1px;
 	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+	border: 0;
 }
 
 .responsive-table__cards {

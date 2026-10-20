@@ -10,10 +10,12 @@ import NcSelect from '@nextcloud/vue/components/NcSelect'
 import NcTextArea from '@nextcloud/vue/components/NcTextArea'
 import NcTextField from '@nextcloud/vue/components/NcTextField'
 import EvidenceUploader from '@/components/evidence/EvidenceUploader.vue'
+import UnsavedChangesDialog from '@/components/shared/UnsavedChangesDialog.vue'
+import { useUnsavedChangesGuard } from '@/composables/useUnsavedChangesGuard'
 import { listActiveExpenseTypes, listCostCenters } from '@/services/configurationApi'
 import { useSheetStore } from '@/stores/sheets'
 import { useTransactionStore } from '@/stores/transactions'
-import type { CostCenter, ExpenseType, TransactionDraftWrite } from '@/types/api'
+import { ApiError, type CostCenter, type ExpenseType, type TransactionDraftWrite } from '@/types/api'
 import { selectOptionKey, selectOptionValue } from '@/utils/selectOption'
 
 const route = useRoute()
@@ -164,6 +166,86 @@ function collectDraftErrors(): Record<string, string> {
 
 const isDraftSavable = computed(() => Object.keys(collectDraftErrors()).length === 0)
 
+/* ------------------------------------------------------------------ *
+ * UI-PUR-012: unsaved-change guard and 409 refetch-without-merge
+ * ------------------------------------------------------------------ */
+
+const baseline = ref('')
+const conflictMessage = ref('')
+const deleteDialogOpen = ref(false)
+
+function snapshotBaseline(): void { baseline.value = JSON.stringify(draft.value) }
+const isDirty = computed(() => JSON.stringify(draft.value) !== baseline.value)
+
+/** UI-PUR-011: only a draft can be deleted (FR-025). */
+const canDeleteDraft = computed(() => isEditing.value
+	&& transactionStore.currentTransaction?.status === 'DRAFT'
+	&& !transactionStore.loading)
+
+const deleteDescription = computed(() => transactionStore.currentTransaction?.activeRevision.description?.trim()
+	|| transactionId.value)
+
+/**
+ * A conflict is not merged. The record is re-read and its stored values replace the form, so the
+ * purchaser reviews what the server actually holds before deciding what to save next.
+ */
+async function reloadAfterConflict(): Promise<void> {
+	if (!isEditing.value) return
+	try {
+		await transactionStore.loadTransaction(transactionId.value)
+		const revision = transactionStore.currentTransaction?.activeRevision
+		if (!revision) return
+		draft.value = {
+			expenseDate: revision.expenseDate,
+			amountMinor: revision.amount.amountMinor,
+			description: revision.description ?? '',
+			costCenterId: revision.costCenter.id,
+			expenseTypeId: revision.expenseType.id,
+		}
+		snapshotBaseline()
+	} catch {
+		// The store records the reload failure; the conflict message still explains what happened.
+	}
+}
+
+const {
+	open: guardOpen,
+	saving: guardSaving,
+	saveFailed: guardSaveFailed,
+	ask: askLeave,
+	stay: stayOnForm,
+	saveAndLeave,
+	discard: discardChanges,
+} = useUnsavedChangesGuard({
+	isDirty: () => isDirty.value,
+	save: saveForGuard,
+	fallback: () => ({ name: 'transactions', params: { sheetId: sheetId.value } }),
+	isBlocked: () => deleteDialogOpen.value,
+})
+
+/**
+ * UI-PUR-009: preselect the cost center of the most recently **saved** transaction.
+ *
+ * Ordered by the stored `activeRevision.createdAt`, never by array position or expense date, and
+ * only when the center is still in the active option list. A tie is treated as ambiguous and left
+ * blank rather than resolved by whichever row happened to arrive first.
+ */
+function preselectCostCenter(): void {
+	if (isEditing.value || draft.value.costCenterId) return
+	const transactions = [...(sheetStore.currentSheet?.transactions ?? [])]
+	if (transactions.length === 0) return
+	const sorted = transactions.sort((left, right) =>
+		Date.parse(right.activeRevision.createdAt) - Date.parse(left.activeRevision.createdAt))
+	const latest = sorted[0]
+	const previous = sorted[1]
+	if (!latest?.activeRevision.createdAt) return
+	if (previous && previous.activeRevision.createdAt === latest.activeRevision.createdAt) return
+	const costCenterId = latest.activeRevision.costCenter?.id
+	if (!costCenterId) return
+	if (!costCenters.value.some((center) => center.id === costCenterId)) return
+	draft.value.costCenterId = costCenterId
+}
+
 async function loadOptions(): Promise<void> {
 	loadingOptions.value = true
 	try {
@@ -200,42 +282,61 @@ async function loadTransactionForEdit(): Promise<void> {
 	await loadOptions()
 }
 
-async function persist(): Promise<void> {
-	if (isEditing.value) {
-		await transactionStore.updateExistingTransaction(
-			transactionId.value,
-			draft.value,
-			transactionStore.currentTransaction?.version ?? 0,
-		)
-	} else {
-		await transactionStore.createNewTransaction(sheetId.value, draft.value)
+/**
+ * Stores the draft. Returns `false` when it was refused, so the save guard can stay on the form.
+ *
+ * It deliberately does **not** navigate: a normal save terminates on the sheet detail, while
+ * "Save and exit" in the guard leaves for the destination the caller originally chose.
+ */
+async function persist(): Promise<boolean> {
+	transactionStore.clearError()
+	conflictMessage.value = ''
+	try {
+		if (isEditing.value) {
+			// UI-PUR-013: an update must never send a placeholder because the record was not read.
+			// Version `0` is the legitimate first version, so "missing" is `undefined`, not falsy.
+			const version = transactionStore.currentTransaction?.version
+			if (version === undefined) {
+				await transactionStore.loadTransaction(transactionId.value)
+				conflictMessage.value = t('pettycash', 'guard.conflict')
+				return false
+			}
+			await transactionStore.updateExistingTransaction(transactionId.value, draft.value, version)
+		} else {
+			await transactionStore.createNewTransaction(sheetId.value, draft.value)
+		}
+		snapshotBaseline()
+		return true
+	} catch (error: unknown) {
+		if (error instanceof ApiError && error.status === 409) {
+			await reloadAfterConflict()
+			conflictMessage.value = t('pettycash', 'guard.conflict')
+		}
+		return false
 	}
-	// FR-088: a save MUST return the purchaser to the sheet's detail view, where the
-	// sheet's status, its transactions, and its Submit control are presented together.
-	// The transactions list keeps its role as a readable view, but it MUST NOT be the
-	// terminus of a save: it renders no Submit control and no route back to the sheet.
-	await router.push({ name: 'sheet-detail', params: { id: sheetId.value } })
+}
+
+/** The guard's Save action: a draft save, never a workflow submission. */
+async function saveForGuard(): Promise<boolean> {
+	errors.value = collectDraftErrors()
+	if (Object.keys(errors.value).length > 0) return false
+	return persist()
 }
 
 async function handleSaveDraft(): Promise<void> {
 	errors.value = collectDraftErrors()
 	if (Object.keys(errors.value).length > 0) return
-	transactionStore.clearError()
-	try {
-		await persist()
-	} catch {
-		// Error surfaced through transactionStore.error
+	if (await persist()) {
+		// FR-088: a save MUST return the purchaser to the sheet's detail view.
+		await router.push({ name: 'sheet-detail', params: { id: sheetId.value } })
 	}
 }
 
 async function handleSubmit(): Promise<void> {
 	errors.value = collectValidationErrors()
 	if (Object.keys(errors.value).length > 0) return
-	transactionStore.clearError()
-	try {
-		await persist()
-	} catch {
-		// Error surfaced through transactionStore.error
+	if (await persist()) {
+		await router.push({ name: 'sheet-detail', params: { id: sheetId.value } })
 	}
 }
 
@@ -251,14 +352,40 @@ async function handleResubmit(): Promise<void> {
 	errors.value = collectValidationErrors()
 	if (Object.keys(errors.value).length > 0) return
 	transactionStore.clearError()
+	conflictMessage.value = ''
 	try {
-		await transactionStore.resubmitCorrectionDraft(
-			transactionId.value,
-			transactionStore.currentTransaction?.version ?? 0,
-		)
-		// FR-088, same as `persist()` above: a save terminates on the sheet detail,
+		const version = transactionStore.currentTransaction?.version
+		if (version === undefined) {
+			await transactionStore.loadTransaction(transactionId.value)
+			conflictMessage.value = t('pettycash', 'guard.conflict')
+			return
+		}
+		await transactionStore.resubmitCorrectionDraft(transactionId.value, version)
+		// FR-088, same as `handleSaveDraft()` above: a save terminates on the sheet detail,
 		// never on the transactions list.
 		await router.push({ name: 'sheet-detail', params: { id: sheetId.value } })
+	} catch (error: unknown) {
+		if (error instanceof ApiError && error.status === 409) {
+			await reloadAfterConflict()
+			conflictMessage.value = t('pettycash', 'guard.conflict')
+		}
+	}
+}
+
+/** UI-PUR-011: delete is offered for a draft only, and names the transaction in the confirmation. */
+function askDeleteDraft(): void { deleteDialogOpen.value = true }
+
+async function confirmDeleteDraft(): Promise<void> {
+	const transaction = transactionStore.currentTransaction
+	if (!transaction) return
+	// Capture before the delete clears `currentTransaction`: `sheetId` falls back to it on the edit
+	// route, so reading it afterwards would navigate to an empty id instead of the sheet.
+	const targetSheetId = sheetId.value
+	transactionStore.clearError()
+	try {
+		await transactionStore.deleteExistingTransaction(transaction.id, transaction.version)
+		deleteDialogOpen.value = false
+		await router.push({ name: 'sheet-detail', params: { id: targetSheetId } })
 	} catch {
 		// Error surfaced through transactionStore.error
 	}
@@ -273,8 +400,14 @@ onMounted(() => {
 	// The stores record a failure in their own `error` ref, which this view renders in its alert.
 	// A mount-time load has no caller to react to the rejection, so it is absorbed here rather than
 	// surfacing as an unhandled promise rejection in the user's console.
-	if (isEditing.value) loadTransactionForEdit().catch(() => undefined)
-	else Promise.all([loadOptions(), loadSheet()]).catch(() => undefined)
+	if (isEditing.value) {
+		loadTransactionForEdit().then(() => { snapshotBaseline() }).catch(() => undefined)
+	} else {
+		Promise.all([loadOptions(), loadSheet()]).then(() => {
+			preselectCostCenter()
+			snapshotBaseline()
+		}).catch(() => undefined)
+	}
 })
 </script>
 
@@ -367,7 +500,7 @@ onMounted(() => {
 						data-test="description-input" />
 				</div>
 
-				<div class="form-row">
+			<div class="form-row">
 				<NcSelect
 					v-model="draft.costCenterId"
 					:options="costCenters.map(center => ({ label: center.name, value: center.id }))"
@@ -386,30 +519,42 @@ onMounted(() => {
 					:reduce="selectOptionValue"
 					:get-option-key="selectOptionKey"
 					:input-label="t('pettycash', 'transactions.expenseType')"
-						:error="!!errors.expenseTypeId"
-						:helper-text="errors.expenseTypeId || ''"
-						:loading="loadingOptions"
-						:disabled="!editable"
-						required
-						data-test="expense-type-select" />
-				</div>
+					:error="!!errors.expenseTypeId"
+					:helper-text="errors.expenseTypeId || ''"
+					:loading="loadingOptions"
+					:disabled="!editable"
+					required
+					data-test="expense-type-select" />
+			</div>
 
 				<div class="form-row">
 					<div data-test="evidence-upload-area">
-						<!-- The uploader is a draft affordance: FR-025 allows evidence to be added and
-						     removed before submission, and FR-026 forbids it afterwards. -->
+						<!-- UI-PUR-010: evidence needs a stored transaction. The create route offers a
+						     catalogued hint instead of a control that could only fail; the uploader stays
+						     on the edit route while the transaction is a draft or awaiting correction. -->
 						<EvidenceUploader
-							v-if="editable"
+							v-if="editable && isEditing"
 							:transaction-id="transactionId"
 							:is-draft="isDraft" />
-						<p v-else class="read-only-hint" data-test="evidence-read-only-hint">
+						<p v-else-if="!editable" class="read-only-hint" data-test="evidence-read-only-hint">
 							{{ t('pettycash', 'common.readOnly') }}
+						</p>
+						<p v-else class="read-only-hint" data-test="evidence-after-save-hint">
+							{{ t('pettycash', 'transactions.evidenceAfterSave') }}
 						</p>
 					</div>
 				</div>
 
 				<div class="form-actions">
-					<NcButton variant="secondary" type="button" @click="router.push({ name: 'transactions', params: { sheetId } })">
+					<NcButton
+						v-if="canDeleteDraft"
+						variant="error"
+						type="button"
+						data-test="delete-transaction-btn"
+						@click="askDeleteDraft">
+						{{ t('pettycash', 'transactions.deleteDraft') }}
+					</NcButton>
+					<NcButton variant="secondary" type="button" data-test="transaction-cancel" @click="askLeave()">
 						{{ t('pettycash', 'common.cancel') }}
 					</NcButton>
 					<NcButton
@@ -456,6 +601,47 @@ onMounted(() => {
 		<NcNoteCard v-if="sheetStore.error" type="error" role="alert" data-test="sheet-error">
 			{{ sheetStore.error }}
 		</NcNoteCard>
+
+		<NcNoteCard v-if="conflictMessage" type="warning" role="alert" data-test="conflict-message">
+			{{ conflictMessage }}
+		</NcNoteCard>
+
+		<!-- UI-PUR-011: DRAFT-only deletion, with a confirmation that names the transaction. -->
+		<div v-if="deleteDialogOpen" class="confirm-backdrop" data-test="delete-transaction-dialog">
+			<section
+				class="confirm-panel"
+				role="dialog"
+				aria-modal="true"
+				aria-labelledby="delete-transaction-title">
+				<h2 id="delete-transaction-title" class="confirm-panel__title">
+					{{ t('pettycash', 'transactions.deleteDraftTitle') }}
+				</h2>
+				<p>{{ t('pettycash', 'transactions.deleteDraftMessage', { description: deleteDescription }) }}</p>
+				<div class="confirm-panel__actions">
+					<NcButton
+						variant="secondary"
+						data-test="cancel-delete-transaction"
+						@click="deleteDialogOpen = false">
+						{{ t('pettycash', 'common.cancel') }}
+					</NcButton>
+					<NcButton
+						variant="error"
+						:loading="transactionStore.loading"
+						data-test="confirm-delete-transaction"
+						@click="confirmDeleteDraft">
+						{{ t('pettycash', 'transactions.deleteDraftConfirm') }}
+					</NcButton>
+				</div>
+			</section>
+		</div>
+
+		<UnsavedChangesDialog
+			:open="guardOpen"
+			:saving="guardSaving"
+			:save-failed="guardSaveFailed"
+			@stay="stayOnForm"
+			@discard="discardChanges"
+			@save="saveAndLeave" />
 	</div>
 </template>
 
@@ -523,12 +709,50 @@ onMounted(() => {
 	justify-content: space-between;
 	align-items: center;
 	padding: 0.75rem 1rem;
-	border-radius: 4px;
+	border-radius: var(--border-radius-small);
 }
 
 .alert--error {
-	background-color: var(--nc-color-error-container, #fce4ec);
-	color: var(--nc-color-on-error-container, #c62828);
+	background-color: var(--color-background-hover);
+	color: var(--color-error);
+}
+
+.confirm-backdrop {
+	position: fixed;
+	inset: 0;
+	z-index: 10040;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 1rem;
+	background-color: var(--color-backdrop);
+}
+
+.confirm-panel {
+	inline-size: min(100%, 30rem);
+	padding: 1.5rem;
+	border-radius: var(--border-radius-large);
+	background-color: var(--color-main-background);
+	color: var(--color-main-text);
+	box-shadow: 0 8px 32px var(--color-box-shadow);
+	font-size: var(--font-size-floor);
+}
+
+.confirm-panel__title {
+	margin-block-start: 0;
+}
+
+.confirm-panel__actions {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	gap: 0.5rem;
+	margin-block-start: 1.5rem;
+}
+
+.confirm-panel :focus-visible {
+	outline: 2px solid var(--color-primary-element);
+	outline-offset: 2px;
 }
 
 @media (width >= 600px) {

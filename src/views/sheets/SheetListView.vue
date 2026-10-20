@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { direction } from '@/utils/direction'
-import { computed, h, nextTick, onMounted, ref, type VNode } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, h, nextTick, onMounted, ref, watch, type VNode } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 // UI-PUR-008: the overflow menu is imported from the package root, like `DeleteSheetDialog`'s
 // `NcDialog`: it is a composite (trigger + popover) and the root entry is the public surface for it.
 import { NcActionButton, NcActions } from '@nextcloud/vue'
@@ -14,6 +14,7 @@ import NcNoteCard from '@nextcloud/vue/components/NcNoteCard'
 import NcSelect from '@nextcloud/vue/components/NcSelect'
 import NcTextField from '@nextcloud/vue/components/NcTextField'
 import ResponsiveTable from '@/components/shared/ResponsiveTable.vue'
+import SheetDetailView from '@/views/sheets/SheetDetailView.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import { mdiPlus } from '@mdi/js'
 import { t } from '@nextcloud/l10n'
@@ -32,7 +33,21 @@ import {
 import { SHEET_STATUSES, type Money, type SheetFilters, type SheetSummary } from '@/types/api'
 
 const router = useRouter()
+const route = useRoute()
 const sheetStore = useSheetStore()
+
+/** UI-PUR-005: the detail is an overlay over this list, so the list keeps its rows and scroll. */
+const isWorkspaceOpen = computed(() => !!route.params.id)
+const lastOpenedSheetId = ref<string | null>(null)
+
+watch(() => route.params.id, (id, previous) => {
+	if (!previous || id || !lastOpenedSheetId.value) return
+	const opened = lastOpenedSheetId.value
+	lastOpenedSheetId.value = null
+	void nextTick(() => {
+		document.querySelector<HTMLElement>(`[data-sheet-open="${opened}"]`)?.focus()
+	})
+})
 
 /**
  * UI-PUR-004: whether this mount is a return from a sheet surface.
@@ -151,6 +166,12 @@ const currentPage = computed(() => sheetStore.pagination.page)
 const canGoPrevious = computed(() => currentPage.value > 1)
 const canGoNext = computed(() => currentPage.value < totalPages.value)
 
+/** The visible range, for the "showing X to Y of Z" readout beside the pager. */
+const rangeStart = computed(() => sheetStore.pagination.total === 0
+	? 0
+	: (currentPage.value - 1) * sheetStore.pagination.pageSize + 1)
+const rangeEnd = computed(() => (currentPage.value - 1) * sheetStore.pagination.pageSize + sheetStore.sheets.length)
+
 /**
  * Moves a page, carrying the applied filter with it.
  *
@@ -235,7 +256,7 @@ function openSheetCell(item: SheetSummary, column: { key: string }): VNode {
 			h('div', { class: 'sheet-identity__text' }, [
 				h(
 					NcButton,
-					{ variant: 'tertiary', onClick: () => goToDetail(item.id), 'data-test': 'open-sheet-item' },
+					{ variant: 'tertiary', onClick: () => goToDetail(item.id), 'data-test': 'open-sheet-item', 'data-sheet-open': item.id },
 					() => item.title
 				),
 			]),
@@ -367,7 +388,7 @@ function listCell(item: SheetSummary, column: { key: string }): VNode {
 			h('div', { class: 'sheet-identity__text' }, [
 				h(
 					NcButton,
-					{ variant: 'tertiary', onClick: () => goToDetail(item.id), 'data-test': 'sheet-list-item' },
+					{ variant: 'tertiary', onClick: () => goToDetail(item.id), 'data-test': 'sheet-list-item', 'data-sheet-open': item.id },
 					() => item.title
 				),
 				h('small', { class: 'sheet-identity__id', 'data-test': 'sheet-list-id' }, item.id),
@@ -565,6 +586,7 @@ function goToCreate() {
 
 function goToDetail(sheetId: string) {
 	rememberSheetListScroll(readScrollOffset(listRoot.value))
+	lastOpenedSheetId.value = sheetId
 	router.push({ name: 'sheet-detail', params: { id: sheetId } })
 }
 
@@ -600,10 +622,14 @@ async function confirmDelete() {
 
 <template>
 	<div ref="listRoot" class="sheet-list-view" :dir="direction" data-test="sheet-list-view">
-		<div class="header-row">
-			<h1 class="mb-0">{{ t('pettycash', 'sheets.title') }}</h1>
+		<div class="header-row sheet-list-header">
+			<div class="sheet-list-header__text">
+				<h1 class="mb-0">{{ t('pettycash', 'sheets.title') }}</h1>
+				<p class="sheet-list-subtitle">{{ t('pettycash', 'sheets.subtitle') }}</p>
+			</div>
 			<NcButton
 				variant="primary"
+				class="create-sheet-button"
 				:aria-label="t('pettycash', 'sheets.create')"
 				data-test="create-sheet-button"
 				@click="goToCreate"
@@ -630,16 +656,20 @@ async function confirmDelete() {
 			@submit.prevent="applyFilters"
 		>
 			<div class="sheet-filters__grid">
-				<NcSelect
-					:model-value="draft.status ?? null"
-					:options="statusOptions"
-					:reduce="selectOptionValue"
-					:get-option-key="selectOptionKey"
-					:clearable="true"
-					:label="t('pettycash', 'sheets.filter.status')"
-					data-test="sheet-filter-status"
-					@update:model-value="draft.status = orUndefined($event)"
-				/>
+				<label class="sheet-filters__field">
+					<span class="sheet-filters__label">{{ t('pettycash', 'sheets.filter.status') }}</span>
+					<NcSelect
+						:model-value="draft.status ?? null"
+						:options="statusOptions"
+						:reduce="selectOptionValue"
+						:get-option-key="selectOptionKey"
+						:clearable="true"
+						:placeholder="t('pettycash', 'sheets.filter.allStatuses')"
+						:aria-label="t('pettycash', 'sheets.filter.status')"
+						data-test="sheet-filter-status"
+						@update:model-value="draft.status = orUndefined($event)"
+					/>
+				</label>
 				<NcTextField
 					:model-value="draft.currency ?? ''"
 					:label="t('pettycash', 'sheets.filter.currency')"
@@ -647,22 +677,26 @@ async function confirmDelete() {
 					@update:model-value="draft.currency = orUndefined($event)"
 				/>
 				<label class="sheet-filters__field">
-					<span class="sheet-filters__label">{{ t('pettycash', 'sheets.filter.from') }}</span>
+					<span class="sheet-filters__label">{{ t('pettycash', 'sheets.filter.createdFrom') }}</span>
 					<input
-						:model-value="draft.from ?? ''"
+						:value="draft.from ?? ''"
 						type="date"
 						data-test="sheet-filter-from"
-						@input="draft.from = ($event.target as HTMLInputElement).value"
-					>
+						@input="draft.from = orUndefined(($event.target as HTMLInputElement).value)">
+					<small v-if="draft.from" class="sheet-filters__hint" data-test="sheet-filter-from-hint">
+						{{ formatDate(draft.from) }}
+					</small>
 				</label>
 				<label class="sheet-filters__field">
-					<span class="sheet-filters__label">{{ t('pettycash', 'sheets.filter.to') }}</span>
+					<span class="sheet-filters__label">{{ t('pettycash', 'sheets.filter.createdTo') }}</span>
 					<input
-						:model-value="draft.to ?? ''"
+						:value="draft.to ?? ''"
 						type="date"
 						data-test="sheet-filter-to"
-						@input="draft.to = ($event.target as HTMLInputElement).value"
-					>
+						@input="draft.to = orUndefined(($event.target as HTMLInputElement).value)">
+					<small v-if="draft.to" class="sheet-filters__hint" data-test="sheet-filter-to-hint">
+						{{ formatDate(draft.to) }}
+					</small>
 				</label>
 				<!--
 					The creator facet, rendered rather than typed. See `creatorScope` for why an editable box
@@ -693,7 +727,7 @@ async function confirmDelete() {
 			region instead of sitting in one undifferentiated table. The store already computed
 			`openSheets`; the view simply never used it.
 		-->
-		<NcNoteCard :heading="t('pettycash', 'sheets.openSheets')" data-test="open-sheets">
+		<NcNoteCard type="info" :heading="t('pettycash', 'sheets.openSheets')" data-test="open-sheets">
 			<ResponsiveTable
 				v-if="sheetStore.openSheets.length"
 				:columns="OPEN_SHEET_COLUMNS"
@@ -710,7 +744,7 @@ async function confirmDelete() {
 			</p>
 		</NcNoteCard>
 
-		<NcNoteCard data-test="sheet-list">
+		<NcNoteCard type="info" data-test="sheets">
 			<!--
 				FR-071 (T389): this table used to sit in `overflow-x: auto`, which produces a horizontal
 				scrollbar at 390px rather than satisfying the requirement -- exactly what
@@ -764,6 +798,14 @@ async function confirmDelete() {
 			that is the FR-071 failure (everything visible without horizontal scroll at 390px) arriving from
 			the other direction. Two controls plus a position readout stay one row at any total.
 		-->
+		<p v-if="sheetStore.pagination.total > 0" class="sheet-range" data-test="sheet-range">
+			{{ t('pettycash', 'sheets.showing', {
+				from: formatNumber(rangeStart),
+				to: formatNumber(rangeEnd),
+				total: formatNumber(sheetStore.pagination.total)
+			}) }}
+		</p>
+
 		<nav
 			v-if="totalPages > 1"
 			class="sheet-pager"
@@ -830,6 +872,9 @@ async function confirmDelete() {
 			@cancel="sheetPendingDeletion = null"
 			@confirm="confirmDelete"
 		/>
+
+		<!-- UI-PUR-005: the sheet detail is a large workspace over this list. -->
+		<SheetDetailView v-if="isWorkspaceOpen" />
 	</div>
 </template>
 
@@ -838,6 +883,29 @@ async function confirmDelete() {
 	display: flex;
 	flex-direction: column;
 	gap: 1rem;
+}
+
+.sheet-list-header {
+	align-items: flex-start;
+}
+
+.sheet-list-header__text {
+	display: flex;
+	flex-direction: column;
+	gap: 0.25rem;
+	min-inline-size: 0;
+}
+
+/* On a wrapped mobile header the button gets a full line of its own; without `nowrap` its
+   label breaks into "ایجاد / برگه" even though the line has room for the phrase. */
+.create-sheet-button :deep(.button-vue__text) {
+	white-space: nowrap;
+}
+
+.sheet-list-subtitle,
+.sheet-range {
+	margin: 0;
+	color: var(--color-text-maxcontrast);
 }
 
 /*
@@ -854,6 +922,11 @@ async function confirmDelete() {
  */
 :deep(.notecard > div) {
 	min-width: 0;
+
+	/* The card is a row: the slot's unnamed div is the content column. Without `flex-grow` it
+	   shrink-wraps its table (565px inside a 1152px card), which squeezes every column and makes
+	   the amount groups wrap into a very tall row. Let it take the card's remaining width. */
+	flex: 1 1 auto;
 }
 
 .empty-hint {
@@ -882,9 +955,9 @@ async function confirmDelete() {
 	flex-direction: column;
 	gap: 0.75rem;
 	padding: 0.75rem;
-	border: 1px solid var(--nc-color-border, #dbdbdb);
-	border-radius: var(--border-radius-large, 8px);
-	background-color: var(--nc-color-background, #fff);
+	border: 1px solid var(--color-border);
+	border-radius: var(--border-radius-large);
+	background-color: var(--color-main-background);
 }
 
 .sheet-filters__grid {
@@ -893,15 +966,55 @@ async function confirmDelete() {
 	gap: 0.75rem;
 }
 
+/*
+ * At 390px the two 180px tracks plus the form's padding made the shell's min-content wider than
+ * the viewport; Nextcloud clips the overflow, so the left-hand fields were painted off-screen.
+ * One full-width column lets each control shrink instead of disappearing.
+ */
+@media (width <= 640px) {
+	.sheet-filters__grid {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	/* When the header row wraps, the single action lands on the main-start edge by default.
+	   Keep the primary action at the inline-end, as it is in the unwrapped desktop header. */
+	.header-row > :last-child {
+		margin-inline-start: auto;
+	}
+}
+
+/* A grid track is a minimum, not a maximum: a control with a wider intrinsic minimum would
+   overlap its neighbour (the status select did exactly that). Let every cell shrink. */
+.sheet-filters__grid > * {
+	min-inline-size: 0;
+}
+
+.sheet-filters__grid :deep(.nc-select) {
+	inline-size: 100%;
+	min-inline-size: 0;
+}
+
 .sheet-filters__field {
 	display: flex;
 	flex-direction: column;
 	gap: 0.25rem;
+	min-inline-size: 0;
+}
+
+.sheet-filters__field input {
+	inline-size: 100%;
+	box-sizing: border-box;
 }
 
 .sheet-filters__label {
 	font-size: var(--font-size-floor);
-	color: var(--nc-color-text-maxcontrast, #6b6b6b);
+	color: var(--color-text-maxcontrast);
+}
+
+/* The chosen instant in the reader's own calendar, beside the native picker's ISO value. */
+.sheet-filters__hint {
+	font-size: var(--font-size-floor);
+	color: var(--color-text-maxcontrast);
 }
 
 /*
@@ -913,7 +1026,7 @@ async function confirmDelete() {
  */
 .sheet-filters__scope {
 	font-size: var(--font-size-floor);
-	color: var(--nc-color-text-maxcontrast, #6b6b6b);
+	color: var(--color-text-maxcontrast);
 }
 
 .sheet-filters__actions {
@@ -934,7 +1047,7 @@ async function confirmDelete() {
 
 .sheet-pager__position {
 	font-size: var(--font-size-floor);
-	color: var(--nc-color-text-maxcontrast, #6b6b6b);
+	color: var(--color-text-maxcontrast);
 }
 
 .nc-table {
@@ -947,17 +1060,17 @@ async function confirmDelete() {
 .nc-table td {
 	padding: 0.75rem;
 	text-align: start;
-	border-bottom: 1px solid var(--nc-color-outline-variant, #e0e0e0);
+	border-bottom: 1px solid var(--color-border);
 }
 
 .nc-table th {
 	font-weight: 600;
-	color: var(--nc-color-on-surface-variant, #616161);
-	background-color: var(--nc-color-surface-container-lowest, #fff);
+	color: var(--color-text-maxcontrast);
+	background-color: var(--color-main-background);
 }
 
 .nc-table tbody tr:hover {
-	background-color: var(--nc-color-surface-container-low, #fafafa);
+	background-color: var(--color-background-hover);
 }
 
 /*
@@ -986,7 +1099,6 @@ async function confirmDelete() {
 
 :deep(.sheet-identity__id) {
 	color: var(--color-text-maxcontrast);
-	font-family: var(--font-face-monospace, monospace);
 	overflow-wrap: anywhere;
 }
 
@@ -1043,12 +1155,12 @@ async function confirmDelete() {
 	justify-content: space-between;
 	align-items: center;
 	padding: 0.75rem 1rem;
-	border-radius: 4px;
+	border-radius: var(--border-radius-small);
 }
 
 .alert--error {
-	background-color: var(--nc-color-error-container, #fce4ec);
-	color: var(--nc-color-on-error-container, #c62828);
+	background-color: var(--color-background-hover);
+	color: var(--color-error);
 }
 
 .alert button {
