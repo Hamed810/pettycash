@@ -235,11 +235,24 @@ Pick the tool that matches the question:
 
 OCI is discovery evidence. Serena is PHP semantic evidence. Source is implementation evidence. Tests and runtime are behavioral evidence. None substitutes for another; do not present a weaker method as equivalent.
 
+## Task-Driven Tool Selection — Verified Policy
+
+These principles are binding complements to the Evidence Hierarchy. They are model- and agent-independent.
+
+1. **Match the tool to the question.** OCI is the primary tool for semantic code discovery, implementation lookup, call graph navigation, dependency-path investigation, architecture exploration, code communities, pre-edit context, and supported branch/PR impact analysis. Serena is used for precise symbol navigation, finding references, source-level dependency verification, and structured code editing. Context7 is used for external framework documentation, library APIs, and version-specific documentation.
+2. **No redundant tool fan-out.** Invoke one investigation tool per question unless its result is ambiguous, incomplete, or flagged by an unhealthy index; resolve such results against actual source instead of stacking another discovery call.
+3. **Freshness before architecture-sensitive investigation.** Check the target repository's index status for both toolchains before structural or graph-driven analysis; refresh only through each tool's official incremental workflow when a result depends on current structure.
+4. **Routes come from source, not mapping tools.** For Nextcloud PHP route questions inspect `appinfo/routes.php`, the actual controllers, and their consumers; no installed code-intelligence tool provides reliable Nextcloud route mapping.
+5. **Graph findings are discovery, not proof.** Verify ambiguous or incomplete graph output (empty caller sets, unknown risk, unresolved edges) against actual source before acting on it.
+6. **Unsupported capability goes to source and git.** When graph results are incomplete or ambiguous, exact references must be enumerated, branch-impact tooling does not support the requested comparison, Nextcloud PHP routes must be traced, or generated or dynamic code is involved, use direct source inspection and Git commands. Do not replace unsupported capabilities with fabricated assumptions.
+7. **Intelligence before edits; tests after.** For non-trivial changes, gather the relevant code intelligence first and run the appropriate targeted tests afterward; MCP and code-intelligence calls are not required for trivial, fully-known local edits.
+8. **An unhealthy index proves nothing.** Empty results from a stale, incompatible, or mid-refresh index are not evidence that code, routes, or references do not exist.
+
 ## OCI — Discovery
 
 OCI is the default first discovery layer for non-trivial repository discovery: unknown implementation areas, domain/behavior discovery, related concepts, analogous implementations, precedents, cross-artifact discovery, behavior spread across files or layers, and locating related specs, reports, tests, and source.
 
-Primary tools: `codebase_context`, `codebase_peek`, `codebase_search`, `implementation_lookup`.
+Primary tools: `codebase_context`, `codebase_peek`, `codebase_search`, `implementation_lookup`, plus `call_graph` for call graph navigation and dependency paths, `architecture_context` and `code_communities` for architecture exploration, and `pr_impact` for supported branch/PR impact analysis.
 
 OCI output is not authoritative proof. Do not treat chunk boundaries, rankings, inferred communities, or indexed call edges as exact source semantics.
 
