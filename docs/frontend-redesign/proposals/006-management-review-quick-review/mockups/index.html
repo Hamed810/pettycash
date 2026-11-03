@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+		<title>Design proposal #006 — inline quick review · mockups</title>
+		<link rel="stylesheet" href="mockup.css">
+		<script>
+			/* apply capture class before first paint to avoid toolbar flash in screenshots */
+			(function () {
+				var p = new URLSearchParams(location.search);
+				if (p.get("capture") === "1") document.documentElement.classList.add("is-capture");
+				document.addEventListener("DOMContentLoaded", function () {
+					if (p.get("capture") === "1") document.body.classList.add("is-capture");
+				});
+			})();
+		</script>
+	</head>
+	<body>
+		<header class="review-toolbar" data-toolbar>
+			<div class="review-toolbar__brand">
+				<span class="review-toolbar__mark" aria-hidden="true">۶</span>
+				<span class="review-toolbar__titles">
+					<span class="review-toolbar__title">Cost center manager · inline quick review</span>
+					<span class="review-toolbar__note">Design-only mockup · illustrative data · not an implementation</span>
+				</span>
+			</div>
+			<div class="review-toolbar__controls" role="group" aria-label="Mockup controls">
+				<div class="seg" role="group" aria-label="Language">
+					<button class="seg__btn" data-lang="en" type="button">English</button>
+					<button class="seg__btn" data-lang="fa" type="button">فارسی</button>
+				</div>
+				<div class="seg" role="group" aria-label="Viewport">
+					<button class="seg__btn" data-device="desktop" type="button">Desktop</button>
+					<button class="seg__btn" data-device="mobile" type="button">Mobile</button>
+				</div>
+				<label class="seg" aria-label="State">
+					<select class="seg__btn" data-state-select style="appearance:auto;background:transparent;color:#dce9e0;border:0">
+						<option value="collapsed">Collapsed queue</option>
+						<option value="expanded">Quick review</option>
+						<option value="doc">Doc preview</option>
+						<option value="unsupported">Unsupported file</option>
+						<option value="details">Full details</option>
+						<option value="confirm">Confirm decision</option>
+						<option value="return">Confirm return</option>
+						<option value="error">Reject w/o note</option>
+						<option value="submitting">Submitting</option>
+						<option value="completed">Decision complete</option>
+					</select>
+				</label>
+				<div class="seg" role="group" aria-label="Capture">
+					<a class="seg__btn" data-capture href="#" style="text-decoration:none">Capture view</a>
+				</div>
+			</div>
+		</header>
+
+		<main class="stage">
+			<div class="stage__frame">
+				<div class="app-frame" id="app" lang="en" dir="ltr"></div>
+			</div>
+		</main>
+
+		<script src="mockup.js"></script>
+		<script>
+			(function () {
+				var p = new URLSearchParams(location.search);
+				var lang = p.get("lang") === "fa" ? "fa" : "en";
+				var device = p.get("device") === "mobile" ? "mobile" : "desktop";
+				var view = p.get("state") || "collapsed";
+				var capture = p.get("capture") === "1";
+
+				function go(next) {
+					var q = new URLSearchParams({ lang: next.lang || lang, device: next.device || device, state: next.state || view });
+					if (next.capture || capture) q.set("capture", "1");
+					location.search = q.toString();
+				}
+
+				document.querySelectorAll("[data-lang]").forEach(function (b) {
+					b.classList.toggle("is-active", b.getAttribute("data-lang") === lang);
+					b.addEventListener("click", function () { go({ lang: b.getAttribute("data-lang") }); });
+				});
+				document.querySelectorAll("[data-device]").forEach(function (b) {
+					b.classList.toggle("is-active", b.getAttribute("data-device") === device);
+					b.addEventListener("click", function () { go({ device: b.getAttribute("data-device") }); });
+				});
+				var sel = document.querySelector("[data-state-select]");
+				sel.value = view;
+				sel.addEventListener("change", function () { go({ state: sel.value }); });
+
+				var cap = document.querySelector("[data-capture]");
+				if (capture) cap.textContent = "Exit capture";
+				cap.addEventListener("click", function (e) {
+					e.preventDefault();
+					var q = new URLSearchParams({ lang: lang, device: device, state: view });
+					if (!capture) q.set("capture", "1");
+					location.search = q.toString();
+				});
+			})();
+		</script>
+	</body>
+</html>
