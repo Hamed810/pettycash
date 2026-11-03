@@ -73,7 +73,7 @@ Plus 23 verified-control records and 4 open visual/product questions that source
 
 **Not blocked — ready for owner review and a first implementation batch (frontend only, no backend change, no pending product decision):** `UI-PUR-001`, `002`, `004`, `008`, `009`, `010`, `011`, `012`, `013`, `015`.
 
-**Blocked** (after the reconciliation pass — see `BUNNY_READY_QUEUE.md` §2/§4): `UI-PUR-003`, `UI-PUR-007` and `UI-PUR-014` are `BLOCKED_BY_BACKEND`. The product questions they waited on (D-09, D-05, D-06) are answered; what remains is the unapproved backend change each needs (`BE-CR-002`, `001`, `003`). `UI-PUR-016` is ready for its server-enforced tier with its evidence criterion deferred until `BE-CR-004`; `UI-PUR-005` and `UI-PUR-012` are unblocked by D-01.
+**Blocked** (after the reconciliation pass — see `BUNNY_READY_QUEUE.md` §2/§4): `UI-PUR-003`, `UI-PUR-007` and `UI-PUR-014` are `BLOCKED_BY_BACKEND`. The product questions they waited on (D-09, D-05, D-06) are answered; **D-05 was answered on 2026-10-27 in favour of an immutable account (title-only edit)**, and `BE-CR-001` is now delivered and verified (`T438`–`T441`, 2026-10-28), so `UI-PUR-007` needs only its own implementation authorization. What remains for the other cards is the unapproved backend change each needs (`BE-CR-002`, `003`). `UI-PUR-016` is ready for its server-enforced tier with its evidence criterion deferred until `BE-CR-004`; `UI-PUR-005` and `UI-PUR-012` are unblocked by D-01.
 
 **Blocked pending backend authorization:** every `BE-CR-*` (6), plus the five frontend tasks that consume them (`UI-PUR-003`, `007`, `014`, `016`).
 
@@ -98,7 +98,7 @@ Batch A — foundations and the purchaser list
 | D-02 | English LTR now vs D-006's "Persian and English from day one" — and when is an English catalog authored? | sequencing (mechanism ship is safe) |
 | D-03 | Does the list's date filter mean sheet-creation date or expense date? | possibly a spec clarification + contract change |
 | D-04 | Does the purchaser list keep FR-062's stage-approved columns? | `UI-PUR-002` completeness |
-| D-05 | May a sheet's account change after creation? (validate-and-expose vs immutable) | `UI-PUR-007` + `BE-CR-001` |
+| D-05 | May a sheet's account change after creation? (validate-and-expose vs immutable) | `UI-PUR-007` + `BE-CR-001` — **answered 2026-10-27: immutable after creation (Option A); title-only edit** |
 | D-06 | Stage cards: counts (needs `BE-CR-003`) or only the published figures? | `UI-PUR-014`, `UI-PUR-016` |
 | D-07 | Two published transaction statuses can never occur — remove or document? | contract hygiene |
 | D-08 | Does the mobile reference set match the owner's "eight mobile images"? | `UI-PUR-005` mobile evidence |
@@ -172,7 +172,7 @@ tasks/BE-CR-001.md  … tasks/BE-CR-006.md    (6 files)
 
 ## 9. Next action (no further prompt required)
 
-1. The product owner answers what remains open — `REC-01` (how an English catalog is sourced), the intra-OPEN ordering inside `BE-CR-002`, the currency and permission rules inside `BE-CR-001`, the `REC-03` semantics inside `BE-CR-003`, and whether the three spec-compliance changes (`BE-CR-004/005/006`) are in scope at all. D-01, D-05, D-06, D-09 and D-11 are already answered; see `OWNER_DECISION_RECONCILIATION.md`.
+1. The product owner answers what remains open — `REC-01` (how an English catalog is sourced), the intra-OPEN ordering inside `BE-CR-002`, the `REC-03` semantics inside `BE-CR-003`, and whether the three spec-compliance changes (`BE-CR-004/005/006`) are in scope at all. D-01, D-05, D-06, D-09 and D-11 are already answered; see `OWNER_DECISION_RECONCILIATION.md`. The `BE-CR-001` currency/permission rules are settled by the 2026-10-27 immutable-account decision (`D-026`).
 2. The product owner approves or rejects each task card. Approval is per card; approving `EXECUTION_PLAN.md` is not approving the cards.
 3. Only then: hand the Batch A cards (`UI-PUR-001` → `002` → `008` → `004`, then the later batches) to an implementation agent, one card at a time, with the card's own tests as the completion evidence — sequence and gates in `BUNNY_READY_QUEUE.md`, verification levels in `TEST_STRATEGY.md`.
 4. Backend work starts only after the corresponding `BE-CR` is explicitly authorized — with the open questions inside each `BE-CR` answered first, since several of them are product questions (a currency migration rule, a lock-version behaviour, a stricter submission rule).

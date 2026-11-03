@@ -45,12 +45,14 @@ Nothing below is inferred from the clarifications alone. Each clarification was 
 - **Task effect:** `UI-PUR-001` → `READY_FOR_OWNER_APPROVAL` for the mechanism, with `REC-01` recorded as a dependent decision. No task is blocked by D-02 itself.
 - **Explicitly not done:** no English catalog was authored, no partial catalog was proposed, and no requirement to use English in shipping builds was invented.
 
-### D-05 — Sheet title and account are editable while the sheet is OPEN, subject to real permissions
+### D-05 — Sheet title and account are editable while the sheet is OPEN, subject to real permissions (superseded 2026-10-27)
 
-- **Decision resolved:** the account is **not immutable**; the approved interaction is inline editing of the open sheet's metadata, not a separate Edit Sheet workflow.
-- **Verified consequence (sharpened `BE-CR-001`):** the contract's own `accountId` description says the field cannot be required (V4), yet the controller refuses its absence (V5). So a **title-only PATCH** is *contractually correct but implementation-refused* — meaning even the least invasive workaround is a backend change, not a frontend one. The alternative remains to expose the sheet's `accountId` so the client can echo it back. Both options are backend changes; both stay blocked.
+> **Superseded 2026-10-27 (owner Option A).** The account is **immutable after creation**; only the title may change while the sheet is `OPEN`. The paragraphs below record the earlier 2026-10-19 reading and are retained as history. Current normative policy: 001 `FR-019`/`FR-021`; decision record `D-026`; delivery 001 `T438`–`T441` (all implemented and verified 2026-10-28). Any account assignment supplied on PATCH is refused before persistence.
+
+- **Decision resolved (historical reading):** the account is **not immutable**; the approved interaction is inline editing of the open sheet's metadata, not a separate Edit Sheet workflow.
+- **Verified consequence (sharpened `BE-CR-001`):** the contract's own `accountId` description says the field cannot be required (V4), yet the controller refuses its absence (V5). So a **title-only PATCH** is *contractually correct but implementation-refused* — meaning even the least invasive workaround is a backend change, not a frontend one. The current resolution is that PATCH becomes title-only and any supplied account is refused; exposing the sheet's `accountId` is still required, but for read-only display rather than echoing it back.
 - **No contractually-correct frontend-only path exists:** the sheet's account is absent from every payload (`SheetPayloadFormatter.php:22-24`), and guessing `accounts[0]` is exactly GAP-011 (silent repointing). This analysis is recorded in `BLOCKED_ITEMS.md` §3.
-- **Derived constraint (documented as derived, not owner-stated):** "subject to real permissions" is read as *ownership of the sheet and of the target account, with the account active*; the currency question (whether an account of a different currency may be adopted by a sheet that already stores a currency) is **not** answered by the clarification and must be answered before `BE-CR-001` is approved.
+- **Derived constraint (documented as derived, not owner-stated):** "subject to real permissions" was read as *ownership of the sheet and of the target account, with the account active*; the currency question (whether an account of a different currency may be adopted by a sheet that already stores a currency) is **now answered**: the account and currency are immutable, so neither path exists. See `D-026`.
 - **Task effect:** `UI-PUR-007` → `BLOCKED_BY_BACKEND` (previously `BLOCKED_OWNER_DECISION`). Its blocking reason changed, not its status class.
 
 ### D-06 — Workflow stage statistics must come from actual transaction decisions per stage
@@ -119,7 +121,7 @@ These are **dependencies and diligence items**, not defects. They carry their ow
 | `UI-PUR-004` | PROPOSED | `READY_FOR_OWNER_APPROVAL` | Unchanged; sequenced **before** `UI-PUR-005` because the overlay consumes it |
 | `UI-PUR-005` | PROPOSED (D-01 evidence) | `READY_FOR_OWNER_APPROVAL` | D-01 approves the dialog and the mobile references; D-11 confirms the tabbed workspace |
 | `UI-PUR-006` | PROPOSED (D-11) | `READY_FOR_OWNER_APPROVAL` | D-11 resolved: History tab in scope, existing per-transaction APIs |
-| `UI-PUR-007` | BLOCKED_OWNER_DECISION (D-05) | `BLOCKED_BY_BACKEND` | D-05 resolved in favour of editable; no contractually-correct frontend-only path exists (`REC-02`) |
+| `UI-PUR-007` | BLOCKED_OWNER_DECISION (D-05) | `BLOCKED_BY_BACKEND` | D-05 resolved 2026-10-27 in favour of an immutable account (title-only edit); no contractually-correct frontend-only path exists (`REC-02`) |
 | `UI-PUR-008` | PROPOSED | `READY_FOR_OWNER_APPROVAL` | Unchanged |
 | `UI-PUR-009` | PROPOSED | `READY_FOR_OWNER_APPROVAL` | `REC-05`: last-save ordering source confirmed, no backend change |
 | `UI-PUR-010` | PROPOSED | `READY_FOR_OWNER_APPROVAL` | Unchanged |
@@ -136,7 +138,7 @@ These are **dependencies and diligence items**, not defects. They carry their ow
 
 | BE-CR | Delta | Classification |
 |---|---|---|
-| `BE-CR-001` | Expose the sheet's `accountId` **or** make an absent `accountId` mean "unchanged" (both are backend changes); permission and currency rules to be stated | **Required by a frontend requirement** (D-05) |
+| `BE-CR-001` | Expose the sheet's `accountId` on `SheetDetail` only and make the update title-only (any supplied account refused); permission and currency rules now settled by the 2026-10-27 immutable-account decision (`D-026`) | **Required by a frontend requirement** (D-05) |
 | `BE-CR-002` | Server ordering: OPEN-first with a defined intra-OPEN order plus the First-Submitted direction across pages | **Required by a frontend requirement** (D-09) |
 | `BE-CR-003` | Per-stage decision counts and amounts (data already selected by `rowsForSheet()`), with `REC-03`'s semantics stated | **Required by a frontend requirement** (D-06) |
 | `BE-CR-004` | Evidence policy at submit/resubmit (FR-023 never enforced; resubmit inverted) | **Spec-compliance change, outside the redesign's scope** unless the owner brings it in |

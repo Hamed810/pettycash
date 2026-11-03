@@ -1,5 +1,7 @@
 # Pettycash UI Design Contract — Approved direction / last updated 2026-10-19
 
+> **Superseded behavior note (2026-10-27):** the sheet's source account is **immutable after creation**; only the title may change while the sheet is `OPEN`, and the account/currency are displayed read-only. Any statement below that a sheet's **Account** is editable is a 2026-10-19 prototype-direction statement and is withdrawn. Normative policy: 001 `FR-019`/`FR-021`; decision record `D-026`; delivery 001 `T438`–`T441` (all implemented and verified 2026-10-28). This document remains design direction only and creates no behavior authority.
+
 ## Scope and process
 - Redesign existing **Nextcloud Pettycash frontend**, never rebuild product; no new business capabilities.
 - Purchaser view **only** in this phase. Manager (Cost Center, Senior), Finance, Administrator views intentionally later.

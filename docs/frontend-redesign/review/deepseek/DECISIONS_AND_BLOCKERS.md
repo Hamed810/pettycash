@@ -46,7 +46,7 @@
 ### D-05 — May a sheet's account change after creation?
 **The defect:** GAP-011 (a retitle can silently repoint a sheet to another account, unvalidated, with the currency left behind).
 
-**Proposed disposition:** the safest reading is that the account is editable while OPEN but must be **validated** on update (owner, existence, active, currency compatibility) and **visible** in the sheet payload so the client can send the right value — `BE-CR-001`. If the owner prefers immutability, the update path must still stop accepting a substituted account, which requires the same payload exposure. **The one option that must not be chosen is "leave it as it is".**
+**Disposition (answered 2026-10-27 — Option A): the account is immutable after creation.** The earlier proposal below is retained as history only. The owner decided that only the title may change while the sheet is `OPEN`; any supplied `accountId` is refused before persistence; the sheet currency is immutable; and the stored account is displayed read-only. The payload exposure is still required, but for read-only display rather than for echoing an account back. Normative source: 001 `FR-019`/`FR-021`; decision record `D-026`; delivery 001 `T438`–`T441` (all implemented and verified 2026-10-28; `T041` closed).
 
 ---
 

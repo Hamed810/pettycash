@@ -72,7 +72,7 @@ Order inside the batch matters; the tasks do not overlap in files except where n
 | 3.1 | `BE-CR-004` → `UI-PUR-016` | owner approval | The submit-readiness surface is meaningless without the server enforcing the same rule |
 | 3.2 | `BE-CR-005` | owner approval | Improves the list and workspace status display; no frontend task needed beyond re-testing |
 | 3.3 | `BE-CR-002` → `UI-PUR-003` | D-09 + owner approval | Backend first, then the sort control and the server-driven OPEN region |
-| 3.4 | `BE-CR-001` → `UI-PUR-007` | D-05 + owner approval | Do not start `UI-PUR-007`'s inline editing before the payload exposes the account |
+| 3.4 | `BE-CR-001` → `UI-PUR-007` | D-05 (answered 2026-10-27: immutable account) + implementation authorization | Do not start `UI-PUR-007`'s inline editing before the backend delivers the read-only `SheetDetail.accountId` projection and the title-only PATCH |
 | 3.5 | `BE-CR-003` → `UI-PUR-014` | D-06; only if Shape 2 | If Shape 1 is chosen, mark `BE-CR-003` withdrawn |
 | 3.6 | `BE-CR-006` | owner approval (lowest priority) | Independent; can be scheduled whenever a backend slot exists |
 | 3.7 | `UI-PUR-013` | — (no backend dependency) | Can be pulled forward into Batch 0 if a slot is free; listed here because it touches revision semantics |
@@ -118,7 +118,7 @@ Recommended first hand-off, in this order — all frontend-only, no `BE-CR`, no 
 
 Then Batch 2 (`UI-PUR-005`, `UI-PUR-006`, `UI-PUR-015`).
 
-**Not ready, and why:** `UI-PUR-003` (D-09 + `BE-CR-002`), `UI-PUR-007` (D-05 + `BE-CR-001`), `UI-PUR-014` (D-06), `UI-PUR-016` (Submit-behaviour decision + `BE-CR-004`), and every `BE-CR-*` (owner approval).
+**Not ready, and why:** `UI-PUR-003` (D-09 + `BE-CR-002`), `UI-PUR-007` (D-05 answered 2026-10-27 as an immutable account + `BE-CR-001` delivery/authorization), `UI-PUR-014` (D-06), `UI-PUR-016` (Submit-behaviour decision + `BE-CR-004`), and every `BE-CR-*` (owner approval).
 
 ---
 

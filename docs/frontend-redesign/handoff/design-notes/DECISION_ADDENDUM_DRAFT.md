@@ -2,6 +2,8 @@
 
 **Scope:** Decisions *after* `DECISIONS.md` dated 2026-10-11. These are a conversation-level checkpoint, **not yet written into Git**. Owner should merge using project's append-only change-control procedure, assign official IDs, and reconcile prior D-006 (bilingual final product) with the **temporary English-only Manus design sequence** (not a rescission of bilingual support).
 
+> **Superseded 2026-10-27:** `U-14`'s "title/account" half is withdrawn. The sheet's source account and currency are **immutable after creation**; only the title may change while the sheet is `OPEN`. Normative policy: 001 `FR-019`/`FR-021`; decision record `D-026`. The `U-14` row is retained as history.
+
 | Candidate ID | Approved direction (English) | خلاصه فارسی | Status |
 |---|---|---|---|
 | U-01 | Design PNG before any UI code; approved PNG then editable/runnable prototype, then Bunny implementation. | اول PNG، بعد تصویب، بعد Prototype، بعد کد اصلی | Approved in conversation |

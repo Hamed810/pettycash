@@ -43,7 +43,7 @@
 | `DECISIONS_AND_BLOCKERS.md` | D-01…D-12 (governance contradictions, open product questions, conservative assumptions) |
 | `FINAL_HANDOFF.md` | executive summary, coverage, checks actually run vs not run, git verification, next actions |
 | `tasks/UI-PUR-001…016.md` | 16 implementation-ready task cards, every one `PROPOSED` + approval gate |
-| `tasks/BE-CR-001…006.md` | 6 backend change requests, every one `BLOCKED_PENDING_OWNER_APPROVAL` |
+| `tasks/BE-CR-001…006.md` | 6 backend change requests, originally every one `BLOCKED_PENDING_OWNER_APPROVAL`; `BE-CR-001` is `DONE_VERIFIED` (2026-10-28) |
 
 ---
 

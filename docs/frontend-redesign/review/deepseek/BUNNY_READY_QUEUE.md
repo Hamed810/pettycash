@@ -53,7 +53,7 @@
 | 9 · Localization, calendar and theme | `UI-PUR-001` (mechanism, tier 1) + `UI-PUR-015` (a11y/theming parity) | Deviation 2: the *mechanism* cannot wait until tier 9 because tier 2–8 screens depend on it; the theme/RTL-safety parity pass stays at the end |
 | 10 · Browser tests and regression validation | **gate, not a task** — see §5 | No task was invented for it; existing suites already cover the areas |
 
-**Blocked lane (do not start):** `UI-PUR-003`, `UI-PUR-007`, `UI-PUR-014` and all six `BE-CR-*`.
+**Blocked lane (do not start):** `UI-PUR-003`, `UI-PUR-007`, `UI-PUR-014` and the five remaining `BE-CR-*` (`BE-CR-001` is delivered and verified).
 
 ---
 
@@ -168,9 +168,10 @@
 | Card | Status | Blocked by | Unblock condition |
 |---|---|---|---|
 | `UI-PUR-003` — sorting: OPEN-first in either direction, correct across pages | `BLOCKED_BY_BACKEND` | `BE-CR-002` (unapproved). D-09 is **resolved**: OPEN-first is required and must hold across pagination, so a client-side sort of the loaded page is not an acceptable substitute | `BE-CR-002` approved **and** the intra-OPEN ordering question answered |
-| `UI-PUR-007` — edit the sheet's title inline while OPEN, without ever changing its account by accident | `BLOCKED_BY_BACKEND` | `BE-CR-001` (unapproved). D-05 is **resolved** (account is editable while OPEN, subject to real permissions) but no contractually-correct frontend-only path exists: the controller requires `accountId`, the payload never carries the sheet's account, and guessing is the GAP-011 defect | `BE-CR-001` approved with the currency/permission rule answered |
+| `UI-PUR-007` — edit the sheet's title inline while OPEN, without ever changing its account by accident | `BLOCKED_BY_BACKEND` | `BE-CR-001` **delivery is complete** (2026-10-28). D-05 is **resolved 2026-10-27: the account is immutable after creation and only the title may change** (supersedes the earlier "account editable" reading). No contractually-correct frontend-only path existed; the controller required `accountId`, the payload never carried the sheet's account, and guessing is the GAP-011 defect | Separate implementation authorization for this frontend card (the backend `T438`–`T441` delivery is done) |
 | `UI-PUR-014` — stage summary inside the sheet workspace | `BLOCKED_BY_BACKEND` | `BE-CR-003` (unapproved). D-06 is **resolved**: counts **and** amounts per stage from actual decisions, Returned shown when applicable, final finance totals are not a substitute — which makes `BE-CR-003` required rather than optional | `BE-CR-003` approved with `REC-03`'s semantics stated |
-| `BE-CR-001` … `BE-CR-006` | `BLOCKED_PENDING_OWNER_APPROVAL` | Governance requires explicit separate approval for any API/business-logic/authorization change | Owner approves the exact scope in writing, with each card's open questions answered |
+| `BE-CR-001` | `DONE_VERIFIED` | Policy decided 2026-10-27 (immutable account); delivery 001 `T438`–`T441` implemented and verified 2026-10-28, and `T041` closed. There is no replacement-path decision outstanding | Done; downstream `T039`/`T080` still need their own implementation authorization |
+| `BE-CR-002` … `BE-CR-006` | `BLOCKED_PENDING_OWNER_APPROVAL` | Governance requires explicit separate approval for any API/business-logic/authorization change | Owner approves the exact scope in writing, with each card's open questions answered |
 
 ---
 

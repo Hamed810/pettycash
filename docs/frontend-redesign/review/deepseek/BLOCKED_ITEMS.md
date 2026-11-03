@@ -9,14 +9,16 @@
 
 | Category | Count | IDs |
 |---|---|---|
-| Frontend tasks blocked by an unapproved backend change | **3** | `UI-PUR-003`, `UI-PUR-007`, `UI-PUR-014` |
-| Backend change requests awaiting explicit owner approval | **6** | `BE-CR-001` … `BE-CR-006` |
+| Frontend tasks blocked by an unapproved backend change | **2** | `UI-PUR-003`, `UI-PUR-014` |
+| Frontend tasks whose backend dependency is delivered and which await separate implementation authorization | **1** | `UI-PUR-007` |
+| Backend change requests awaiting explicit owner approval | **5** | `BE-CR-002` … `BE-CR-006` |
+| Backend change requests with decided policy, delivered and verified | **1** | `BE-CR-001` (`T438`–`T441`, `DONE_VERIFIED` 2026-10-28; `T041` closed) |
 | Owner decisions still open that gate *planning*, not any current card | **2** | `REC-01` (English catalog), intra-OPEN ordering (inside `BE-CR-002`) |
 | Owner options recorded but deliberately not adopted | **2** | `REC-04` alternative (adopt `POST /correction`), FR-062 amendment for a strict six-column list |
 | Findings requiring runtime verification before they may be called reproduced | **3** | `GAP-005`, `GAP-022`, `GAP-029` |
 | Verified-correct controls that must **not** be "fixed" | many | see `AUDIT_REPORT.md` §verified controls |
 
-Nothing else in the package is blocked: **13 of the 16 frontend cards are `READY_FOR_OWNER_APPROVAL`** (still not approved — awaiting the owner).
+Nothing else in the package is blocked. At the original audit baseline, **13 of the 16 frontend cards were `READY_FOR_OWNER_APPROVAL`** (not approved); later task closures are tracked in `specs/005-purchaser-ui-redesign/tasks.md`.
 
 ---
 
@@ -30,17 +32,17 @@ Nothing else in the package is blocked: **13 of the 16 frontend cards are `READY
 - **Contractually-correct frontend-only workaround:** **none.** The only correct behaviours are (a) wait for server ordering, or (b) leave the list unordered — which is the defect.
 - **Unblock condition:** `BE-CR-002` approved **and** its intra-OPEN ordering question (below) answered, then `UI-PUR-003` implemented against the frozen contract.
 
-### 2.2 `UI-PUR-007` — Edit the sheet's title inline while OPEN, without ever changing its account by accident
+### 2.2 `UI-PUR-007` — Edit the sheet's title inline while OPEN, with the account immutable
 
-- **Blocked by:** `BE-CR-001` (unapproved).
-- **Decision status:** D-05 is **resolved** — the title *and* the account are editable while the sheet is OPEN, subject to real permissions, via inline editing rather than a separate Edit Sheet workflow.
+- **Blocked by:** `BE-CR-001` **delivery is complete** (immutable-account policy decided 2026-10-27; 001 `T438`–`T441` all delivered and verified 2026-10-28; `T041` closed). The remaining blocker is separate implementation authorization for this frontend task. There is no replacement-path blocker: the prior same-currency replacement policy is withdrawn, and no slice is partially blocked.
+- **Decision status:** D-05 is **resolved and corrected** — while the sheet is `OPEN`, its owner may edit the **title only**. The source account and currency are immutable after creation. The earlier "title *and* account are editable" reading is superseded by the owner's 2026-10-27 Option A decision.
 - **Why the frontend cannot do it alone — and this is the sharpest finding of the reconciliation pass:**
   1. The controller **requires** `accountId` on update and refuses its absence with a field-level 422 (`lib/Controller/SheetController.php:147-158`).
   2. The contract, however, requires only `title` and states that `accountId` "cannot be required" (`ocs-api.yaml:1396-1410`). So the **only** least-invasive workaround — a title-only PATCH — is *contractually correct but implementation-refused*; making it work is itself a backend change.
-  3. The client cannot compute the sheet's current account: it is absent from every payload (`SheetPayloadFormatter.php:22-24` drops it deliberately), and multiple accounts may share a currency.
-  4. Substituting `accounts[0]` is exactly `GAP-011`: a silent repointing of the sheet, with no currency reconciliation.
-- **Contractually-correct frontend-only workaround:** **none exists.** Not sending the field fails validation; sending a guess is data corruption.
-- **Unblock condition:** `BE-CR-001` approved with two answers first — (i) the currency rule when a sheet already stores a currency and a different-currency account is adopted, and (ii) the permission rule ("subject to real permissions" = ownership of sheet **and** target account, account active — currently a *derived* reading, not an owner statement).
+  3. The client cannot compute the sheet's current account: it is absent from every payload (`SheetPayloadFormatter.php:22-24` drops it deliberately), so even a legitimate read-only display is impossible today.
+  4. Substituting `accounts[0]` is exactly `GAP-011`: a silent repointing of the sheet, with no currency reconciliation. The controller currently accepts that value without any existence, ownership, active-state, or currency check.
+- **Contractually-correct frontend-only workaround:** **none exists.** Not sending the field fails validation; sending a guess is data corruption; sending the current account is still a refused assignment under the immutable-account policy.
+- **Unblock condition:** the `BE-CR-001` backend delivery (001 `T438`–`T441`) is complete, and this frontend task still requires separate explicit implementation authorization. The delivered behavior covers repository account-identity integrity, `SheetDetail.accountId`, title-only `SheetUpdate` with any supplied `accountId` refused before persistence, read-only edit display, and focused verification (14 suites/236 tests/1,616 assertions, 1 pre-existing skip; OpenAPI/TypeScript gates passing; settlement unchanged). The policy's normative source is 001 `FR-019`/`FR-021`: the source account and currency are immutable after creation; an `OPEN` sheet's owner may update the title only; the account is displayed accurately and read-only, including when inactive; a title-only PATCH omits `accountId`; any supplied `accountId` — including `null`, the current account, an inactive account, or an owned/active/same-currency account — is refused with `422 VALIDATION_FAILED`/`fieldErrors.accountId`; corrupted references are reported as `422 DATA_FAULT`, never repaired. The public `accountId` is declared on `SheetDetail` only. The Sheets List remains governed by FR-083's all-or-nothing corrupt-record answer and does not gain `accountId`. `pettycash_accounts_user_currency_uniq` and the account model are unchanged; no second-account fixture exists.
 
 ### 2.3 `UI-PUR-014` — Stage summary inside the sheet workspace
 
@@ -52,7 +54,14 @@ Nothing else in the package is blocked: **13 of the 16 frontend cards are `READY
 
 ---
 
-## 3. Backend change requests — all `BLOCKED_PENDING_OWNER_APPROVAL`
+## 3. Backend change requests — one delivered, four policy-undecided
+
+**`BE-CR-001` is not one of the four policy-undecided requests.** Its immutable-account policy was
+decided on 2026-10-27; the delivery 001 `T438`–`T441` is implemented and verified (2026-10-28), and
+`T041` is closed. There is no replacement path and no partially blocked slice. The downstream frontend
+cards still require their own separate implementation authorization. `BE-CR-002`, `003`, `005`, and `006` are
+the four requests that remain policy-undecided. 001 `FR-019`/`FR-021` are the normative source for the
+`BE-CR-001` policy; this document references them rather than restating them as an independent policy.
 
 ### 3.1 The approval rule being applied
 
@@ -62,7 +71,7 @@ Repository governance requires explicit separate approval for any API, financial
 
 | ID | Required API / behaviour delta | Endpoints & code touched | Frontend consumer | Classification |
 |---|---|---|---|---|
-| `BE-CR-001` | Expose the sheet's `accountId` in the projection **and/or** treat an absent `accountId` on update as "unchanged"; validate the adopted account (owned by caller, active, currency rule) | `PATCH /sheets/{sheetId}`, `GET /sheets`, `GET /sheets/{sheetId}`; `SheetController`, `SheetService`, `SheetPayloadFormatter` | `UI-PUR-007` | **Required by a frontend requirement** (D-05) |
+| `BE-CR-001` | Expose the sheet's `accountId` on **`SheetDetail` only**; make the account immutable after creation (title-only `SheetUpdate`; any supplied `accountId` refused before persistence with `fieldErrors.accountId`; sheet currency immutable; inactive stored account preserved and displayed read-only; corrupted references reported, never repaired) | `PATCH /sheets/{sheetId}`, `GET /sheets/{sheetId}`; `SheetController`, `SheetService`, `SheetPayloadFormatter`, `DbExpenseSheetRepository` | `UI-PUR-007` | **Required by a frontend requirement** (D-05); **immutable-account policy decided 2026-10-27 (`D-026`), with `T438`–`T441` delivered and verified 2026-10-28 and `T041` closed** — the backend behavior is delivered; the frontend task is blocked on its own separate implementation authorization, **not** policy-undecided and **not** on a replacement decision |
 | `BE-CR-002` | Deterministic server ordering: OPEN-first always, then the requested direction on First Submitted, valid across pages, with a documented tie-breaker | `GET /sheets` (`ocs-api.yaml:364-381`), list query + repository | `UI-PUR-003` | **Required by a frontend requirement** (D-09) |
 | `BE-CR-003` | Per-stage decision **counts and amounts** (Approved / Rejected / Pending / Returned) added to the sheet-session payload; data already selected by `SheetSummaryQuery::rowsForSheet()` (`:173-181`, `:210-215`) — this is an aggregate + payload change, not new persistence | sheet summary projection; contract schema for the new object | `UI-PUR-014` | **Required by a frontend requirement** (D-06) |
 | `BE-CR-004` | One consistent evidence policy: require "all required evidence" at submission (FR-023 currently never enforced — `SubmitSheet.php:83`, `TransactionRevision.php:124-129`) and make resubmission consistent (`ResubmitCorrection.php:108-110` demands it unconditionally) | submission + resubmission application services | `UI-PUR-016` (advisory tier) | **Spec-compliance change — outside the redesign's scope** unless the owner brings it in |
@@ -71,10 +80,14 @@ Repository governance requires explicit separate approval for any API, financial
 
 ### 3.3 Open questions that must be answered **before** an approval would even be meaningful
 
+> **2026-10-27:** both `BE-CR-001` questions below are answered in `D-026`; the delivery is 001 `T438`–`T441` and all four slices are delivered and verified (2026-10-28), with `T041` closed. The remaining `BE-CR-002`/`BE-CR-003` questions are still open. The policy answers and task registration authorized documentation only; the later separate authorizations covered the implementation. 001 `FR-019`/`FR-021` are the normative policy source; this document references them. **Option A (immutable account)** supersedes the earlier same-currency replacement answer: the source account and currency are immutable after creation; a title-only PATCH omits `accountId` and preserves the stored account even when inactive; any supplied `accountId` — including `null`, the current account, or an owned/active/same-currency account — is refused before persistence with `422 VALIDATION_FAILED`/`fieldErrors.accountId`. The preferred partial-list availability for a corrupt sheet is **not** adopted because it conflicts with FR-083's all-or-nothing list answer; the list remains `422` with no omission and no partial `200`, and an inactive-but-resolvable account remains readable. `pettycash_accounts_user_currency_uniq` and the account model are unchanged; there is no replacement path, no second-account fixture, and `T041` requires only implementation authorization.
+>
+> **Readiness reconciliation (2026-10-27, documentation only):** the `T438`–`T441` text now distinguishes an account-reference fault from a sheet-currency fault, defines `save()` refusal, retargets the contradictory detail-absence test, allows `accountId` only in the detail conformance check, updates the provisioning identity note, makes `T440` depend on `T439`, adds the read-only account/currency display with no `accounts[0]` and no `accountId` submission, and adds conformance/provisioning/dashboard/`npm run typecheck`/targeted Vitest coverage plus operator-only remediation and the `T440` official-Chrome desktop + 390px Persian-RTL owner visual gate. **No second active IRR fixture is added**, because no replacement case exists. All four slices were ready under explicit implementation authorization, and `T041` could close after authorized delivery and verification. No in-app repair is authorized.
+
 | For | Question | Evidence status |
 |---|---|---|
-| `BE-CR-001` | When a sheet already stores a currency and the adopted account is denominated differently — refuse, or migrate? | **Not answerable from source.** Must be an owner answer. |
-| `BE-CR-001` | "Subject to real permissions" — confirm the derived reading (caller owns the sheet and the target account; account active) | Derived, not owner-stated |
+| `BE-CR-001` | May a sheet's source account be changed after creation, including to a differently denominated account? | **Answered 2026-10-27 (`D-026`, Option A): no — the account is immutable.** The currency is also immutable; no conversion, migration, or re-denomination occurs. |
+| `BE-CR-001` | "Subject to real permissions" — confirm the reading for a title-only update | **Answered 2026-10-27 (`D-026`): the sheet's owner may update the title only while the sheet is `OPEN`.** No account is supplied or validated, and there is no administrator or finance override. |
 | `BE-CR-002` | How is the **OPEN group** ordered among itself? Open sheets have no first-submission timestamp. | **Not answered by D-09**; must be chosen |
 | `BE-CR-002` | Tie-breaker when several sheets share a First Submitted instant | Not answerable from source |
 | `BE-CR-003` | Confirm `REC-03`: stage statistics cover the sheet's **active** revisions, so a Return superseded by a correction revision no longer counts as returned, and the resubmitted transaction re-enters as Pending at Cost Center | Derived from `rowsForSheet()`'s row set; must be confirmed |

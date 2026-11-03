@@ -17,35 +17,46 @@ without typing `#/admin/configuration` in the address bar.
 | File | Change |
 |---|---|
 | `src/types/navigation.ts` (new) | `NAVIGATION_ENTRIES` table + `visibleEntries()`; route names stay literal for the integrity scanner |
-| `src/components/navigation/AppNavigation.vue` (new) | Plain `<nav><ul><RouterLink>` shell; sole `loadSession()` caller (see below); renders on every route |
+| `src/components/navigation/AppNavigation.vue` (new) | Plain `<nav><ul><RouterLink>` shell; loads the session for the shell (see below); renders on every route |
 | `src/AppRoot.vue` | Renders `AppNavigation` above `RouterView` |
 | `src/views/DashboardView.vue` | `quickLinks` reusing `visibleEntries()`; cards stay presentational |
 | `src/views/admin/ConfigurationView.vue`, `FundingView.vue` | Dashboard breadcrumb back-links |
-| `tests/Frontend/Component/Navigation.spec.ts` (new) | 7 tests: admin/non-admin, role→queue matrix, FR-007, signed-out, resolve, session-load |
+| `tests/Frontend/Component/Navigation.spec.ts` (new) | 9 tests: admin/non-admin, role→queue matrix, FR-007, signed-out/failure, resolve, session-load, focusable table order |
 | `tests/Frontend/routeNameIntegrity.spec.ts` | Reachability walk seeded with `src/AppRoot.vue` (shell is a render root) |
 | `specs/004-in-app-navigation/` | spec, plan, research, data-model, contracts, quickstart, tasks |
 
 Deliberately NOT touched: `src/router/index.ts` (read-only; no route renamed),
 `lib/` (no backend change — authorization stays server-side), sheet/transaction
 views (shell covers FR-004; several carry unrelated uncommitted changes), `t()`
-catalog (none exists in-repo; keys follow the `navigation.*` convention).
+catalog (the Persian catalog now names every `navigation.*` key; this feature did not edit it).
 
 ## Latent defect found and fixed in passing
 
-`useAuthStore.loadSession()` had **no production caller** — session roles were
-permanently empty and every role-gated surface ran on its unknown-session
-fallback. `AppNavigation` (mounted once per app lifetime) now issues the single
+`useAuthStore.loadSession()` had **no production caller for the shell** — session
+roles were empty there and every role-gated surface ran on its unknown-session
+fallback. `AppNavigation` (mounted once per app lifetime) now issues the shell's
 load; failure is absorbed per the mount idiom since the store records `error`.
+(`AuditView.vue` also loads the session on mount; the shell's load is what makes
+the global navigation role-aware on every route.)
 
 ## Verification evidence
 
-- `npm test`: 19 files / 436 tests green (incl. new Navigation.spec, route-integrity, NextcloudVueContract, RTL, narrow-viewport, keyboard)
+- `npm test`: 19 files / 436 tests green at implementation time (incl. new Navigation.spec, route-integrity, NextcloudVueContract, RTL, narrow-viewport, keyboard; the suite has since grown)
 - `npm run typecheck` (`vue-tsc --noEmit`): clean
 - `eslint` on all touched files: clean; `stylelint` on touched SFCs: clean
 - Production `vite build` not run in this change (regenerates tracked `js/`+`css/` chunks; tree already carries unrelated build dirt) — but the lab-served bundle demonstrably contains the nav code (`nav-admin-configuration` in `js/pettycash-main.mjs`; repo bind-mounted at `/var/www/html/custom_apps/pettycash`), and the smoke below ran against it live.
 - `quickstart.md` machine-checkable subset validated headless against the live lab on 2026-10-10 (`test-results/nav-smoke-004.mjs`, chromium, principals `pettycash-e2e-admin` + `pettycash-e2e`): **13/13** — admin 1-click configuration (4/4 sections) + funding with dashboard back-links, non-admin sees no admin entries, purchaser sheets+accounts + quicklinks, direct admin URL loads shell without advertising admin entries, 390px no-scroll with `dir=rtl`, Tab reaches all 6/6 visible nav entries.
-- Still owed to a person (T020 remainder): visual RTL feel + by-person keyboard walkthrough at desktop and 390px.
-- T022 (2026-10-10): session-failure fallback decided for T004 — failed load renders dashboard+sheets only (`sessionFailed` in `src/types/navigation.ts`, fed from `useAuthStore.error`; `logout()` clears stale errors); contract rule 2 updated. Note: the lab-served bundle predates this change (no rebuild per T019 rationale), so the fallback is unit-covered only until the next build.
+- T020 human walkthrough completed 2026-10-10: visual RTL feel and the by-person keyboard walkthrough at desktop and 390px passed (`tasks.md` T020); no defects recorded.
+- T022 (2026-10-10): session-failure fallback decided for T004 — failed load renders dashboard+sheets only (`sessionFailed` in `src/types/navigation.ts`, fed from `useAuthStore.error`; `logout()` clears stale errors); contract rule 2 updated. The current served bundle contains `sessionFailed`, so the fallback is no longer unit-only.
+
+## Convergence follow-up (2026-10-19)
+
+T023 added the regression coverage the first report described but did not assert:
+dashboard back-links in `ConfigurationView`/`FundingView`, owning-queue + dashboard
+breadcrumbs in `TransactionReviewDetailView`/`FinanceReviewView`, role-aware
+`dashboard-quicklinks` in `DashboardView`, and the navigation's focusable table order.
+T024 reconciled this report's test count, catalog claim, T020 status, and bundle note
+with the current evidence.
 
 ## What this does not claim
 

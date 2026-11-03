@@ -17,7 +17,7 @@
 | `UI-PUR-004` | List state preserved across the sheet detail (page, filters, scroll) | P1 | S | PROPOSED | — | NONE | GAP-017 (state) |
 | `UI-PUR-005` | Sheet detail workspace: the large overlay over the list | P1 | L | PROPOSED | `UI-PUR-004`, `UI-PUR-012` (partial) | NONE | GAP-017 (shell), 062, 070, 073 |
 | `UI-PUR-006` | Workspace transaction table, row actions, honest History tab | P1 | M | PROPOSED (D-11 for the tab) | `UI-PUR-005` | NONE | GAP-019, 051, 052, 053 |
-| `UI-PUR-007` | Inline title edit while OPEN, without changing the account | P1 | M | **BLOCKED_OWNER_DECISION** (D-05) | `UI-PUR-005`, `UI-PUR-008` | **BE-CR-001** | GAP-011 (FE), 012 |
+| `UI-PUR-007` | Inline title edit while OPEN, without changing the account | P1 | M | **BLOCKED_BY_BACKEND** (D-05 answered 2026-10-27: immutable account) | `UI-PUR-005`, `UI-PUR-008` | **BE-CR-001** | GAP-011 (FE), 012 |
 | `UI-PUR-008` | Sheet actions behind a 3-dot overflow menu | P2 | S | PROPOSED | — | NONE | GAP-013 |
 | `UI-PUR-009` | Preselect the cost center from the last saved transaction in the sheet | P1 | S | PROPOSED | — | NONE | GAP-024 |
 | `UI-PUR-010` | Evidence only after the transaction exists | P1 | S | PROPOSED | — | NONE | GAP-025 |
@@ -34,7 +34,7 @@
 
 | ID | Title | Pri | Size | Endpoint / contract impact | Consumer task | Findings |
 |---|---|---|---|---|---|---|
-| `BE-CR-001` | Expose the sheet's account and validate it on update | P1 | S–M | `GET /sheets`, `GET /sheets/{id}`, `PATCH /sheets/{id}`, `SheetSummary`, OpenAPI | `UI-PUR-007` | GAP-011 |
+| `BE-CR-001` | Expose the sheet's account on `SheetDetail` only and make the account immutable on update | P1 | S–M | `GET /sheets/{id}`, `PATCH /sheets/{id}`, `SheetDetail`, OpenAPI | `UI-PUR-007` | GAP-011 |
 | `BE-CR-002` | Sortable, deterministic, OPEN-first ordering for the sheet list | P1 | M | `GET /sheets`, OpenAPI (+ a stable tie-breaker) | `UI-PUR-003` | GAP-001, 005 |
 | `BE-CR-003` | Per-stage decision counts for a sheet (**conditional**) | P2 | M | `GET /sheets/{id}`, `SheetTotals`/`SheetSummary`, OpenAPI | `UI-PUR-014` Shape 2 | GAP-020 |
 | `BE-CR-004` | One consistent evidence policy at submit and resubmit | P1 | S | `POST /sheets/{id}/submit`, `POST /transactions/{id}/resubmit`, `contracts/workflow.md`, OpenAPI | `UI-PUR-016` | GAP-030, 032 |

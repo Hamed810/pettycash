@@ -60,7 +60,7 @@
 | **F2 — UI foundation stabilization** | ▶ Batch A recorded; Batch B frontend forms/workspace/list implemented and verified (2026-10-20) | Fix confirmed foundational defects in approved scope | Bounded fixes, root-cause evidence, relevant tests | Foundation checks pass, no unaccepted regressions |
 | **F3 — UX architecture** | ◐ Partially resolved — decisions D-01/D-11 (tabbed workspace, unsaved-changes dialog) are recorded; no accepted F3 deliverable | User journeys, information hierarchy, navigation, UI states | User flows, information architecture, page/behavior specifications | UX approval |
 | **F4 — Visual design & prototypes** | ◐ Samples exist (three reference screens + 9 mobile images); no recorded visual approval | Closely adapt Budget's visual language to Pettycash | Design patterns, reviewable prototypes, bilingual/bidirectional/two-theme variants | Explicit visual approval before coding |
-| **F5 — Incremental implementation** | ▶ Batch A recorded; Batch B frontend (`T029–T038`, `T022`) implemented/verified 2026-10-20; backend cards and owner acceptance pending | Implement approved slices | Code, change reports, tests, before/after screenshots | Definition of Done + slice approval |
+| **F5 — Incremental implementation** | ▶ Batch A recorded; Batch B frontend (`T029–T038`, `T022`) implemented/verified 2026-10-20; the approved receipt/creation slice (`BE-CR-004`) implemented/verified 2026-10-24; owner acceptance and remaining backend cards pending | Implement approved slices | Code, change reports, tests, before/after screenshots | Definition of Done + slice approval |
 | **F6 — Final verification** | ⬜ Not started | End-to-end, regression, accessibility, release readiness | Evidence matrix and acceptance report | Explicit product-owner sign-off |
 
 ### F1 — proposed read-only work packages
@@ -115,15 +115,33 @@ At each gate: (1) deliver evidence, (2) record issues and risks, (3) obtain expl
 
 - **دستور مالک (`D-021`):** Batch B **فرانت‌اند** `T029–T038` و `T022` در اپ واقعی پیاده‌سازی و در lab راستی‌آزمایی شد؛ Backend، کاتالوگ انگلیسی (`REC-01`) و همه نوشتن‌های Git مسدود ماندند. این دستور، جمله «هیچ کارت Batch B تأیید یا آغاز نشده» را فقط برای کارت‌های فرانت‌اند جایگزین می‌کند.
 - **نتیجه:** `npm run check` سبز (۵۲۴/۵۲۴ در اجرای دوم؛ ۹ فایل/۲۲۲ تست هدفمند)؛ فارسی RTL و انگلیسی LTR زنده بدون خطا/سرریز؛ استقلال تقویم تأیید شد. `T051` پذیرش بصری مالک باز است.
-- **بدون تغییر:** `P-005` (کاتالوگ انگلیسی)، `P-008` (سطح تقویم)، `P-007`/`P-009` (BE-CR)، و شش `BE-CR`.
+- **بدون تغییر:** `P-005` (کاتالوگ انگلیسی)، `P-008` (سطح تقویم)، `P-007` و دامنه `BE-CR-005/006` در `P-009`. `BE-CR-004` در ۲۰۲۶-۱۰-۲۳ فقط برای قطعه رسید/ایجاد تصویب شد و در ۲۰۲۶-۱۰-۲۴ پیاده‌سازی و راستی‌آزمایی شد؛ پنج `BE-CR` دیگر مسدود می‌مانند.
 - **Git:** هیچ نوشتن Git انجام نشد؛ طرح شماره‌دار [`GIT-PLAN-002-R1`](../reports/GIT-PLAN-002-R1.md) پیشنهاد شده و تصویب مالک لازم است.
 
 **English:**
 
 - **Owner directive (`D-021`):** Batch B **frontend** `T029–T038` and `T022` were implemented in the real app and verified in the lab; backend, the English catalog (`REC-01`), and all Git writes remained blocked. This supersedes the 2026-10-19 "no Batch B card" statement for the frontend cards only.
 - **Result:** `npm run check` passed (524/524 on rerun; 9 files/222 targeted); live Persian RTL and English LTR with no errors/overflow; calendar independence confirmed. `T051` owner visual acceptance is open.
-- **Unchanged:** `P-005` (English catalog), `P-008` (calendar surface), `P-007`/`P-009` (BE-CRs), and all six `BE-CR`s.
+- **Unchanged:** `P-005` (English catalog), `P-008` (calendar surface), `P-007`, and the `BE-CR-005/006` scope in `P-009`. `BE-CR-004` was approved on 2026-10-23 for the receipt/creation slice only and was implemented and verified on 2026-10-24; the other five `BE-CR` remain blocked.
 - **Git:** no Git write performed; the numbered plan [`GIT-PLAN-002-R1`](../reports/GIT-PLAN-002-R1.md) is proposed and needs owner approval.
+
+---
+
+## هم‌راستاسازی ۲۰۲۶-۱۰-۲۴ / 2026-10-24 reconciliation
+
+**فارسی:**
+
+- **قطعه تأییدشده رسید/ایجاد (`BE-CR-004`، `D-022`، `ADR-007`):** در ۲۰۲۶-۱۰-۲۴ پیاده‌سازی و از نظر فنی راستی‌آزمایی شد: ۰۰۱ `T431–T435` و ۰۰۵ `T044`، `T053–T063`.
+- **نتیجه:** چهار اجرای مرورگر (`fa`/`en` × دسکتاپ/۳۹۰px) هرکدام ۴۶/۴۶ بررسی با ۱۱ تصویر و صفر خطای صفحه؛ Vitest هدفمند ۴ فایل/۱۹۰ تست؛ PHPUnit کانتینری ۵ فایل/۵۱ تست/۷۶۵ assertion؛ `npm run check` ۲۶ فایل/۵۳۶ تست با lint بدون خطا. شواهد: [`005-receipt-creation-slice.md`](../reports/005-receipt-creation-slice.md).
+- **باز:** پذیرش بصری مالک (`T051`)، اجرای کامل PHPUnit (`T049`)، ممیزی نهایی ردیابی (`T052`)، کاتالوگ انگلیسی (`REC-01`)، و همه نوشتن‌های Git.
+- **بدون تغییر:** `BE-CR-001/002/003/005/006` مسدود می‌مانند؛ `P-005`/`P-008`/`P-007` باز هستند. هیچ چیز در این گذر staged/commit/push نشد.
+
+**English:**
+
+- **Approved receipt/creation slice (`BE-CR-004`, `D-022`, `ADR-007`):** implemented and technically verified on 2026-10-24: 001 `T431`–`T435` and 005 `T044`, `T053`–`T063`.
+- **Result:** four browser runs (`fa`/`en` × desktop/390px), 46/46 checks and 11 screenshots each with zero page errors; targeted Vitest 4 files / 190 tests; container PHPUnit 5 files / 51 tests / 765 assertions; `npm run check` 26 files / 536 tests with lint 0 errors. Evidence: [`005-receipt-creation-slice.md`](../reports/005-receipt-creation-slice.md).
+- **Open:** owner visual acceptance (`T051`), the full PHP suite (`T049`), the final traceability audit (`T052`), the English catalog (`REC-01`), and all Git writes.
+- **Unchanged:** `BE-CR-001/002/003/005/006` remain blocked; `P-005`/`P-008`/`P-007` remain open. Nothing was staged, committed, or pushed in this pass.
 
 ---
 
