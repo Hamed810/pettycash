@@ -419,6 +419,12 @@ paths:
     patch:
       tags: [Sheets]
       summary: Update an open sheet
+      description: >
+        Title-only update of an existing open sheet. The request body is `SheetUpdate`, so it carries
+        only `title` and `expectedVersion`; `SheetCreate`'s account-selection/provisioning semantics
+        do not apply. Any supplied `accountId` is refused with `422 VALIDATION_FAILED` and
+        `fieldErrors.accountId` before persistence — a supplied value does not authorize account
+        replacement.
       parameters:
         - $ref: '#/components/parameters/SheetId'
         - $ref: '#/components/parameters/CommandId'
@@ -427,9 +433,7 @@ paths:
         content:
           application/json:
             schema:
-              allOf:
-                - $ref: '#/components/schemas/SheetCreate'
-                - $ref: '#/components/schemas/ExpectedVersion'
+              $ref: '#/components/schemas/SheetUpdate'
       responses:
         '200':
           description: Updated sheet
@@ -446,10 +450,10 @@ paths:
     # T417 / FR-086. Owner deletion of a sheet that has **never been submitted**, with its draft
     # transactions, their revisions, and their stored evidence files, removed atomically.
     #
-    # `X-PettyCash-Command-ID` is **required**, unlike the header-free `DELETE /transactions/{id}` next
-    # door. That operation is repeatable because a retry has nothing left to remove; a sheet delete
-    # without a gate would answer "not found" on the retry, so a client that lost the first response
-    # could not tell its own success from a failure. FR-086 makes FR-084 apply here for that reason.
+    # `X-PettyCash-Command-ID` is **required**, exactly as it is on `DELETE /transactions/{id}`.
+    # Without a gate a sheet delete would answer "not found" on the retry, so a client that lost the
+    # first response could not tell its own success from a failure. FR-086 makes FR-084 apply here
+    # for that reason; the transaction delete carries the same gate under FR-025.
     delete:
       tags: [Sheets]
       summary: Delete an own sheet that has never been submitted
@@ -485,6 +489,9 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/SheetDetail' }
         '422':
+          # FR-091: when a receipt-required transaction has no active receipt, `fieldErrors` carries
+          # one entry per offending transaction keyed `transactions.<transactionId>.evidence`. The
+          # response names every offending transaction, not only the first.
           $ref: '#/components/responses/ValidationError'
         '409':
           $ref: '#/components/responses/Conflict'
@@ -544,18 +551,31 @@ paths:
           $ref: '#/components/responses/Conflict'
     delete:
       tags: [Transactions]
-      summary: Delete a transaction from an open sheet
-      # Repeatable command: no `X-PettyCash-Command-ID`. `contracts/workflow.md` requires that header
-      # only for *non-repeatable* commands, and a DELETE of a draft row is repeatable — the caller
-      # retries it, and the endpoint has nothing to deduplicate because the row is simply gone.
-      # `expectedVersion` still guards against a *concurrent* edit; it is not a replay guard, since a
-      # sequential retry resends the version the client originally read.
+      summary: Delete a draft transaction from an open sheet
+      # T436 / FR-025. Draft deletion is a replay-gated command: the client keeps one
+      # `X-PettyCash-Command-ID` across retries so a lost 204 is distinguishable from a
+      # failure. A successful delete has no body (204); the same command id and payload
+      # returns that same 204 even though the row is gone. A different command id after
+      # the row is gone is `404`, never a second success. `expectedVersion` remains a
+      # concurrency guard, not a replay guard.
       parameters:
         - $ref: '#/components/parameters/TransactionId'
+        - $ref: '#/components/parameters/CommandId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExpectedVersion' }
       responses:
-        '204': { description: Draft transaction deleted }
+        '204': { description: Draft transaction deleted; bodyless success }
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
 
   /transactions/{transactionId}/decisions:
     post:
@@ -630,6 +650,12 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/TransactionDetail' }
+        # FR-091: the correction resubmission applies the same conditional receipt rule as sheet
+        # submission. A receipt-required transaction with no active receipt answers 422 with a
+        # `transactions.<transactionId>.evidence` field error; a receipt-exempt transaction is not
+        # refused for that reason.
+        '422':
+          $ref: '#/components/responses/ValidationError'
         # T416. This operation declares a **required** `ExpectedVersion` body, so a stale version is
         # reachable by construction and the contract had no stated answer for it. FR-025: a stale
         # pre-submission edit is a `409` whose recovery is "reload", not a `422` telling the caller to
@@ -719,10 +745,10 @@ paths:
     delete:
       tags: [Evidence]
       summary: Delete draft evidence or deactivate submitted evidence
-      # Repeatable command: no `X-PettyCash-Command-ID`, for the reason given on
-      # `DELETE /transactions/{transactionId}`. The effect is idempotent rather than merely
-      # repeatable — the evidence row survives as deactivated, so a repeat returns the same `200`
-      # and the same metadata, including the `deactivatedAt` recorded by the *first* call.
+      # Effect-idempotent command: no `X-PettyCash-Command-ID`. A draft deletion removes the row;
+      # a submitted deletion leaves the row deactivated, so a repeat returns the same `200` and the
+      # same metadata, including the `deactivatedAt` recorded by the *first* call. This is the
+      # deliberate exception to the replay-gated delete rule, not the transaction/sheet pattern.
       parameters:
         - $ref: '#/components/parameters/EvidenceId'
       responses:
@@ -1408,6 +1434,25 @@ components:
             automatically; several means the caller must send this field and the request is refused
             naming it. A purchaser with zero accounts therefore has no `accountId` to send, which is
             why it cannot be required -- FR-020 and a required `accountId` cannot both hold.
+    SheetUpdate:
+      # T439 / FR-019 / FR-021. The pre-submission update is **title-only**, so it does not reuse
+      # `SheetCreate`: that schema is create-specific (its optional `accountId` selects or provisions
+      # the account for a *new* sheet, FR-020) and reusing it declared a field the update must refuse.
+      # `additionalProperties: false` makes a supplied `accountId` schema-invalid as well as
+      # server-refused, so the two layers cannot drift into disagreement.
+      type: object
+      additionalProperties: false
+      required: [title, expectedVersion]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 255 }
+        expectedVersion: { type: integer, minimum: 0 }
+      description: >
+        A title-only update of an existing open sheet. `expectedVersion` is required so a stale write
+        is refused as a conflict instead of silently overwriting a newer one. There is no
+        `accountId` property and no FR-020 provisioning semantics: the sheet keeps the account it was
+        created with, active or inactive, and its currency. A request body that supplies `accountId`
+        is refused with `422 VALIDATION_FAILED` and `fieldErrors.accountId` before persistence; a
+        supplied value does not authorize account replacement.
     SheetTotals:
       type: object
       properties:
@@ -1450,7 +1495,20 @@ components:
       allOf:
         - $ref: '#/components/schemas/SheetSummary'
         - type: object
+          required: [accountId]
           properties:
+            # T439 / FR-019 / FR-021. The authoritative stored account's public UUID, in the
+            # detail-only branch: the Sheets List keeps `SheetSummary` and declares no account. It is
+            # the account the sheet was created with -- not the caller's first active account, not a
+            # list-order pick, and never the internal database id -- so the edit form can display it
+            # read-only instead of guessing it.
+            accountId:
+              type: string
+              format: uuid
+              minLength: 1
+              description: >
+                The public UUID of the account this sheet is stored against. It is a response fact,
+                not an update input: `PATCH /sheets/{sheetId}` accepts no `accountId`.
             allowedActions: { $ref: '#/components/schemas/CapabilitySet' }
             transactions:
               type: array
@@ -1462,6 +1520,9 @@ components:
       type: string
       enum: [DRAFT, AWAITING_COST_CENTER_REVIEW, COST_CENTER_APPROVED, COST_CENTER_REJECTED, AWAITING_SENIOR_REVIEW, SENIOR_APPROVED, SENIOR_REJECTED, AWAITING_FINANCE_REVIEW, AWAITING_PURCHASER_CORRECTION, COMPLETED_APPROVED, COMPLETED_REJECTED]
     TransactionDraftWrite:
+      # FR-089: the create and update operations accept the FR-022 minimum **and** every optional
+      # draft field declared below. A save never requires evidence, even when the selected expense
+      # type has `evidence_required = true`; that rule is evaluated only at submit/resubmit (FR-091).
       type: object
       required: [expenseDate, amountMinor]
       properties:
@@ -1472,7 +1533,7 @@ components:
         expenseTypeId: { type: string, format: uuid, nullable: true }
     TransactionSummary:
       type: object
-      required: [id, sheetId, activeRevision, stage, status, evidenceCount, version]
+      required: [id, sheetId, activeRevision, stage, status, evidenceCount, evidenceRequired, version]
       properties:
         id: { type: string, format: uuid }
         sheetId: { type: string, format: uuid }
@@ -1482,6 +1543,11 @@ components:
         finalOutcome: { type: string, enum: [APPROVED, REJECTED], nullable: true }
         latestDecision: { $ref: '#/components/schemas/Decision' }
         evidenceCount: { type: integer }
+        # FR-092. Server-derived from the active expense type's **current** `evidence_required`
+        # setting, never inferred by the client. False when the transaction has no expense type yet.
+        # The readiness surface pairs this with `evidenceCount` to name each draft missing a receipt;
+        # the authoritative refusal remains the submit/resubmit 422 (FR-091).
+        evidenceRequired: { type: boolean }
         version: { type: integer }
     TransactionDetail:
       allOf:

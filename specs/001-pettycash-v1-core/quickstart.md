@@ -150,11 +150,16 @@ users and 10,000 annual transactions.
 1. Create two open sheets simultaneously.
 2. Verify a user with one active account receives its fixed currency.
 3. Verify a user with multiple accounts can select only active account currencies.
-4. Save a transaction using only expense date and positive amount.
-5. Attempt submission with missing description, cost center, expense type, or required evidence;
-   verify field-level errors and no state change.
-6. Complete the transaction, attach multiple evidence files, and submit.
-7. Verify submission succeeds without requiring a positive account balance, creates the first
+4. Save a transaction using only expense date and positive amount; verify the save succeeds with no
+   receipt and returns to the sheet detail view (FR-022, FR-089, FR-088).
+5. Create a second transaction with description, cost center, and expense type, and select one or
+   more receipts before the first save; verify every field persists and each staged receipt becomes
+   attached to the created transaction without a second manual save (FR-089, FR-090).
+6. Attempt submission with missing description, cost center, expense type, or a required receipt;
+   verify field-level errors and no state change. Verify a transaction whose expense type does not
+   require evidence is not refused for a missing receipt (FR-091, SC-017).
+7. Complete the transaction, attach multiple evidence files, and submit.
+8. Verify submission succeeds without requiring a positive account balance, creates the first
    formal audit event, and prevents new transactions in the submitted sheet.
 
 ### Scenario C: Management Review and Allowed Self-Review
@@ -172,7 +177,9 @@ users and 10,000 annual transactions.
 1. Return a transaction from a management or finance stage.
 2. Verify only the purchaser can edit the correction draft.
 3. Change amount, date, description, classification, and evidence as permitted.
-4. Resubmit and verify exactly one new revision becomes active at cost-center review.
+4. Resubmit and verify exactly one new revision becomes active at cost-center review. Verify the
+   conditional receipt rule: a receipt-required expense type is refused without an active receipt,
+   while a receipt-exempt expense type resubmits without one (FR-091).
 5. Verify every earlier revision, decision, evidence state, actor, and audit value remains visible.
 
 ### Scenario E: Shared Finance Queue and Atomic Settlement

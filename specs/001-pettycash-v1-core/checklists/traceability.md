@@ -1,6 +1,6 @@
 # Requirement-to-Test Traceability: PettyCash V1 Core Workflow
 
-**Scope:** FR-001 through FR-088 and SC-001 through SC-016 (T134, delivered 2026-10-09).
+**Scope:** FR-001 through FR-088 and SC-001 through SC-016 (T134, delivered 2026-10-09). The 2026-10-23 receipt/creation amendment adds FR-089–FR-092 and SC-017; their rows are **OPEN** and are owned by the Phase 75 tasks, not by T134.
 **Method:** one row per requirement. *Owner* is the delivering task — a task whose prose merely
 cites an identifier does not count. *Test evidence* names files verified to exist; status is
 `DONE` (delivered + green), `PARTIAL` (delivered in part, open remainder named), or `OPEN`.
@@ -139,6 +139,16 @@ delivered requirement. Counts below are point-in-time (2026-10-09) and shift as 
 | FR-079 | T264 | Identifier-limit assertions in V1SchemaMigrationTest | DONE |
 | FR-080 | T262, T263 | Clean-install acceptance (quickstart §2) | PARTIAL — legacy-framing reconciliation open (T263) |
 | FR-081 | T262 | Forward-chain migration acceptance | DONE |
+
+## Receipt Timing and Creation (FR-089–FR-092, SC-017) — added 2026-10-23, all OPEN
+
+| Key | Owner task(s) | Test evidence (planned) | Status |
+|-----|---------------|-------------------------|--------|
+| FR-089 | T431, T435 | `tests/Contract/Controller/PurchaserFlowControllerTest.php`, `tests/Integration/Workflow/SheetSubmissionTest.php` | OPEN — no test written |
+| FR-090 | T431, 005 T054–T055 | `tests/Frontend/Component/StagedReceipts.spec.ts`, `tests/Frontend/Component/PurchaserFlow.spec.ts` | OPEN — no test written |
+| FR-091 | T431–T433 | `tests/Unit/Domain/Expense/SheetSubmissionPolicyTest.php`, `tests/Integration/Workflow/SheetSubmissionTest.php`, `tests/Contract/Controller/CorrectionControllerTest.php` | OPEN — no test written |
+| FR-092 | T431, T434, 005 T056 | `tests/Unit/Infrastructure/Http/TransactionPayloadFormatterEvidenceTest.php` | OPEN — no test written |
+| SC-017 | T431–T435, 005 T061 | Same tests plus browser evidence on the four fixture sheets | OPEN — no evidence |
 
 ## Success Criteria (SC-001–SC-016)
 

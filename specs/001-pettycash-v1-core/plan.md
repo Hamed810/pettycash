@@ -90,9 +90,12 @@ operational condition, not a rare accident. See **research.md** Decision 17.
 
 **Constraints**: Persian RTL V1 UI with all listed elements (sheet status, transaction status, current stage, prior decisions, history, evidence) visible without horizontal scroll at 390px viewport, status color/icon meeting WCAG AA contrast, text ≥12pt Persian font; server-authoritative authorization with explicit multi-role decision matrix: self-review permitted when user holds required review role + scope + stage permission, ownership grants purchaser rights only; append-only business audit with minimum 7-year retention; immutable prior revisions; no destructive migration of historical data; atomic workflow and ledger changes; shared finance queue; no automatic escalation or mutation retry; no independent authentication, logging, backup, or file system; evidence file size capped at 100 MB per file by a ceiling PettyCash enforces itself, refusing anything larger regardless of the host file service limit, with a host limit below 100 MB still rejecting first and reported separately as a host-limit failure (FR-074, clarified 2026-10-02); purchasers with no rial account record get a default rial account auto-created on first sheet creation (idempotent provisioning per FR-020); where a rial account exists but is inactive the attempt is refused with `422` and only an administrator restores it (FR-014/FR-020, clarified 2026-10-08); public evidence links have configurable TTL (default 30 days, max 1 year) with per-access audit logging in configuration audit per FR-031; reporting periods for group exports are **Jalali in-progress periods** (current month, quarter and year), resolved at query time to inclusive Gregorian date ranges in the requesting account's time zone, and are mutually exclusive with an explicit custom date range, per FR-068 as designed under **Jalali Reporting Periods (FR-068)**
 
-**Scale/Scope**: Eight user journeys, **88** functional requirements, five business roles, three review
+**Scale/Scope**: Eight user journeys, **92** functional requirements, five business roles, three review
 stages, **15** persistent entity families, a role-aware dashboard, reports, and Excel,
-CSV, PDF, and grouped-evidence export
+CSV, PDF, and grouped-evidence export. The 2026-10-23 clarification adds FR-089–FR-092 and SC-017
+without adding a persisted entity: initial creation accepts all optional draft fields, receipts can be
+selected before the first save, saving never requires a receipt, and submission/resubmission enforce
+the active expense type's `evidence_required` rule per transaction.
 
 ## Constitution Check
 
@@ -101,7 +104,11 @@ Approved Compatibility Change register on 2026-09-30 after constitution v1.1.0 i
 and v1.2.0 introduced ACC-002, and re-checked on 2026-10-07 after the clarification session added
 FR-085 and amended FR-031, FR-040, FR-071, FR-073 and FR-076, and re-checked on 2026-10-09 after the
 2026-10-08/09 sessions added FR-086, FR-087, FR-088 and SC-015, SC-016 and amended FR-014, FR-020,
-FR-023, FR-025, FR-033, FR-070, FR-083, FR-084 and SC-009: PASS, no exception.*
+FR-023, FR-025, FR-033, FR-070, FR-083, FR-084 and SC-009, and re-checked on 2026-10-23 after the
+receipt-timing clarification added FR-089–FR-092 and SC-017 and amended FR-023, FR-025, and FR-047,
+and re-checked on 2026-10-28 after the owner authorized all four slices and `T438`–`T441` were
+implemented and verified (all complete 2026-10-28): PASS on the policy, with
+the accepted pre-release compatibility change recorded and no constitutional amendment.*
 
 - **I. Specification Before Implementation — PASS**: The finalized specification supplies
   priorities, acceptance scenarios, requirements, success criteria, assumptions, and resolved
@@ -113,8 +120,11 @@ FR-023, FR-025, FR-033, FR-070, FR-083, FR-084 and SC-009: PASS, no exception.*
   and other applications untouched. The development-only reset discards never-released V1
   development schema and data under explicit approval; it is not a migration, rewrites no
   historical or audit record, and preserves every V1 business invariant, so it does not conflict
-  with the prohibition on destructive migrations and history rewriting. The legacy backup remains
-  reference material only, and no constitutional amendment is required.
+  with the prohibition on destructive migrations and history rewriting. The 2026-10-23 receipt
+  amendment changes no financial invariant: it enforces FR-023/FR-091 at submission, makes saving
+  explicitly receipt-free, and exposes the server-derived `evidenceRequired`/`422` shape already
+  recorded in the contracts. The legacy backup remains reference material only, and no
+  constitutional amendment is required.
 - **III. Nextcloud-Native Architecture — PASS**: Authentication, users, files, technical logging,
   routing, dependency injection, database access, localization, and security remain on supported
   Nextcloud services. **Extended 2026-10-07**: the one unauthenticated surface in V1 — the public
@@ -163,6 +173,144 @@ FR-023, FR-025, FR-033, FR-070, FR-083, FR-084 and SC-009: PASS, no exception.*
   T400 done); screen-reader semantics deferred to V2 per FR-076.
 - Delegations (FR-031 links, FR-074 types/scanning) affirmatively comply with Principle III;
   FR-085/FR-040/FR-086/FR-087 add protection under Principle IV.
+
+### BE-CR-001 Immutable Sheet Account (re-check 2026-10-27: policy PASS; replacement path withdrawn)
+
+**Policy.** The owner decided the account rule on 2026-10-27 (Option A) and it is recorded in
+`spec.md` (`### Session 2026-10-27`), FR-019 and FR-021, and in 005 `FR-005-019`/`FR-005-050`. A
+sheet's source account is selected at creation and is immutable afterwards. The sheet currency is
+immutable after creation. While the sheet is `OPEN`, its owner may update the title only; the update
+omits `accountId` and preserves the stored account — active or inactive — and currency. Any supplied
+`accountId`, including `null`, the current account, an inactive account, or an owned, active,
+same-currency account, is refused before persistence with `422 VALIDATION_FAILED` and
+`fieldErrors.accountId`. Unknown or corrupted stored references are detected and reported, never
+repaired or re-denominated. The account is not a settlement instruction. The prior same-currency
+replacement policy and its feasibility conflict are withdrawn; no account-model, schema, constraint,
+migration, or fixture change is authorized.
+
+**Normative source.** `spec.md` `FR-019`/`FR-021` own this policy. 005
+`FR-005-019`/`FR-005-050`, `D-026`, and the review records reference those requirements; they do
+not create a second policy source.
+
+**API compatibility.** `SheetDetail` gains one required response member in its detail-only `allOf`
+branch; `SheetSummary` and the `GET /sheets` list response are unchanged. `SheetCreate` is
+untouched, and PATCH moves to a dedicated `SheetUpdate` request schema containing only `title` and
+`expectedVersion`, with `additionalProperties: false` so `accountId` is schema-invalid as well as
+server-refused. `accountId` is not an accepted update property; any supplied value is refused by
+the server before persistence. The contract, `src/generated/api.ts`, and `src/types/api.ts` change
+together in `T439`, because the create and update responses also return `SheetDetail`. Existing
+in-repository consumers and strict response validators are audited and updated in that slice,
+including the full-page edit form's read-only display path in `T440`; `accounts[0]` is not an edit
+source. The change is response-additive on `SheetDetail` but **not request-shape compatible** with
+legacy PATCH bodies: a body that carries `accountId` is now refused. The owner has explicitly
+accepted pre-release API and behavioral incompatibilities because the application has not launched.
+The compatibility impact and release/versioning treatment are recorded under Constitution v1.4.0:
+because the PATCH change is breaking for the published contract, Delivery item 6 requires explicit
+approval, a compatibility strategy, release notes, and a **MAJOR version decision for the affected
+public contract** at release. That release step is separately authorized; this planning record
+performs no MAJOR, minor, patch, app-version, or package-version bump. The contract documents no
+external-consumer compatibility guarantee beyond its versioned schema, so the plan MUST NOT claim
+that no external consumers exist; a documented strict validator that rejects the added detail
+property would be a V.6 breaking-change exception requiring separate approval, not an assumed
+failure.
+
+**Corrupted records and list availability.** A corrupt account reference is refused, never
+substituted: `T438` makes `mapRow()` throw `UnreadableRecordData` with an **account-reference
+discriminator** for a missing or dangling account row, or an account currency that differs from the
+sheet's stored `currency_id`; a missing sheet-currency row throws the same type without that
+discriminator. Repository reads used by detail and update raise before returning; `T440` preserves
+the resulting refusal taxonomy. `save()` refuses an unresolved public account id with the
+account-reference type before writing, and the existing `422 DATA_FAULT` mapping logs and withholds
+the internal message. Both corruption variants remain `422 DATA_FAULT`; neither is converted to
+`fieldErrors.accountId`, because an update never supplies an account. `SheetSummary` does not expose
+`accountId`, but `mapRow()` is shared by list and detail and `ExpenseSheet` requires an account id;
+skipping account resolution for the list alone would therefore require a list-specific read model
+or a nullable domain field. That is a broader change and is not authorized by these slices. The
+Sheets List therefore remains all-or-nothing `422` under FR-083 for any unreadable record, with no
+silent omission and no partial `200`. An inactive-but-resolvable account is not corruption; it
+remains readable, so read-only history is preserved. A pre-existing dangling-account or
+cross-currency row is not repaired: it remains refused until an operator corrects the stored
+reference out-of-band, and no endpoint, migration, backfill, or new task is authorized to rewrite
+stored financial references. Partial-list availability is out of scope and is not adopted.
+
+**Title-only and immutable account.** A title-only update omits `accountId`; the existing account —
+active or inactive — and the stored currency are unchanged. Any explicit `accountId` value is an
+attempted assignment, even when it equals the current account, and is refused with
+`fieldErrors.accountId`; an inactive existing account does not block the title-only update. The edit
+form displays that stored account authoritatively and read-only, never guesses it, and never
+resubmits it. No account selector or replacement path exists. `T440` MUST NOT add a second active IRR
+fixture or any replacement test case.
+
+**Minimum change (Phase 77; `T438`–`T441` delivered and verified 2026-10-28).**
+
+- *Persistence (`T438`, complete 2026-10-28)*: `DbExpenseSheetRepository::mapRow()` resolves the stored `account_id` to the
+  account's public UUID and currency and throws `UnreadableRecordData` with an account-reference
+  discriminator when the account row is missing or the account/sheet currencies disagree; a missing
+  sheet-currency row throws the same type without the discriminator. `save()` refuses an unresolvable
+  public account id with the account-reference type before writing instead of writing `account_id = 0`;
+  the existing `422 DATA_FAULT` mapping logs and withholds the internal message. No backfill, rewrite,
+  default currency, or repair. No schema change or migration: `account_id` and `currency_id` already
+  exist.
+- *Contract and projection (`T439`, complete 2026-10-28)*: add required `accountId` to `SheetDetail` only; leave
+  `SheetSummary` unchanged; add a dedicated `SheetUpdate` request schema for `PATCH /sheets/{id}`
+  containing only `title` (required) and `expectedVersion` (required), with
+  `additionalProperties: false`, no accepted `accountId` property, and no provisioning semantics,
+  instead of reusing the create-specific `SheetCreate`;
+  regenerate `src/generated/api.ts` only through `scripts/validate-openapi.sh --write`; add the
+  field to hand-written `src/types/api.ts` and the `SheetUpdate` type to the service/store; emit it
+  from `SheetPayloadFormatter::detail()` only. Retarget the old detail-absence assertion to the list,
+  allow `accountId` only in the detail conformance test, and update the provisioning identity note
+  because the detail field makes the linkage observable over HTTP. Delivered and verified 2026-10-28:
+  generated types match the contract, the formatter emits the stored public account on detail only, and
+  the focused evidence is recorded in `tasks.md` `T439`; enforcement of the title-only body remains `T440`.
+- *Application (`T440`, complete 2026-10-28)*: `SheetController::update()` rejects any supplied `accountId` before
+  mutation while keeping `expectedVersion`, command-id handling, and error shape.
+  `SheetService::updateSheet()` accepts no account parameter; any present key, including `null`,
+  returns `422 VALIDATION_FAILED` with `fieldErrors.accountId` before the title, account, currency,
+  or lock version changes. A title-only update succeeds even when the stored account is inactive and
+  preserves it. A new narrow field-error exception maps to the existing `422 VALIDATION_FAILED`.
+  Both corruption variants (`UnreadableRecordData`) remain `422 DATA_FAULT`; neither becomes
+  `fieldErrors.accountId`. `ExpenseSheet::$currency` becomes `readonly`. The full-page edit form
+  displays the stored account and currency authoritatively and read-only from `SheetDetail`, keeps an
+  inactive current account visible, never offers an account selector, and never sends `accountId`;
+  `accounts[0]` is not an edit source. Existing owner scoping, `OPEN`-only refusal, and stale-version
+  `409` ordering are preserved. No replacement case exists or is tested; no fixture may create a
+  second active IRR account. `T440` requires official Google Chrome desktop and 390px Persian-RTL
+  screenshots under `artifacts/visual-review/t440/<iteration>/` and MUST stop for explicit owner
+  visual approval before `T441` closes the slice. The owner's limited visual approval was recorded
+  2026-10-28 (verbatim: “I approve T440 with limited visual acceptance.”).
+- *Verification (`T441`, complete 2026-10-28)*: focused contract, integration, repository, formatter,
+  domain, and conformance tests, dashboard account-fault coverage, the OpenAPI gate, `npm run
+  typecheck`, targeted Vitest/lint for the touched frontend files, and a closure record. Evidence:
+  14 focused PHPUnit suites, **236 tests, 1,616 assertions, 1 pre-existing skip**;
+  `scripts/validate-openapi.sh` exits 0 (OpenAPI 3.0.3, 33 paths, 43 operations, 46 schemas;
+  generated types match); `npm run typecheck` passes; targeted Vitest 8 files/**223 tests**; scoped
+  ESLint/Stylelint clean. No account, currency, transaction amount, or settlement routing changed;
+  `SheetSummary` is unchanged; `FinanceSettlementTest` is unchanged and green. The closure records
+  the accepted pre-release compatibility impact, that Delivery item 6 requires a MAJOR public-contract
+  decision plus release notes and a compatibility strategy at the separately authorized release step,
+  and the release/versioning decision without performing an automatic bump. `T041` closed as
+  `DONE_VERIFIED`. `T039`/`T080` retain the `BLOCKED_BY_BACKEND` label pending separate implementation
+  authorization (and `T080`'s own owner visual gate), with the backend dependency now satisfied.
+
+**Constitution mapping.** Principle I is satisfied because the policy is decided before the slices
+start and the slices are registered rather than implemented. Principle II is satisfied because the
+response change is additive on `SheetDetail`, `SheetSummary` and `SheetCreate` are untouched, PATCH
+gains a dedicated request schema rather than a changed create schema, no stored value is rewritten,
+and no migration is added; the accepted pre-release refusal of legacy account-bearing PATCH bodies is
+recorded as a compatibility change, not hidden. Principle IV is satisfied because corruption is refused rather
+than repaired, validation precedes mutation, and settlement remains owned by the transaction owner
+and transaction currency. Principle V is satisfied by the named focused suites, the
+conformance/provisioning checks, `npm run typecheck`, and the OpenAPI gate; `T441` ran them and
+recorded the exact counts/results above. No exception is required.
+
+**Rollback.** Because the change adds one response field, one request schema, validation, and tests
+without schema or data change, rollback is a plain revert of the four Phase 77 slices: remove
+`accountId` from `SheetDetail`, the generated and hand-written types, and `detail()`; restore the
+create-schema reuse on PATCH; restore the prior update account handling; and revert the repository
+resolution to its previous mapping. No stored `account_id`/`currency_id` value is modified by the
+change, so rollback needs no data repair, no down-migration, and no settlement adjustment. Stored
+rows written by the current code remain readable.
 
 ### Compatibility Target Register Conformance
 
@@ -249,6 +397,21 @@ under **Complexity Tracking → Jalali Conversion Strategy**). It is a plain Com
 MIT licence with no PHP extension requirement, so it does not alter any compatibility target above
 and requires no register entry. It is nevertheless a new runtime dependency and is brought under the
 existing static dependency-security gate (T125).
+
+**Re-checked 2026-10-27 after the BE-CR-001 clarification and Phase 77 planning, and 2026-10-28 after
+`T438` delivery.** The amendment
+adds no requirement ID, no success criterion, no schema, no migration, and no dependency. It records
+the owner-decided immutable-account policy; `T438`–`T439` are now implemented and verified, and `T440`–`T441`
+remain unstarted. `SheetDetail` gains one additive
+field, `SheetSummary` is unchanged, PATCH gets a dedicated request schema that does not accept
+`accountId` rather than a changed create schema, validation refuses rather than repairs, the sheet
+currency becomes `readonly` without any stored value being rewritten, and settlement stays with the
+transaction owner and currency. The pre-release refusal of legacy account-bearing PATCH bodies is
+accepted and recorded; no version is bumped automatically. Phase 1 artifacts remain compliant, the
+compatibility register is untouched, and no constitutional exception is required. `T438` required none
+of those gates and its persistence change is delivered; `T439` required none of them either and its
+contract/projection change is delivered. `T440` and `T441` required none of those gates; the
+immutable-update behavior and its focused closure are delivered and verified (2026-10-28).
 
 ## Project Structure
 
@@ -404,6 +567,15 @@ or served assets rather than a second frontend project.
    T275's FR-060 amendment, never before (T124).
 9. **Hardening**: Run migration, failure-injection, concurrency, target-volume, browser, RTL,
    responsive, accessibility, and recovery checks; update operational and release documentation.
+
+**Phase 77 (2026-10-27; `T438`–`T441` delivered and verified 2026-10-28):** `T438`–`T441` refine slice 3
+(purchaser vertical slice) in place; they add no delivery phase and change no phase order. `T438` is
+independent and first and is complete; `T439` follows it and is complete; `T440` follows `T439`; `T441`
+verifies both and is complete. They add no
+migration, no schema change, and no settlement change. There is no account-replacement path: the stored
+account and currency are immutable, any supplied `accountId` is refused, `T440` implements the
+title-only/read-only behavior, and `T441` records the closure evidence and the accepted pre-release
+compatibility impact.
 
 **Database Portability (FR-077)**: The supported V1 backends are the Nextcloud database types
 `mysql` (MySQL 8.0/8.4, MariaDB 10.6/10.11/11.4/11.8), `pgsql` (PostgreSQL 14–18), and `sqlite`

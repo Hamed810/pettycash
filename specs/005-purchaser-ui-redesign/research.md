@@ -2,7 +2,7 @@
 
 **Feature**: `005-purchaser-ui-redesign` | **Date**: 2026-10-19
 
-This research records the decisions taken while bringing the existing Purchaser UI Redesign work under Spec Kit management. It resolves *management* questions (identity, traceability, evidence, status vocabulary, Git boundaries). It deliberately does **not** re-open product, domain, or backend questions; those carry the IDs assigned by the audit package and remain owned by the product owner.
+This research records the decisions taken while bringing the existing Purchaser UI Redesign work under Spec Kit management. It resolves *management* questions (identity, traceability, evidence, status vocabulary, Git boundaries). It deliberately does **not** re-open product, domain, or backend questions outside the owner-approved 2026-10-23 `BE-CR-004` slice; all other items carry the IDs assigned by the audit package and remain owned by the product owner. The decisions dated 2026-10-19 describe the management baseline; the 2026-10-20 Batch B implementation is recorded in `docs/reports/005-purchaser-ui-redesign.md` and current card status lives in `spec.md`/`tasks.md`.
 
 ---
 
@@ -20,7 +20,7 @@ This research records the decisions taken while bringing the existing Purchaser 
 
 ## Decision 3: Domain non-duplication
 
-- **Decision**: `spec.md` cites the authoritative `001-pettycash-v1-core` requirements (FR-020…FR-089) instead of restating them. Where a redesign requirement depends on a domain rule, the 001 ID appears in the requirement text or in the traceability matrix.
+- **Decision**: `spec.md` cites the authoritative `001-pettycash-v1-core` requirements (FR-020…FR-092) instead of restating them. Where a redesign requirement depends on a domain rule, the 001 ID appears in the requirement text or in the traceability matrix. The 2026-10-23 receipt/creation requirements are cited as FR-089–FR-092 and SC-017; they are not duplicated as new 005 business rules.
 - **Rationale**: Constitution Principle I makes `specs/` the governing source for delivery; the 001 spec is already authoritative for account/currency rules, draft minimums, submission preconditions, immutability, revisions, evidence ceilings, filters, Jalali periods, RTL/390px, replay safety, deletion, and the post-save destination. Restating them would create a divergence risk on financial rules.
 - **Alternatives considered**: A self-contained 005 spec that repeats the rules (rejected — silent divergence risk). A spec that references nothing (rejected — untraceable acceptance).
 
@@ -32,19 +32,19 @@ This research records the decisions taken while bringing the existing Purchaser 
   |---|---|
   | `DONE_VERIFIED` | Implemented and technically verified (tests and/or recorded browser evidence). **Not** product-owner visual acceptance. |
   | `PARTIAL` | Implemented in part; named residual work remains. |
-  | `READY_FOR_OWNER_APPROVAL` | No blocker found; work is **not** started and **not** approved. |
+  | `READY_FOR_OWNER_APPROVAL` | No blocker found; the slice may be not started **or** implementation-complete and minimally verified, but it is **not** owner-approved/accepted. This state authorizes neither post-approval comprehensive verification nor the next task. |
   | `BLOCKED_BY_BACKEND` | A frontend card whose contractually-correct completion requires an unapproved `BE-CR`. |
   | `BLOCKED_PENDING_OWNER_APPROVAL` | A backend change request awaiting explicit owner approval. |
   | `NOT_STARTED` | No work performed; no blocker other than the absence of approval. |
 
-- **Rationale**: The audit's own vocabulary (`PROPOSED`) is mapped by `OWNER_DECISION_RECONCILIATION.md` §5 to `READY_FOR_OWNER_APPROVAL`. `DONE_VERIFIED` is deliberately distinct from visual acceptance, because the Batch A report explicitly records that browser verification is not owner approval.
+- **Rationale**: The audit's own vocabulary (`PROPOSED`) is mapped by `OWNER_DECISION_RECONCILIATION.md` §5 to `READY_FOR_OWNER_APPROVAL`. `DONE_VERIFIED` is deliberately distinct from visual acceptance, because the Batch A report explicitly records that browser verification is not owner approval. The post-implementation variant is used by `T075` (2026-10-25): its original implementation and minimal verification are complete and visual acceptance is pending; its 2026-10-26 save-action refinement is documented with implementation pending, so the task stays at this gate and the next task is not authorized.
 - **Alternatives considered**: Reusing `PROPOSED` (rejected — ambiguous between "not started" and "blocked"). A binary done/not-done model (rejected — hides the blocked/ready distinction the owner needs).
 
 ## Decision 5: Blocked items — no workarounds, no contract edits
 
-- **Decision**: `BE-CR-001…006` remain `BLOCKED_PENDING_OWNER_APPROVAL`. No specification, contract, OpenAPI, workflow, authorization, financial, or `lib/` change may be made to unblock them. Frontend cards that depend on them (`UI-PUR-003`, `UI-PUR-007`, `UI-PUR-014`, and the evidence tier of `UI-PUR-016`) stay `BLOCKED_BY_BACKEND` and are not approximated client-side.
-- **Rationale**: `BLOCKED_ITEMS.md` §2 records that two of the three affected cards have **no contractually-correct frontend-only workaround**; `CHARTER.md` and `DECISIONS.md` D-005 require separate approval for backend/contract change. The Batch A report confirms OPEN-first ordering was deliberately left unimplemented rather than faked.
-- **Alternatives considered**: "Temporary" client-side sort (rejected — produces lying page boundaries, the exact defect `UI-PUR-003` exists to fix). Editing the contract to match implementation (rejected — a contract write without approval).
+- **Decision**: `BE-CR-002`, `003`, `005`, and `006` remain `BLOCKED_PENDING_OWNER_APPROVAL`. No specification, contract, OpenAPI, workflow, authorization, financial, or `lib/` change may be made to unblock them. `BE-CR-001` was originally covered by the same rule but was separately approved and delivered on 2026-10-28 (001 `T438`–`T441`, `DONE_VERIFIED`; `T041` closed). Frontend cards that depend on the remaining requests (`UI-PUR-003`, `UI-PUR-014`, and `UI-PUR-007`'s own implementation authorization) stay `BLOCKED_BY_BACKEND` and are not approximated client-side. `BE-CR-004` is the other **separately approved exception** (owner directive 2026-10-23), limited to the receipt/creation scope in `spec.md` FR-005-027 and FR-005-035…038.
+- **Rationale**: `BLOCKED_ITEMS.md` §2 records that two of the three affected cards have **no contractually-correct frontend-only workaround**; `CHARTER.md` and `DECISIONS.md` D-005 require separate approval for backend/contract change. The Batch A report confirms OPEN-first ordering was deliberately left unimplemented rather than faked. The owner's 2026-10-23 answer supplies the missing receipt rule and explicitly approves only that scope.
+- **Alternatives considered**: "Temporary" client-side sort (rejected — produces lying page boundaries, the exact defect `UI-PUR-003` exists to fix). Editing the contract to match implementation (rejected — a contract write without approval). Treating `BE-CR-004` as blanket backend approval (rejected — the directive is scoped to receipts and creation).
 
 ## Decision 6: Evidence tiers and what this management pass may claim
 
@@ -52,7 +52,7 @@ This research records the decisions taken while bringing the existing Purchaser 
   1. **Re-executed in this pass** — the targeted Vitest run (`4 files / 168 tests`, 2026-10-19).
   2. **Report-recorded** — the Batch A report's `npm run check` (23 files / 481 tests) and its Playwright scripts (32/32, 8/8+8/8, 5/5). Not re-run here.
   3. **Source-verified** — code paths inspected; recorded with file references.
-  4. **Not yet obtained** — live calendar-change surface, mutating negative test, English catalog, product-owner visual acceptance, any Batch B evidence.
+  4. **Not yet obtained at the 2026-10-19 baseline** — live calendar-change surface, mutating negative test, English catalog, product-owner visual acceptance, any Batch B evidence. Batch B evidence was added 2026-10-20.
 - **Rationale**: Constitution Principle V requires evidence appropriate to the claim; the Batch A report itself distinguishes "browser-verified" from "authorised scope". Claiming tier 2 as tier 1 would be a false completion claim; `FR-005-034` and `SC-005-009` forbid it.
 - **Alternatives considered**: Re-running the aggregate gate in a documentation-only pass (rejected — the tree did not change; per repository policy, unchanged full-project gates are not re-run for the same evidence). Claiming the report as this pass's evidence (rejected — it is a different pass).
 
@@ -70,14 +70,14 @@ This research records the decisions taken while bringing the existing Purchaser 
 
 ## Decision 9: Task-ledger layout
 
-- **Decision**: `tasks.md` uses a single `T001…T052` sequence grouped into phases: management migration (T001–T015), Batch A closure (T016–T025), owner-gate actions (T026–T027), correctness and blocked cards (T028–T034), workspace/Batch B candidates (T035–T040), backend change requests (T041–T046), and verification/polish gates (T047–T052). Every task carries its card ID, requirement IDs, status, and evidence or gate.
+- **Decision**: `tasks.md` uses a single `T001…T063` sequence grouped into phases: management migration (T001–T015), Batch A closure (T016–T025), owner-gate actions (T026–T027), correctness and blocked cards (T028–T034), workspace/Batch B candidates (T035–T040), backend change requests (T041–T046), verification/polish gates (T047–T052), and the approved 2026-10-23 receipt/creation slice (T053–T063). Every task carries its card ID, requirement IDs, status, and evidence or gate.
 - **Rationale**: The 004 ledger proves the repository's Spec Kit convention works with `[x]`/`[ ]` and inline evidence notes. The card IDs must remain visible in the ledger so the traceability matrix in `spec.md` resolves.
-- **Alternatives considered**: One task per requirement (rejected — 34 plus 22 cards would fragment the ledger). Free-form checklist without IDs (rejected — breaks `SC-005-001`).
+- **Alternatives considered**: One task per requirement (rejected — 38 plus 22 cards would fragment the ledger). Free-form checklist without IDs (rejected — breaks `SC-005-001`). A separate 006 feature for the approved slice (rejected — 001 and 005 already own the domain rule and purchaser surface; a new feature would duplicate authority).
 
 ## Decision 10: What "completion" means for this management feature
 
 - **Decision**: Feature 005's management baseline is complete when: the artifacts exist and agree, all 22 imported cards are mapped with a status and a gate, the governance files state only evidence-backed facts, and the Git plan is delivered for approval. Implementation of any Batch B card is **outside** this baseline.
-- **Rationale**: The requested deliverable is a management migration plus an approval-gated Git plan, not code. Treating Batch B as "done" would violate `FR-005-032`.
+- **Rationale**: The requested deliverable was a management migration plus an approval-gated Git plan, not code. At that baseline, treating Batch B as "done" would have violated `FR-005-032`; the later 2026-10-20 owner directive approved the frontend Batch B implementation separately.
 - **Alternatives considered**: Requiring Batch B approval as part of this feature (rejected — only the owner can grant it, and it is explicitly not requested).
 
 ## Decision 11: The R1 checkpoint has its own approved scope
@@ -86,3 +86,10 @@ This research records the decisions taken while bringing the existing Purchaser 
 - **Rationale**: The working tree contains durable management, audit, design, source, and build artifacts that must be recoverable together. Ordered commits with exact allowlists keep each step reviewable and preserve the boundary between Batch A and Feature 004.
 - **Exclusions**: Pre-existing user changes (`AGENTS.md`, `CLAUDE.md`, `.claude/`, `.env.testing`, `docs/Review uploaded pasted content.zip`), Feature 004 tests and reports, `_archives/`, `review/bunny/screenshots/`, `test-results/`, the 10 excluded desktop references, the generated mobile duplicates, and the mobile contact sheet remain unstaged.
 - **Evidence rule**: Commit results are recorded only after the commits succeed. A failed step is reported as a stop, never as partial completion.
+
+## Decision 12: The 2026-10-23 receipt/creation slice and its status mapping
+
+- **Decision**: The owner directive 2026-10-23 approves `BE-CR-004` and the receipt/creation requirements only. The approved behavior is: saving never requires a receipt; the create form may stage receipts before the first save and uploads them after creation; sheet submission and correction resubmission require at least one active receipt only when the active expense type's current `evidence_required` is true; the payload exposes server-derived `evidenceRequired`; and a `422` names every offending transaction. The implementation is split between 001 `T431`–`T435` (domain/backend/contract verification) and 005 `T053`–`T063` (UI, fixtures, browser evidence, acceptance).
+- **Status mapping without new vocabulary**: `UI-PUR-010` and `UI-PUR-016` become `PARTIAL`, because their historical tasks (`T030`, `T034`) remain real evidence but no longer describe the current requirement. `BE-CR-004` becomes `NOT_STARTED` with no approval gate — the owner has approved it; the remaining gate is implementation and evidence. No `SUPERSEDED`, `APPROVED`, or `REOPENED` value is introduced; the six-value vocabulary in Decision 4 stays closed, and the notes carry the history.
+- **Rationale**: The existing vocabulary has no value for "was done, requirement then changed" or "approved but not started". Adding one would invalidate every existing status consumer and the traceability checks. `PARTIAL` plus a named replacement task, and `NOT_STARTED` plus "owner approved" in the gate, express both facts without inventing a seventh state.
+- **Alternatives considered**: Reopening T030/T034 and clearing their checkboxes (rejected — erases the historical evidence and makes the ledger lie about what happened). Adding `SUPERSEDED`/`APPROVED` (rejected — breaks the closed vocabulary and the existing guards). Creating a new feature 006 (rejected — no ownership gap; 001 and 005 already own the rule and the surface).

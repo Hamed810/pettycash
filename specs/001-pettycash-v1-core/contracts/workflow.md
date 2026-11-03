@@ -19,6 +19,14 @@ different payload returns conflict and creates no new business effect.
 Mutable-resource commands carry `expectedVersion`. A stale version returns conflict and the caller
 must reload; the client does not automatically retry a mutation.
 
+**Replay-safe deletes (2026-10-24, FR-025/FR-086).** `DELETE /sheets/{id}` and
+`DELETE /transactions/{id}` are both replay-gated. Each requires `X-PettyCash-Command-ID` and
+`expectedVersion`. The same command id with the same canonical payload returns the original `204`
+after the row is gone; the same id with a different payload is `409`; a different id after deletion
+is `404`. `expectedVersion` is the concurrency guard, not the replay guard. `DELETE /evidence/{id}`
+is the deliberate exception: it is effect-idempotent (a draft row is removed, a submitted row is
+deactivated) and remains header-free, returning the same outcome on repeat.
+
 ## Command Replay Versus Superseded Attempt (FR-084, FR-085)
 
 These are **different failures** and are resolved differently. Conflating them is a defect, because one
@@ -64,12 +72,33 @@ state the caller reasoned about is gone.
 All successful decisions insert an immutable decision and audit event. No endpoint edits or deletes
 a decision.
 
+## Receipt Requirement Contract
+
+1. **Saving never requires a receipt.** Creating or updating an editable transaction with the FR-022
+   minimum, or with any optional draft fields, MUST NOT be refused because no evidence is attached.
+2. **Submission and resubmission are the gates.** Sheet submission and correction resubmission require
+   at least one **active** evidence item for each transaction whose active expense type has
+   `evidence_required = true`. A transaction whose active expense type has `evidence_required = false`
+   MUST NOT be required to have evidence. A deactivated evidence item does not satisfy the gate.
+3. **Timing.** The rule is evaluated from the active expense type's current configuration when the
+   submission or resubmission is attempted. The rule is not snapshotted at transaction creation and is
+   not evaluated by a save.
+4. **Identification.** A refusal is `422` and carries a `transactions.<transactionId>.evidence` field
+   error for every offending transaction, so the response names each missing receipt rather than a
+   single generic message. The same requirement is exposed to the readiness surface as the
+   server-derived `TransactionSummary.evidenceRequired` plus the active `evidenceCount`.
+5. **Pre-save attachment.** Receipts selected before the first save are staged by the client and
+   uploaded after the transaction is created through the existing evidence endpoint. A failed upload
+   leaves the saved transaction in place and is reported for retry; no pre-transaction upload endpoint
+   and no orphan-evidence lifecycle is introduced (`docs/decisions/ADR-007-pre-save-receipt-attachment.md`).
+
 ## Correction Contract
 
 1. A return decision places the transaction in purchaser correction.
 2. Only the transaction owner may create and edit the correction draft.
 3. The draft begins from the active revision but has a new revision identity.
-4. Resubmission validates the full required dataset and evidence.
+4. Resubmission validates the full required dataset and applies the Receipt Requirement Contract's
+   conditional evidence rule; evidence is required only when the active expense type requires it.
 5. Activation atomically switches the active revision and routes it to cost-center review.
 6. Prior revisions, decisions, evidence history, and audit events remain unchanged.
 

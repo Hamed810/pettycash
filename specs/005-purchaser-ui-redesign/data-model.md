@@ -2,7 +2,7 @@
 
 **Feature**: `005-purchaser-ui-redesign` | **Date**: 2026-10-19
 
-No new persisted entity and no change to any persisted domain entity. The entities below are **presentation and management models** that already exist in the working tree or are planned by this feature. None of them stores or transforms a financial value; the domain remains authoritative for every persisted figure.
+No new persisted entity and no change to any persisted domain entity. The entities below are **presentation and management models** that already exist in the working tree or are planned by this feature. The 2026-10-23 receipt/creation slice adds no persisted table: it consumes the existing transaction/evidence records and adds only the presentation staging queue, the server-derived readiness field, and debug-gated fixture data. None of them stores or transforms a financial value; the domain remains authoritative for every persisted figure.
 
 > **Non-rule**: nothing in this file redefines a 001 domain rule. Where a field carries a financial meaning, the authoritative source is the 001 payload and the 001 specification. See `spec.md` §"Domain non-duplication rule".
 
@@ -82,15 +82,17 @@ No new persisted entity and no change to any persisted domain entity. The entiti
 
 ---
 
-## Entity: Readiness model (**plan** — `UI-PUR-016`)
+## Entity: Readiness model (**plan** — `UI-PUR-016`; receipt tier approved 2026-10-23)
 
 | Field | Type | Rule |
 |---|---|---|
-| blockers | `Array<{ transactionId, field }>` | Only server-enforced preconditions: description, cost center, expense type, at least one transaction (`FR-005-027`) |
-| evidence state | `'unknown'` | Forced while `BE-CR-004` is unapproved. Must never render as "ready" or "blocking" |
+| blockers | `Array<{ transactionId, field }>` | Server-enforced preconditions: description, cost center, expense type, at least one transaction (`FR-005-027`), plus `evidence` when `evidenceRequired` is true and active `evidenceCount` is zero |
+| `evidenceRequired` | `boolean` | Server-derived from the active expense type's current `evidence_required`; false when no expense type is selected. Never inferred client-side (`FR-092`) |
+| `evidenceCount` | `integer` | Count of active evidence items; a deactivated item does not satisfy the receipt requirement (`FR-091`) |
 | submit affordance | reachable | Remains reachable; the server's 422 remains the backstop |
+| field errors | `transactions.<transactionId>.evidence` | Every `422` key is mapped to the named transaction in one summary; no generic-only failure (`FR-005-037`) |
 
-**Invariants**: no client-derived domain rule; a submitted sheet renders no readiness surface; a zero-transaction sheet shows the FR-024 blocker and no Submit affordance.
+**Invariants**: no client-derived domain rule; a submitted sheet renders no readiness surface; a zero-transaction sheet shows the FR-024 blocker and no Submit affordance; readiness and the `422` name the same offending transactions for the same server state.
 
 ---
 
@@ -109,6 +111,36 @@ No new persisted entity and no change to any persisted domain entity. The entiti
 
 ---
 
+## Entity: Receipt staging queue (**plan** — `UI-PUR-010`; approved 2026-10-23)
+
+| Field | Type | Rule |
+|---|---|---|
+| `items` | `Array<StagedReceipt>` | Files selected before the first save; multiple allowed |
+| `StagedReceipt.localId` | string | Stable local identity for list rendering and retry; not a server ID |
+| `StagedReceipt.name/size/type` | string/number/string | Display and existing evidence validation; no financial meaning |
+| `StagedReceipt.state` | `'staged' \| 'uploading' \| 'attached' \| 'failed'` | `uploading`/`attached` are reachable only after the transaction exists |
+| `StagedReceipt.transactionId` | string or `null` | `null` until creation; an upload MUST NOT be attempted while null |
+| `StagedReceipt.error` | string or `null` | Per-file failure message; the transaction remains saved |
+
+**Invariants**: saving never requires an item; the queue is cleared only after every item is `attached` or explicitly discarded; a failed item remains visible for retry; the unsaved-changes guard treats a non-empty staged queue as dirty; no request path contains `//` or an empty ID (`FR-005-022/036`, `ADR-007`).
+
+**State transitions**: `staged → uploading → attached`; `uploading → failed → uploading` on retry; `staged → removed` before save; no transition to `attached` without a non-empty transaction ID.
+
+---
+
+## Entity: Development fixture set (**plan** — `T060`; approved 2026-10-23)
+
+| Field | Type | Rule |
+|---|---|---|
+| `namespace` | string | Debug-only marker used for idempotency and cleanup; never a production label |
+| `sheets` | `Array<{ title, transactionCount, receiptCoverage }>` | Exactly 25, 30, 35, and 40 transactions; deliberate receipt-required, receipt-exempt, missing, attached, and correction-returned cases |
+| `gate` | `debug === true` | The command refuses otherwise; not a migration, startup, or production-user path |
+| `owner` | purchaser UID | Fixture data belongs to the lab purchaser, not a real financial account |
+
+**Invariants**: uses application services where they exist; no raw financial rows that bypass domain invariants; idempotent in its namespace; removable without touching unrelated lab data (`FR-005-035`).
+
+---
+
 ## Relationship to the domain model
 
 | Presentation entity | Domain authority | Relationship |
@@ -117,4 +149,6 @@ No new persisted entity and no change to any persisted domain entity. The entiti
 | Formatting surface | `Money` value object (minor units + currency + `minorUnit`) | Read-only consumer; never converts or re-rounds |
 | Sheet list session | `GET /sheets` paged response | Restores *context*, refetches *data* |
 | Workspace state | `GET /sheets/{id}`, transaction endpoints | Read-only consumer; actions gated by the server's capability set |
-| Readiness model | FR-022/023/024, submit 422 | Mirrors server-enforced preconditions; adds no rule |
+| Readiness model | FR-022/023/024/091/092, submit 422 | Mirrors server-enforced preconditions; adds no rule; `evidenceRequired`/`evidenceCount` are read from the payload |
+| Receipt staging queue | FR-089/090, existing evidence endpoint | Client-only until creation; no persisted counterpart; no orphan-evidence lifecycle |
+| Development fixture set | FR-005-035 | Verification data only; no domain authority and no production path |

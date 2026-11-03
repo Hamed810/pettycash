@@ -9,7 +9,19 @@
 and no open task carries a `[CRITICAL]` tag. The purchaser journey is closed: T171's E2E suite is 7 of
 7 green as of 2026-10-09. (Corrected by T430; its prescribed "323 of 374" described the pre-Phase-74
 state and was superseded before it could land by T171, T428, T429 and T430 itself closing in the same
-pass.)
+pass.) **2026-10-23:** Phase 75 adds `T431`–`T435`; all five are complete, so the ledger is 382 rows with
+382 checked. **2026-10-24 (planning amendment):** Phase 76 appends `T436`–`T437`; both are unchecked and
+gated, so the ledger is 384 rows with 382 complete and two open. The 2026-10-09 count above is preserved
+as management-baseline evidence and is not restated as the current delivery measure. **2026-10-27
+(clarification + planning):** the owner decided the `BE-CR-001` sheet account-update policy (see
+`### Session 2026-10-27`); `FR-019` and `FR-021` record the resulting domain rules. Phase 77 then
+appended `T438`–`T441` as **unstarted, owner-authorization-gated** implementation slices at that
+date; all four were subsequently authorized, delivered, and verified (2026-10-28), so the ledger
+is 388 rows with 387 complete and one open (`T437`). The clarification itself adds no
+requirement ID; the planning pass adds no application source, contract, test, migration, or runtime
+change and authorizes no implementation. **2026-10-28:** the owner authorized `T438` and then `T439`,
+and both are complete and verified, so the ledger is 388 rows with 385 complete and three open
+(`T437`, `T440`, `T441`).
 
 **Input**: User description: "Read the existing business requirements and create feature
 specifications from them. Do not implement anything. Only create specs."
@@ -255,6 +267,70 @@ specifications from them. Do not implement anything. Only create specs."
 
 **Recorded 2026-10-09:** this adds **FR-088**, moving the requirement count from 87 to **88**. `plan.md:93` recorded 87 and has been corrected here, and `tasks.md` T134's traceability range still read FR-001 through FR-087 and has been corrected to FR-001 through FR-088 — both MUST be reconciled in this change per Constitution V, and both were behind the count this answer created. No new success criterion is added: FR-088 is a reachability rule whose observable consequence is that the existing submission scenarios can be exercised from where a save leaves the purchaser, so it is verified by T171's Playwright journeys rather than by a new measurable outcome. **No product code was changed by this answer** — it decides a question the implementation had already answered one way, and the gap between that implementation and this decision is **T171**'s to close.
 
+### Session 2026-10-23
+
+- Q: When is a receipt required, and may a purchaser attach receipts before the first save? → A: **Saving an editable transaction NEVER requires a receipt. The create form MUST allow receipts to be selected before the first save, and those receipts MUST become attached to the created transaction without a second manual save. Sheet submission and correction resubmission MUST require at least one active receipt for each transaction whose active expense type has `evidence_required = true`; a transaction whose active expense type has `evidence_required = false` MUST NOT be required to have one. The rule is evaluated from the active expense type's current configuration at submission/resubmission time, and a refusal MUST identify every offending transaction.**
+
+**The rule was previously split between an unenforced requirement and an inverted implementation.** FR-023 already required "all required evidence" at submission, and `data-model.md` already described `evidence_required` as "at least one active item required at submission when true", but `ExpenseSheet::submit()` called `TransactionRevision::assertSubmittable()` without the expense type's flag, so no receipt was ever required at sheet submission. Correction resubmission did the opposite: `ResubmitCorrection::execute()` required evidence for every correction, including expense types configured as not requiring it. The owner's answer resolves both directions with one rule rather than leaving two inconsistent gates.
+
+**Pre-save attachment is a user-experience requirement, not a second upload endpoint.** The transaction row must exist before the existing evidence endpoint can accept a file, so the create form stages selected receipts in memory and uploads them immediately after the transaction is created. If an upload fails, the transaction remains saved — saving is allowed without a receipt — and the failure is reported per file so the purchaser can retry from the edit surface. The architectural choice and its rejected alternatives are recorded in `docs/decisions/ADR-007-pre-save-receipt-attachment.md`; it adds no orphan-upload lifecycle and no unauthenticated storage surface.
+
+**The server remains the authority for readiness and refusal.** The transaction payload exposes `evidenceRequired` from the active expense type and the existing active `evidenceCount`, so the purchaser can see a missing receipt before pressing Submit without the client re-deriving the rule. The submission `422` carries a `transactions.<transactionId>.evidence` field error for every offending transaction, so a stale client still receives the same identification the readiness surface shows.
+
+**Recorded 2026-10-23:** this adds **FR-089**, **FR-090**, **FR-091**, and **FR-092**, and **SC-017**, moving the requirement count from 88 to **92** and the success-criterion count from 16 to **17**. `plan.md`'s Scale/Scope count and Constitution Check are reconciled in the same change. Existing IDs are not renumbered; the new requirements are appended after FR-088 and the new success criterion after SC-016.
+
+### Session 2026-10-27
+
+- Q: May an `OPEN` sheet's source account change after creation, including to another account owned by the same purchaser, active, and denominated in the sheet's existing currency? → A: **No — the source account is immutable after creation.** The account is selected at creation and MUST NOT subsequently change. The sheet currency is also immutable after creation. While the sheet is `OPEN`, its owner may edit the title only. A title-only PATCH MUST omit `accountId` entirely and MUST preserve the stored account — active or inactive — and the stored currency. There is no account-changing path, no administrator or finance override, and no automatic conversion or reinterpretation of existing transaction amounts. This decision supersedes the earlier same-currency replacement answers of this session.
+- Q: What must happen when a PATCH supplies an `accountId`? → A: **Reject it before persistence.** Only omission of `accountId` is accepted. Any supplied value — including `null`, the current account, an inactive account, or an owned, active, same-currency target — is an attempted account assignment and MUST be refused with `422 VALIDATION_FAILED` and `fieldErrors.accountId`. No title, account, currency, or lock-version mutation may be persisted.
+- Q: When a sheet's current account has become inactive, may the purchaser still update the title, and may the account be replaced? → A: **Title-only remains allowed; replacement is not.** An inactive existing account MUST NOT block an otherwise authorized title-only update. The edit surface displays that account accurately and read-only and preserves it; the purchaser cannot replace it.
+- Q: Which sheet response payload should declare the authoritative `accountId`? → A: **`SheetDetail` only.** The public `accountId` is declared on the sheet detail payload used by the edit surface; `SheetSummary` and the Sheets List response remain unchanged and do not carry `accountId`.
+- Q: What should happen when a sheet's stored account reference or currency already disagrees with the account record? → A: **Detect and report only.** Reads and writes are refused with `422 DATA_FAULT` until an authorized data fix resolves the record; no silent reassignment, auto-repair, or currency rewrite. Because an update never supplies an account, neither an unresolvable account reference nor a currency disagreement is converted to `fieldErrors.accountId`; only a supplied `accountId` produces that field error.
+- Q: Does the immutable account change where a sheet's transactions are financially settled? → A: **No — settlement stays unchanged.** Settlement continues to resolve from the transaction owner and the transaction currency under the existing approved rule; `sheet.accountId` is descriptive and is never a settlement instruction.
+
+**Recorded 2026-10-27:** this session decides the `BE-CR-001` product policy only. The clarification adds no requirement ID and no task (the separate planning pass registered the then-unstarted `T438`–`T441`; all four were later authorized, delivered, and verified on 2026-10-28), and it changes no API/OpenAPI contract, schema, authorization, financial rule, or implementation state. `FR-019` and `FR-021` carry the resulting domain rules, and `specs/005-purchaser-ui-redesign/spec.md` records the purchaser-surface obligations that reference them. Backend implementation, the `SheetDetail.accountId` projection, and the server-side validation were **not** authorized or implemented by that record; the purchaser edit task was therefore `BLOCKED_BY_BACKEND` at that date and was unblocked by the later delivery. `BE-CR-002`/`BE-CR-003` questions remain open under `P-007`.
+
+**Owner decision — immutable sheet account (2026-10-27, Option A).** A sheet's source account is
+immutable after creation. This supersedes and withdraws the earlier same-currency replacement policy
+and its recorded feasibility conflict; that conflict is closed by removing account replacement
+entirely, not by changing the account model. No account-model expansion, schema change, new migration,
+constraint relaxation, or fixture that manufactures a second same-currency account is authorized, and
+`pettycash_accounts_user_currency_uniq` remains unchanged. The approved Create Sheet modal is not
+modified.
+
+**Reconciliation note (2026-10-27, documentation only).** `FR-019` and `FR-021` are the normative
+source for the immutable-account policy. 005 `FR-005-019`/`FR-005-050`, `D-026`, `BE-CR-001.md`, and
+`BLOCKED_ITEMS.md` reference those requirements rather than creating a second policy authority.
+`SheetDetail` gains the authoritative public `accountId`; `SheetSummary` and the Sheets List response
+remain unchanged; the generated and hand-written API types are updated in the same implementation
+slice; existing in-repository consumers and strict response validators are considered. The contract
+records no external-consumer compatibility guarantee beyond its versioned schema, so the plan does
+not claim that no external consumers exist. `SheetCreate` is unchanged; `PATCH /sheets/{sheetId}` uses a
+dedicated `SheetUpdate` schema containing only `title` and `expectedVersion`, with
+`additionalProperties: false` so `accountId` and every other undeclared property are schema-invalid.
+`accountId` is not an accepted update property; any value supplied for it — including `null`, the stored account, an inactive
+account, or an owned, active, same-currency account — is refused before persistence with
+`422 VALIDATION_FAILED` and `fieldErrors.accountId`. The change is **not request-shape compatible with
+legacy bodies**: a previously accepted PATCH body carrying `accountId` is now refused. The owner has
+explicitly accepted pre-release API and behavioral incompatibilities because the application is still
+under development and has not launched. The compatibility impact and release/versioning treatment are
+recorded under Constitution v1.4.0: because the PATCH change is breaking for the published contract,
+Delivery item 6 requires explicit approval, a compatibility strategy, release notes, and a **MAJOR
+version decision for the affected public contract** at release. That release step is separately
+authorized; this documentation change performs no MAJOR, minor, patch, app-version, or package-version
+bump. A documented strict validator that rejects the added detail
+property would be a V.6 breaking-change exception requiring separate approval. The edit form displays the
+stored account authoritatively and read-only, never prefills it for submission, and never sends
+`accountId`; `accounts[0]` is never an edit source. An inactive stored account is displayed and
+preserved by a title-only update. A corrupt account reference and a corrupt sheet-currency reference
+are both `422 DATA_FAULT`; neither becomes a field-level account error because no account is supplied.
+No application repair exists for a pre-existing dangling-account or cross-currency row; it remains
+refused until an operator corrects the stored reference out-of-band. FR-083 is preserved: the Sheets
+List remains all-or-nothing with `422` and no silent omission or partial `200`; partial-list
+availability is out of scope and MUST NOT be adopted for this change. An inactive-but-resolvable
+account is not corruption and remains readable, preserving read-only history where the stored
+reference is sound.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Capture and Submit Expenses (Priority: P1)
@@ -290,8 +366,10 @@ stage while the purchaser retains a clear view of their status.
    save returns the purchaser to that sheet's detail view where the sheet's Submit control is
    reachable (FR-088).
 6. **Given** a sheet has no transactions or any transaction lacks its required cost center,
-   expense type, description, or evidence, **When** the purchaser submits the sheet, **Then** the
-   submission is rejected with specific validation messages.
+   expense type, description, or a receipt required by its active expense type, **When** the
+   purchaser submits the sheet, **Then** the submission is rejected with specific validation
+   messages, and a transaction whose active expense type does not require a receipt is not refused
+   for that reason (FR-091).
 7. **Given** every transaction is complete, **When** the purchaser submits the sheet, **Then** the
    sheet is locked against new transactions and its transactions enter formal review even when the
    source petty-cash account has insufficient or negative balance.
@@ -312,6 +390,20 @@ stage while the purchaser retains a clear view of their status.
     devices, **When** the second tab saves a change to it, **Then** the save is refused with
     `409 Conflict` telling the purchaser to reload, neither edit is silently overwritten, and no
     superseded-attempt audit event is written because the draft carries no official history (FR-025).
+11. **Given** the create-transaction form, **When** the purchaser supplies only an expense date and a
+    positive amount and saves, **Then** the transaction is created and the purchaser returns to the
+    sheet detail view, with no receipt required and no submission-field error shown for a save
+    (FR-022, FR-089).
+12. **Given** the create-transaction form, **When** the purchaser supplies description, cost center,
+    and expense type and selects one or more receipts before the first save, **Then** the transaction
+    is created with every supplied field, each staged receipt becomes attached to the created
+    transaction without a second manual save, and a failed receipt upload is reported per file while
+    the saved transaction remains intact (FR-089, FR-090).
+13. **Given** a sheet with one transaction whose expense type requires a receipt and one whose
+    expense type does not, **When** the purchaser submits the sheet without receipts, **Then** the
+    receipt-required transaction is refused and named in the validation response, the receipt-exempt
+    transaction is not refused for that reason, and after an active receipt is attached the sheet
+    submits successfully (FR-091, FR-092, SC-017).
 
 ---
 
@@ -533,7 +625,18 @@ of all primary workflow actions.
 - A sheet may contain transactions assigned to different cost centers; each transaction follows
   the managers responsible for its own cost center.
 - A sheet with no transactions, a transaction with a non-positive amount, or a transaction missing
-  any submission field or required evidence cannot be submitted.
+  any submission field or required evidence cannot be submitted. A transaction whose active expense
+  type does not require evidence is not refused for the absence of a receipt.
+- A receipt selected before the first save is staged in the create form; if the transaction is
+  created but a staged receipt cannot be uploaded, the transaction remains saved, the failed file is
+  named, and the purchaser can retry from the edit surface without re-entering the transaction
+  (FR-090). If transaction creation itself fails, no staged receipt is uploaded and no orphan
+  evidence is created.
+- A receipt that has been deactivated does not satisfy the submission requirement; an active receipt
+  attached to the transaction does, including after a correction creates a new revision (FR-091).
+- An administrator may change an expense type's `evidence_required` setting while a draft exists;
+  the setting in force at submission/resubmission decides whether that draft needs a receipt
+  (FR-091).
 - A sheet can be submitted without available account balance, and an approved consumption may
   result in a negative balance.
 - A save that succeeds MUST NOT leave the purchaser somewhere the sheet cannot be submitted from: the
@@ -770,6 +873,37 @@ of all primary workflow actions.
   create multiple open expense sheets.
 - **FR-019**: Each sheet MUST have one purchaser, title, creation date, status, source petty-cash
   account, and currency.
+  **Immutable-account rule (Clarified 2026-10-27; owner Option A).** The source account is selected at
+  creation and MUST NOT change afterwards. The sheet currency is immutable after creation. While the
+  sheet is `OPEN`, its owner may update the title only. A title-only update MUST omit `accountId`
+  entirely and MUST preserve the stored account — active or inactive — and the stored currency. An
+  inactive existing account MUST NOT block an otherwise authorized title-only update. Any supplied
+  `accountId` — including `null`, the current account, an inactive account, or an owned, active,
+  same-currency account — is an attempted account assignment and MUST be refused before persistence
+  with `422 VALIDATION_FAILED` and `fieldErrors.accountId`; no title, account, currency, or lock-version
+  change may be persisted. The edit surface MUST display the stored account authoritatively and
+  read-only and MUST NOT guess, substitute, or resubmit an account. Unknown, malformed, or corrupted
+  stored account references MUST be detected and reported, never silently replaced, repaired, or
+  re-denominated. There is no account-changing path, no administrator or finance override, and no
+  automatic conversion or reinterpretation of existing transaction amounts. This requirement and
+  FR-021 are the normative policy source; other feature specifications and decision records reference
+  them and MUST NOT restate the policy as an independent authority.
+  **Implementation (2026-10-27 registration; 2026-10-28 delivered and verified):** 001 Phase 77
+  registers `T438` (repository account-reference integrity, refusal instead of substitution), `T439`
+  (`SheetDetail.accountId` on the detail payload only; `SheetUpdate` accepts `title` and
+  `expectedVersion` only, contract + types), `T440` (immutable title-only PATCH, supplied-account
+  refusal, inactive-account title edit, authoritative read-only edit display, visual gate) and `T441`
+  (focused security, integrity, contract, and regression verification plus closure records). On
+  2026-10-28 the owner authorized all four in order; each is implemented and verified, `T441` closed
+  `DONE_VERIFIED` with 236 focused tests/1,616 assertions (1 pre-existing skip), the OpenAPI and
+  TypeScript gates green, and `T041` closed with it. `T440` is `DONE_VERIFIED` under the owner's
+  explicit limited visual approval. The breaking PATCH change was accepted pre-release; because it
+  is breaking for the published contract, Constitution v1.4.0 Delivery item 6 requires a **MAJOR
+  version decision for the affected public contract**, release notes, and a compatibility strategy at
+  the separately authorized release step. No version bump was performed here. No account-model,
+  schema, constraint, or migration change was made or is authorized; `T039` and `T080` remain
+  `BLOCKED_BY_BACKEND` pending separate implementation authorization, and `T080` also retains its own
+  owner visual gate.
 - **FR-020**: A purchaser with one active account MUST receive its currency automatically; a
   purchaser with multiple active accounts MUST choose from only those account currencies; a purchaser
   with **no rial account of their own** has a default active rial account auto-created on first sheet
@@ -790,11 +924,22 @@ of all primary workflow actions.
   what this requirement specifies and what T085 implements. FR-014 is therefore left as the account
   model and is not a second owner of provisioning. Recorded 2026-10-01.
 - **FR-021**: Every transaction in a sheet MUST inherit the sheet currency and MUST NOT define an
-  independent currency.
+  independent currency. Because the sheet currency and source account are immutable after creation
+  (FR-019, Clarified 2026-10-27), no update path may change the sheet currency, re-denominate existing
+  transactions, or replace the account to obtain a different currency. An account in a different
+  currency MUST NOT be introduced, and a stored account/currency disagreement MUST be reported as
+  unreadable data rather than used to reinterpret existing amounts.
+  **Implementation (2026-10-28, `DONE_VERIFIED`):** `T440` makes `ExpenseSheet::$currency` readonly
+  and refuses any supplied `accountId` before persistence; `T438` refuses a stored account/currency
+  disagreement as unreadable data instead of substituting a currency. `T441` verified both at the
+  contract, application, repository, and settlement boundaries. No transaction amount, currency, or
+  settlement rule changed.
 - **FR-022**: An open transaction MUST be savable with an expense date and positive amount as its
   minimum initial information.
 - **FR-023**: Submission MUST require every transaction to have an expense date, positive amount,
   description, exactly one cost center, one active expense type, and all required evidence.
+  **The evidence half of this rule is owned by FR-091** and is evaluated only at submission or
+  correction resubmission; saving a draft never requires evidence (FR-089).
   **The expense date carries no validity window (Clarified 2026-10-08).** Any valid calendar date
   MUST be accepted, **including a date later than today**, because the expense date is a fact the
   purchaser asserts about when a cost was incurred rather than a scheduling promise; V1 MUST NOT
@@ -831,6 +976,8 @@ of all primary workflow actions.
 - **FR-024**: A sheet MUST contain at least one transaction before submission.
 - **FR-025**: Before submission, the purchaser MUST be able to add, edit, and delete transactions
   and add or remove their evidence. Deleting the draft **sheet** itself is FR-086.
+  Saving an editable transaction MUST NOT require evidence, even when its selected expense type
+  requires a receipt for submission (FR-089).
   **Concurrent editing by the owner (Clarified 2026-10-08).** Where a save carries a version that is
   no longer current, the application MUST refuse it with `409 Conflict` on FR-085's terms and the
   client MUST reload before saving again. A pre-submission edit MUST NOT silently overwrite a newer
@@ -843,6 +990,20 @@ of all primary workflow actions.
   (FR-051). (Recorded 2026-10-08: `data-model.md:23` places `lock_version` on seven aggregates "for
   optimistic checks" and `:25-38` states the behaviour only for a decision, while this requirement
   permitted unrestricted draft editing — so a second save silently destroyed the first.)
+  **Draft-deletion acknowledgement and replay (Clarified 2026-10-24).** A successful draft-transaction
+  deletion answers `204 No Content` with no body. For that response the absence of an OCS envelope is
+  **success**, not a malformed response, and the client MUST NOT report
+  `pettycash.error.malformedResponse`. The delete is a replay-gated command: it MUST carry
+  `X-PettyCash-Command-ID` and `expectedVersion`. Replaying the same command id with the same payload
+  returns the original `204` even though the row is gone, so a client that lost the first response can
+  distinguish its own success from a failure. A **different** command id after the row is gone is
+  refused as not found, never treated as a second success. `expectedVersion` remains a concurrency
+  guard and is not a replay guard. Evidence attached to the draft MUST NOT block an otherwise
+  authorized deletion: the cascade removes its draft evidence rows and stored files with the
+  transaction. (Recorded 2026-10-24: the endpoint already answered `204`, the client required an OCS
+  envelope, and the service ran its ownership/state lookup before any replay check — so a retry after
+  success answered “Transaction not found”. Contract and backend change are gated as `T436`; the
+  client-side bodyless-success handling is 005 `T064`.)
 - **FR-026**: After submission, the purchaser MUST NOT add transactions or edit transaction
   business information except through correction of a returned transaction.
 - **FR-027**: Account balance MUST NOT prevent sheet creation or submission, and negative balances
@@ -982,7 +1143,9 @@ of all primary workflow actions.
 #### Correction, Revision, and Audit
 
 - **FR-047**: Any review stage MUST be able to return a transaction to the purchaser for correction
-  with a required explanation.
+  with a required explanation. Resubmitting the corrected transaction MUST apply FR-091's conditional
+  receipt rule: a required receipt is enforced for an expense type that requires one, and is not
+  enforced for an expense type that does not.
 - **FR-048**: Correcting a submitted transaction MUST create a new revision; the prior revision
   MUST remain unchanged and viewable.
 - **FR-049**: A corrected transaction MUST restart review with its cost center manager and follow
@@ -992,6 +1155,20 @@ of all primary workflow actions.
 - **FR-051**: Formal transaction audit MUST begin with sheet submission and record submissions,
   routing, approvals, rejections, returns, corrections, revision creation, transaction changes,
   evidence additions, and evidence deactivations.
+  **Pre-submission revision and audit boundary (Clarified 2026-10-24, gated by ADR-008).** “Begin with
+  sheet submission” is a boundary, not only a starting event. Under the intended model a
+  never-submitted transaction has **one working revision**, edited in place under `lock_version`; its
+  draft saves create no official revision history and no transaction-audit events. The first submission
+  activates that revision and begins the official record; correction of a returned transaction still
+  creates a new revision per FR-048. The current implementation does not honor this boundary: it writes
+  `REVISION_CREATED` when a draft is created, and a new revision plus `TRANSACTION_CHANGED` on every
+  draft `PATCH`. Correcting that changes the revision rows the API returns and the audit stream for
+  existing drafts, so it is **proposed, not implemented, in
+  `docs/decisions/ADR-008-pre-submission-revision-boundary.md`** and gated as `T437`. Existing stored
+  revisions and audit events remain append-only under FR-053 and MUST NOT be deleted, rewritten, or
+  backfilled to simulate the boundary. Until ADR-008 is approved and `T437` is delivered, the purchaser
+  interface MUST NOT present draft revisions or draft-stage audit events as official history (005
+  `T069`); that presentation rule changes no stored data.
 - **FR-052**: Every audit event MUST retain event time, actor identifier, actor display name at the
   time, actor role at the time, workflow stage, event type, decision, explanation, and applicable
   before-and-after values.
@@ -1325,6 +1502,28 @@ of all primary workflow actions.
   route back to the sheet, so a correct save left the sheet unsubmittable from where the app put the
   purchaser. The transaction list is retained as a readable view and keeps its own Add control; what this
   requirement forbids is its being the **terminus** of a save.)
+- **FR-089**: Initial transaction creation MUST accept every optional field declared by the
+  transaction draft contract — description, exactly one cost center, and one active expense type —
+  together with FR-022's minimum information, in the same save. Saving an editable transaction
+  MUST NOT require evidence, regardless of the selected expense type's receipt requirement. A save
+  that supplies only the FR-022 minimum MUST remain valid.
+- **FR-090**: Before the first save of a new transaction, the purchaser MUST be able to select one or
+  more receipts. Receipts selected before the first save MUST become attached to the created
+  transaction without a second manual save. If a selected receipt cannot be attached after the
+  transaction is created, the transaction MUST remain saved, the failure MUST be reported for that
+  receipt, and the purchaser MUST be able to retry without re-entering the transaction. If creation
+  fails, no selected receipt may be uploaded and no orphan evidence may be left behind.
+- **FR-091**: Sheet submission and correction resubmission MUST enforce the receipt requirement per
+  transaction. A transaction whose active expense type has `evidence_required = true` MUST have at
+  least one **active** receipt attached to the transaction; a deactivated receipt MUST NOT satisfy
+  the requirement. A transaction whose active expense type has `evidence_required = false` MUST NOT
+  be required to have a receipt. The rule MUST be evaluated from the active expense type's current
+  configuration at submission or resubmission time, and a refusal MUST identify **every** offending
+  transaction and the missing receipt requirement in the `422` response.
+- **FR-092**: The transaction payload MUST expose a server-derived `evidenceRequired` boolean for
+  the active expense type and the existing active `evidenceCount`, so a purchaser can identify each
+  transaction missing a required receipt before submission. The client MUST NOT infer the receipt
+  requirement from expense type names, local configuration, or a second copy of the rule.
 - **FR-077**: PettyCash MUST remain database-portable across the declared V1 database backends:
   MySQL/MariaDB, PostgreSQL, and SQLite. The MariaDB development environment is not an
   application-level dependency, and behavior MUST remain equivalent across the declared backends.
@@ -1519,6 +1718,13 @@ of all primary workflow actions.
   had just identified in FR-087's identifier clause. The check is stated **two-way** on purpose: an
   enumeration that grows to cover codes nothing returns is as wrong as code emitted outside it, and only a
   two-way check catches it.)
+- **SC-017**: In acceptance testing, **100%** of transactions whose active expense type requires a
+  receipt and whose transaction has no active receipt are refused at sheet submission or correction
+  resubmission and named individually in the `422` response; **100%** of transactions whose active
+  expense type does not require a receipt are not refused for lack of one; and **0** saves are
+  refused solely because no receipt is attached. (Added 2026-10-23: FR-091 made the receipt rule
+  conditional and FR-089 made saving receipt-free, so the old single "required evidence" phrase in
+  US1 scenario 6 could not distinguish a correctly exempt transaction from a missed one.)
 
 ## Assumptions
 

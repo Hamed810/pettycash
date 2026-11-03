@@ -12169,3 +12169,505 @@ remains there). No constitution MUST violation found.
 - [X] T428 Name the inactive account and the administrator remedy in the sheet-creation refusal message and pin the exists-but-inactive refusal with a contract test asserting the `422`, the named account, and the remedy, per FR-020 (partial) — **complete, delivered.** The message half was already in code (`AccountAdministrationService.php:118-124`); the pin is new: `tests/Contract/Controller/SheetCreationInactiveAccountTest.php` (1 test / 3 assertions, green) prepares the new `deactivated-rial` fixture state (both acting-user accounts retired; every other state upserts them active so no leak — verified by a green `AccountControllerTest` 12/12 right after) and asserts `422` + account id + `administrator must reactivate`. Seeder note: booleans MUST be bound with explicit `PARAM_BOOL` (untyped `false` arrives as `''` and strict MariaDB rejects it — the reason `upsert()` already maps types).
 - [X] T429 Correct T135's release-readiness procedure body from five to seven FR-070 exclusions so the review checks bulk decisions and sheet-level audit history alongside the five original exclusions, per FR-070 (partial) — **complete, delivered.** T135's header already named seven; the body now states all seven (five original + bulk decisions + sheet-level audit history) and requires seven confirmed exclusions in the review record.
 - [X] T430 Correct the spec status ledger count to the current case-insensitive checkbox total (323 of 374 with T304 closed), per Constitution V (partial) — **complete, delivered.** The prescribed figures described the pre-Phase-74 state and were superseded in-pass by T171, T428 and T429 closing; the status now reads the verified true count, **327 of 377** (T304 closed, no open `[CRITICAL]`, T171 7/7 green).
+
+## Phase 75: Receipt timing and creation (2026-10-23, owner-approved `BE-CR-004`)
+
+Scope: FR-089–FR-092 and SC-017. Saving never requires a receipt; initial creation accepts the FR-022
+minimum or every optional draft field; receipts selected before the first save are staged by the client
+and attached after creation; sheet submission and correction resubmission enforce the active expense
+type's current `evidence_required` rule per transaction; the payload exposes `evidenceRequired`; and a
+`422` names every offending transaction. The contracts, data model, and workflow contract were amended in
+the planning pass that added this phase; these tasks implement and verify the behavior. **All five tasks
+in this phase are complete** (T431–T435), with server and live-HTTP evidence recorded per task. Phase 75
+adds five tasks to the 382-row ledger; the historical T430 line is not rewritten.
+
+- [X] T431 [P] [US1] Add the RED tests for FR-089–FR-092 before implementation: create with the FR-022 minimum and with every optional field; save without a receipt for both a receipt-required and a receipt-exempt expense type; sheet submission blocks only the receipt-required transaction and names every offender in `transactions.<transactionId>.evidence`; correction resubmission applies the same conditional rule; `TransactionSummary` exposes `evidenceRequired` and active `evidenceCount`; a deactivated receipt does not satisfy the requirement. Files: `tests/Contract/Controller/PurchaserFlowControllerTest.php`, `tests/Contract/Controller/CorrectionControllerTest.php`, `tests/Integration/Workflow/SheetSubmissionTest.php`, `tests/Integration/Workflow/TransactionCorrectionTest.php`, `tests/Unit/Domain/Expense/SheetSubmissionPolicyTest.php`, `tests/Unit/Domain/Expense/TransactionRevisionTest.php`, `tests/Unit/Infrastructure/Http/TransactionPayloadFormatterEvidenceTest.php` (new). The current implementation is expected to fail: `ExpenseSheet::submit()` does not pass the expense type flag and `ResubmitCorrection::execute()` requires evidence unconditionally.
+      Status: COMPLETE · Evidence: RED tests authored and observed failing before implementation; final server suites green (SheetSubmissionPolicyTest 16/16, TransactionCorrectionTest 9/9, TransactionPayloadFormatterEvidenceTest 4/4, SheetSubmissionTest 11/11, FinanceSettlementTest 35/35, AuditEventCoverageTest 11/11) and live-HTTP contract suites green (CorrectionControllerTest 17/17, PurchaserFlowControllerTest 58/58, TransactionSheetIdConformanceTest 4/4). Owner directive 2026-10-23.
+- [X] T432 [US1] Enforce the conditional receipt rule at sheet submission and aggregate every missing receipt instead of throwing on the first one. Pass a per-transaction `evidenceRequired` map resolved from the active expense type through `ExpenseSheet::submit()`; call `assertSubmittable(false)` for field validation, then collect receipt failures; throw a `SubmissionBlocked` exception carrying `transactions.<transactionId>.evidence` field errors; map it to `422 VALIDATION_FAILED` in `OcsErrorMapper`. Files: `lib/Domain/Expense/ExpenseSheet.php`, `lib/Domain/Expense/TransactionRevision.php`, `lib/Domain/Expense/SubmissionBlocked.php` (new), `lib/Application/Workflow/SubmitSheet.php`, `lib/Infrastructure/Http/OcsErrorMapper.php`. Depends on T431.
+      Status: COMPLETE · Evidence: `ExpenseSheet::submit()` now takes the per-transaction rule, validates fields first, aggregates every missing receipt into `SubmissionBlocked` field errors, and activates nothing on refusal; `OcsErrorMapper` preserves the errors as `422 VALIDATION_FAILED`. `SheetSubmissionTest` 11/11, `SheetSubmissionPolicyTest` 16/16, `PurchaserFlowControllerTest` 58/58.
+- [X] T433 [US1] Apply the same conditional receipt rule to correction resubmission, replacing the unconditional `if (!$activeRevision->hasEvidence())` refusal. Resolve the active expense type's current `evidence_required`, require an active receipt only when true, and return the same per-transaction `422` field error when it is missing. Files: `lib/Application/Workflow/ResubmitCorrection.php`, `lib/Infrastructure/Http/OcsErrorMapper.php`, `tests/Contract/Controller/CorrectionControllerTest.php`, `tests/Integration/Workflow/TransactionCorrectionTest.php`. Depends on T431/T432.
+      Status: COMPLETE · Evidence: the unconditional refusal was replaced by the active expense type's current rule; the canonical PATCH flow and prior revision are unchanged. `TransactionCorrectionTest` 9/9 and live `CorrectionControllerTest` 17/17, including receipt-exempt success and receipt-required `422` with the per-transaction evidence key.
+- [X] T434 [US1] Expose server-derived `evidenceRequired` on `TransactionSummary` alongside the existing active `evidenceCount`. Resolve the active expense type through `ExpenseTypeRepository` in `TransactionPayloadFormatter`; return `false` when the transaction has no expense type yet; never infer the value from the client. Add the formatter test and keep the generated OpenAPI client regeneration in 005 T056. Files: `lib/Infrastructure/Http/TransactionPayloadFormatter.php`, `tests/Unit/Infrastructure/Http/TransactionPayloadFormatterEvidenceTest.php`. Depends on T431.
+      Status: COMPLETE · Evidence: `TransactionPayloadFormatter::summary()` resolves the active expense type through `ExpenseTypeRepository` on every read; absent type returns `false`. `TransactionPayloadFormatterEvidenceTest` 4/4, formatter suites 13/13, and live `PurchaserFlowControllerTest` 58/58 including the summary assertion.
+- [X] T435 [P] [US1] Verify the existing create/update path already accepts the FR-022 minimum and every optional draft field (description, cost center, expense type) and never requires evidence on save. Add contract/integration assertions; fix only a gap within FR-089's scope, not the submission rule. Files: `lib/Application/Expense/TransactionService.php` (only if the test exposes a gap), `tests/Contract/Controller/PurchaserFlowControllerTest.php`, `tests/Contract/Controller/TransactionSheetIdConformanceTest.php`. Depends on T431 (for the shared fixture vocabulary), but may run in parallel with T432–T434.
+      Status: COMPLETE · Evidence: no production gap found. Live contract assertions now cover create with the FR-022 minimum, create with every optional field, and update with every optional field without evidence: `PurchaserFlowControllerTest` 58/58 and `TransactionSheetIdConformanceTest` 4/4.
+
+**Checkpoint**: T431–T435 are green in the container; 005 T056–T059 can consume `evidenceRequired` and the `422` keys; 005 T061 still needs browser evidence. No frontend-only test is accepted as proof of T432/T433.
+
+## Phase 76: Findings A–E amendment (2026-10-24; `T436` implemented 2026-10-25, `T437` gated)
+
+Scope: the 001 half of the 2026-10-24 review. `T436` makes draft transaction deletion replay-safe and
+aligns the API contract with the bodyless `204`. `T437` implements the pre-submission revision/audit
+boundary proposed in `docs/decisions/ADR-008-pre-submission-revision-boundary.md`. The purchaser
+presentation tasks for the same findings are 005 `T064`–`T072`; they do not authorize backend work.
+
+**Execution state (2026-10-25).** `T436` was implemented and verified after the owner approved the
+2026-10-24 contract/backend amendment (`G-12`). `T437` remains **unapproved and not started**
+(`G-13` is deferred): `ADR-008` is Proposed, not accepted, and no domain revision/audit behaviour was
+changed. The planning pass that added this phase changed specifications, contracts, and this ledger
+only; the implementation pass changed the files named by `T436` and its tests. The historical Phase 75
+evidence is not rewritten, and the 382-row count in it remains the pre-amendment count.
+
+- [X] T436 [US1] Make draft transaction deletion replay-safe and align `DELETE /transactions/{transactionId}` with its bodyless `204`, per FR-025 (Clarified 2026-10-24). Require and validate `X-PettyCash-Command-ID`; pass it to `TransactionService::deleteTransaction()`; wrap the delete in `IdempotencyService` with operation `transaction.delete`, target `transactionId`, payload `{transaction_id, expected_version}`, and result status `204`; return the original `204` for a same-id/same-payload replay even after the row is gone; return `409 IDEMPOTENCY_CONFLICT` for the same id with a different payload; return `404 NOT_FOUND` for an absent, another owner's, or already-deleted transaction under a **different** command id; keep stale-version `409`, non-OPEN-sheet/non-DRAFT `422`, and the existing evidence cascade. Add a narrow not-found refusal type or an equivalent explicit controller mapping so “already gone” is `404`, not the current `422`. Do not change evidence deletion (it remains effect-idempotent and header-free). Files: `specs/001-pettycash-v1-core/contracts/ocs-api.yaml` (amended by this planning pass), `lib/Controller/TransactionController.php`, `lib/Application/Expense/TransactionService.php`, `lib/Application/NotFound.php` or equivalent (new, if used), `lib/Infrastructure/Http/OcsErrorMapper.php` (only if the marker is added), `tests/Contract/Controller/PurchaserFlowControllerTest.php`, `tests/Contract/Controller/CompletedSheetLockTest.php`, `tests/Integration/Expense/TransactionServiceDeleteTest.php` (new). Depends on explicit owner approval of the 2026-10-24 amendment. Gate: G-12 — **approved 2026-10-25**.
+  Acceptance: a missing or malformed command id answers `400 BAD_REQUEST` and deletes nothing; the first valid delete answers `204` with no body; replaying the same id and payload answers `204` and creates no second effect; the same id with a different `expectedVersion` answers `409` and changes nothing; a different id after success answers `404`; a stale version answers `409`; a submitted, returned, or non-`DRAFT` transaction answers `422` and survives; another owner's transaction is indistinguishable from an absent one; a draft with evidence has its evidence rows and stored files removed with it. Contract tests must cover every status and the replay matrix; the integration test must assert the row count, evidence cascade, and idempotency record.
+  Status: COMPLETE (2026-10-25) · Gate: G-12 approved by owner. Evidence: `TransactionController::destroy()` now requires `X-PettyCash-Command-ID` (absent/blank → `400 BAD_REQUEST` with a `commandId` field error; malformed → the same `400` via `CommandId::fromString()`), validates `expectedVersion` separately (`422`), and passes the command id into `TransactionService::deleteTransaction()`. The service wraps the whole delete — guards included — in `IdempotencyService::execute()` with operation `transaction.delete`, target `transactionId`, payload `{transaction_id, expected_version}`, and result status `204`; only a non-replay runs `deleteTransactionOnce()`, which throws the new `Application\NotFound` for absent/another-owner/already-deleted rows. `OcsErrorMapper` maps `NotFound` → `404 NOT_FOUND` (placed before the generic arms) while stale version stays `409`, non-OPEN sheet / non-DRAFT stays `422`, and the evidence cascade is inside the same transaction. `ExpenseSheet::removeTransaction()` compared `$tx->id()` (a method) to a string and never removed anything; it now compares `$tx->id`, so the sheet's stored transaction list actually loses the deleted row. Tests: `tests/Integration/Expense/TransactionServiceDeleteTest.php` 9/9 (15 assertions), `tests/Unit/Evidence/DeleteCommandIdExemptionTest.php` 11/11 (47), `tests/Contract/Controller/CompletedSheetLockTest.php` 12/12 (79), `tests/Contract/Controller/StaleVersionConflictTest.php` 6/6 (24), `tests/Contract/Controller/PurchaserFlowControllerTest.php` 63/63 (483). All run through `scripts/dev/phpunit` with `debug=false`; browser replay/404 evidence is 005 `T072`.
+- [ ] T437 [US1] Implement the pre-submission revision/audit boundary in ADR-008 after explicit owner approval, per FR-025, FR-048, FR-051 and FR-053 (Clarified 2026-10-24). For new never-submitted transactions: create one working revision and write no transaction-audit event; a draft `PATCH` updates that revision in place, increments `lock_version`, creates no second revision, and writes no `TRANSACTION_CHANGED`; the first submission activates that revision and writes `SUBMITTED`, `ROUTED`, and `REVISION_CREATED` for revision 1 at the submission stage; correction of an already-submitted transaction keeps the existing new-revision behavior under FR-048. Do **not** delete, rewrite, renumber, or backfill existing draft revisions/audit rows (FR-053); no migration is part of this task. Files: `lib/Application/Expense/TransactionService.php`, `lib/Domain/Expense/ExpenseTransaction.php`, `lib/Domain/Expense/TransactionRevision.php`, `lib/Application/Workflow/SubmitSheet.php`, `lib/Application/Workflow/ResubmitCorrection.php` (only if the correction path must be pinned unchanged), `tests/Integration/Expense/TransactionServiceUpdateTest.php`, `tests/Integration/Audit/AuditEventCoverageTest.php`, `tests/Integration/Workflow/SheetSubmissionTest.php`, `tests/Unit/Domain/Expense/TransactionRevisionTest.php`, `tests/Contract/Controller/PurchaserFlowControllerTest.php`. Depends on explicit owner approval of ADR-008. Gate: ADR-008 approval; not started.
+  Acceptance: draft creation leaves exactly one revision and zero transaction-audit events; a draft edit leaves the revision id and count unchanged, increments the transaction version, and leaves the audit count unchanged; a stale draft edit still answers `409`; first submission activates the same revision and records the formal events once, with no `DRAFT`-stage event; a correction still creates revision 2+ and preserves prior revisions/decisions; an existing legacy draft with multiple revisions is read without rewrite and its next edit does not add another; `GET /transactions/{id}/revisions` for a new draft returns one revision. The test suite must fail against the current producer before the implementation and pass afterward.
+
+**Checkpoint**: `T436` is complete with the evidence above. `T437` remains open, unchecked, and gated
+on `ADR-008` (`G-13`, deferred); `ADR-008` stays **Proposed — not approved, not implemented**, and no
+pre-submission revision/audit behaviour changed. The 2026-10-24 planning pass made no runtime, fixture,
+migration, or database change; the 2026-10-25 `T436` pass changed only the deletion path, its error
+mapping, the sheet aggregate's transaction removal, the contract tests, and the already-amended
+`ocs-api.yaml`.
+
+## Phase 77: BE-CR-001 immutable-account implementation (2026-10-27 policy approved; 2026-10-28 `T438`–`T441` implemented and verified)
+
+Scope: FR-019 and FR-021 as clarified on 2026-10-27 (`## Clarifications` Session 2026-10-27; `D-026`)
+and the purchaser-surface obligations in 005 `FR-005-019`/`FR-005-050`. The owner selected Option A: a
+sheet's source account is selected at creation and is immutable afterwards; the currency is immutable
+after creation; only the title may be updated while the sheet is `OPEN`; a title-only PATCH omits
+`accountId`; any supplied `accountId` is refused before persistence; an inactive stored account does
+not block a title-only update; `SheetDetail` alone carries the public `accountId`; corrupted
+references are detected and reported, never repaired; and settlement is unchanged. This phase
+registers the minimum implementation slices. **Execution state (2026-10-28):** the owner authorized
+`T438`, `T439`, `T440`, and then `T441`; all four are implemented and verified (see their status
+lines). `T440` is `DONE_VERIFIED` under the owner's explicit limited visual approval; `T441` is
+`DONE_VERIFIED` with its focused evidence and closure record below. The 2026-10-27
+planning pass changed documentation only. The 2026-10-28 `T438` pass changed the repository
+mapping/refusal, the `UnreadableRecordData` discriminator, the corrupt-record fixture, and the focused
+tests; the `T439` pass changed the contract, generated/hand-written types, the formatter detail
+projection, the service/store request type, and the focused tests; the `T440` pass added the
+title-only PATCH enforcement, the raw `accountId` refusal, the read-only edit display, and the
+focused tests. None made any schema, migration, settlement, or `SheetSummary` change; the only
+frontend-behavior changes are the T439 edit request body and the T440 read-only edit display. No
+schema change or migration is required: `account_id` and `currency_id` already exist.
+
+**Account replacement withdrawn (2026-10-27).** The earlier same-currency replacement policy and its
+feasibility conflict are superseded by the owner's immutable-account decision. There is no
+account-changing path, no account selector, no second-account fixture, and no replacement acceptance
+case. `pettycash_accounts_user_currency_uniq` and the account creation model remain unchanged. `T438`–
+`T441` are all delivered and verified; none is partially blocked. `T041` closed as `DONE_VERIFIED`
+under the same delivery; `T039` and `T080` retain the `BLOCKED_BY_BACKEND` label pending separate
+implementation authorization, with `T080` also retaining its own owner visual gate.
+
+- [X] T438 [US1] **Account-identity persistence integrity** — stop substituting an unreadable account.
+  `DbExpenseSheetRepository::mapRow()` must resolve the stored `account_id` to the account's public UUID
+  and its currency. A missing account row or an account currency that differs from the sheet's stored
+  `currency_id` MUST throw `UnreadableRecordData` carrying an **account-reference discriminator**; a
+  missing sheet-currency row MUST throw the same type **without** that discriminator, so the two faults
+  remain distinguishable. The discriminator MUST be structural (a typed flag or factory on the
+  exception), never message parsing. Both carry the sheet public id and surrogate ids in the log-only
+  message and MUST NOT return `''`, `0`, a default currency, or any repaired value. `save()` MUST refuse to write
+  `account_id = 0` when the public account id cannot be resolved, throwing the account-reference
+  `UnreadableRecordData` before any write. `OcsErrorMapper` keeps its existing `422 DATA_FAULT`
+  classification, logging, and message-withholding for both variants. No backfill, rewrite, or repair.
+  Files:
+  `lib/Infrastructure/Persistence/Expense/DbExpenseSheetRepository.php`,
+  `lib/Application/DataIntegrity/UnreadableRecordData.php` (account-reference discriminator),
+  `tests/Contract/Fixture/CorruptRecordFixture.php` and `tests/Contract/Fixture/corrupt-record-fixture.php`
+  (add an account-reference probe with the existing repair-before-write and verified-removal discipline),
+  `tests/Contract/Controller/DataIntegritySheetAccountTest.php` (new),
+  `tests/Integration/Persistence/RepositoryRoundTripTest.php` and
+  `tests/Integration/Persistence/roundtrip-runner.php` (normal account round trip and missing-account
+  refusal). Depends on: none. Gate: explicit owner implementation authorization — **granted 2026-10-28 for `T438` only**.
+  Acceptance: `GET /sheets` and `GET /sheets/{id}` answer `422 DATA_FAULT` for a sheet whose stored
+  account reference resolves to no row and for a sheet whose account currency differs from the sheet
+  currency; the list is all-or-nothing per FR-083 — it MUST NOT omit the affected sheet, return a
+  partial `200`, or substitute a guessed, empty, or default account/currency; repository reads used by
+  detail and update raise before returning, while `T440` owns the supplied-account refusal and HTTP
+  error shaping; an inactive-but-resolvable
+  account is not corruption and remains readable, preserving read-only history where the stored
+  reference is sound, while an unresolvable reference is refused; a detail response for an
+  unresolvable reference is refused rather than emitting a placeholder, because the required
+  `SheetDetail.accountId` cannot be produced without inventing one; no `200` response carries an
+  empty, guessed, or substituted `accountId`; the probe is removed in `finally` and a failed removal
+  fails the test; a healthy sheet round-trips with the same public account id; `save()` with an
+  unknown public account id throws the account-reference type, writes no row, and repairs nothing; the
+  response is `422 DATA_FAULT` with the internal message logged and withheld; a missing sheet-currency
+  row remains a general `UnreadableRecordData` and is never reclassified as an account field error;
+  `UnreadableRecordData`'s message is logged and withheld from the caller per FR-083. **No in-app
+  repair:** a pre-existing dangling-account or cross-currency row remains refused until an operator
+  corrects the stored reference out-of-band; no endpoint, migration, backfill, or new task is
+  authorized to rewrite stored financial references. **List-mapping boundary:** `SheetSummary` does not expose
+  `accountId`, but `mapRow()` is shared by list and detail and `ExpenseSheet` requires an account id,
+  so skipping account resolution for the list would require a list-specific read model or a nullable
+  domain field. That broader change is not part of `T438`; the list behavior above remains FR-083's,
+  and partial-list availability is not adopted without a separate owner decision and contract change.
+  The existing `DataIntegritySheetCurrencyTest` list assertions remain the governing evidence and
+  MUST NOT be weakened.
+  Status: COMPLETE (2026-10-28) · Gate: owner authorized `T438` only. Evidence: `UnreadableRecordData`
+  now carries the structural `accountReference` variant (`accountReference()` / `isAccountReference()`),
+  never a message parse. `DbExpenseSheetRepository::mapRow()` resolves the sheet currency first and then
+  the account, throwing the account-reference variant for a missing account row and for an
+  account/currency disagreement, and the general variant (unchanged) for a missing sheet-currency row;
+  the account lookup deliberately does not filter `active`, so inactive-but-resolvable history stays
+  readable. `save()` resolves the account before building either statement and refuses an unknown public
+  id instead of writing `account_id = 0`; updates use the same resolved id. The corrupt-record fixture
+  gained `account` and `account-currency` probes with the existing sweep-before-write and verified-removal
+  discipline; the roundtrip runner now records the normal public-account round trip, both refusal
+  variants, the inactive-account read, and the no-write refusal. Tests, all through
+  `scripts/dev/phpunit`: the six focused roundtrip cases (`testTheSheetRoundTripsItsPublicAccountId`,
+  `testAReadRefusesADanglingAccountReference`, `testAReadRefusesAnAccountCurrencyMismatch`,
+  `testAMissingSheetCurrencyRemainsAGeneralDataFault`, `testAnInactiveButResolvableAccountRemainsReadable`,
+  `testSaveRefusesAnUnknownPublicAccountWithoutWriting`) → **6/6, 20 assertions**; the full
+  `RepositoryRoundTripTest` → **80/80, 390 assertions**; `DataIntegritySheetAccountTest` plus the existing
+  `DataIntegritySheetCurrencyTest` → **11/11, 46 assertions** (live HTTP `422 DATA_FAULT`, all-or-nothing
+  list, healthy-sheet control, and no internal-id/message disclosure). `OcsErrorMapper` was not changed:
+  its existing `UnreadableRecordData` arm already answers `422 DATA_FAULT` for both variants and withholds
+  the message. **Out-of-band lab remediation (not application behavior):** the shared lab held 134
+  pre-existing sheets owned by `pettycash-e2e` whose `account_id` pointed at an account deleted by an
+  earlier fixture re-seed; the new mapper correctly refused them, so they were corrected out-of-band to
+  the existing e2e account before the roundtrip suite. No endpoint, migration, backfill, or application
+  path performs or authorizes that repair; a production row in that state remains refused until an
+  operator corrects it. **Residual environment defect (not `T438`):** `DataIntegrityReportTest`'s
+  `/reports/process` control still answers `422` because two 2026-10-11 E2E transactions (ids 2438 and
+  2441) carry dangling `active_revision_id` values; the transaction repository throws its pre-existing
+  "has no active revision" fault. Those rows are not read by `mapRow()` and the failure exists independently
+  of this task; they were not repaired or deleted. `DataIntegrityReportTest` + `DashboardDataFaultTest`
+  therefore measured **7/9 green**, with the two `/reports/process` assertions failing for that reason.
+
+- [X] T439 [US1] **Contract and `SheetDetail.accountId` projection** — declare the authoritative public
+  account on the detail payload only and make the update contract title-only. Amend
+  `contracts/ocs-api.yaml`: add `accountId` (UUID, required) to the `SheetDetail` object and leave
+  `SheetSummary` unchanged; add a dedicated `SheetUpdate` request schema for `PATCH /sheets/{sheetId}`
+  containing only `title` (required) and `expectedVersion` (required), with no `accountId` property,
+  `additionalProperties: false`, and no FR-020 provisioning semantics, instead of reusing the
+  create-specific `SheetCreate`. Regenerate
+  `src/generated/api.ts` only through `scripts/validate-openapi.sh --write`; add `accountId: string` to
+  the hand-written `SheetDetail` in `src/types/api.ts`; add a `SheetUpdate` request type (`title`
+  required, `expectedVersion` required, no account field) and use it in
+  `src/services/sheetsApi.ts`/`src/stores/sheets.ts` instead of `SheetCreate`. Emit the field from
+  `SheetPayloadFormatter::detail()` only; `summary()` and `summaries()` MUST NOT emit it. Files:
+  `specs/001-pettycash-v1-core/contracts/ocs-api.yaml`, `src/generated/api.ts`, `src/types/api.ts`,
+  `src/services/sheetsApi.ts`, `src/stores/sheets.ts`,
+  `lib/Infrastructure/Http/SheetPayloadFormatter.php`,
+  `tests/Unit/Infrastructure/Http/SheetPayloadFormatterAccountTest.php` (new),
+  `tests/Contract/Controller/PurchaserFlowControllerTest.php` (retarget
+  `testSheetSummaryCarriesNoUndeclaredAccountId` to `GET /sheets`; add a detail `accountId` assertion),
+  `tests/Contract/Controller/SheetSummaryConformanceTest.php` (declare `accountId` as the only new
+  detail-only property; keep the list check), `tests/Contract/Controller/SheetProvisioningContractTest.php`
+  (update the "identity is not observable over HTTP" note and assert the provisioned account id is the
+  detail `accountId`), and the affected `SheetDetail` fixtures in `tests/Frontend/Component/*.spec.ts`.
+  Depends on T438. Gate: explicit owner
+  implementation authorization; not started (`T438` prerequisite is complete).
+  Acceptance: `SheetDetail` declares `accountId` as a required UUID in its detail-only `allOf`
+  member; `SheetSummary` and every `GET /sheets` item remain unchanged and carry no `accountId`;
+  `SheetCreate` remains unchanged; `SheetUpdate` keeps `title` and `expectedVersion` required, sets
+  `additionalProperties: false`, declares no `accountId`, and does not reuse the create-specific
+  provisioning semantics; the operation
+  description states that any supplied `accountId` is refused with
+  `422 VALIDATION_FAILED`/`fieldErrors.accountId` before persistence; every `GET /sheets/{id}`, create,
+  and update response carries a non-empty UUID `accountId` equal to the stored account's public id;
+  `SheetSummaryConformanceTest` allows `accountId` only on detail and still rejects it on the list;
+  the retargeted list test is green and no test asserts that the detail response lacks `accountId`;
+  `scripts/validate-openapi.sh` exits 0 and the generated file is not hand-edited; both
+  `src/generated/api.ts` and the hand-written `src/types/api.ts` are updated in the same slice and
+  expose the field; existing in-repository consumers and strict response validators are audited and
+  updated in that slice; the change is response-additive on detail but deliberately **not
+  request-shape compatible** for legacy PATCH bodies carrying `accountId`, which are now refused. The
+  owner accepted that pre-release incompatibility; the closure/release note must record it. The change
+  does not assert that no external consumers exist, because the contract documents no such guarantee,
+  and a strict external validator that rejects the added property would be a V.6 breaking-change
+  exception requiring separate approval rather than an assumed failure; no `accounts[0]`, list-order,
+  empty-string, or guessed value is emitted.
+  Status: DONE_VERIFIED (2026-10-28) · Gate: owner authorized `T439` only. Evidence: `SheetDetail`'s
+  detail-only `allOf` member now declares `accountId` as a required UUID; `SheetSummary` and
+  `SheetCreate` are unchanged, and the `GET /sheets` list emits no account. `SheetUpdate` declares only
+  required `title` and `expectedVersion`, sets `additionalProperties: false`, declares no `accountId`,
+  and carries no FR-020 provisioning semantics; `PATCH /sheets/{sheetId}` now references it, and both
+  the operation and schema descriptions state that a supplied `accountId` is refused with
+  `422 VALIDATION_FAILED`/`fieldErrors.accountId` before persistence (enforcement is `T440`).
+  `src/generated/api.ts` was regenerated only through `scripts/validate-openapi.sh --write`; both it
+  and `src/types/api.ts` expose `SheetDetail.accountId` and `SheetUpdate`.
+  `sheetsApi.updateSheet()`/`SheetStore.updateExistingSheet()` now take `SheetUpdate`, and the edit form
+  builds a title-only request body. `SheetPayloadFormatter::detail()` emits `$sheet->accountId`;
+  `summary()`/`summaries()` were not changed. Focused tests, all through the project wrappers:
+  `SheetPayloadFormatterAccountTest` **4/4, 11 assertions**; `SheetSummaryConformanceTest` **6/6, 165
+  assertions, 1 pre-existing skip** (the single-revision `activeRevisionNumber` skip, unrelated to this
+  slice); `PurchaserFlowControllerTest` **64/64, 521 assertions**; `SheetProvisioningContractTest`
+  **3/3, 28 assertions**; targeted Vitest (`LoadingIsolation`, `SheetFormDialog`, `PurchaserFlow`)
+  **174/174**; `scripts/validate-openapi.sh` exit 0 with a freshly derived file; `npm run typecheck`
+  and scoped ESLint clean. The provisioning test now asserts the detail `accountId` equals the
+  provisioned account's public id, and the retargeted list test asserts no list item carries it.
+  **Transitional risk (resolved by T440):** at T439 delivery the controller still required
+  `accountId` until `T440`, so a title-only edit save answered `422` in that slice; no
+  account-guessing path was added. **Regeneration note:**
+  `--write` also refreshed pre-existing uncommitted contract drift already present in the working tree
+  (transaction-delete/evidence amendments) because the generator is whole-file; the generated file now
+  matches the current contract byte-for-byte.
+
+- [X] T440 [US1] **Immutable title-only PATCH and read-only edit display** — accept only a title-only
+  update and refuse every supplied account. `SheetController::update()` MUST reject any request that
+  contains an `accountId` key, while keeping `expectedVersion` required, the existing command-id
+  handling, and the existing error shape; an empty, whitespace, `null`, current, inactive, or
+  owned/active/same-currency `accountId` is the same field-level `422`, never "unchanged" and never a
+  valid target. `SheetService::updateSheet()` MUST NOT accept or validate an adopted account; the
+  refusal MUST run before any title/account/currency/lock-version mutation. Preserve the existing
+  owner-scoping (no new disclosure), `OPEN`-only refusal, and stale-version `409` ordering. Add a
+  narrow field-error exception (`SheetAccountInvalid`) carrying `fieldErrors['accountId']` and map it
+  to `422 VALIDATION_FAILED`; add an explicit `OcsErrorMapper` arm so its field errors survive and any
+  wrapped `UnreadableRecordData` is logged while the internal message is withheld. A corrupt
+  account-reference or sheet-currency `UnreadableRecordData` raised while loading remains
+  `422 DATA_FAULT`; it MUST NOT be converted to `fieldErrors.accountId` because no account is
+  supplied. Make `ExpenseSheet::$currency` readonly so no code path can rewrite the sheet currency
+  after construction. No settlement change. The existing full-page edit form (`SheetFormView`) MUST
+  display the stored account and currency authoritatively and read-only from `SheetDetail.accountId`,
+  keep the current account visible when it is inactive, and MUST NOT render an account selector,
+  prefill a submitted account, or send `accountId` in the PATCH; `accounts[0]` MUST NOT be used on an
+  edit. This is the minimum in-repository consumer compatibility required by `T439`, not a
+  `T039`/`T080` redesign. Files: `lib/Controller/SheetController.php`,
+  `lib/Application/Expense/SheetService.php`, `lib/Application/Expense/SheetAccountInvalid.php` (new),
+  `lib/Infrastructure/Http/OcsErrorMapper.php`, `lib/Domain/Expense/ExpenseSheet.php`,
+  `src/views/sheets/SheetFormView.vue`,
+  `tests/Contract/Controller/SheetAccountUpdatePolicyTest.php` (new),
+  `tests/Integration/Expense/SheetAccountUpdateTest.php` (new),
+  `tests/Unit/Domain/Expense/ExpenseSheetCurrencyImmutableTest.php` (new),
+  `tests/Frontend/Component/PurchaserFlow.spec.ts` (read-only account/currency and no-`accountId`
+  cases), plus the existing `CompletedSheetLockTest.php`/`StaleVersionConflictTest.php` if a
+  signature-adjacent assertion is needed.
+  Depends on T439. Gate: explicit owner implementation authorization; not started.
+  Acceptance: a title-only PATCH omits `accountId` entirely and succeeds, leaving `account_id`,
+  `currency_id`, the lock-version increment rule, every transaction amount, and settlement routing
+  unchanged; any supplied `accountId` — including `null`, empty/whitespace, the current account, an
+  inactive account, or an owned/active/same-currency account — answers `422 VALIDATION_FAILED` with
+  `fieldErrors.accountId` and persists nothing; a title-only PATCH on a sheet whose current account is
+  inactive succeeds and preserves that inactive account and its currency; no FR-020 provisioning
+  occurs on update; a corrupt account reference or currency disagreement remains `422 DATA_FAULT` with
+  the internal message logged and withheld, and is never reported as `fieldErrors.accountId`; the edit
+  form displays the stored account and currency accurately and read-only, keeps an inactive current
+  account visible, provides no account selector or `accounts[0]` path, and never sends `accountId`;
+  non-`OPEN`, another owner's, and stale-version requests keep their existing refusals; no `accountId`
+  is guessed or substituted; `SheetSummary` and the settlement path are untouched; official Google
+  Chrome desktop and 390px Persian-RTL screenshots are recorded under
+  `artifacts/visual-review/t440/<iteration>/`, and the task MUST stop for explicit owner visual
+  approval before `T441` closes the slice. No replacement case exists or is tested, and no
+  second-account fixture is added.
+
+  **Status 2026-10-28 (iteration 1): `DONE_VERIFIED`. The owner recorded explicit limited visual
+  approval on 2026-10-28, verbatim: "I approve T440 with limited visual acceptance." The owner
+  reviewed and approved all four iteration-1 screenshots for the agreed functional scope.**
+  Owner-approved scope: correct title-only editing; accurate authoritative account identity;
+  read-only account and currency; immutable account and currency persistence; accurate
+  inactive-account presentation; and desktop + 390px mobile functional presentation. The following
+  visual issues are explicitly deferred to `T080` and are not T440 closure blockers: replace the
+  legacy yellow form with the approved shared modal; improve account-name readability and prevent
+  clipping; improve inactive-account presentation; correct the sheet-name field label; and improve
+  responsive spacing and alignment. This approval did not close `T441` at the time; `T441` has since
+  closed as `DONE_VERIFIED` (2026-10-28), and `T080` retains the `BLOCKED_BY_BACKEND` label pending
+  separate implementation authorization and its own visual gate.
+  Convergence verification: the existing targeted PHPUnit/Vitest, typecheck, lint/stylelint, build,
+  and official-Chrome evidence recorded below was re-read and reused; no successful test was rerun,
+  and no application source changed during this convergence.
+  Backend enforcement: `SheetController::update()` checks the raw request for an `accountId` key
+  before field validation and before any service call, and raises `SheetAccountInvalid` for every
+  supplied value (including `null`, empty, whitespace, the current account, an inactive stored
+  account, and another owned account). `SheetService::updateSheet()` is title-only and takes no account argument, so it cannot
+  look up, validate, adopt, or provision an account; the stored `accountId` and `currency` are
+  preserved. `OcsErrorMapper` maps `SheetAccountInvalid` to `422 VALIDATION_FAILED` above the generic
+  `InvalidArgumentException` arm and preserves `fieldErrors.accountId`; `UnreadableRecordData` still
+  maps to `422 DATA_FAULT`, logged and withheld. `ExpenseSheet::$currency` is readonly.
+  Owner scoping → stale-version `409` → `OPEN`-only ordering, command-id handling, and no-partial-
+  persistence behavior are unchanged.
+  Frontend binding: `SheetFormView` reads `SheetDetail.accountId` and `SheetDetail.currency` in edit
+  mode, hides the account selector, renders both fields read-only, never uses `accounts[0]` on an
+  edit, and sends only `{ title, expectedVersion }`. When the stored account is absent from the
+  active-account list it is displayed by its persisted UUID with the `sheets.accountInactive` note;
+  no replacement account or balance is substituted. The edit primary action uses `sheets.saveChanges`.
+  Changed files: `lib/Controller/SheetController.php`,
+  `lib/Application/Expense/SheetService.php`,
+  `lib/Application/Expense/SheetAccountInvalid.php` (new),
+  `lib/Infrastructure/Http/OcsErrorMapper.php`, `lib/Domain/Expense/ExpenseSheet.php`,
+  `src/views/sheets/SheetFormView.vue`, `l10n/en.json`, `l10n/fa.json`, `l10n/en.js`, `l10n/fa.js`,
+  `tests/Contract/Controller/SheetAccountUpdatePolicyTest.php` (new),
+  `tests/Integration/Expense/SheetAccountUpdateTest.php` (new),
+  `tests/Unit/Domain/Expense/ExpenseSheetCurrencyImmutableTest.php` (new),
+  `tests/Frontend/Component/PurchaserFlow.spec.ts`,
+  `tests/Contract/Controller/CompletedSheetLockTest.php`,
+  `tests/Contract/Controller/StaleVersionConflictTest.php`,
+  `tests/Contract/Controller/PurchaserFlowControllerTest.php`, this ledger, and
+  `artifacts/visual-review/t440/iteration-1/`.
+  Targeted verification (2026-10-28, all from the repository wrappers/scripts):
+  `scripts/dev/phpunit tests/Unit/Domain/Expense/ExpenseSheetCurrencyImmutableTest.php` — 1 test,
+  2 assertions, OK; `scripts/dev/phpunit tests/Integration/Expense/SheetAccountUpdateTest.php` —
+  5 tests, 31 assertions, OK; `scripts/dev/phpunit
+  tests/Contract/Controller/SheetAccountUpdatePolicyTest.php` — 5 tests, 80 assertions, OK;
+  `scripts/dev/phpunit tests/Contract/Controller/CompletedSheetLockTest.php` — 12 tests,
+  79 assertions, OK; `scripts/dev/phpunit tests/Contract/Controller/StaleVersionConflictTest.php` —
+  6 tests, 24 assertions, OK; `scripts/dev/phpunit
+  tests/Contract/Controller/PurchaserFlowControllerTest.php` — 64 tests, 521 assertions, OK;
+  `scripts/dev/phpunit tests/Contract/Controller/DataIntegritySheetAccountTest.php` — 6 tests,
+  29 assertions, OK (corrupt account reference remains `422 DATA_FAULT`);
+  `scripts/dev/phpunit tests/Contract/Controller/DataIntegritySheetCurrencyTest.php` — 5 tests,
+  17 assertions, OK (currency disagreement remains `422 DATA_FAULT`);
+  `npx vitest run tests/Frontend/Component/PurchaserFlow.spec.ts` — 158 tests passed;
+  `npx vitest run tests/Frontend/Component/SheetFormDialog.spec.ts` — 10 tests passed (Create
+  Sheet presentation unchanged); `npm run typecheck` — pass; scoped `npx eslint
+  src/views/sheets/SheetFormView.vue tests/Frontend/Component/PurchaserFlow.spec.ts` — pass;
+  scoped `npx stylelint src/views/sheets/SheetFormView.vue` — pass;
+  `npm run build` — pass (required so Chrome served the T440 bundle).
+  Owner-review evidence: official Google Chrome 156.0.8078.47, Persian RTL, official desktop
+  1440×900 and mobile 390×844; zero browser-issued writes; console and page errors empty. Files:
+  `artifacts/visual-review/t440/iteration-1/desktop/01-edit-form-active-account.png`,
+  `.../desktop/02-edit-form-inactive-account.png`,
+  `.../mobile/01-edit-form-active-account-390.png`,
+  `.../mobile/02-edit-form-inactive-account-390.png`, with checks in
+  `artifacts/visual-review/t440/iteration-1/record.json`. The inactive state was captured from the
+  `deactivated-rial` fixture and the `draft` baseline was restored afterwards.
+  Remaining/known limits at `T440` closure: `T441` focused verification and closure, the
+  MAJOR-version decision for the breaking public PATCH contract, and the deferred `T080` visual
+  redesign remained open; `T441` has since closed as `DONE_VERIFIED` (2026-10-28) and the
+  MAJOR-version decision remains assigned to the separately authorized release step. The
+  owner's explicit limited visual approval is recorded above. Pre-existing unrelated
+  `DataIntegrityReportTest` failures (transactions 2438/2441) are untouched. `T079` remains
+  `DONE_VERIFIED`; `T438`/`T439`/`T440`/`T441` are `DONE_VERIFIED`; `T080` remains
+  `BLOCKED_BY_BACKEND`.
+
+- [X] T441 [US1] **Focused verification and closure record** — prove the policy at the contract,
+  application, repository, and data-integrity boundaries, then record it. Run through
+  `scripts/dev/phpunit`: the new `SheetAccountUpdatePolicyTest`, `SheetAccountUpdateTest`,
+  `DataIntegritySheetAccountTest`, `SheetPayloadFormatterAccountTest`,
+  `ExpenseSheetCurrencyImmutableTest`, and the existing `PurchaserFlowControllerTest` (the retargeted
+  list test plus the new detail assertion), `SheetSummaryConformanceTest`,
+  `SheetProvisioningContractTest`, `CompletedSheetLockTest`, `StaleVersionConflictTest`,
+  `DataIntegritySheetCurrencyTest`, `RepositoryRoundTripTest`, and `FinanceSettlementTest`; the
+  account-fault coverage includes `GET /api/v1/dashboard`, which reads sheets through
+  `findByStatus()`/`findByOwnerUid()`. Run `scripts/validate-openapi.sh`, `npm run typecheck`, and the
+  targeted lint/style checks for the touched frontend files. Run the targeted Vitest specs that
+  construct `SheetDetail` fixtures or exercise the edit form: `PurchaserFlow.spec.ts`,
+  `SheetFormDialog.spec.ts`, `SheetWorkspace.spec.ts`, `StagedReceipts.spec.ts`,
+  `OpenSheetTransactionEdit.spec.ts`, `EvidenceStatusPresentation.spec.ts`, `LoadingIsolation.spec.ts`,
+  and `SheetDeletion.spec.ts`. Confirm zero cross-currency writes, zero settlement changes, and zero
+  changes to `SheetSummary`. Record commands, results, changed paths, and the `git status` enumeration
+  in this ledger and the 001/005 spec/plan records, `D-026`, `BE-CR-001.md`, `BLOCKED_ITEMS.md`, and
+  `docs/reports/005-purchaser-ui-redesign.md`; record the operator-only remediation note for
+  pre-existing corrupt rows. Do not mark `T080` unblocked until this delivery is complete and
+  separately authorized. Files: `specs/001-pettycash-v1-core/tasks.md`,
+  `specs/001-pettycash-v1-core/spec.md`, `specs/001-pettycash-v1-core/plan.md`,
+  `specs/005-purchaser-ui-redesign/tasks.md`, `specs/005-purchaser-ui-redesign/spec.md`,
+  `specs/005-purchaser-ui-redesign/plan.md`, `docs/frontend-redesign/DECISIONS.md`,
+  `docs/frontend-redesign/review/deepseek/tasks/BE-CR-001.md`,
+  `docs/frontend-redesign/review/deepseek/BLOCKED_ITEMS.md`,
+  `docs/reports/005-purchaser-ui-redesign.md`. Depends on T439 and T440 (both `DONE_VERIFIED`). Gate:
+  explicit owner implementation authorization; not started.
+  Acceptance: all named suites are green with the exact counts recorded; `scripts/validate-openapi.sh`
+  exits 0; `npm run typecheck` passes; the contract and both type files agree, and `SheetUpdate`
+  declares only `title` and `expectedVersion` with `additionalProperties: false`; no `accountId` appears on
+  `SheetSummary` or any list item, while detail carries it; the detail conformance test allows only the
+  declared new property and the list conformance test still rejects it; no account, currency, or
+  transaction amount is rewritten; settlement tests are unchanged; the existing
+  `DataIntegritySheetCurrencyTest` list assertions remain green and are not weakened; the closure
+  records that partial-list availability was not adopted because it conflicts with FR-083's
+  all-or-nothing list answer, and records the operator-only remediation procedure for pre-existing
+  dangling-account or cross-currency rows; the closure records the accepted pre-release API/behavioral
+  compatibility impact — legacy PATCH bodies carrying `accountId` are now refused — and the
+  release/versioning decision under Constitution v1.4.0, without claiming that no external consumers
+  exist and without performing an automatic MAJOR/minor/patch or app/package version bump; because the
+  PATCH change is breaking for the published contract, the closure must record that Delivery item 6
+  requires a **MAJOR version decision for the affected public contract**, release notes, and a
+  compatibility strategy at the separately authorized release step; `T440`'s
+  official-Chrome desktop + 390px Persian-RTL evidence exists and the owner's explicit visual approval
+  is recorded verbatim; the 001 and 005 ledgers agree on `T438`–`T441`, `T041`, `T039`, and `T080`;
+  there is no replacement-path conflict and no positive different-account case; the verification does
+  not add a second active IRR fixture or assert a state production cannot create; `T041` closed as
+  `DONE_VERIFIED` once `T438`–`T441` were authorized, delivered, and verified (2026-10-28) and had
+  remained `BLOCKED_PENDING_OWNER_APPROVAL` for implementation authorization until then; `T039` and `T080`
+  remain `BLOCKED_BY_BACKEND`; `T080` also retains its own owner visual gate after implementation;
+  `T079` remains `DONE_VERIFIED`; `T437`/`ADR-008` remain deferred; `T049` and `T051` remain separate
+  gates.
+
+  **Status 2026-10-28: `DONE_VERIFIED`.** The owner authorized `T441` after `T438`–`T440` were
+  `DONE_VERIFIED` and the `T440` limited visual approval was recorded. Verification reused the
+  existing focused suites and added exactly one test — the dashboard account-fault case — because
+  `T441` explicitly requires `GET /api/v1/dashboard` coverage; no application source changed.
+  Focused PHPUnit through `scripts/dev/phpunit`, all green: `ExpenseSheetCurrencyImmutableTest`
+  1 test/2 assertions; `SheetAccountUpdateTest` 5/31; `SheetAccountUpdatePolicyTest` 5/80;
+  `DataIntegritySheetCurrencyTest` 5/17; `SheetPayloadFormatterAccountTest` 4/11;
+  `PurchaserFlowControllerTest` 64/521; `SheetSummaryConformanceTest` 6/165 with **1 pre-existing
+  skip** (the fixture holds one transaction at revision 1, so the highest-revision-number versus
+  active-revision-count distinction is not observable; the emitted number is still proved equal to
+  `max($numbers)` in the preceding assertion); `SheetProvisioningContractTest` 3/28;
+  `CompletedSheetLockTest` 12/79; `StaleVersionConflictTest` 6/24; `RepositoryRoundTripTest` 80/390;
+  `FinanceSettlementTest` 35/197; `DashboardDataFaultTest` 3/36; `DataIntegritySheetAccountTest`
+  7/35. Aggregate: 14 suites, **236 tests, 1,616 assertions, 1 pre-existing skip**.
+  `scripts/validate-openapi.sh` exits 0 (OpenAPI 3.0.3, 33 paths, 43 operations, 46 schemas;
+  generated types match; no `--write` run). `npm run typecheck` passes. Targeted Vitest: 8 files,
+  **223 tests** passed (`PurchaserFlow`, `SheetFormDialog`, `SheetWorkspace`, `StagedReceipts`,
+  `OpenSheetTransactionEdit`, `EvidenceStatusPresentation`, `LoadingIsolation`, `SheetDeletion`).
+  Scoped ESLint on `src/views/sheets/SheetFormView.vue` and
+  `tests/Frontend/Component/PurchaserFlow.spec.ts`, and scoped Stylelint on
+  `src/views/sheets/SheetFormView.vue`, are clean (no output).
+  Acceptance mapping: (1) repository account-reference integrity — `DataIntegritySheetAccountTest`
+  7/35 plus the roundtrip account cases; (2) account/currency consistency — the mismatch probe and
+  `RepositoryRoundTripTest` resolve the account currency and refuse disagreement; (3) immutable sheet
+  account and currency — `SheetAccountUpdateTest` and `ExpenseSheetCurrencyImmutableTest`;
+  (4) successful title-only PATCH — `SheetAccountUpdatePolicyTest` and
+  `PurchaserFlowControllerTest`; (5) every supplied `accountId` refused — `null`, empty, whitespace,
+  current, inactive, and another owned account all answer `422 VALIDATION_FAILED` with
+  `fieldErrors.accountId`; (6) field-level 422 — the same suite; (7) no partial persistence — each
+  refusal re-reads the sheet and asserts the stored title/account/currency/version are unchanged;
+  (8) inactive-but-valid readability — the repository lookup deliberately does not filter `active`
+  and the inactive title-edit case passes; (9) `DATA_FAULT` — both corruption variants answer
+  `422 DATA_FAULT`, log, and withhold, and the added dashboard case proves
+  `GET /api/v1/dashboard` refuses an unreadable account reference and answers 200 again after probe
+  removal; (10) `OPEN`-only and sheet-owner authorization — `SheetAccountUpdateTest` and
+  `CompletedSheetLockTest` preserve owner scoping and non-`OPEN` refusal; (11) optimistic-concurrency
+  `409` — `StaleVersionConflictTest` 6/24; (12) `SheetDetail.accountId` projection — formatter test,
+  detail conformance, and the roundtrip; (13) unchanged `SheetSummary` — the list conformance test
+  rejects `accountId` and `PurchaserFlowControllerTest` keeps the absence assertion on `GET /sheets`;
+  (14) `SheetUpdate` OpenAPI conformance — only `title`/`expectedVersion`, `additionalProperties:
+  false`, no `accountId`; (15) generated API type consistency — the OpenAPI gate matches the
+  contract byte-for-byte; (16) preserved financial settlement semantics — `FinanceSettlementTest`
+  35/197 unchanged and green, and no settlement source file changed in the delivery.
+  Financial integrity: no account, currency, transaction amount, or settlement routing was rewritten;
+  the only database writes in these suites are their disposable fixtures, and every corruption probe
+  is removed in a `finally` block with a post-removal `200` assertion. Partial-list availability was
+  **not** adopted: FR-083's all-or-nothing list answer remains, with no omission and no partial `200`;
+  an inactive-but-resolvable account remains readable. Operator-only remediation for a pre-existing
+  dangling-account or cross-currency row: identify the stored `account_id`/`currency_id` after an
+  authorized data review and correct it out-of-band to a valid row (or restore the missing row); the
+  application never repairs, remaps, or re-denominates it, and no endpoint, migration, backfill, or
+  in-app repair is authorized.
+  Compatibility/release: the owner accepted the pre-release breaking PATCH change; legacy bodies
+  carrying `accountId` are now schema-invalid and server-refused, while the `SheetDetail` response
+  addition is additive. The contract documents no external-consumer guarantee, so this record does
+  not claim that no external consumers exist. Constitution v1.4.0 Delivery item 6 therefore requires
+  a **MAJOR version decision for the affected public contract**, release notes, and a compatibility
+  strategy at the separately authorized release step. No MAJOR/minor/patch, `appinfo/info.xml`
+  (`1.3.1`), or `package.json` (`1.0.0`) bump was performed.
+  Changed paths for `T441`: `tests/Contract/Controller/DataIntegritySheetAccountTest.php` (added
+  dashboard case; 6/29 → 7/35), this ledger, 001 `spec.md`/`plan.md`,
+  005 `tasks.md`/`spec.md`/`plan.md`/`contracts/purchaser-ui-contract.md`/`checklists/requirements.md`/
+  `research.md`, `D-025`/`D-026`, `BE-CR-001.md`, `BLOCKED_ITEMS.md`, `STATUS.md`, the review/handoff
+  records (`AUDIT_REPORT.md`, `BUNNY_READY_QUEUE.md`, `DECISIONS_AND_BLOCKERS.md`, `FINAL_HANDOFF.md`,
+  `OWNER_DECISION_RECONCILIATION.md`, `PROGRESS.md`, `tasks/UI-PUR-007.md`,
+  `handoff/manus/01_PROJECT_CONTRACT_EN.md`), and `docs/reports/005-purchaser-ui-redesign.md`. No
+  application source, OpenAPI contract, generated-type, schema, migration, settlement, or frontend
+  source file changed in `T441`. `git status --short` remains dirty
+  with the earlier `T074`–`T077`/`T079`/`T438`–`T440` work and unrelated uncommitted changes; `T441`
+  added only the test and documentation edits above. No commit, push, reset, clean, or OCI reindex
+  occurred. Known unrelated defect: `DataIntegrityReportTest` still fails on transactions
+  `2438`/`2441` (dangling `active_revision_id`); those rows were not repaired or deleted and were not
+  part of the `T441` gate. Status transitions: `T041` is `DONE_VERIFIED`; `T039` and `T080` keep the
+  `BLOCKED_BY_BACKEND` label required by this acceptance, with their backend dependency now satisfied
+  and the remaining gate being separate implementation authorization (and, for `T080`, its own
+  official-Chrome visual gate). `T079` remains `DONE_VERIFIED`; `T074`–`T077` are preserved;
+  `T437`/`ADR-008` remain deferred; `T049`/`T051` remain separate gates. `T080` was not started.
+
+**Checkpoint**: `T438`, `T439`, `T440`, and `T441` are complete and verified (2026-10-28) with the
+evidence above. `T440` is `DONE_VERIFIED` under the owner's explicit limited visual approval recorded
+verbatim in its entry; that approval covers the agreed functional scope only, and the deferred
+visual issues remain `T080` obligations. `T441` is `DONE_VERIFIED`: all named suites are green with
+the exact counts recorded, the OpenAPI and TypeScript gates pass, the contract and both type files
+agree, no account/currency/amount was rewritten, and settlement is unchanged. The immutable-account
+policy removes the former replacement-path blocker. `T440`'s official-Chrome desktop + 390px
+Persian-RTL owner gate is satisfied. `T041` closed as `DONE_VERIFIED`; `T039` and `T080` retain the
+`BLOCKED_BY_BACKEND` label pending separate implementation authorization, and `T080` also retains its
+own owner visual gate. `T080` did not start. The `T438` pass
+changed only the
+sheet repository, the data-integrity exception, the corrupt-record fixture, the focused tests, and this
+documentation; it did not change contracts, generated types, schema, migration, settlement, or frontend
+behavior. The `T439` pass changed the contract, generated/hand-written types, the formatter detail
+projection, the service/store request type, the edit request body, the focused tests, and this
+documentation; it changed no schema, migration, settlement, or other frontend behavior.
+`T080` remains `BLOCKED_BY_BACKEND`; `T079` is unchanged and `DONE_VERIFIED`.

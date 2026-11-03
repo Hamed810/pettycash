@@ -119,7 +119,7 @@
 | `public_id` | UUID string | Unique external identifier |
 | `title` | string(255) | Required |
 | `description` | text | Optional |
-| `evidence_required` | boolean | At least one active item required at submission when true |
+| `evidence_required` | boolean | At least one active item required at sheet submission or correction resubmission when true. Evaluated from the current configuration at that moment; never evaluated by a save (FR-089, FR-091). |
 | `active` | boolean | Controls new selection only |
 | audit columns | datetime/user UID | Required |
 | `lock_version` | integer | Increment on update |
@@ -197,8 +197,8 @@
 | `public_id` | UUID string | Unique external identifier |
 | `title` | string(255) | Required |
 | `owner_uid` | string(64) | Purchaser |
-| `account_id` | bigint | Selected source account |
-| `currency_id` | bigint | Must equal account currency |
+| `account_id` | bigint | Selected source account; at creation it must belong to `owner_uid`, be active, and match `currency_id`. Immutable after creation. An existing reference may outlive the account's active state (deactivation does not rewrite the sheet); it is displayed accurately and preserved by title-only updates |
+| `currency_id` | bigint | Must equal account currency; immutable after creation |
 | `status` | enum string | Derived projection described below |
 | `submitted_total_minor` | bigint nullable | Snapshot at first submission |
 | `created_at` | UTC datetime | Required |
@@ -207,6 +207,24 @@
 | `finance_started_at` | UTC datetime nullable | Set when first finance item is available |
 | `completed_at` | UTC datetime nullable | Set at terminal sheet state |
 | `lock_version` | integer | Concurrency control |
+
+**Immutable-account rules (Clarified 2026-10-27; owner Option A)**:
+
+- `account_id` and `currency_id` are selected at creation and MUST NOT change afterwards. There is no account-replacement path.
+- A title-only update omits the API `accountId`; the existing `account_id` reference — active or inactive — and the stored currency are unchanged. An inactive existing account MUST NOT block an authorized title-only update.
+- Any supplied API `accountId` — including `null`, the current value, an inactive account, or an owned, active, same-currency account — is an attempted assignment and MUST be refused before persistence. No title, account, currency, or lock-version mutation is persisted.
+- Unknown, malformed, or corrupted stored references, and account/currency disagreements, MUST be detected and reported as data faults, never silently repaired or re-denominated.
+- `account_id` is a descriptive source-account reference; it is not a settlement instruction and does not change how finance settles the sheet's transactions.
+
+**Phase 77 persistence note (2026-10-27, planned and unstarted)**: the columns and constraints above
+already exist. `T438`–`T441` add no column, index, constraint, backfill, or migration, and
+`pettycash_accounts_user_currency_uniq` is unchanged. `account_id` is already the stored reference; the
+planned change is limited to resolving it faithfully on read (refusing an unreadable or
+currency-disagreeing reference through the existing `UnreadableRecordData` fault path), refusing an
+unresolvable account on write, projecting the resolved public id on `SheetDetail` only, refusing any
+supplied account on update, and making the aggregate currency immutable in code. No existing row is
+rewritten; no default currency is substituted; cross-currency migration is out of scope. No
+account-replacement case exists or is tested.
 
 **Derived values**:
 
@@ -264,7 +282,13 @@ Mutable totals are calculated by role-scoped projections rather than stored as i
 - Revision 1 may remain mutable only while its transaction is a draft in an open sheet.
 - A submitted revision is immutable.
 - Correction is authored as a new revision and becomes active atomically on resubmission.
-- Required evidence is validated against active evidence related to the revision/transaction.
+- Required evidence is validated against active evidence related to the transaction at sheet
+  submission or correction resubmission, and only when the active expense type's current
+  `evidence_required` setting is true. Evidence from a prior revision remains valid because evidence
+  belongs to the transaction, not to one revision. Deactivated evidence does not satisfy the
+  requirement. Saving a draft never validates evidence (FR-089, FR-091).
+- The transaction payload's `evidenceRequired` is derived from the active expense type's current
+  setting; `evidenceCount` remains the count of active evidence items (FR-092).
 
 ## Workflow Decision
 
@@ -309,6 +333,10 @@ Mutable totals are calculated by role-scoped projections rather than stored as i
 
 - Draft removal deletes metadata and binary only before formal submission.
 - After submission, deactivate metadata and retain the binary.
+- A receipt selected before the first save is staged by the client; its binary reaches this table
+  only after the transaction row exists and the existing evidence upload path accepts it. A failed
+  upload leaves the saved transaction intact and is reported per file; it does not create an orphan
+  row (FR-090, `ADR-007`).
 - Files are streamed only after transaction authorization.
 - Database failure after an AppData write triggers compensation; reconciliation detects orphans.
 
