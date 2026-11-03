@@ -1,23 +1,49 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { deleteEvidence, getEvidenceContent } from '@/services/evidenceApi'
 import type { Evidence } from '@/types/api'
 import NcButton from '@nextcloud/vue/components/NcButton'
 import NcChip from '@nextcloud/vue/components/NcChip'
 import NcIconSvgWrapper from '@nextcloud/vue/components/NcIconSvgWrapper'
 import NcNoteCard from '@nextcloud/vue/components/NcNoteCard'
-import { mdiImage, mdiFilePdfBox, mdiFileDocument, mdiFile, mdiDownload, mdiDelete, mdiFileOutline } from '@mdi/js'
+import { mdiImage, mdiFilePdfBox, mdiFileDocument, mdiFile, mdiDownload, mdiDelete, mdiFileOutline, mdiEye } from '@mdi/js'
 import { t } from '@nextcloud/l10n'
 import { formatSheetDateTime } from '@/utils/date'
+import { isInlineSafeMediaType } from '@/utils/evidencePreview'
 
 interface Props {
 	evidence: Evidence[]
 	isDraft: boolean
+	/**
+	 * FR-005-047 / C-21: the transaction has never been submitted *and* its sheet is still OPEN.
+	 *
+	 * In that state the ordinary attachment list is the purchaser's current working set, not a
+	 * lifecycle record: withdrawn files are gone, and every remaining row is simply attached. The
+	 * inactive-history presentation (badge and deactivation time) belongs to submitted and
+	 * correction transactions, where 001 FR-059/FR-060 keep that history visible.
+	 *
+	 * The host passes the conjunction because neither fact alone is enough: a submitted legacy row
+	 * can still read `DRAFT`, and an `OPEN` sheet can hold rows in other states. This is
+	 * presentation only; it never changes stored evidence or server behavior.
+	 */
+	neverSubmitted?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
-	isDraft: true
+	isDraft: true,
+	neverSubmitted: false
 })
+
+/** C-21: the ordinary working list contains only current attachments. */
+const visibleEvidence = computed(() => props.neverSubmitted
+	? props.evidence.filter((item) => item.active)
+	: props.evidence)
+
+const emit = defineEmits<{
+	preview: [evidence: Evidence]
+	/** T075: a successful removal changed the server's evidence set; the host must refresh it. */
+	changed: []
+}>()
 
 const deleting = ref<string | null>(null)
 const error = ref<string | null>(null)
@@ -41,7 +67,9 @@ function getMediaTypeIcon(mediaType: string) {
 
 async function handleDownload(ev: Evidence) {
 	try {
-		const blob = await getEvidenceContent(ev.id)
+		// The stored type decides how the server serves this. `attachment` is what keeps a
+		// non-inline-safe file (SVG, HTML, unknown) from ever being navigated to in this origin.
+		const blob = await getEvidenceContent(ev.id, 'attachment')
 		const url = URL.createObjectURL(blob)
 		const a = document.createElement('a')
 		a.href = url
@@ -62,6 +90,7 @@ async function handleDelete(ev: Evidence) {
 	error.value = null
 	try {
 		await deleteEvidence(ev.id)
+		emit('changed')
 	} catch (e: unknown) {
 		const err = e as Error
 		error.value = err.message
@@ -84,8 +113,8 @@ async function handleDelete(ev: Evidence) {
 			link to nowhere, and it puts its actions behind a hover-revealed three-dot menu, so the
 			removal affordance FR-058 requires is hidden until the pointer happens to be over the row.
 		-->
-		<ul v-if="props.evidence.length" class="evidence-items">
-			<li v-for="ev in props.evidence" :key="ev.id" class="evidence-item" data-test="evidence-list-item">
+		<ul v-if="visibleEvidence.length" class="evidence-items">
+			<li v-for="ev in visibleEvidence" :key="ev.id" class="evidence-item" data-test="evidence-list-item">
 				<NcIconSvgWrapper
 					:path="getMediaTypeIcon(ev.mediaType)"
 					:size="24"
@@ -104,8 +133,10 @@ async function handleDelete(ev: Evidence) {
 					</div>
 					<!-- FR-059: a deactivated file is retained, and its history stays viewable, so the
 					     time it was withdrawn is part of what the row says. Without a timestamp the
-					     row would say only that it is inactive, which is not the same information. -->
-					<div v-if="!ev.active" class="evidence-item__deactivation" data-test="deactivation-info">
+					     row would say only that it is inactive, which is not the same information.
+					     C-21 keeps this for submitted/correction history; a never-submitted OPEN-sheet
+					     draft does not render lifecycle metadata at all. -->
+					<div v-if="!props.neverSubmitted && !ev.active" class="evidence-item__deactivation" data-test="deactivation-info">
 						<span v-if="ev.deactivatedAt">
 							{{ t('pettycash', 'evidence.deactivatedAt') }} {{ formatTimestamp(ev.deactivatedAt) }}
 						</span>
@@ -114,9 +145,21 @@ async function handleDelete(ev: Evidence) {
 				</div>
 
 				<div class="evidence-item__actions">
-					<NcChip :variant="ev.active ? 'success' : 'error'" data-test="evidence-active-badge">
+					<NcChip v-if="!props.neverSubmitted" :variant="ev.active ? 'success' : 'error'" data-test="evidence-active-badge">
 						{{ ev.active ? t('pettycash', 'evidence.active') : t('pettycash', 'evidence.inactive') }}
 					</NcChip>
+					<!-- FR-005-042: preview is offered only for the server's inline-safe set. An SVG or
+					     HTML file keeps the download control and gains no preview button at all, so the
+					     UI cannot promise an inline rendering the server refuses to serve. -->
+					<NcButton
+						v-if="ev.active && isInlineSafeMediaType(ev.mediaType)"
+						variant="tertiary"
+						:aria-label="t('pettycash', 'evidence.previewNamed', { name: ev.name })"
+						data-test="preview-evidence-btn"
+						@click="emit('preview', ev)"
+					>
+						<NcIconSvgWrapper :path="mdiEye" :size="16" />
+					</NcButton>
 					<!-- FR-060: an authorized viewer must be able to download evidence and see its state,
 					     so download is offered whenever the item is active — including to a reviewer
 					     looking at a submitted transaction, which is the case download used to refuse. -->
@@ -235,5 +278,32 @@ async function handleDelete(ev: Evidence) {
 .evidence-empty-icon {
 	margin-bottom: 0.5rem;
 	opacity: 0.5;
+}
+
+/*
+ * At a narrow viewport the row cannot stay on one line.
+ *
+ * `.evidence-item__actions` keeps its max-content width (three 68px buttons plus gaps = 219px)
+ * because `flex-shrink: 0` stops it yielding, and the row is a nowrap flex line. The body then
+ * absorbs the whole deficit and `overflow-wrap: anywhere` breaks the filename one character per
+ * line: at 390px the body measured 21px in the detail view and 39.5px in the editing form.
+ *
+ * Grid gives the actions their own full-width row instead. `minmax(0, 1fr)` keeps the body the
+ * shrinking track it already was, `align-items: start` aligns the icon with the first name line,
+ * and `justify-content: flex-end` is direction-aware, so RTL and LTR place the actions on the same
+ * physical side. DOM order (icon, body, actions) is unchanged, so no template or data-test hook
+ * moves. Desktop keeps the single-line flex row.
+ */
+@media (width <= 640px) {
+	.evidence-item {
+		display: grid;
+		grid-template-columns: auto minmax(0, 1fr);
+		align-items: start;
+	}
+
+	.evidence-item__actions {
+		grid-column: 1 / -1;
+		justify-content: flex-end;
+	}
 }
 </style>

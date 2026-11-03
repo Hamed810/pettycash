@@ -12,10 +12,12 @@ import { t } from '@nextcloud/l10n'
 interface Props {
 	transactionId: string
 	isDraft: boolean
+	compact?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
-	isDraft: true
+	isDraft: true,
+	compact: false
 })
 
 const emit = defineEmits<{
@@ -26,6 +28,7 @@ const file = ref<File | null>(null)
 const uploading = ref(false)
 const progress = ref(0)
 const error = ref<string | null>(null)
+const showFullFileName = ref(false)
 const MAX_FILE_SIZE = 100 * 1024 * 1024 // 100 MB
 
 function formatFileSize(bytes: number) {
@@ -62,6 +65,7 @@ function onFileSelected(event: Event) {
 			return
 		}
 		file.value = selectedFile
+		showFullFileName.value = false
 		error.value = null
 	}
 }
@@ -77,12 +81,13 @@ async function handleUpload() {
 			progress.value = Math.min(progress.value + 10, 90)
 		}, 100)
 
-		await uploadEvidence(props.transactionId, file.value, { commandId: crypto.randomUUID() })
+		await uploadEvidence(props.transactionId, file.value)
 
 		clearInterval(progressInterval)
 		progress.value = 100
 		emit('uploaded')
 		file.value = null
+		showFullFileName.value = false
 	} catch (e: unknown) {
 		const err = e as Error
 		error.value = err.message
@@ -94,12 +99,13 @@ async function handleUpload() {
 
 function removeFile() {
 	file.value = null
+	showFullFileName.value = false
 	error.value = null
 }
 </script>
 
 <template>
-	<div class="evidence-uploader" data-test="evidence-uploader">
+	<div class="evidence-uploader" :class="{ 'evidence-uploader--compact': compact }" data-test="evidence-uploader">
 		<!-- FR-025 permits adding evidence before submission; FR-026 forbids it afterwards, with the
 		     single exception of a correction of a returned transaction, which the server models as a
 		     new revision rather than as an edit of this one. The prop previously existed and was never
@@ -119,7 +125,7 @@ function removeFile() {
 			<div class="drop-zone" :class="{ 'has-file': file }" data-test="drop-zone">
 				<input type="file" ref="fileInput" @change="onFileSelected" accept="*" hidden data-test="evidence-upload-input" />
 				<div v-if="!file" class="drop-zone__empty">
-					<NcIconSvgWrapper :path="mdiCloudUpload" :size="48" class="drop-zone__icon" />
+					<NcIconSvgWrapper :path="mdiCloudUpload" :size="compact ? 28 : 48" class="drop-zone__icon" />
 					<span class="drop-zone__text">{{ t('pettycash', 'evidence.dragDrop') }}</span>
 					<small class="drop-zone__hint">{{ t('pettycash', 'evidence.clickToSelect') }}</small>
 					<NcButton variant="secondary" @click="openFilePicker" class="drop-zone__btn" data-test="select-file-btn">
@@ -129,12 +135,35 @@ function removeFile() {
 				</div>
 				<div v-else class="drop-zone__file">
 					<div class="drop-zone__file-info">
-						<NcIconSvgWrapper :path="mdiFileCheck" :size="24" class="drop-zone__file-icon" />
+						<NcIconSvgWrapper :path="mdiFileCheck" :size="compact ? 20 : 24" class="drop-zone__file-icon" />
 						<div class="drop-zone__file-details">
-							<div class="drop-zone__file-name">{{ file.name }}</div>
-							<div class="drop-zone__file-size">{{ formatFileSize(file.size) }}</div>
+							<div v-if="!compact" class="drop-zone__file-name">{{ file.name }}</div>
+							<template v-else>
+								<button
+									type="button"
+									class="drop-zone__file-name drop-zone__file-name--toggle"
+									dir="auto"
+									:aria-expanded="showFullFileName"
+									:title="file.name"
+									data-test="file-name-toggle"
+									@click="showFullFileName = !showFullFileName"
+								>
+									{{ file.name }}
+								</button>
+								<div
+									v-if="showFullFileName"
+									class="drop-zone__file-full-name"
+									dir="auto"
+									tabindex="0"
+									:aria-label="file.name"
+									data-test="file-full-name"
+								>
+									{{ file.name }}
+								</div>
+							</template>
+							<div class="drop-zone__file-size" dir="ltr">{{ formatFileSize(file.size) }}</div>
 						</div>
-						<NcChip data-test="file-size-badge">
+						<NcChip class="drop-zone__size-chip" data-test="file-size-badge">
 							{{ t('pettycash', 'evidence.sizeOk') }}
 						</NcChip>
 					</div>
@@ -264,5 +293,77 @@ function removeFile() {
 	gap: 0.5rem;
 	width: 100%;
 	max-width: 500px;
+}
+
+.evidence-uploader--compact {
+	gap: 0.375rem;
+}
+
+.evidence-uploader--compact .drop-zone {
+	padding: 0.5rem 0.75rem;
+}
+
+.evidence-uploader--compact .drop-zone__empty {
+	gap: 0.375rem;
+}
+
+.evidence-uploader--compact .drop-zone__btn {
+	margin-top: 0;
+}
+
+.evidence-uploader--compact .drop-zone__file {
+	align-items: stretch;
+	gap: 0.375rem;
+	padding: 0;
+}
+
+.evidence-uploader--compact .drop-zone__file-info {
+	gap: 0.5rem;
+	max-width: none;
+}
+
+.evidence-uploader--compact .drop-zone__size-chip {
+	display: none;
+}
+
+.evidence-uploader--compact .drop-zone__file-name--toggle {
+	display: block;
+	width: 100%;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	font-weight: 500;
+	text-align: start;
+	cursor: pointer;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.evidence-uploader--compact .drop-zone__file-name--toggle:focus-visible {
+	outline: 2px solid var(--color-primary-element, #1976d2);
+	outline-offset: 2px;
+	border-radius: 2px;
+}
+
+.evidence-uploader--compact .drop-zone__file-full-name {
+	max-width: 100%;
+	padding: 0.25rem 0.5rem;
+	border-radius: var(--border-radius, 4px);
+	background: var(--color-background-dark, #f0f0f0);
+	font-size: var(--font-size-floor);
+	text-align: start;
+	white-space: nowrap;
+	overflow-x: auto;
+	overscroll-behavior-inline: contain;
+}
+
+.evidence-uploader--compact .drop-zone__actions {
+	flex-wrap: wrap;
+	justify-content: flex-start;
+	gap: 0.375rem;
+	max-width: none;
 }
 </style>
