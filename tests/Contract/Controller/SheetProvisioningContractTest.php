@@ -169,21 +169,20 @@ final class SheetProvisioningContractTest extends TestCase
 
     /**
      * The created sheet is usable in the provisioned account's currency, under the caller who
-     * provisioned it.
+     * provisioned it, and reports that account's public id as its own.
      *
-     * ## What this asserts, and what it cannot
+     * ## What this asserts
      *
-     * FR-020 says the provisioned account is **used** by the sheet. Identity linkage — "this sheet's
-     * account is *that* account" — is **not observable over HTTP**, and that is a contract decision
-     * rather than an omission: `SheetPayloadFormatter` documents that the sheet response carried an
-     * `accountId` the schema does not declare, and dropped it, because "a field the contract does not
-     * describe is one nothing can be tested against." Adding it back here would re-litigate a settled
-     * decision from a test, so this does not.
+     * FR-020 says the provisioned account is **used** by the sheet. Before T439 that linkage was not
+     * observable over HTTP: `SheetDetail` declared no account member, and the formatter dropped the
+     * `accountId` it carried for that reason. T439 amended the contract to declare `accountId` on the
+     * detail payload only, so the identity linkage is now expressible and asserted here: the detail's
+     * `accountId` must be the id of the one active account the same caller can list.
      *
-     * So this asserts the linkage that *is* expressible in the declared schema: the sheet reports the
-     * provisioned account's currency, and it belongs to the caller who caused the provisioning. A
-     * sheet pointed at a different or nonexistent account would fail on currency or on `ownerId`.
-     * Recorded as a real limit, not presented as full identity coverage.
+     * This is stronger than the currency/owner check beside it, which would still pass for a sheet
+     * pointed at a different account of the same currency. The currency and owner assertions are kept
+     * because they describe the user-visible outcome; the identity assertion is the one that proves
+     * "this sheet's account is *that* account".
      */
     public function testTheCreatedSheetIsInTheProvisionedCurrencyAndOwnedByTheCaller(): void
     {
@@ -198,6 +197,13 @@ final class SheetProvisioningContractTest extends TestCase
             $detail['currency'] ?? null,
             'the sheet must carry the provisioned account\'s currency, or provisioning created an '
                 . 'account the sheet did not use. Sheet: ' . json_encode($detail, JSON_UNESCAPED_SLASHES)
+        );
+
+        $this->assertSame(
+            $accounts[0]['id'] ?? null,
+            $detail['accountId'] ?? null,
+            'the sheet detail must name the provisioned account by its public id, not a guessed or '
+                . 'first-listed one. Sheet: ' . json_encode($detail, JSON_UNESCAPED_SLASHES)
         );
 
         $this->assertSame(

@@ -172,6 +172,12 @@ final class ContractFixtures
         return self::id('expenseTypeId');
     }
 
+    /** An active expense type whose `evidence_required` is true. */
+    public static function requiredExpenseTypeId(): string
+    {
+        return self::id('requiredExpenseTypeId');
+    }
+
     /**
      * The USD sheet, which the currency read-back assertions need because FR-021
      * makes the sheet the authority for its transactions' currency and the rial

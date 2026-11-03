@@ -24,6 +24,7 @@ use OCA\PettyCash\Application\Expense\SheetService;
 use OCA\PettyCash\Application\Expense\TransactionService;
 use OCA\PettyCash\Application\Evidence\EvidenceService;
 use OCA\PettyCash\Application\Workflow\SubmitSheet;
+use OCA\PettyCash\Application\Workflow\ResubmitCorrection;
 use OCA\PettyCash\Application\Workflow\ManagementReviewService;
 use OCA\PettyCash\Application\Workflow\FinanceSettlementService;
 use OCA\PettyCash\Application\Workflow\SupersededDecisionAudit;
@@ -235,7 +236,21 @@ $container->register(SubmitSheet::class, fn($c) => new SubmitSheet(
     $c->query(CurrentUser::class),
     $c->query(CostCenterRepository::class),
     $c->query(ExpenseTransactionRepository::class),
-    $c->query(RoleAssignmentRepository::class)
+    $c->query(RoleAssignmentRepository::class),
+    $c->query(ExpenseTypeRepository::class)
+));
+
+$container->register(ResubmitCorrection::class, fn($c) => new ResubmitCorrection(
+    $c->query(CurrentUser::class),
+    $c->query(ExpenseTransactionRepository::class),
+    $c->query(CostCenterRepository::class),
+    $c->query(UserDirectory::class),
+    $c->query(AuditWriter::class),
+    $c->query(TransactionManager::class),
+    $c->query(IdempotencyService::class),
+    $c->query(AuthorizationService::class),
+    $c->query(TransactionRevisionRepository::class),
+    $c->query(ExpenseTypeRepository::class)
 ));
 
 // FR-085. Registered before the two decision services that consume it, and built from the same

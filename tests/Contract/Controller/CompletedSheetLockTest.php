@@ -182,7 +182,6 @@ final class CompletedSheetLockTest extends TestCase
     {
         $response = $this->patch('/sheets/' . $this->completedSheetId, [
             'title' => 'Renamed after completion',
-            'accountId' => ContractFixtures::accountId(),
             'expectedVersion' => $this->sheetVersion($this->sheet($this->completedSheetId)),
         ]);
 
@@ -236,16 +235,18 @@ final class CompletedSheetLockTest extends TestCase
      * SC-011 is about and it fires first — the draft check would otherwise mask a sheet guard that
      * had been removed.
      *
-     * No command id, matching `PurchaserFlowControllerTest::testDeleteTransactionSucceedsWithout
-     * ACommandIdHeader()`: deleting a draft is repeatable, so T318 removed the header from this
-     * operation rather than leaving a refusal attributable to the header check.
+     * A command id is sent because T436 made deletion replay-gated: without it the endpoint answers
+     * `400` and this test would be asserting the header check rather than the completed-sheet guard.
      */
     public function testASettledTransactionRefusesDeletion(): void
     {
         $response = $this->client->request(
             'DELETE',
             $this->url('/transactions/' . $this->settledTransactionId),
-            ['json' => ['expectedVersion' => $this->transactionVersion($this->transaction($this->settledTransactionId))]]
+            [
+                'headers' => ['X-PettyCash-Command-ID' => ContractFixtures::commandId()],
+                'json' => ['expectedVersion' => $this->transactionVersion($this->transaction($this->settledTransactionId))],
+            ]
         );
 
         $this->assertRefused($response, 'Cannot delete transactions from a submitted sheet');
@@ -330,7 +331,6 @@ final class CompletedSheetLockTest extends TestCase
         $this->assertRefused(
             $this->patch('/sheets/' . $sheetId, [
                 'title' => 'Renamed after completion',
-                'accountId' => ContractFixtures::accountId(),
                 'expectedVersion' => $this->sheetVersion($this->sheet($sheetId)),
             ]),
             'Only open sheets can be updated',

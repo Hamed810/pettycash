@@ -366,7 +366,8 @@ final class Application extends App implements IBootstrap
                 $c->query(CurrencyRepository::class),
                 $c->query(RoleAssignmentRepository::class),
                 $c->query(ExpenseSheetRepository::class),
-                $c->query(CurrentUser::class)
+                $c->query(CurrentUser::class),
+                $c->query(ExpenseTypeRepository::class)
             );
         });
 
@@ -635,7 +636,8 @@ final class Application extends App implements IBootstrap
                 $c->query(CurrentUser::class),
                 $c->query(CostCenterRepository::class),
                 $c->query(ExpenseTransactionRepository::class),
-                $c->query(RoleAssignmentRepository::class)
+                $c->query(RoleAssignmentRepository::class),
+                $c->query(ExpenseTypeRepository::class)
             );
         });
 

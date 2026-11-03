@@ -7,21 +7,24 @@ namespace OCA\PettyCash\Tests\Unit\Evidence;
 use PHPUnit\Framework\TestCase;
 
 /**
- * T318: `contracts/ocs-api.yaml` must not require `X-PettyCash-Command-ID` on a `DELETE`.
+ * The contract's command-id requirement on `DELETE`, split by operation.
  *
- * ## The defect
+ * ## The history
  *
  * The maintainer decision on T318 settled the artifact contradiction this repository had been
  * carrying: `contracts/workflow.md` requires the header for *non-repeatable* commands only, while
  * `contracts/ocs-api.yaml` had `$ref`ed `components/parameters/CommandId` — declared
- * `required: true` — onto two `DELETE` operations. A `DELETE` is repeatable, so on `workflow.md`'s
- * wording it is exempt, and the OpenAPI was requiring a header the Command Contract does not.
+ * `required: true` — onto two `DELETE` operations. At that time both deletes were treated as
+ * repeatable and the contract was narrowed to match.
  *
- * `EvidenceController::destroy()` had already chosen the `workflow.md` answer in the *code* — it
- * required the header, so it chose the `ocs-api.yaml` answer instead — which is the exact silent
- * choice Constitution Governance forbids. This test pins the artifact side of the settlement so the
- * two files cannot drift apart again: a re-added `$ref` fails here rather than being discovered by
- * a client that stops sending the header.
+ * **T436 (2026-10-24) reopened that decision for one of the two.** A draft transaction delete is not
+ * effect-idempotent in the way the exemption assumed: a retry after a lost `204` reached a row that
+ * was already gone and answered "not found", leaving the client unable to distinguish its own success
+ * from a failure. The transaction delete is now replay-gated, so its command id is required and the
+ * replay guarantee applies. The evidence delete remains the deliberate exception: a draft row is
+ * removed, a submitted row is deactivated, and a repeat returns the same outcome.
+ *
+ * This test pins both halves so the contract cannot drift back into ambiguity.
  *
  * ## Why the YAML is read as text rather than parsed
  *
@@ -37,10 +40,10 @@ use PHPUnit\Framework\TestCase;
  * ## What is deliberately still asserted
  *
  * The header stays `required: true` on every non-repeatable operation, and `workflow.md` keeps its
- * non-repeatable rule. Those two are the load-bearing half of the decision: removing the header from
- * the DELETEs is only correct while the rest of the contract still requires it where it must. So this
- * file also proves the exemption is narrow — a blanket removal would satisfy every assertion below
- * and would be a strictly worse contract.
+ * non-repeatable rule. Those two are the load-bearing half of the decision: the evidence delete's
+ * exemption is only correct while the rest of the contract still requires the header where it must.
+ * So this file also proves the exemption is narrow — a blanket removal would satisfy every assertion
+ * below and would be a strictly worse contract.
  */
 final class DeleteCommandIdExemptionTest extends TestCase
 {
@@ -136,16 +139,16 @@ final class DeleteCommandIdExemptionTest extends TestCase
         return false;
     }
 
-    public function testTheTransactionDeleteDoesNotRequireACommandIdHeader(): void
+    public function testTheTransactionDeleteRequiresACommandIdHeader(): void
     {
         $block = $this->operation(self::TRANSACTION_DELETE, 'delete');
 
         self::assertNotEmpty($block, 'the DELETE /transactions/{transactionId} operation must exist');
-        self::assertFalse(
+        self::assertTrue(
             $this->referencesCommandId($block),
-            'contracts/workflow.md requires X-PettyCash-Command-ID only for non-repeatable commands, and a '
-            . 'DELETE is repeatable. Re-adding the $ref here would reinstate the contradiction T318 settles, '
-            . 'and a conforming client that stopped sending the header would be refused'
+            'T436 made the transaction delete replay-gated: a retry after a lost 204 must return the '
+            . 'original success rather than "not found". Without a required command id the server '
+            . 'cannot distinguish a replay from a new attempt, so the $ref must stay'
         );
     }
 

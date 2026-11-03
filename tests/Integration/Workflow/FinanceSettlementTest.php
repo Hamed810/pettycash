@@ -25,6 +25,7 @@ use OCA\PettyCash\Domain\Configuration\Currency;
 use OCA\PettyCash\Domain\Configuration\Repository\RoleAssignmentRepository;
 use OCA\PettyCash\Domain\Configuration\Repository\CostCenterRepository;
 use OCA\PettyCash\Domain\Configuration\Repository\CurrencyRepository;
+use OCA\PettyCash\Domain\Configuration\Repository\ExpenseTypeRepository;
 use OCA\PettyCash\Domain\Evidence\Repository\EvidenceRepository;
 use OCA\PettyCash\Domain\Workflow\Repository\WorkflowDecisionRepository;
 use OCA\PettyCash\Domain\Workflow\FinanceDecisionPolicy;
@@ -855,7 +856,8 @@ private function lockVersionOf(string $transactionId): int
             $this->container->query(CurrencyRepository::class),
             $this->container->query(RoleAssignmentRepository::class),
             $this->container->query(ExpenseSheetRepository::class),
-            $this->container->query(CurrentUser::class)
+            $this->container->query(CurrentUser::class),
+            $this->container->query(ExpenseTypeRepository::class)
         );
 
         $detail = $formatter->detail($transaction);

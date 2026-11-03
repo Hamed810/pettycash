@@ -21,6 +21,7 @@ use OCA\PettyCash\Tests\TestDoubles\InMemoryCurrencyRepository;
 use OCA\PettyCash\Tests\TestDoubles\InMemoryCurrentUser;
 use OCA\PettyCash\Tests\TestDoubles\InMemoryEvidenceRepository;
 use OCA\PettyCash\Tests\TestDoubles\InMemoryExpenseSheetRepository;
+use OCA\PettyCash\Tests\TestDoubles\InMemoryExpenseTypeRepository;
 use OCA\PettyCash\Tests\TestDoubles\InMemoryRoleAssignmentRepository;
 use OCA\PettyCash\Tests\TestDoubles\InMemoryWorkflowDecisionRepository;
 use PHPUnit\Framework\TestCase;
@@ -149,7 +150,8 @@ final class TransactionPayloadFormatterCapabilitiesTest extends TestCase
             new InMemoryCurrencyRepository(),
             $assignments,
             new InMemoryExpenseSheetRepository(),
-            new InMemoryCurrentUser($actorUid)
+            new InMemoryCurrentUser($actorUid),
+            new InMemoryExpenseTypeRepository()
         );
     }
 

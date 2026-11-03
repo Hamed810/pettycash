@@ -33,6 +33,7 @@ use OCA\PettyCash\Domain\Expense\ExpenseTransaction;
 use OCA\PettyCash\Domain\Expense\Repository\ExpenseSheetRepository;
 use OCA\PettyCash\Domain\Expense\Repository\ExpenseTransactionRepository;
 use OCA\PettyCash\Domain\Expense\Repository\TransactionRevisionRepository;
+use OCA\PettyCash\Domain\Expense\SubmissionBlocked;
 use OCA\PettyCash\Domain\Expense\TransactionRevision;
 use OCA\PettyCash\Domain\Shared\ActorSnapshot;
 use OCA\PettyCash\Domain\Shared\Clock;
@@ -153,6 +154,73 @@ final class SheetSubmissionTest extends TestCase
         self::assertEquals(WorkflowStage::CostCenter, $tx2->stage);
         self::assertEquals(TransactionStatus::AwaitingCostCenterReview, $tx1->status);
         self::assertEquals(TransactionStatus::AwaitingCostCenterReview, $tx2->status);
+    }
+
+    public function testSubmissionResolvesTheCurrentReceiptRuleAndNamesEveryOffender(): void
+    {
+        $purchaserUid = 'test-user';
+        $currency = CurrencyCode::fromString('IRR');
+
+        $required = ExpenseType::create('Receipt Required ' . Uuid::random(), null, true);
+        $required->publicId = (string) Uuid::random();
+        $exempt = ExpenseType::create('Receipt Exempt ' . Uuid::random(), null, false);
+        $exempt->publicId = (string) Uuid::random();
+
+        $expenseTypes = $this->container->query(ExpenseTypeRepository::class);
+        $expenseTypes->save($required);
+        $expenseTypes->save($exempt);
+
+        $sheet = ExpenseSheet::open('sheet-receipts', $purchaserUid, 'acc-1', $currency, 'Receipt policy');
+        $sheet->publicId = 'sheet-receipts';
+
+        $transactions = [];
+        foreach ([
+            ['tx-required-1', $required, false],
+            ['tx-exempt', $exempt, false],
+            ['tx-required-2', $required, false],
+            ['tx-required-with-evidence', $required, true],
+        ] as $index => [$id, $type, $hasEvidence]) {
+            $revision = TransactionRevision::draft(
+                'rev-' . $id,
+                1,
+                new DateTimeImmutable('2026-09-2' . $index, new DateTimeZone('UTC')),
+                Money::positive(50000, CurrencyCode::fromString('IRR'))
+            );
+            $revision->complete(
+                'Description ' . $id,
+                'CC001',
+                'CC001',
+                'Engineering',
+                1,
+                $type->title,
+                $type->id ?? 1,
+                $hasEvidence,
+                $type->publicId
+            );
+            $transaction = new ExpenseTransaction($id, $purchaserUid, $revision);
+            $sheet->addTransaction($transaction);
+            $transactions[] = $transaction;
+        }
+
+        $sheetRepository = $this->container->query(ExpenseSheetRepository::class);
+        $sheetRepository->save($sheet);
+
+        try {
+            $this->container->query(SubmitSheet::class)
+                ->execute('sheet-receipts', 'command-receipts-' . Uuid::random(), 0);
+            self::fail('A missing receipt on a receipt-required transaction must block submission');
+        } catch (SubmissionBlocked $blocked) {
+            self::assertSame(
+                ['transactions.tx-required-1.evidence', 'transactions.tx-required-2.evidence'],
+                array_keys($blocked->fieldErrors())
+            );
+        }
+
+        self::assertSame(SheetStatus::Open, $sheet->status);
+        foreach ($transactions as $transaction) {
+            self::assertSame(WorkflowStage::Draft, $transaction->stage);
+            self::assertSame(TransactionStatus::Draft, $transaction->status);
+        }
     }
 
     public function testSubmissionLocksNewTransactionCreation(): void
@@ -336,7 +404,8 @@ $revision = TransactionRevision::draft(
             $container->query(\OCA\PettyCash\Application\Port\CurrentUser::class),
             $container->query(\OCA\PettyCash\Domain\Configuration\Repository\CostCenterRepository::class),
             $container->query(\OCA\PettyCash\Domain\Expense\Repository\ExpenseTransactionRepository::class),
-            $container->query(\OCA\PettyCash\Domain\Configuration\Repository\RoleAssignmentRepository::class)
+            $container->query(\OCA\PettyCash\Domain\Configuration\Repository\RoleAssignmentRepository::class),
+            $container->query(\OCA\PettyCash\Domain\Configuration\Repository\ExpenseTypeRepository::class)
         );
         
         $commandId = 'test-command-' . \OCA\PettyCash\Domain\Shared\Uuid::random();
@@ -421,7 +490,8 @@ $revision = TransactionRevision::draft(
             $container->query(\OCA\PettyCash\Application\Port\CurrentUser::class),
             $container->query(\OCA\PettyCash\Domain\Configuration\Repository\CostCenterRepository::class),
             $spy,
-            $container->query(\OCA\PettyCash\Domain\Configuration\Repository\RoleAssignmentRepository::class)
+            $container->query(\OCA\PettyCash\Domain\Configuration\Repository\RoleAssignmentRepository::class),
+            $container->query(\OCA\PettyCash\Domain\Configuration\Repository\ExpenseTypeRepository::class)
         );
 
         $commandId = 'test-command-' . \OCA\PettyCash\Domain\Shared\Uuid::random();

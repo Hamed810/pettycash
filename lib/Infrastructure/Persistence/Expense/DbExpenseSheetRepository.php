@@ -170,11 +170,18 @@ final class DbExpenseSheetRepository implements ExpenseSheetRepository
         $now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
         $currentUser = $this->currentUser->uid();
 
+        // Resolve the account before either branch builds a write. This used to happen inside the
+        // `set()`/`values()` call and returned `0` when the public id matched no row, so an unknown
+        // account was written as `account_id = 0`: a new dangling reference, created by the very
+        // method that is supposed to persist a valid sheet. Resolving once, ahead of the statement,
+        // also means the refusal happens before any SQL is sent, not after a partial write.
+        $accountDbId = $this->getAccountDbId($sheet->accountId, $sheet->id, $sheet->dbId);
+
         if ($existing) {
             $qb->update('pettycash_sheets')
                 ->set('title', $qb->createNamedParameter($sheet->title ?? ''))
                 ->set('owner_uid', $qb->createNamedParameter($sheet->ownerUid))
-                ->set('account_id', $qb->createNamedParameter($this->getAccountDbId($sheet->accountId)))
+                ->set('account_id', $qb->createNamedParameter($accountDbId))
                 ->set('currency_id', $qb->createNamedParameter($this->getCurrencyDbId($sheet->currency)))
                 ->set('status', $qb->createNamedParameter($sheet->status->value))
                 ->set('submitted_total_minor', $sheet->submittedTotalMinor ? $qb->createNamedParameter($sheet->submittedTotalMinor) : $qb->createNamedParameter(null))
@@ -193,7 +200,7 @@ final class DbExpenseSheetRepository implements ExpenseSheetRepository
                     'public_id' => $qb->createNamedParameter($sheet->id),
                     'title' => $qb->createNamedParameter($sheet->title ?? ''),
                     'owner_uid' => $qb->createNamedParameter($sheet->ownerUid),
-                    'account_id' => $qb->createNamedParameter($this->getAccountDbId($sheet->accountId)),
+                    'account_id' => $qb->createNamedParameter($accountDbId),
                     'currency_id' => $qb->createNamedParameter($this->getCurrencyDbId($sheet->currency)),
                     'status' => $qb->createNamedParameter($sheet->status->value),
                     'submitted_total_minor' => $sheet->submittedTotalMinor ? $qb->createNamedParameter($sheet->submittedTotalMinor) : $qb->createNamedParameter(null),
@@ -217,7 +224,25 @@ final class DbExpenseSheetRepository implements ExpenseSheetRepository
         }
     }
 
-    private function getAccountDbId(string $publicId): int
+    /**
+     * The surrogate id of a public account id, or a loud refusal before a write.
+     *
+     * ## Why there is no `0` fallback
+     *
+     * This returned `0` when the lookup matched no row, and every `save()` then wrote that value into
+     * `pettycash_sheets.account_id`. A sheet so written is not a sheet with an unknown account: it is
+     * a sheet whose account reference points at a row that cannot exist, and the read path is right to
+     * refuse it. Creating that fault while persisting a financial record is exactly the silent repair
+     * the account policy forbids, so an unresolved public id now raises the account-reference variant
+     * of `UnreadableRecordData` before the statement is built.
+     *
+     * The message names the sheet's public id and both surrogate ids so an operator can find the row
+     * that was about to be written. It never reaches a caller: `OcsErrorMapper` logs it in full and
+     * substitutes its canonical data-fault text.
+     *
+     * @throws UnreadableRecordData
+     */
+    private function getAccountDbId(string $publicId, string $sheetPublicId, ?int $sheetDbId): int
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('id')
@@ -225,7 +250,18 @@ final class DbExpenseSheetRepository implements ExpenseSheetRepository
             ->where($qb->expr()->eq('public_id', $qb->createNamedParameter($publicId)))
             ->setMaxResults(1);
         $row = $qb->executeQuery()->fetchAssociative();
-        return $row ? (int) $row['id'] : 0;
+
+        if (!$row) {
+            throw UnreadableRecordData::accountReference(sprintf(
+                'Cannot resolve the account of sheet %s (sheet id %s): the public account id %s '
+                . 'matches no row in pettycash_accounts. Refusing to write account_id = 0.',
+                $sheetPublicId,
+                $sheetDbId === null ? 'not yet persisted' : (string) $sheetDbId,
+                $publicId
+            ));
+        }
+
+        return (int) $row['id'];
     }
 
     private function getCurrencyDbId(\OCA\PettyCash\Domain\Shared\CurrencyCode $currencyCode): int
@@ -241,16 +277,32 @@ final class DbExpenseSheetRepository implements ExpenseSheetRepository
 
     private function mapRow(array $row): ExpenseSheet
     {
-        // The sheet's public id is passed to the currency lookup so a failure can name the record an
-        // operator has to go and look at. The surrogate `currency_id` alone would not be enough: it is
-        // the sheet that is broken, and there may be many rows pointing at the same missing currency.
+        $sheetPublicId = (string) $row['public_id'];
+        $sheetDbId = (int) $row['id'];
+        $sheetCurrencyId = (int) $row['currency_id'];
+
+        // The sheet's currency resolves **first**, and the order is load-bearing.
+        //
+        // A missing currency row and an account whose currency disagrees with the sheet are two
+        // different faults that must stay distinguishable. If the account were resolved first, a
+        // sheet with a dangling `currency_id` would look exactly like an account/currency mismatch --
+        // the account's real currency would differ from the dangling value -- and a currency fault
+        // would be reported as an account fault. Resolving the sheet's own currency first establishes
+        // that the authority exists; only then can an account disagreement be an account fault.
         $currencyCode = \OCA\PettyCash\Domain\Shared\CurrencyCode::fromString(
-            $this->getCurrencyCode((int) $row['currency_id'], (string) $row['public_id'])
+            $this->getCurrencyCode($sheetCurrencyId, $sheetPublicId, $sheetDbId)
         );
+        $accountPublicId = $this->getAccountReference(
+            (int) $row['account_id'],
+            $sheetCurrencyId,
+            $sheetPublicId,
+            $sheetDbId
+        );
+
         $sheet = ExpenseSheet::open(
             $row['public_id'],
             $row['owner_uid'],
-            $this->getAccountPublicId($row['account_id']),
+            $accountPublicId,
             $currencyCode
         );
         $sheet->title = $row['title'] ?? '';
@@ -301,7 +353,7 @@ final class DbExpenseSheetRepository implements ExpenseSheetRepository
      *
      * @throws UnreadableRecordData
      */
-    private function getCurrencyCode(int $currencyId, string $sheetPublicId): string
+    private function getCurrencyCode(int $currencyId, string $sheetPublicId, int $sheetDbId): string
     {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('code')
@@ -312,10 +364,11 @@ final class DbExpenseSheetRepository implements ExpenseSheetRepository
 
         if (!$row) {
             throw new UnreadableRecordData(sprintf(
-                'Cannot resolve the currency of sheet %s: currency_id %d matches no row in '
-                . 'pettycash_currencies. The amount_minor values on this sheet cannot be read, because '
-                . 'an amount is meaningless without its currency.',
+                'Cannot resolve the currency of sheet %s (sheet id %d): currency_id %d matches no '
+                . 'row in pettycash_currencies. The amount_minor values on this sheet cannot be read, '
+                . 'because an amount is meaningless without its currency.',
                 $sheetPublicId,
+                $sheetDbId,
                 $currencyId
             ));
         }
@@ -323,15 +376,72 @@ final class DbExpenseSheetRepository implements ExpenseSheetRepository
         return (string) $row['code'];
     }
 
-    private function getAccountPublicId(int $accountId): string
-    {
+    /**
+     * The public id of the account a sheet stores, or a loud refusal.
+     *
+     * ## Why the currency is read here too
+     *
+     * `ExpenseSheet` can only be built from a public account id and a currency. The old method returned
+     * `''` when the stored `account_id` matched no row, which produced an aggregate with an empty
+     * account id: a sheet that looks readable, serialises an empty reference, and cannot be used for
+     * anything that later needs the account. Returning the public id alone would leave the second,
+     * quieter fault in place as well -- an account denominated in a different currency than the sheet,
+     * which is not a sheet the application can legitimately produce and must not be presented as one.
+     *
+     * ## Why this is the account-reference variant
+     *
+     * Both faults here are about the sheet's account reference rather than the sheet's own currency,
+     * and the caller can tell them apart from the exception structurally through
+     * {@see UnreadableRecordData::isAccountReference()}. A missing sheet-currency row is raised by
+     * {@see self::getCurrencyCode()} before this method runs, so it keeps the general variant and is
+     * never reclassified as an account error.
+     *
+     * An inactive account is **not** a fault. The lookup deliberately does not filter on `active`:
+     * history has to remain readable after an account is deactivated, and the account's currency is
+     * still a fact.
+     *
+     * @throws UnreadableRecordData
+     */
+    private function getAccountReference(
+        int $accountId,
+        int $sheetCurrencyId,
+        string $sheetPublicId,
+        int $sheetDbId
+    ): string {
         $qb = $this->connection->getQueryBuilder();
         $qb->select('public_id')
+            ->addSelect('currency_id')
             ->from('pettycash_accounts')
             ->where($qb->expr()->eq('id', $qb->createNamedParameter($accountId)))
             ->setMaxResults(1);
         $row = $qb->executeQuery()->fetchAssociative();
-        return $row ? $row['public_id'] : '';
+
+        if (!$row) {
+            throw UnreadableRecordData::accountReference(sprintf(
+                'Cannot resolve the account of sheet %s (sheet id %d): account_id %d matches no row '
+                . 'in pettycash_accounts. The sheet cannot be presented without inventing an account.',
+                $sheetPublicId,
+                $sheetDbId,
+                $accountId
+            ));
+        }
+
+        $accountCurrencyId = (int) $row['currency_id'];
+        if ($accountCurrencyId !== $sheetCurrencyId) {
+            throw UnreadableRecordData::accountReference(sprintf(
+                'Cannot read sheet %s (sheet id %d): its account %s (account id %d) is denominated in '
+                . 'currency_id %d, but the sheet stores currency_id %d. The amounts cannot be '
+                . 'reinterpreted in another currency.',
+                $sheetPublicId,
+                $sheetDbId,
+                (string) $row['public_id'],
+                $accountId,
+                $accountCurrencyId,
+                $sheetCurrencyId
+            ));
+        }
+
+        return (string) $row['public_id'];
     }
 
     /**

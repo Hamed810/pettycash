@@ -41,16 +41,61 @@ use RuntimeException;
  */
 final class CorruptRecordFixture
 {
+    /** The sheet's stored currency reference points at no row. The original probe. */
+    public const FAULT_CURRENCY = 'currency';
+
+    /** The sheet's stored account reference points at no row. */
+    public const FAULT_ACCOUNT = 'account';
+
+    /** The account resolves, but its currency is not the sheet's stored currency. */
+    public const FAULT_ACCOUNT_CURRENCY = 'account-currency';
+
+    /** @var list<string> */
+    public const FAULTS = [self::FAULT_CURRENCY, self::FAULT_ACCOUNT, self::FAULT_ACCOUNT_CURRENCY];
+
     /**
      * Write the probe and return what it wrote.
      *
-     * @return array{sheetId: string, transactionId: string, revisionId: string, revisionDbId: int, danglingCurrencyId: int, repairedBeforeWriting: int}
+     * @param self::FAULT_* $fault which stored reference to break
+     *
+     * @return array{
+     *     fault: string,
+     *     sheetId: string,
+     *     sheetDbId: int,
+     *     transactionId: string,
+     *     revisionId: string,
+     *     revisionDbId: int,
+     *     accountId: string,
+     *     accountDbId: int,
+     *     accountCurrencyId: int,
+     *     sheetCurrencyId: int,
+     *     danglingAccountId: int|null,
+     *     danglingCurrencyId: int|null,
+     *     repairedBeforeWriting: int
+     * }
      */
-    public static function insert(): array
+    public static function insert(string $fault = self::FAULT_CURRENCY): array
     {
-        $manifest = self::run('insert');
+        if (!in_array($fault, self::FAULTS, true)) {
+            throw new RuntimeException(
+                "Unknown corrupt-record fault '{$fault}'; expected one of " . implode(', ', self::FAULTS) . '.'
+            );
+        }
 
-        foreach (['sheetId', 'transactionId', 'revisionId', 'revisionDbId', 'danglingCurrencyId'] as $key) {
+        $manifest = self::run('insert', $fault);
+
+        foreach ([
+            'fault',
+            'sheetId',
+            'sheetDbId',
+            'transactionId',
+            'revisionId',
+            'revisionDbId',
+            'accountId',
+            'accountDbId',
+            'accountCurrencyId',
+            'sheetCurrencyId',
+        ] as $key) {
             if (!array_key_exists($key, $manifest)) {
                 throw new RuntimeException(
                     "The corrupt-record fixture did not report '{$key}'.\n" . self::describe($manifest)
@@ -58,15 +103,44 @@ final class CorruptRecordFixture
             }
         }
 
+        if ($fault === self::FAULT_ACCOUNT && !is_int($manifest['danglingAccountId'] ?? null)) {
+            throw new RuntimeException(
+                'The account-reference probe did not report the dangling account id it wrote.' . self::describe($manifest)
+            );
+        }
+        if ($fault === self::FAULT_CURRENCY && !is_int($manifest['danglingCurrencyId'] ?? null)) {
+            throw new RuntimeException(
+                'The currency-reference probe did not report the dangling currency id it wrote.' . self::describe($manifest)
+            );
+        }
+        if (
+            $fault === self::FAULT_ACCOUNT_CURRENCY
+            && (int) $manifest['accountCurrencyId'] === (int) $manifest['sheetCurrencyId']
+        ) {
+            throw new RuntimeException(
+                'The account-currency probe reported the same currency for the account and the sheet, so '
+                . 'it would not exercise a disagreement.' . self::describe($manifest)
+            );
+        }
+
         return [
+            'fault' => (string) $manifest['fault'],
             'sheetId' => (string) $manifest['sheetId'],
+            // The sheet surrogate key, so a caller can assert the internal message's identifier is
+            // absent from a response body as well.
+            'sheetDbId' => (int) $manifest['sheetDbId'],
             'transactionId' => (string) $manifest['transactionId'],
             'revisionId' => (string) $manifest['revisionId'],
             // The surrogate key, so the caller can assert the *absence* of this number from a response
             // body. `UnreadableRecordData` names it, and T029's whole point was that it must not reach a
             // caller -- which cannot be asserted against a number the test does not know.
             'revisionDbId' => (int) $manifest['revisionDbId'],
-            'danglingCurrencyId' => (int) $manifest['danglingCurrencyId'],
+            'accountId' => (string) $manifest['accountId'],
+            'accountDbId' => (int) $manifest['accountDbId'],
+            'accountCurrencyId' => (int) $manifest['accountCurrencyId'],
+            'sheetCurrencyId' => (int) $manifest['sheetCurrencyId'],
+            'danglingAccountId' => ($manifest['danglingAccountId'] ?? null) === null ? null : (int) $manifest['danglingAccountId'],
+            'danglingCurrencyId' => ($manifest['danglingCurrencyId'] ?? null) === null ? null : (int) $manifest['danglingCurrencyId'],
             'repairedBeforeWriting' => (int) ($manifest['repairedBeforeWriting'] ?? 0),
         ];
     }
@@ -118,7 +192,7 @@ final class CorruptRecordFixture
     /**
      * @return array<string, mixed>
      */
-    private static function run(string $action): array
+    private static function run(string $action, ?string $fault = null): array
     {
         $user = getenv('PETTYCASH_TEST_USER');
         if ($user === false || trim($user) === '') {
@@ -134,7 +208,9 @@ final class CorruptRecordFixture
         }
 
         $command = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($fixture) . ' '
-            . escapeshellarg(trim($user)) . ' ' . escapeshellarg($action) . ' 2>&1';
+            . escapeshellarg(trim($user)) . ' ' . escapeshellarg($action)
+            . ($fault === null ? '' : ' ' . escapeshellarg($fault))
+            . ' 2>&1';
         $output = shell_exec($command);
 
         if ($output === null || trim($output) === '') {

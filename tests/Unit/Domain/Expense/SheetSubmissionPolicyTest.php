@@ -10,6 +10,7 @@ use InvalidArgumentException;
 use LogicException;
 use OCA\PettyCash\Domain\Expense\ExpenseSheet;
 use OCA\PettyCash\Domain\Expense\ExpenseTransaction;
+use OCA\PettyCash\Domain\Expense\SubmissionBlocked;
 use OCA\PettyCash\Domain\Expense\TransactionRevision;
 use OCA\PettyCash\Domain\Shared\CurrencyCode;
 use OCA\PettyCash\Domain\Shared\Money;
@@ -139,19 +140,59 @@ final class SheetSubmissionPolicyTest extends TestCase
         $sheet->submit();
     }
 
-    public function testSubmissionDoesNotRequireEvidenceByDefault(): void
+    public function testSubmissionDoesNotRequireEvidenceWhenTheExpenseTypeDoesNotRequireIt(): void
     {
-        // Current implementation does not enforce evidence requirement by default
-        // This is a known issue - evidence requirement should be based on expense type
         $sheet = ExpenseSheet::open('sheet', 'u1', 'account', CurrencyCode::fromString('IRR'));
         $revision = TransactionRevision::draft('r1', 1, new DateTimeImmutable('2026-09-20'), Money::positive(10, CurrencyCode::fromString('IRR')));
         $revision->complete('desc', 'cc', 'CC001', 'Engineering', 1, 'Travel', 1, false);
         $sheet->addTransaction(new ExpenseTransaction('t1', 'u1', $revision));
 
-        // Should succeed without evidence (current behavior)
-        $total = $sheet->submit();
+        $total = $sheet->submit(['t1' => false]);
 
         self::assertSame(10, $total);
+    }
+
+    public function testSubmissionRefusesEveryReceiptRequiredTransactionAndLeavesTheSheetOpen(): void
+    {
+        $sheet = ExpenseSheet::open('sheet', 'u1', 'account', CurrencyCode::fromString('IRR'));
+
+        foreach (['required-1', 'exempt', 'required-2'] as $index => $id) {
+            $revision = TransactionRevision::draft(
+                'r-' . $id,
+                1,
+                new DateTimeImmutable('2026-09-2' . $index),
+                Money::positive(10, CurrencyCode::fromString('IRR'))
+            );
+            $revision->complete('desc ' . $id, 'cc', 'CC001', 'Engineering', 1, 'Travel', 1, false);
+            $sheet->addTransaction(new ExpenseTransaction($id, 'u1', $revision));
+        }
+
+        try {
+            $sheet->submit([
+                'required-1' => true,
+                'exempt' => false,
+                'required-2' => true,
+            ]);
+            self::fail('A receipt-required transaction without active evidence must block submission');
+        } catch (SubmissionBlocked $blocked) {
+            self::assertSame(
+                ['transactions.required-1.evidence', 'transactions.required-2.evidence'],
+                array_keys($blocked->fieldErrors()),
+                'The refusal must name every offending transaction, not only the first, and must not name the exempt one'
+            );
+            self::assertSame(
+                \OCA\PettyCash\Domain\Workflow\SheetStatus::Open,
+                $sheet->status,
+                'A refused submission must not partially submit the sheet'
+            );
+            foreach ($sheet->transactions() as $transaction) {
+                self::assertSame(
+                    \OCA\PettyCash\Domain\Workflow\WorkflowStage::Draft,
+                    $transaction->stage,
+                    'A refused submission must not route any transaction'
+                );
+            }
+        }
     }
 
     public function testSubmissionRequiresAtLeastOneTransaction(): void

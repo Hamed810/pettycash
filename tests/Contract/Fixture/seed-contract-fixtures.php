@@ -97,6 +97,10 @@ const FIXTURE_IDS = [
     'currency'        => '11111111-1111-4111-8111-111111111111',
     'costCenter'      => '22222222-2222-4222-8222-222222222222',
     'expenseType'     => '33333333-3333-4333-8333-333333333333',
+    // A second expense type with the receipt rule the contract's ordinary fixture deliberately does
+    // not have. The correction suite edits a draft onto this type so a missing receipt is reachable
+    // over HTTP without changing the default type every other test submits against.
+    'requiredExpenseType' => '33333333-3333-4333-8333-444444444444',
     'account'         => '44444444-4444-4444-8444-444444444444',
     'sheet'           => '55555555-5555-4555-8555-555555555555',
     'transaction'     => '66666666-6666-4666-8666-666666666666',
@@ -505,6 +509,15 @@ upsert($db, 'pettycash_expense_types', 'public_id', FIXTURE_IDS['expenseType'], 
     'title' => 'Contract Fixture Expense Type',
     'description' => 'Seeded for the OCS contract tests.',
     'evidence_required' => false,
+    'active' => true,
+    'lock_version' => 0,
+], $audit));
+
+upsert($db, 'pettycash_expense_types', 'public_id', FIXTURE_IDS['requiredExpenseType'], array_merge([
+    'public_id' => FIXTURE_IDS['requiredExpenseType'],
+    'title' => 'Contract Fixture Receipt Required',
+    'description' => 'Seeded to exercise submission and correction receipt enforcement.',
+    'evidence_required' => true,
     'active' => true,
     'lock_version' => 0,
 ], $audit));
@@ -1285,6 +1298,7 @@ echo json_encode([
     'secondCurrencyId'   => FIXTURE_IDS['secondCurrency'],
     'costCenterId'       => FIXTURE_IDS['costCenter'],
     'expenseTypeId'      => FIXTURE_IDS['expenseType'],
+    'requiredExpenseTypeId' => FIXTURE_IDS['requiredExpenseType'],
     'accountId'          => FIXTURE_IDS['account'],
     'secondAccountId'    => FIXTURE_IDS['secondAccount'],
     'foreignAccountId'   => FIXTURE_IDS['foreignAccount'],

@@ -21,7 +21,7 @@ final class ExpenseSheet
         public string $id,
         public string $ownerUid,
         public string $accountId,
-        public CurrencyCode $currency,
+        public readonly CurrencyCode $currency,
         public SheetStatus $status = SheetStatus::Open,
         public ?int $submittedTotalMinor = null,
         public string $title = '',
@@ -73,20 +73,49 @@ final class ExpenseSheet
         $this->transactions[] = $transaction;
     }
 
-    public function submit(): int
+    /**
+     * Submit every transaction and route the sheet to cost-center review.
+     *
+     * Field validation and the receipt rule are deliberately separate. The fields are what every
+     * transaction needs regardless of configuration, while the receipt rule belongs to the active
+     * expense type and is resolved by the application layer for each transaction. Keeping the rule
+     * out of this aggregate would make an old caller silently exempt; taking the per-transaction map
+     * here keeps the domain check atomic and lets the refusal name every offender.
+     *
+     * Nothing is activated until every check has passed, so a refused submission leaves the sheet
+     * and all of its transactions exactly as they were.
+     *
+     * @param array<string, bool> $evidenceRequired transaction id => whether its expense type currently requires a receipt
+     * @throws SubmissionBlocked when one or more receipt-required transactions have no active receipt
+     */
+    public function submit(array $evidenceRequired = []): int
     {
         if ($this->transactions === []) {
             throw new InvalidArgumentException('At least one transaction is required');
         }
+
+        $fieldErrors = [];
+        foreach ($this->transactions as $tx) {
+            $tx->revision()->assertSubmittable(false);
+
+            if (($evidenceRequired[$tx->id] ?? false) && !$tx->revision()->hasEvidence()) {
+                $fieldErrors['transactions.' . $tx->id . '.evidence'][] = SubmissionBlocked::EVIDENCE_FIELD_MESSAGE;
+            }
+        }
+
+        if ($fieldErrors !== []) {
+            throw new SubmissionBlocked($fieldErrors);
+        }
+
         $total = 0;
         foreach ($this->transactions as $tx) {
-            $tx->revision()->assertSubmittable();
             $tx->activate($tx->revision());
             $total += $tx->revision()->amount()->minorUnits();
         }
         $this->status = SheetStatus::CostCenter;
         $this->submittedTotalMinor = $total;
         $this->firstSubmittedAt = new DateTimeImmutable('now', new \DateTimeZone('UTC'));
+
         return $total;
     }
 
@@ -98,7 +127,7 @@ final class ExpenseSheet
 
     public function removeTransaction(string $transactionId): void
     {
-        $this->transactions = array_filter($this->transactions, fn($tx) => $tx->id() !== $transactionId);
+        $this->transactions = array_filter($this->transactions, fn($tx) => $tx->id !== $transactionId);
     }
 
     /**

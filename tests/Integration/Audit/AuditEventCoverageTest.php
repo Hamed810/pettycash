@@ -461,7 +461,8 @@ final class AuditEventCoverageTest extends TestCase
             new InMemoryCurrentUser(self::OWNER),
             $this->costCenters,
             $this->transactions,
-            $this->assignments
+            $this->assignments,
+            new InMemoryExpenseTypeRepository()
         );
     }
 }

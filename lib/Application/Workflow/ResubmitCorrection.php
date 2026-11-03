@@ -10,7 +10,9 @@ use LogicException;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Domain\Expense\Repository\ExpenseTransactionRepository;
 use OCA\PettyCash\Domain\Configuration\Repository\CostCenterRepository;
+use OCA\PettyCash\Domain\Configuration\Repository\ExpenseTypeRepository;
 use OCA\PettyCash\Domain\Configuration\CostCenter;
+use OCA\PettyCash\Domain\Expense\SubmissionBlocked;
 use OCA\PettyCash\Domain\Expense\TransactionRevision;
 use OCA\PettyCash\Domain\Expense\Repository\TransactionRevisionRepository;
 use OCA\PettyCash\Application\Port\UserDirectory;
@@ -39,7 +41,8 @@ class ResubmitCorrection
         private TransactionManager $transactionManager,
         private IdempotencyService $idempotencyService,
         private AuthorizationService $authorizationService,
-        private TransactionRevisionRepository $revisionRepository
+        private TransactionRevisionRepository $revisionRepository,
+        private ExpenseTypeRepository $expenseTypeRepository
     ) {}
 
     /**
@@ -105,8 +108,20 @@ class ResubmitCorrection
                 if ($activeRevision->description() === null || trim($activeRevision->description()) === '') {
                     throw new InvalidArgumentException('Transaction missing description');
                 }
-                if (!$activeRevision->hasEvidence()) {
-                    throw new InvalidArgumentException('Transaction missing required evidence');
+                // The receipt rule belongs to the transaction's active expense type, not to the
+                // correction path. The old unconditional `hasEvidence()` refusal made every
+                // correction impossible for a receipt-exempt type, and it also treated evidence that
+                // had been explicitly deactivated as if it were still present.
+                $expenseTypeId = $activeRevision->expenseTypeId();
+                $expenseType = $expenseTypeId === null
+                    ? null
+                    : $this->expenseTypeRepository->findByPublicId($expenseTypeId);
+                if (($expenseType?->evidenceRequired ?? false) && !$activeRevision->hasEvidence()) {
+                    throw new SubmissionBlocked([
+                        'transactions.' . $transactionPublicId . '.evidence' => [
+                            SubmissionBlocked::EVIDENCE_FIELD_MESSAGE,
+                        ],
+                    ]);
                 }
 
                 // Verify the cost center still exists.

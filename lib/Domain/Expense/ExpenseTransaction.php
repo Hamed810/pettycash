@@ -238,11 +238,13 @@ final class ExpenseTransaction
      * would change the transaction's current information (FR-050) before the purchaser had finished,
      * and would route a half-entered revision to a manager.
      *
-     * The stage and status are deliberately left alone for the same reason. This is what
-     * `updateTransaction()` must use while a transaction is being corrected: it previously called
-     * `activate()`, which on every edit of a correction draft set the stage to `COST_CENTER` and the
-     * status to `AWAITING_COST_CENTER_REVIEW` — so a purchaser's second edit ended correction and
-     * routed the expense to a manager *before they resubmitted anything*.
+     * The stage and status are deliberately left alone for the same reason. This is the edit path
+     * `updateTransaction()` must use for every draft, correction or ordinary: an edit is never a
+     * submission. It previously called `activate()`, which on every edit set the stage to
+     * `COST_CENTER` and the status to `AWAITING_COST_CENTER_REVIEW`. On a correction draft that ended
+     * correction and routed the expense to a manager *before the purchaser resubmitted anything*; on
+     * an ordinary draft on an open sheet it put an unsubmitted transaction into the cost-center queue
+     * and made it read-only to its owner.
      *
      * ## Why it does not deactivate what it replaces
      *

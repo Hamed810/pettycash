@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace OCA\PettyCash\Tests\Integration\Persistence;
 
+use OCA\PettyCash\Application\DataIntegrity\UnreadableRecordData;
 use OCA\PettyCash\Tests\Support\LeakedRows;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
@@ -648,6 +649,129 @@ final class RepositoryRoundTripTest extends TestCase
         $this->assertSame('OPEN', $sheet['byPublicId']['status']);
         $this->assertTrue($sheet['listedForOwner']);
         $this->assertTrue($sheet['listedUnderStatus']);
+    }
+
+    /**
+     * T438: the public account id survives both read paths, as the account's UUID.
+     *
+     * The sheet's title, owner and currency were already asserted. The account was not: `mapRow()` could
+     * return `''` and every test in this file still passed. This is the normal round trip that makes the
+     * refusal tests below meaningful, and it also pins the projection: the sheet must expose the
+     * account's public UUID, not its surrogate key.
+     */
+    public function testTheSheetRoundTripsItsPublicAccountId(): void
+    {
+        $integrity = $this->report('expense')['accountIntegrity'];
+
+        $this->assertSame(
+            $integrity['accountPublicId'],
+            $integrity['sheetAccountIdByPublicId'],
+            'a sheet read by public id must name the account public UUID it was saved with'
+        );
+        $this->assertSame(
+            $integrity['accountPublicId'],
+            $integrity['sheetAccountIdBySurrogate'],
+            'a sheet read by its surrogate key must resolve the same account public UUID'
+        );
+        $this->assertNotSame(
+            '',
+            $integrity['sheetAccountIdByPublicId'],
+            'an empty account id is the substitution T438 removes'
+        );
+        $this->assertNotSame(
+            (string) $integrity['accountDbId'],
+            $integrity['sheetAccountIdByPublicId'],
+            'the sheet must expose the account public UUID, not its surrogate key'
+        );
+    }
+
+    /**
+     * T438: a stored account reference that resolves to no row is refused structurally.
+     *
+     * The point of the discriminator is that an operator can tell this from a sheet-currency fault
+     * without reading the exception message. Asserting `accountReference` against the account fault and
+     * against the currency fault below is what makes it a discriminator rather than a label.
+     */
+    public function testAReadRefusesADanglingAccountReference(): void
+    {
+        $fault = $this->report('expense')['accountIntegrity']['danglingAccount'];
+
+        $this->assertTrue($fault['threw'], 'a delete orphan cannot leave the sheet readable with an empty account');
+        $this->assertSame(UnreadableRecordData::class, $fault['type']);
+        $this->assertTrue($fault['accountReference'], 'the dangling account is an account-reference fault');
+    }
+
+    /**
+     * T438: an account that exists in another currency is an account-reference fault, not a valid sheet.
+     *
+     * The sheet's currency row resolves and the account row resolves, so neither of the two simpler
+     * faults is present. The only defect is that the two disagree, and `mapRow()` must not reinterpret
+     * one as the other.
+     */
+    public function testAReadRefusesAnAccountCurrencyMismatch(): void
+    {
+        $fault = $this->report('expense')['accountIntegrity']['crossCurrency'];
+
+        $this->assertTrue($fault['threw'], 'a sheet whose account is denominated in another currency is unreadable');
+        $this->assertSame(UnreadableRecordData::class, $fault['type']);
+        $this->assertTrue($fault['accountReference'], 'the disagreement is about the account reference');
+    }
+
+    /**
+     * T438: a missing sheet currency stays the general variant and is never reclassified as an account
+     * fault.
+     *
+     * The account row is healthy here. The sheet's `currency_id` is the broken reference, so the only
+     * correct answer is the account-free `UnreadableRecordData`. This is also why `mapRow()` resolves the
+     * sheet currency before the account: the other order would see the account's real currency differ
+     * from the dangling id and call it a mismatch.
+     */
+    public function testAMissingSheetCurrencyRemainsAGeneralDataFault(): void
+    {
+        $fault = $this->report('expense')['accountIntegrity']['danglingCurrency'];
+
+        $this->assertTrue($fault['threw'], 'a dangling sheet currency must still refuse the sheet');
+        $this->assertSame(UnreadableRecordData::class, $fault['type']);
+        $this->assertFalse(
+            $fault['accountReference'],
+            'a missing sheet currency must not be reclassified as an account-reference fault'
+        );
+    }
+
+    /**
+     * T438: an inactive-but-resolvable account is history, not corruption.
+     *
+     * The account row still exists and still supplies its currency. Deactivation is a read-only-history
+     * fact, so the sheet must remain readable and must keep naming the same public account id.
+     */
+    public function testAnInactiveButResolvableAccountRemainsReadable(): void
+    {
+        $inactive = $this->report('expense')['accountIntegrity']['inactiveAccount'];
+
+        $this->assertFalse($inactive['threw'], 'deactivating an account must not make its historical sheets unreadable');
+        $this->assertNull($inactive['type']);
+        $this->assertSame(
+            $this->report('expense')['accountIntegrity']['accountPublicId'],
+            $inactive['accountId'],
+            'the inactive account must still be the public account id the sheet stores'
+        );
+    }
+
+    /**
+     * T438: `save()` refuses an unresolvable public account id and writes nothing.
+     *
+     * The old path resolved the public id inside the statement builder and returned `0` when it matched
+     * no row, so this exact call wrote `account_id = 0`. The assertion is on the structural exception and
+     * on the absence of the row, because a refusal that still inserts is a new corrupt record.
+     */
+    public function testSaveRefusesAnUnknownPublicAccountWithoutWriting(): void
+    {
+        $save = $this->report('expense')['accountIntegrity']['unknownAccountSave'];
+
+        $this->assertTrue($save['threw'], 'an unknown public account id must be refused before the write');
+        $this->assertSame(UnreadableRecordData::class, $save['type']);
+        $this->assertTrue($save['accountReference'], 'the refusal is an account-reference fault');
+        $this->assertFalse($save['wroteRow'], 'a refused save must not leave a row behind, even with account_id = 0');
     }
 
     /**

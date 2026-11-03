@@ -150,6 +150,31 @@ final class TransactionRevisionTest extends TestCase
         self::assertEquals(5, $correctionRevision->expenseTypeDbId);
     }
 
+    public function testAssertSubmittableOnlyRequiresEvidenceWhenTheExpenseTypeRequiresIt(): void
+    {
+        $withoutEvidence = $this->createDraftRevision();
+        $withoutEvidence->complete('Description', 'CC001', 'CC001', 'Engineering', 1, 'Office Supplies', 1, false);
+
+        // The field-level check is deliberately independent of the receipt rule. The expense type
+        // decides whether the transaction has to carry a receipt; a partial draft can still prove it
+        // has every field and no receipt.
+        $withoutEvidence->assertSubmittable(false);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Revision is incomplete');
+        $withoutEvidence->assertSubmittable(true);
+    }
+
+    public function testActiveEvidenceSatisfiesTheReceiptRequiredCheck(): void
+    {
+        $revision = $this->createDraftRevision();
+        $revision->complete('Description', 'CC001', 'CC001', 'Engineering', 1, 'Office Supplies', 1, true);
+
+        $revision->assertSubmittable(true);
+
+        self::assertTrue($revision->hasEvidence());
+    }
+
     public function testCorrectionPreservesAmountAndDate(): void
     {
         $date = new DateTimeImmutable('2026-09-20', new DateTimeZone('UTC'));

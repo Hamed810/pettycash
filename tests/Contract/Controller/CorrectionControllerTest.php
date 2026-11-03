@@ -558,31 +558,19 @@ final class CorrectionControllerTest extends TestCase
     }
 
     /**
-     * workflow.md clause 4: resubmission validates the full required dataset **and evidence**, and a
-     * correction that fails it must not reach review.
+     * FR-091 and FR-005-036: the receipt rule is conditional on the transaction's active expense
+     * type. The ordinary contract fixture type does not require a receipt, so deactivating its only
+     * evidence must not make the correction impossible to resubmit.
      *
-     * **The case this asserts changed, and the change is the point.** The first draft drove an empty
-     * description through `PATCH` and expected a refusal. Measured: none came, because
-     * `TransactionRevision::assertSubmittable()` checks `description === null` and an empty string is
-     * not null — so that premise was never supported and the test was asserting an inference.
-     *
-     * Evidence is the half of clause 4 that *is* enforced and that has a real observable consequence,
-     * so it is what this drives. Deactivating the transaction's only evidence is a supported move —
-     * `DELETE /evidence/{id}` deactivates rather than deletes (FR-058) and T318 made that repeatable
-     * — and once no active evidence remains, the correction is incomplete and resubmission must stop.
-     *
-     * That also pins the evidence predicate from the other side: `data-model.md:248` scopes the
-     * requirement to the revision/**transaction**, so evidence carried by the *superseded* revision
-     * still counts — and deactivated evidence does not. A predicate that ignored `active` would pass
-     * this test while treating withdrawn evidence as if it were still there.
+     * This is the other half of the enforcement test below. Without it, an implementation that
+     * restored the old unconditional `hasEvidence()` check would look correct whenever the fixture
+     * happened to require a receipt.
      */
-    public function testResubmissionIsRefusedOnceTheTransactionsEvidenceIsDeactivated(): void
+    public function testResubmissionIsAllowedWhenTheExpenseTypeDoesNotRequireEvidence(): void
     {
         ContractFixtures::prepare('correction');
 
         $this->createCorrectionDraft();
-
-        $before = $this->activeRevision($this->revisions());
 
         $deactivate = $this->client->request('DELETE', '/ocs/v2.php/apps/pettycash/api/v1/evidence/' . ContractFixtures::evidenceId());
         self::assertSame(
@@ -597,20 +585,62 @@ final class CorrectionControllerTest extends TestCase
             'json' => ['expectedVersion' => $this->currentVersion()],
         ]);
 
-        self::assertGreaterThanOrEqual(
-            400,
-            $response->getStatusCode(),
-            'workflow.md clause 4 requires resubmission to validate evidence. With none active the '
-            . 'correction is incomplete and must be refused rather than routed to a manager. Answered '
-            . 'instead: ' . (string) $response->getBody()
-        );
-
-        $after = $this->activeRevision($this->revisions());
         self::assertSame(
-            $before['id'] ?? null,
-            $after['id'] ?? null,
-            'a refused resubmission must not activate anything. workflow.md clause 5 is atomic: either '
-            . 'the revision activates and routes, or nothing changes'
+            200,
+            $response->getStatusCode(),
+            'a receipt-exempt expense type must not be refused for lack of a receipt. Answered instead: '
+            . (string) $response->getBody()
+        );
+        $data = json_decode((string) $response->getBody(), true)['ocs']['data'] ?? [];
+        self::assertSame('AWAITING_COST_CENTER_REVIEW', $data['status'] ?? null);
+    }
+
+    /**
+     * FR-091 and FR-005-037: when the active expense type does require a receipt and none is active,
+     * resubmission is refused with the same per-transaction field error key used by sheet submission.
+     */
+    public function testResubmissionRefusesAMissingReceiptAndNamesTheTransaction(): void
+    {
+        ContractFixtures::prepare('correction');
+
+        $this->createCorrectionDraft();
+        $active = $this->activeRevision($this->revisions());
+
+        $update = $this->client->request(
+            'PATCH',
+            '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId(),
+            [
+                'headers' => ['X-PettyCash-Command-ID' => ContractFixtures::commandId()],
+                'json' => [
+                    'expenseDate' => $active['expenseDate'] ?? null,
+                    'amountMinor' => $active['amount']['amountMinor'] ?? null,
+                    'expenseTypeId' => ContractFixtures::requiredExpenseTypeId(),
+                    'expectedVersion' => $this->currentVersion(),
+                ],
+            ]
+        );
+        self::assertSame(200, $update->getStatusCode(), (string) $update->getBody());
+
+        $deactivate = $this->client->request('DELETE', '/ocs/v2.php/apps/pettycash/api/v1/evidence/' . ContractFixtures::evidenceId());
+        self::assertSame(200, $deactivate->getStatusCode(), (string) $deactivate->getBody());
+
+        $response = $this->client->request('POST', $this->resubmitUrl(), [
+            'headers' => ['X-PettyCash-Command-ID' => ContractFixtures::commandId()],
+            'json' => ['expectedVersion' => $this->currentVersion()],
+        ]);
+
+        self::assertSame(
+            422,
+            $response->getStatusCode(),
+            'workflow.md clause 4 and FR-091 require an active receipt when the expense type asks for one. '
+            . 'Answered instead: ' . (string) $response->getBody()
+        );
+        $error = json_decode((string) $response->getBody(), true)['ocs']['data']['error'] ?? [];
+        self::assertSame('VALIDATION_FAILED', $error['code'] ?? null);
+        self::assertArrayHasKey(
+            'transactions.' . ContractFixtures::transactionId() . '.evidence',
+            $error['fieldErrors'] ?? [],
+            'The refusal must use the same per-transaction evidence key as sheet submission'
         );
     }
 

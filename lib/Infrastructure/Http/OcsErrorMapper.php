@@ -9,8 +9,11 @@ use OCA\PettyCash\Application\Command\CommandConflict;
 use OCA\PettyCash\Application\Conflict;
 use OCA\PettyCash\Application\DataIntegrity\UnreadableRecordData;
 use OCA\PettyCash\Application\Forbidden;
+use OCA\PettyCash\Application\NotFound;
 use OCA\PettyCash\Application\Refusal;
 use OCA\PettyCash\Application\Support\FaultContextFactory;
+use OCA\PettyCash\Domain\Expense\SubmissionBlocked;
+use OCA\PettyCash\Application\Expense\SheetAccountInvalid;
 use OCP\AppFramework\Http;
 use OCA\PettyCash\Infrastructure\Nextcloud\TechnicalLogger;
 use OCP\AppFramework\Http\DataResponse;
@@ -103,6 +106,10 @@ final class OcsErrorMapper
             // Placed after `Conflict` and `Refusal` because all three markers are disjoint types, so the
             // order states intent rather than resolving an ambiguity.
             $error instanceof Forbidden => [Http::STATUS_FORBIDDEN, $error->errorCode()],
+            // FR-025 / FR-003. An absent record, another owner's record, and a record deleted by an
+            // earlier command all answer the same `404`, so the replay guard's "already gone" case is
+            // distinguishable from a malformed field (`422`) and a lost race (`409`).
+            $error instanceof NotFound => [Http::STATUS_NOT_FOUND, 'NOT_FOUND'],
             // FR-083, and the reason this arm is here rather than in four controllers.
             //
             // A stored record whose reference no longer resolves is a fault in the *data* — not in the
@@ -124,6 +131,17 @@ final class OcsErrorMapper
             // the two is the caller's fault and this one is not, and a client acting on the wrong one
             // retries forever or gives up on data it could have had.
             $error instanceof UnreadableRecordData => [Http::STATUS_UNPROCESSABLE_ENTITY, 'DATA_FAULT'],
+            // FR-091's aggregate receipt refusal. It is a validation failure like the generic arm
+            // below, but it is named separately so its per-transaction field errors survive into the
+            // response. It must stay above `InvalidArgumentException` because it extends that type.
+            $error instanceof SubmissionBlocked => [Http::STATUS_UNPROCESSABLE_ENTITY, 'VALIDATION_FAILED'],
+            // T440 / FR-019 / FR-021. A supplied `accountId` on a title-only update is a field-level
+            // validation failure. This arm exists for the same reason the `SubmissionBlocked` one
+            // does: the generic `InvalidArgumentException` arm would answer the right status but
+            // drop `fieldErrors`, leaving the form unable to mark the field that was refused. It is
+            // also why this arm must remain *above* that generic arm — `SheetAccountInvalid` extends
+            // `InvalidArgumentException`.
+            $error instanceof SheetAccountInvalid => [Http::STATUS_UNPROCESSABLE_ENTITY, 'VALIDATION_FAILED'],
             $error instanceof InvalidArgumentException => [Http::STATUS_UNPROCESSABLE_ENTITY, 'VALIDATION_FAILED'],
             // There is deliberately no `LogicException => 403` arm.
             //
@@ -168,7 +186,15 @@ final class OcsErrorMapper
             $message = $error->getMessage();
         }
 
-        return $this->respond($status, $code, $message, $commandId);
+        return $this->respond(
+            $status,
+            $code,
+            $message,
+            $commandId,
+            $error instanceof SubmissionBlocked || $error instanceof SheetAccountInvalid
+                ? $error->fieldErrors()
+                : []
+        );
     }
 
     /** @param array<string, list<string>> $fieldErrors */

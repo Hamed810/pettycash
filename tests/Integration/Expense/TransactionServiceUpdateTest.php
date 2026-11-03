@@ -9,12 +9,15 @@ use OCA\PettyCash\Application\Expense\TransactionService;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Domain\Configuration\CostCenter;
 use OCA\PettyCash\Domain\Configuration\ExpenseType;
+use OCA\PettyCash\Domain\Evidence\Evidence;
 use OCA\PettyCash\Domain\Expense\ExpenseSheet;
 use OCA\PettyCash\Domain\Expense\ExpenseTransaction;
 use OCA\PettyCash\Domain\Expense\TransactionRevision;
 use OCA\PettyCash\Domain\Shared\CurrencyCode;
 use OCA\PettyCash\Domain\Shared\Money;
 use OCA\PettyCash\Domain\Workflow\SheetStatus;
+use OCA\PettyCash\Domain\Workflow\TransactionStatus;
+use OCA\PettyCash\Domain\Workflow\WorkflowStage;
 use OCA\PettyCash\Tests\TestDoubles\FixedClock;
 use OCA\PettyCash\Tests\TestDoubles\InMemoryCostCenterRepository;
 use OCA\PettyCash\Application\Command\IdempotencyService;
@@ -75,6 +78,7 @@ final class TransactionServiceUpdateTest extends TestCase
     private InMemoryTransactionRevisionRepository $revisions;
     private InMemoryCostCenterRepository $costCenters;
     private InMemoryExpenseTypeRepository $expenseTypes;
+    private InMemoryEvidenceRepository $evidence;
     private TransactionService $service;
     private ExpenseTransaction $transaction;
 
@@ -85,6 +89,7 @@ final class TransactionServiceUpdateTest extends TestCase
         $this->revisions = new InMemoryTransactionRevisionRepository();
         $this->costCenters = new InMemoryCostCenterRepository();
         $this->expenseTypes = new InMemoryExpenseTypeRepository();
+        $this->evidence = new InMemoryEvidenceRepository();
 
         $this->seedCostCenters();
         $this->seedExpenseTypes();
@@ -129,7 +134,7 @@ final class TransactionServiceUpdateTest extends TestCase
             $this->revisions,
             $this->costCenters,
             $this->expenseTypes,
-            new InMemoryEvidenceRepository(),
+            $this->evidence,
             new InMemoryPrivateFileStore(),
             new InMemoryCurrentUser(self::OWNER),
             new InMemoryTransactionManager(),
@@ -334,6 +339,76 @@ final class TransactionServiceUpdateTest extends TestCase
             'the prior revision must not be rewritten by a correction'
         );
         self::assertSame(2, $this->activeRevision()->number());
+    }
+
+    /**
+     * OPEN-sheet edit regression: a save is not a submission.
+     *
+     * Both "Save draft" and "Update" reach `updateTransaction()`. Activating the revision here put
+     * the draft into the cost-center queue and made it read-only to its owner while the sheet was
+     * still OPEN. The assertion is on the stored aggregate as well as the return value, because the
+     * wrong status is written to `current_status` and read back by every later request.
+     */
+    public function testUpdatingADraftOnAnOpenSheetPreservesDraftStatus(): void
+    {
+        $updated = $this->service->updateTransaction(
+            self::TRANSACTION_ID,
+            '2026-02-01',
+            2000,
+            'new description',
+            self::COST_CENTER_ID,
+            self::EXPENSE_TYPE_ID,
+            0,
+            'cmd-open-sheet-draft-status'
+        );
+
+        $stored = $this->transactions->findByPublicId(self::TRANSACTION_ID);
+        self::assertNotNull($stored);
+        $sheet = $this->sheets->findById(1);
+        self::assertNotNull($sheet);
+
+        self::assertSame(TransactionStatus::Draft, $updated->status, 'the response must preserve DRAFT');
+        self::assertSame(WorkflowStage::Draft, $updated->stage, 'the response must stay at the draft stage');
+        self::assertSame(TransactionStatus::Draft, $stored->status, 'the persisted status must preserve DRAFT');
+        self::assertSame(WorkflowStage::Draft, $stored->stage, 'the persisted stage must stay at the draft stage');
+        self::assertSame(SheetStatus::Open, $sheet->status, 'an edit must not submit the owning sheet');
+        self::assertSame(1, $stored->lockVersion, 'the edit must bump the version exactly once');
+        self::assertSame(2, $stored->revision()->number(), 'the edit must attach the new revision');
+    }
+
+    /**
+     * The report also expects an existing attachment to stay associated. Evidence is scoped to the
+     * transaction, and the edit only moves `active_revision_id`, so a new revision must not disturb
+     * the evidence rows.
+     */
+    public function testUpdatingADraftPreservesItsEvidence(): void
+    {
+        $evidence = new Evidence(
+            'evidence-1',
+            1,
+            1,
+            'appdata-key',
+            'receipt.pdf',
+            'application/pdf',
+            1234,
+            'checksum'
+        );
+        $this->evidence->save($evidence);
+
+        $this->service->updateTransaction(
+            self::TRANSACTION_ID,
+            '2026-02-01',
+            2000,
+            'new description',
+            self::COST_CENTER_ID,
+            self::EXPENSE_TYPE_ID,
+            0,
+            'cmd-open-sheet-evidence'
+        );
+
+        $attached = $this->evidence->findByTransactionId(1, true);
+        self::assertCount(1, $attached, 'the edit must not detach the active evidence');
+        self::assertSame('evidence-1', $attached[0]->id, 'the same evidence row must remain attached');
     }
 
     private function activeRevision(): TransactionRevision

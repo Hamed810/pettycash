@@ -188,18 +188,58 @@ final class PurchaserFlowControllerTest extends TestCase
     }
 
     /**
-     * The contract does not declare `accountId` on `SheetSummary`, and the formatter used to emit
-     * it. A field the schema does not describe is one nothing can be tested against, so it is
-     * dropped rather than kept as an extra.
+     * T439: `accountId` is detail-only. `SheetSummary` does not declare it, so the list must not
+     * carry it even though `GET /sheets/{sheetId}` now does — the two endpoints share the formatter
+     * and that is exactly how the field could leak into the list by accident.
      */
     public function testSheetSummaryCarriesNoUndeclaredAccountId(): void
     {
         ContractFixtures::prepare('draft');
 
+        $response = $this->client->request('GET', '/ocs/v2.php/apps/pettycash/api/v1/sheets');
+        $items = json_decode((string) $response->getBody(), true)['ocs']['data']['items'] ?? [];
+
+        $this->assertNotEmpty($items, 'The fixture should seed at least one sheet');
+        $fixtureListed = false;
+        foreach ($items as $item) {
+            $this->assertArrayNotHasKey(
+                'accountId',
+                $item,
+                'SheetSummary does not declare accountId and the GET /sheets list must not emit it'
+            );
+            if (($item['id'] ?? null) === ContractFixtures::sheetId()) {
+                $fixtureListed = true;
+            }
+        }
+        $this->assertTrue($fixtureListed, 'The fixture sheet should appear in the list being checked');
+    }
+
+    /**
+     * T439: the detail payload carries the stored account's public uuid, not a guessed one.
+     *
+     * The fixture sheet is seeded against `ContractFixtures::accountId()`, so this is the assertion
+     * that the projection reports the account the sheet actually belongs to rather than the caller's
+     * first active account or the internal database id.
+     */
+    public function testSheetDetailCarriesTheStoredPublicAccountId(): void
+    {
+        ContractFixtures::prepare('draft');
+
         $response = $this->client->request('GET', '/ocs/v2.php/apps/pettycash/api/v1/sheets/' . ContractFixtures::sheetId());
+        $this->assertEquals(200, $response->getStatusCode());
         $data = json_decode((string) $response->getBody(), true)['ocs']['data'] ?? [];
 
-        $this->assertArrayNotHasKey('accountId', $data, 'SheetSummary does not declare accountId');
+        $this->assertArrayHasKey('accountId', $data, 'SheetDetail requires accountId');
+        $this->assertSame(
+            ContractFixtures::accountId(),
+            $data['accountId'],
+            'SheetDetail.accountId must be the stored account public id, not a guessed or first-listed account'
+        );
+        $this->assertMatchesRegularExpression(
+            '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/',
+            (string) $data['accountId'],
+            'SheetDetail.accountId is declared format: uuid'
+        );
     }
 
     // ===== SHEETS =====
@@ -338,6 +378,7 @@ final class PurchaserFlowControllerTest extends TestCase
         $data = json_decode((string) $response->getBody(), true)['ocs']['data'] ?? [];
         $this->assertArrayHasKey('transactions', $data, "{$method} {$path} returns SheetDetail, which requires transactions");
         $this->assertArrayHasKey('allowedActions', $data, "{$method} {$path} returns SheetDetail, which requires allowedActions");
+        $this->assertArrayHasKey('accountId', $data, "{$method} {$path} returns SheetDetail, which requires accountId");
     }
 
     /**
@@ -370,6 +411,12 @@ final class PurchaserFlowControllerTest extends TestCase
         // Contract: POST /sheets returns 201 with SheetDetail in ocs.data
         $this->assertEquals(201, $response->getStatusCode(), 'POST /sheets should return 201 Created');
         $this->assertOcsResponseStructure($response, 201);
+        $data = json_decode((string) $response->getBody(), true)['ocs']['data'] ?? [];
+        $this->assertSame(
+            ContractFixtures::accountId(),
+            $data['accountId'] ?? null,
+            'The create response is SheetDetail and must report the account the sheet was stored against'
+        );
     }
 
     public function testListSheetsReturns200WithPagedSheets(): void
@@ -398,7 +445,6 @@ final class PurchaserFlowControllerTest extends TestCase
             ],
             'json' => [
                 'title' => 'Updated Title',
-                'accountId' => ContractFixtures::accountId(),
                 'expectedVersion' => ContractFixtures::sheetVersion(),
             ],
         ]);
@@ -406,6 +452,12 @@ final class PurchaserFlowControllerTest extends TestCase
         // Contract: PATCH /sheets/{id} returns 200 with updated SheetDetail
         $this->assertEquals(200, $response->getStatusCode(), 'PATCH /sheets/{id} should return 200 OK');
         $this->assertOcsResponseStructure($response, 200);
+        $data = json_decode((string) $response->getBody(), true)['ocs']['data'] ?? [];
+        $this->assertSame(
+            ContractFixtures::accountId(),
+            $data['accountId'] ?? null,
+            'The update response is SheetDetail and must report the stored account, since update cannot replace it'
+        );
     }
 
     public function testSubmitSheetReturns200WithSubmittedSheetDetail(): void
@@ -441,6 +493,81 @@ final class PurchaserFlowControllerTest extends TestCase
         // Contract: POST /sheets/{id}/transactions returns 201 with TransactionDetail
         $this->assertEquals(201, $response->getStatusCode(), 'POST /sheets/{id}/transactions should return 201 Created');
         $this->assertOcsResponseStructure($response, 201);
+    }
+
+    /**
+     * FR-089: the minimum save is an expense date and a positive amount, and it never requires a
+     * receipt — even when the sheet's currency or the acting user has no other completed data.
+     */
+    public function testCreateTransactionAcceptsTheFR022MinimumWithoutEvidence(): void
+    {
+        $response = $this->client->request(
+            'POST',
+            '/ocs/v2.php/apps/pettycash/api/v1/sheets/' . ContractFixtures::sheetId() . '/transactions',
+            [
+                'headers' => ['X-PettyCash-Command-ID' => ContractFixtures::commandId()],
+                'json' => [
+                    'expenseDate' => '2026-09-20',
+                    'amountMinor' => 1000,
+                ],
+            ]
+        );
+
+        self::assertSame(201, $response->getStatusCode(), (string) $response->getBody());
+        $data = $this->ocsData($response);
+        self::assertSame(0, $data['evidenceCount'] ?? null);
+        self::assertFalse($data['evidenceRequired'] ?? true, 'A save must not require a receipt');
+    }
+
+    /**
+     * FR-089: description, cost center, and expense type are accepted in the same save. This is the
+     * shape the pre-save receipt flow uses before it uploads anything: the create request must be
+     * complete on its own and must not wait for evidence.
+     */
+    public function testCreateTransactionAcceptsEveryOptionalFieldInTheSameSave(): void
+    {
+        $response = $this->client->request(
+            'POST',
+            '/ocs/v2.php/apps/pettycash/api/v1/sheets/' . ContractFixtures::sheetId() . '/transactions',
+            [
+                'headers' => ['X-PettyCash-Command-ID' => ContractFixtures::commandId()],
+                'json' => [
+                    'expenseDate' => '2026-09-20',
+                    'amountMinor' => 1200,
+                    'description' => 'Full draft in one save',
+                    'costCenterId' => ContractFixtures::costCenterId(),
+                    'expenseTypeId' => ContractFixtures::expenseTypeId(),
+                ],
+            ]
+        );
+
+        self::assertSame(201, $response->getStatusCode(), (string) $response->getBody());
+        $data = $this->ocsData($response);
+        self::assertSame('Full draft in one save', $data['activeRevision']['description'] ?? null);
+        self::assertSame(ContractFixtures::costCenterId(), $data['activeRevision']['costCenter']['id'] ?? null);
+        self::assertSame(ContractFixtures::expenseTypeId(), $data['activeRevision']['expenseType']['id'] ?? null);
+        self::assertSame(0, $data['evidenceCount'] ?? null);
+        self::assertFalse($data['evidenceRequired'] ?? true);
+    }
+
+    /**
+     * FR-092 and T434: the payload is the server-derived readiness fact, not a client lookup of the
+     * expense type's name or a local copy of the configuration.
+     */
+    public function testTransactionSummaryExposesEvidenceRequiredAndActiveEvidenceCount(): void
+    {
+        $this->uploadEvidence();
+
+        $response = $this->client->request(
+            'GET',
+            '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId()
+        );
+        self::assertSame(200, $response->getStatusCode(), (string) $response->getBody());
+        $data = $this->ocsData($response);
+
+        self::assertArrayHasKey('evidenceRequired', $data, 'TransactionSummary must expose the server-derived receipt rule');
+        self::assertFalse($data['evidenceRequired'], 'The contract fixture expense type does not require a receipt');
+        self::assertSame(1, $data['evidenceCount'] ?? null, 'The uploaded active receipt must be counted');
     }
 
     // ===== T317: the contract-required command id on transaction create/update =====
@@ -626,11 +753,53 @@ final class PurchaserFlowControllerTest extends TestCase
         // Contract: PATCH /transactions/{id} returns 200 with updated TransactionDetail
         $this->assertEquals(200, $response->getStatusCode(), 'PATCH /transactions/{id} should return 200 OK');
         $this->assertOcsResponseStructure($response, 200);
+
+        $data = $this->ocsData($response);
+        // The contract fixture's draft baseline carries `current_stage = COST_CENTER`; an edit must
+        // preserve the stage it loaded, which `TransactionServiceUpdateTest` asserts from a clean
+        // `Draft`. What this endpoint-level test pins is the status and the resulting capabilities.
+        self::assertSame('DRAFT', $data['status'] ?? null, 'a save is not a submission');
+        self::assertTrue($data['activeRevision']['active'] ?? false, 'the new revision is the current one');
+        self::assertTrue($data['allowedActions']['canEdit'] ?? false, 'the owner must still be able to edit the draft');
+        self::assertTrue($data['allowedActions']['canDelete'] ?? false, 'the owner must still be able to delete the draft');
+    }
+
+    /**
+     * FR-089: the optional draft fields are accepted on update too, and the same save path never
+     * requires a receipt. The create-side test above proves the initial write; this proves a draft
+     * can be completed after creation without a separate evidence round trip.
+     */
+    public function testUpdateTransactionAcceptsEveryOptionalFieldWithoutEvidence(): void
+    {
+        $response = $this->client->request('PATCH', '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId(), [
+            'headers' => [
+                'X-PettyCash-Command-ID' => ContractFixtures::commandId(),
+            ],
+            'json' => [
+                'expenseDate' => '2026-09-21',
+                'amountMinor' => 2000,
+                'description' => 'Completed draft',
+                'costCenterId' => ContractFixtures::costCenterId(),
+                'expenseTypeId' => ContractFixtures::expenseTypeId(),
+                'expectedVersion' => ContractFixtures::transactionVersion(),
+            ],
+        ]);
+
+        self::assertSame(200, $response->getStatusCode(), (string) $response->getBody());
+        $data = $this->ocsData($response);
+        self::assertSame('Completed draft', $data['activeRevision']['description'] ?? null);
+        self::assertSame(ContractFixtures::costCenterId(), $data['activeRevision']['costCenter']['id'] ?? null);
+        self::assertSame(ContractFixtures::expenseTypeId(), $data['activeRevision']['expenseType']['id'] ?? null);
+        self::assertSame(0, $data['evidenceCount'] ?? null);
+        self::assertFalse($data['evidenceRequired'] ?? true);
     }
 
     public function testDeleteTransactionReturns204(): void
     {
         $response = $this->client->request('DELETE', '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId(), [
+            'headers' => [
+                'X-PettyCash-Command-ID' => ContractFixtures::commandId(),
+            ],
             'json' => [
                 'expectedVersion' => ContractFixtures::transactionVersion(),
             ],
@@ -641,14 +810,14 @@ final class PurchaserFlowControllerTest extends TestCase
     }
 
     /**
-     * T318: the contract no longer lists `X-PettyCash-Command-ID` on this operation.
+     * T436: deletion is replay-gated, so a request that cannot be replayed is malformed.
      *
-     * `contracts/workflow.md` requires the header only for *non-repeatable* commands, and deleting a
-     * draft is repeatable — the endpoint has no idempotency wrapper and never did. `expectedVersion`
-     * still guards against a concurrent edit, which is a different condition and is not affected:
-     * the assertions below all send a correct version.
+     * Before this task the endpoint answered `204` without a command id. That made a lost response
+     * unrecoverable: the retry re-read the row, found it gone, and answered "not found" — the client
+     * could not tell its own success from a failure. `contracts/ocs-api.yaml` now declares the header
+     * required on this operation, and `contracts/workflow.md` lists it as replay-gated.
      */
-    public function testDeleteTransactionSucceedsWithoutACommandIdHeader(): void
+    public function testDeleteTransactionWithoutACommandIdIsRefused(): void
     {
         $response = $this->client->request('DELETE', '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId(), [
             'json' => [
@@ -656,11 +825,162 @@ final class PurchaserFlowControllerTest extends TestCase
             ],
         ]);
 
-        $this->assertEquals(
-            204,
+        $this->assertSame(
+            400,
             $response->getStatusCode(),
-            'contracts/ocs-api.yaml does not list X-PettyCash-Command-ID on DELETE /transactions/{id} any '
-            . 'more, so a client that does not send it must still delete'
+            'a replay-gated delete without X-PettyCash-Command-ID is a malformed request, not a successful delete'
+        );
+        $this->assertSame('BAD_REQUEST', $this->ocsData($response)['error']['code'] ?? null);
+    }
+
+    /**
+     * T436: the same command id and payload returns the original `204` after the row is gone.
+     *
+     * This is the property the whole replay gate exists for. A client whose connection drops after the
+     * server committed has no way to know whether the delete happened; retrying the *same intent* must
+     * be safe and must answer the same success, not "not found".
+     */
+    public function testReplayingTheSameDeleteCommandReturnsTheOriginal204(): void
+    {
+        $commandId = ContractFixtures::commandId();
+        $url = '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId();
+        $body = ['expectedVersion' => ContractFixtures::transactionVersion()];
+
+        $first = $this->client->request('DELETE', $url, [
+            'headers' => ['X-PettyCash-Command-ID' => $commandId],
+            'json' => $body,
+        ]);
+        $this->assertSame(204, $first->getStatusCode(), 'the first delete should succeed');
+
+        $replay = $this->client->request('DELETE', $url, [
+            'headers' => ['X-PettyCash-Command-ID' => $commandId],
+            'json' => $body,
+        ]);
+
+        $this->assertSame(
+            204,
+            $replay->getStatusCode(),
+            'the same command id and payload must replay the original 204 even though the row is gone'
+        );
+    }
+
+    /**
+     * T436: the same command id with different content is a conflict, not a replay.
+     *
+     * `expectedVersion` is part of the command's canonical payload. Reusing the id while asking for a
+     * different version is a different intent, and silently answering the first result would hide it.
+     */
+    public function testReusingADeleteCommandWithADifferentPayloadIsAConflict(): void
+    {
+        $commandId = ContractFixtures::commandId();
+        $url = '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId();
+
+        $first = $this->client->request('DELETE', $url, [
+            'headers' => ['X-PettyCash-Command-ID' => $commandId],
+            'json' => ['expectedVersion' => ContractFixtures::transactionVersion()],
+        ]);
+        $this->assertSame(204, $first->getStatusCode());
+
+        $conflict = $this->client->request('DELETE', $url, [
+            'headers' => ['X-PettyCash-Command-ID' => $commandId],
+            'json' => ['expectedVersion' => ContractFixtures::transactionVersion() + 1],
+        ]);
+
+        $this->assertSame(409, $conflict->getStatusCode());
+        $this->assertSame(
+            'IDEMPOTENCY_CONFLICT',
+            $this->ocsData($conflict)['error']['code'] ?? null
+        );
+    }
+
+    /**
+     * T436: a *different* command id after the row is gone is `404`, never a second success.
+     *
+     * The replay gate must not turn deletion into an unconditionally repeatable operation: a caller
+     * that generates a fresh id is making a new attempt, and the honest answer to that attempt is that
+     * there is nothing left to delete.
+     */
+    public function testDeletingAnAlreadyDeletedTransactionUnderANewCommandIdIsNotFound(): void
+    {
+        $url = '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId();
+        $body = ['expectedVersion' => ContractFixtures::transactionVersion()];
+
+        $first = $this->client->request('DELETE', $url, [
+            'headers' => ['X-PettyCash-Command-ID' => ContractFixtures::commandId()],
+            'json' => $body,
+        ]);
+        $this->assertSame(204, $first->getStatusCode());
+
+        $second = $this->client->request('DELETE', $url, [
+            'headers' => ['X-PettyCash-Command-ID' => ContractFixtures::commandId()],
+            'json' => $body,
+        ]);
+
+        $this->assertSame(
+            404,
+            $second->getStatusCode(),
+            'a different command id after deletion is a new attempt and must report the record as gone'
+        );
+        $this->assertSame('NOT_FOUND', $this->ocsData($second)['error']['code'] ?? null);
+    }
+
+    public function testDeleteTransactionRejectsAMalformedCommandId(): void
+    {
+        $response = $this->client->request('DELETE', '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId(), [
+            'headers' => ['X-PettyCash-Command-ID' => str_repeat('x', 41)],
+            'json' => ['expectedVersion' => ContractFixtures::transactionVersion()],
+        ]);
+
+        $this->assertSame(400, $response->getStatusCode());
+        $this->assertSame('BAD_REQUEST', $this->ocsData($response)['error']['code'] ?? null);
+    }
+
+    /**
+     * T436: deleting a draft transaction still removes its draft evidence.
+     *
+     * The service removes the AppData binary before the repository deletes the metadata row, and the
+     * contract's delete answers `204` with no body to inspect. The evidence content endpoint is the
+     * observable proof that the whole subtree is gone rather than orphaned.
+     */
+    public function testDeletingADraftTransactionRemovesItsEvidence(): void
+    {
+        $transactionUrl = '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId();
+
+        $tempFile = tempnam(sys_get_temp_dir(), 't436_');
+        file_put_contents($tempFile, 'draft evidence bytes');
+
+        try {
+            $upload = $this->client->request('POST', $transactionUrl . '/evidence', [
+                'headers' => ['X-PettyCash-Command-ID' => ContractFixtures::commandId()],
+                'multipart' => [[
+                    'name' => 'file',
+                    'contents' => fopen($tempFile, 'r'),
+                    'filename' => 'receipt.txt',
+                ]],
+            ]);
+        } finally {
+            @unlink($tempFile);
+        }
+
+        $this->assertSame(201, $upload->getStatusCode(), (string) $upload->getBody());
+        $evidenceId = $this->ocsData($upload)['id'] ?? null;
+        $this->assertIsString($evidenceId);
+
+        $delete = $this->client->request('DELETE', $transactionUrl, [
+            'headers' => ['X-PettyCash-Command-ID' => ContractFixtures::commandId()],
+            'json' => ['expectedVersion' => ContractFixtures::transactionVersion()],
+        ]);
+        $this->assertSame(204, $delete->getStatusCode(), (string) $delete->getBody());
+
+        $content = $this->client->request(
+            'GET',
+            '/ocs/v2.php/apps/pettycash/api/v1/evidence/' . $evidenceId . '/content'
+        );
+
+        $this->assertSame(
+            404,
+            $content->getStatusCode(),
+            'the evidence row and its binary must be removed with the draft transaction, not orphaned'
         );
     }
 
@@ -1370,7 +1690,10 @@ final class PurchaserFlowControllerTest extends TestCase
         $delete = $this->client->request(
             'DELETE',
             '/ocs/v2.php/apps/pettycash/api/v1/transactions/' . ContractFixtures::transactionId(),
-            ['json' => ['expectedVersion' => ContractFixtures::transactionVersion()]]
+            [
+                'headers' => ['X-PettyCash-Command-ID' => ContractFixtures::commandId()],
+                'json' => ['expectedVersion' => ContractFixtures::transactionVersion()],
+            ]
         );
 
         $this->assertSame(

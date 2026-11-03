@@ -16,6 +16,7 @@ use OCA\PettyCash\Application\Security\AuthorizationService;
 use OCA\PettyCash\Application\StaleRecordVersion;
 use OCA\PettyCash\Domain\Audit\AuditEvent;
 use OCA\PettyCash\Domain\Configuration\Repository\CostCenterRepository;
+use OCA\PettyCash\Domain\Configuration\Repository\ExpenseTypeRepository;
 use OCA\PettyCash\Domain\Configuration\Repository\RoleAssignmentRepository;
 use OCA\PettyCash\Domain\Shared\Enum\Role;
 use OCA\PettyCash\Domain\Expense\ExpenseSheet;
@@ -36,7 +37,8 @@ final readonly class SubmitSheet
         private CurrentUser $currentUser,
         private CostCenterRepository $costCenterRepository,
         private ExpenseTransactionRepository $transactionRepository,
-        private RoleAssignmentRepository $roleAssignmentRepository
+        private RoleAssignmentRepository $roleAssignmentRepository,
+        private ExpenseTypeRepository $expenseTypeRepository
     ) {}
 
     /**
@@ -115,8 +117,24 @@ final readonly class SubmitSheet
                     ];
                 }
 
-                // Submit the sheet (domain logic)
-                $submittedTotal = $sheet->submit();
+                // Resolve the receipt rule from each transaction's current expense type. The rule is
+                // deliberately read now, at submission time, rather than copied onto the revision:
+                // an administrator who changes `evidence_required` governs the next submission, and
+                // a draft saved under an older setting is not silently exempted. A transaction with
+                // no expense type yet is not subject to a receipt rule; the field validation above
+                // still refuses it for the missing type.
+                $evidenceRequired = [];
+                foreach ($sheet->transactions() as $tx) {
+                    $expenseTypeId = $tx->revision()->expenseTypeId();
+                    $expenseType = $expenseTypeId === null
+                        ? null
+                        : $this->expenseTypeRepository->findByPublicId($expenseTypeId);
+                    $evidenceRequired[$tx->id] = $expenseType?->evidenceRequired ?? false;
+                }
+
+                // Submit the sheet (domain logic). The domain refuses every missing receipt before it
+                // activates anything, so the error names all offenders and no partial routing occurs.
+                $submittedTotal = $sheet->submit($evidenceRequired);
 
                 // Persist the routed transactions, not just the sheet. `$sheet->submit()`
                 // transitions every transaction in memory (`activate()` moves each to

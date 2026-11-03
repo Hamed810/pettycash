@@ -410,25 +410,20 @@ final readonly class TransactionService
             $expenseTypePublicId
         );
 
-        // A transaction being corrected must NOT be activated by an edit.
+        // An edit must never activate the transaction.
         //
         // `activate()` does three things at once — it marks the revision active, moves the stage to
-        // `COST_CENTER`, and sets the status to `AWAITING_COST_CENTER_REVIEW`. On an ordinary draft
-        // that is harmless, because nothing has been submitted yet. On a **correction draft** it meant
-        // a purchaser's edit ended correction and routed the expense to a cost-centre manager before
-        // they had resubmitted anything, contradicting `workflow.md`'s Correction Contract clause 5
-        // ("Activation atomically switches the active revision and routes it to cost-center review" —
-        // at resubmission) and FR-050's rule that the active revision determines current information.
+        // `COST_CENTER`, and sets the status to `AWAITING_COST_CENTER_REVIEW`. That is the submission
+        // transition, and `workflow.md`'s Correction Contract clause 5 puts it at resubmission. Using
+        // it on an edit meant a purchaser's correction left correction before resubmission; and, as
+        // the OPEN-sheet draft-status regression showed, an ordinary draft on an open sheet entered
+        // the cost-center queue and became read-only to its owner even though the sheet was never
+        // submitted. `FR-005-046` and C-20 clause 6 require a save to preserve `DRAFT` and start no
+        // approval.
         //
-        // So a correction attaches its edited revision as the one being worked on and leaves stage,
-        // status, and the revision's own `active` flag untouched. Everything else — the drafts on an
-        // open sheet — keeps the previous behaviour, because `TransactionServiceUpdateTest` pins it.
-        if ($isCorrection) {
-            $transaction->attachWorkingRevision($revision);
-        } else {
-            $transaction->activate($revision);
-            $transaction->lockVersion++;
-        }
+        // Attaching the revision makes it the one being worked on without activating it. The method
+        // also increments the lock version, so no separate increment belongs here.
+        $transaction->attachWorkingRevision($revision);
 
             // See createTransaction(): the revision needs the transaction's internal
             // id, and the transaction's active_revision_id needs the revision's.
@@ -503,20 +498,64 @@ final readonly class TransactionService
      * then the metadata rows — because that evidence is only removable while it is
      * still pre-submission. Nothing belonging to a submitted transaction is touched.
      *
+     * **Replay-gated (T436).** The command id is part of the operation's identity, not a
+     * transport detail: a retry after a lost `204` must return that same `204` even though
+     * the row is gone, while a *different* command id must honestly answer `404`. Wrapping
+     * the guards themselves — not just the row removal — is what makes the replay work: a
+     * replayed command never re-reads a transaction that no longer exists, so it cannot
+     * turn its own success into "not found".
+     *
      * @param string $transactionId
-     * @param int $expectedVersion
+     * @param string $commandId      client-generated identity, stable across retries of one intent
+     * @param int    $expectedVersion concurrency guard, and part of the command's replay payload
      */
-    public function deleteTransaction(string $transactionId, int $expectedVersion): void
+    public function deleteTransaction(string $transactionId, string $commandId, int $expectedVersion): void
     {
         $ownerUid = $this->currentUser->uid();
+        $payload = [
+            'transaction_id' => $transactionId,
+            'expected_version' => $expectedVersion,
+        ];
+
+        $this->transactionManager->transactional(function () use ($transactionId, $commandId, $expectedVersion, $ownerUid, $payload): void {
+            $this->idempotencyService->execute(
+                $commandId,
+                $ownerUid,
+                'transaction.delete',
+                $transactionId,
+                $payload,
+                function () use ($transactionId, $ownerUid, $expectedVersion): array {
+                    $this->deleteTransactionOnce($transactionId, $ownerUid, $expectedVersion);
+
+                    return ['deleted' => true, 'transactionId' => $transactionId];
+                },
+                204
+            );
+        });
+    }
+
+    /**
+     * The one-shot body of {@see deleteTransaction()}, run only when the command is not a replay.
+     *
+     * @throws TransactionNotFound when the row is absent, another owner's, or already deleted
+     * @throws StaleRecordVersion  when the caller's `expectedVersion` is not the live version
+     * @throws InvalidArgumentException when the sheet is not open or the row is not a draft
+     */
+    private function deleteTransactionOnce(string $transactionId, string $ownerUid, int $expectedVersion): void
+    {
         $transaction = $this->transactionRepository->findByPublicId($transactionId);
 
         if ($transaction === null || $transaction->ownerUid !== $ownerUid) {
-            throw new InvalidArgumentException('Transaction not found');
+            // FR-003: another user's record is reported as absent, never as forbidden. The same
+            // answer covers "already deleted by another command id" (FR-025).
+            throw new TransactionNotFound();
         }
 
         $sheet = $this->sheetRepository->findById($transaction->sheetId ?? 0);
-        if ($sheet === null || $sheet->status !== SheetStatus::Open) {
+        if ($sheet === null) {
+            throw new TransactionNotFound();
+        }
+        if ($sheet->status !== SheetStatus::Open) {
             throw new InvalidArgumentException('Cannot delete transactions from a submitted sheet');
         }
 
@@ -538,21 +577,19 @@ final readonly class TransactionService
             throw new InvalidArgumentException('Only a draft transaction can be deleted');
         }
 
-        $this->transactionManager->transactional(function () use ($sheet, $transaction): void {
-            $transactionDbId = $transaction->dbId;
-            if ($transactionDbId !== null) {
-                // Remove the AppData binaries while the keys are still known. The
-                // metadata rows are removed by the repository delete below, which
-                // cannot reach the file store.
-                foreach ($this->evidenceRepository->findByTransactionId($transactionDbId) as $evidence) {
-                    $this->fileStore->deleteDraftEvidence($evidence->appDataKey);
-                }
+        $transactionDbId = $transaction->dbId;
+        if ($transactionDbId !== null) {
+            // Remove the AppData binaries while the keys are still known. The
+            // metadata rows are removed by the repository delete below, which
+            // cannot reach the file store.
+            foreach ($this->evidenceRepository->findByTransactionId($transactionDbId) as $evidence) {
+                $this->fileStore->deleteDraftEvidence($evidence->appDataKey);
             }
+        }
 
-            $sheet->removeTransaction($transaction->id);
-            $this->transactionRepository->delete($transaction);
-            $this->sheetRepository->save($sheet);
-        });
+        $sheet->removeTransaction($transaction->id);
+        $this->transactionRepository->delete($transaction);
+        $this->sheetRepository->save($sheet);
     }
 
     /**

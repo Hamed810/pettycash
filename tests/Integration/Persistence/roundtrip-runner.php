@@ -106,6 +106,7 @@ use OCA\PettyCash\Application\Configuration\CostCenterService;
 use OCA\PettyCash\Application\Account\AccountAdministrationService;
 use OCA\PettyCash\Application\Configuration\CurrencyService;
 use OCA\PettyCash\Application\Configuration\ExpenseTypeService;
+use OCA\PettyCash\Application\DataIntegrity\UnreadableRecordData;
 use OCA\PettyCash\Application\Expense\SheetService;
 use OCA\PettyCash\Application\Audit\AuditWriterService;
 use OCA\PettyCash\Application\Audit\ConfigurationAuditService;
@@ -186,6 +187,17 @@ const T379_COUNT_PROBE_UID = 't379-dashboard-count-probe';
  * removed by the shared fingerprint sweep like every other row this runner writes.
  */
 const T388_PROVISIONING_PROBE_UID = 't388-provisioning-probe';
+
+/**
+ * High surrogate ids that no row can hold, for T438's broken-reference probes.
+ *
+ * The same values the contract fixture uses, kept separate so this scenario does not depend on a test
+ * fixture running first. They are inside the unsigned BIGINT range and far above any sequence this lab
+ * will reach; a value the table merely happens not to use could become readable and silently turn the
+ * probe healthy.
+ */
+const DANGLING_CURRENCY_ID = 4294000000;
+const DANGLING_ACCOUNT_ID = 4294000001;
 
 $scenario = $argv[1] ?? '';
 $scenarios = ['configuration', 'account', 'expense', 'command', 'retention', 'appdata', 'exportservice', 'sheetlist', 'dashboardcounts', 'provisioning'];
@@ -1441,6 +1453,45 @@ function scenarioAccount(
  * Also `DbEvidenceRepository` and `DbEvidenceLinkRepository`, plus the consumption movement, which is
  * the one movement that *does* name a source revision.
  */
+/**
+ * T438: break one stored sheet reference, read the sheet, and restore the reference.
+ *
+ * The read is the subject, so the corruption has to be in the row the repository actually selects. The
+ * restore runs in `finally` even when the read throws, which is the normal outcome: leaving the
+ * scenario's own healthy sheet broken would make every later read in the same process fail for a reason
+ * the test created. The scenario's fingerprint sweep removes it either way if the process dies.
+ *
+ * @param callable(): void $corrupt
+ * @param callable(): void $restore
+ *
+ * @return array{threw: bool, type: string|null, accountReference: bool}
+ */
+function probeSheetReadFailure(
+    DbExpenseSheetRepository $sheets,
+    string $sheetPublicId,
+    callable $corrupt,
+    callable $restore
+): array {
+    try {
+        $corrupt();
+    } catch (Throwable $e) {
+        $restore();
+        throw $e;
+    }
+
+    try {
+        $sheets->findByPublicId($sheetPublicId);
+
+        return ['threw' => false, 'type' => null, 'accountReference' => false];
+    } catch (UnreadableRecordData $e) {
+        return ['threw' => true, 'type' => $e::class, 'accountReference' => $e->isAccountReference()];
+    } catch (Throwable $e) {
+        return ['threw' => true, 'type' => $e::class, 'accountReference' => false];
+    } finally {
+        $restore();
+    }
+}
+
 function scenarioExpense(
     DbCurrencyRepository $currencies,
     DbCostCenterRepository $costCenters,
@@ -1801,7 +1852,158 @@ function scenarioExpense(
     $consumptionByRevision = $movements->findBySourceRevisionId($revision->id());
     $ledger = $movements->findByAccountId((int) $account->dbId);
 
+    // --- T438: the stored account reference is part of the sheet's readable identity ---
+    //
+    // The reads above never compared the account id. `mapRow()` returned `''` for an unresolved
+    // reference, and every assertion still passed because the sheet's title, currency and owner were
+    // all readable. Capture it explicitly from both read paths before anything is broken.
+    $accountIdByPublicId = $sheetByPublicId?->accountId;
+    $accountIdBySurrogate = $sheetBySurrogate?->accountId;
+
+    $connection = \OCP\Server::get(IDBConnection::class);
+    $setSheetReference = static function (string $column, int $value) use ($connection, $sheet): void {
+        $update = $connection->getQueryBuilder()->update('pettycash_sheets');
+        $update->set($column, $update->createNamedParameter($value, IQueryBuilder::PARAM_INT))
+            ->where($update->expr()->eq('id', $update->createNamedParameter((int) $sheet->dbId)))
+            ->executeStatement();
+    };
+    $accountDbId = (int) $account->dbId;
+    $accountCurrencyId = (int) $currency->id;
+
+    $danglingAccountFault = probeSheetReadFailure(
+        $sheets,
+        $sheet->id,
+        static function () use ($setSheetReference): void {
+            $setSheetReference('account_id', DANGLING_ACCOUNT_ID);
+        },
+        static function () use ($setSheetReference, $accountDbId): void {
+            $setSheetReference('account_id', $accountDbId);
+        }
+    );
+
+    $danglingCurrencyFault = probeSheetReadFailure(
+        $sheets,
+        $sheet->id,
+        static function () use ($setSheetReference): void {
+            $setSheetReference('currency_id', DANGLING_CURRENCY_ID);
+        },
+        static function () use ($setSheetReference, $accountCurrencyId): void {
+            $setSheetReference('currency_id', $accountCurrencyId);
+        }
+    );
+
+    // The account resolves and the sheet currency resolves, but they are different currencies. This is
+    // the fault the account probe's first check cannot see: there is a row for the account, and a row
+    // for the sheet's currency, and only the agreement between them is wrong.
+    $otherCurrency = $connection->getQueryBuilder();
+    $otherCurrency->select('id')
+        ->from('pettycash_currencies')
+        ->where($otherCurrency->expr()->neq('id', $otherCurrency->createNamedParameter($accountCurrencyId)))
+        ->setMaxResults(1);
+    $otherCurrencyId = $otherCurrency->executeQuery()->fetchOne();
+    if ($otherCurrencyId === false) {
+        throw new RuntimeException(
+            'The account-currency probe needs a second configured currency; this scenario created only one.'
+        );
+    }
+    $otherCurrencyId = (int) $otherCurrencyId;
+
+    $crossCurrencyFault = probeSheetReadFailure(
+        $sheets,
+        $sheet->id,
+        static function () use ($setSheetReference, $otherCurrencyId): void {
+            $setSheetReference('currency_id', $otherCurrencyId);
+        },
+        static function () use ($setSheetReference, $accountCurrencyId): void {
+            $setSheetReference('currency_id', $accountCurrencyId);
+        }
+    );
+
+    // An inactive account is history, not corruption. Deactivate the scenario's own account and read
+    // the sheet again: the reference still resolves, so the sheet must still be readable and must still
+    // name the same public account id.
+    $setAccountActive = static function (bool $active) use ($connection, $accountDbId): void {
+        $update = $connection->getQueryBuilder()->update('pettycash_accounts');
+        $update->set('active', $update->createNamedParameter($active ? 1 : 0, IQueryBuilder::PARAM_INT))
+            ->where($update->expr()->eq('id', $update->createNamedParameter($accountDbId)))
+            ->executeStatement();
+    };
+    $setAccountActive(false);
+    try {
+        $inactiveSheet = $sheets->findByPublicId($sheet->id);
+        $inactiveAccountRead = [
+            'threw' => false,
+            'type' => null,
+            'accountId' => $inactiveSheet?->accountId,
+        ];
+    } catch (Throwable $e) {
+        $inactiveAccountRead = [
+            'threw' => true,
+            'type' => $e::class,
+            'accountId' => null,
+        ];
+    } finally {
+        $setAccountActive(true);
+    }
+
+    // `save()` used to write `account_id = 0` when the public id matched no row. The refusal must be
+    // the account-reference variant and must leave no row behind: a failed write that still inserted
+    // would turn the refusal into a new corrupt record.
+    $unknownAccountSheet = new ExpenseSheet(
+        (string) Uuid::random(),
+        $actorUid,
+        (string) Uuid::random(),
+        $account->currencyCode(),
+        title: LeakedRows::ROUND_TRIP_SHEET_TITLE
+    );
+    $unknownAccountSave = [
+        'threw' => false,
+        'type' => null,
+        'accountReference' => false,
+        'wroteRow' => false,
+    ];
+    try {
+        $sheets->save($unknownAccountSheet);
+    } catch (UnreadableRecordData $e) {
+        $unknownAccountSave = [
+            'threw' => true,
+            'type' => $e::class,
+            'accountReference' => $e->isAccountReference(),
+            'wroteRow' => false,
+        ];
+    } catch (Throwable $e) {
+        $unknownAccountSave = [
+            'threw' => true,
+            'type' => $e::class,
+            'accountReference' => false,
+            'wroteRow' => false,
+        ];
+    }
+
+    $unknownRowCount = $connection->getQueryBuilder();
+    $unknownRowCount->select($unknownRowCount->func()->count('id', 'total'))
+        ->from('pettycash_sheets')
+        ->where($unknownRowCount->expr()->eq('public_id', $unknownRowCount->createNamedParameter($unknownAccountSheet->id)));
+    $unknownAccountSave['wroteRow'] = (int) $unknownRowCount->executeQuery()->fetchOne() > 0;
+
+    if ($unknownAccountSave['wroteRow']) {
+        // A regression that writes the row must still leave the database clean; the assertion on
+        // `wroteRow` is what fails the test, not an accumulating fingerprint.
+        $track('pettycash_sheets', $surrogateIdOf('pettycash_sheets', $unknownAccountSheet->id));
+    }
+
     return [
+        'accountIntegrity' => [
+            'accountPublicId' => $account->id,
+            'accountDbId' => $accountDbId,
+            'sheetAccountIdByPublicId' => $accountIdByPublicId,
+            'sheetAccountIdBySurrogate' => $accountIdBySurrogate,
+            'danglingAccount' => $danglingAccountFault,
+            'danglingCurrency' => $danglingCurrencyFault,
+            'crossCurrency' => $crossCurrencyFault,
+            'inactiveAccount' => $inactiveAccountRead,
+            'unknownAccountSave' => $unknownAccountSave,
+        ],
         'sheet' => [
             'publicId' => $sheet->id,
             'byPublicId' => $sheetByPublicId === null ? null : [

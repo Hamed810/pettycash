@@ -20,6 +20,7 @@ use OCA\PettyCash\Domain\Configuration\ExpenseType;
 use OCA\PettyCash\Domain\Configuration\Repository\CostCenterRepository;
 use OCA\PettyCash\Domain\Configuration\Repository\CurrencyRepository;
 use OCA\PettyCash\Domain\Configuration\Repository\ExpenseTypeRepository;
+use OCA\PettyCash\Domain\Expense\SubmissionBlocked;
 use OCA\PettyCash\Domain\Expense\ExpenseSheet;
 use OCA\PettyCash\Domain\Expense\ExpenseTransaction;
 use OCA\PettyCash\Domain\Expense\Repository\ExpenseSheetRepository;
@@ -55,6 +56,14 @@ final class TransactionCorrectionTest extends TestCase
     protected function setUp(): void
     {
         $this->container = \TestContainerAccessor::getInstance();
+
+        // The correction service tests below write the same public ids the domain tests use, so
+        // clear the doubles rather than depending on the order PHPUnit happens to run them in.
+        $this->container->query(ExpenseSheetRepository::class)->clear();
+        $this->container->query(ExpenseTransactionRepository::class)->clear();
+        $this->container->query(TransactionRevisionRepository::class)->clear();
+        $this->container->query(\OCA\PettyCash\Domain\Audit\Repository\AuditEventRepository::class)->clear();
+        $this->container->query(\OCA\PettyCash\Application\Command\CommandResultRepository::class)->clear();
     }
 
     private function createSubmittedSheetWithTransaction(): ExpenseSheet
@@ -254,5 +263,81 @@ final class TransactionCorrectionTest extends TestCase
 
         // Try to create correction from completed revision
         $tx->createCorrectionRevision('rev-2');
+    }
+
+    public function testResubmissionAllowsAReceiptExemptCorrectionWithoutEvidence(): void
+    {
+        $transaction = $this->seedCorrectionTransaction(false);
+
+        $result = $this->container->query(\OCA\PettyCash\Application\Workflow\ResubmitCorrection::class)
+            ->execute($transaction->publicId, 'command-exempt-' . Uuid::random(), 0);
+
+        self::assertSame(50000, $result['submitted_total']);
+        self::assertSame(TransactionStatus::AwaitingCostCenterReview, $transaction->status);
+        self::assertSame(WorkflowStage::CostCenter, $transaction->stage);
+    }
+
+    public function testResubmissionRefusesAReceiptRequiredCorrectionAndNamesTheTransaction(): void
+    {
+        $transaction = $this->seedCorrectionTransaction(true);
+
+        try {
+            $this->container->query(\OCA\PettyCash\Application\Workflow\ResubmitCorrection::class)
+                ->execute($transaction->publicId, 'command-required-' . Uuid::random(), 0);
+            self::fail('A receipt-required correction without active evidence must not resubmit');
+        } catch (SubmissionBlocked $blocked) {
+            self::assertSame(
+                ['transactions.' . $transaction->publicId . '.evidence'],
+                array_keys($blocked->fieldErrors())
+            );
+            self::assertSame(TransactionStatus::AwaitingPurchaserCorrection, $transaction->status);
+            self::assertSame(WorkflowStage::Correction, $transaction->stage);
+        }
+    }
+
+    private function seedCorrectionTransaction(bool $evidenceRequired): ExpenseTransaction
+    {
+        $type = ExpenseType::create(
+            $evidenceRequired ? 'Receipt Required' : 'Receipt Exempt',
+            null,
+            $evidenceRequired
+        );
+        $type->publicId = (string) Uuid::random();
+        $this->container->query(ExpenseTypeRepository::class)->save($type);
+
+        $revision = TransactionRevision::draft(
+            'rev-' . Uuid::random(),
+            1,
+            new DateTimeImmutable('2026-09-20', new DateTimeZone('UTC')),
+            Money::positive(50000, CurrencyCode::fromString('IRR'))
+        );
+        $revision->complete(
+            'Returned expense',
+            'CC001',
+            'CC001',
+            'Engineering',
+            1,
+            $type->title,
+            $type->id ?? 1,
+            false,
+            $type->publicId
+        );
+        $revision->transactionDbId = 1;
+
+        $transactionPublicId = (string) Uuid::random();
+        $transaction = new ExpenseTransaction(
+            $transactionPublicId,
+            'test-user',
+            $revision,
+            sheetId: 1,
+            dbId: 1,
+            publicId: $transactionPublicId
+        );
+        $transaction->stage = WorkflowStage::Correction;
+        $transaction->status = TransactionStatus::AwaitingPurchaserCorrection;
+
+        $this->container->query(ExpenseTransactionRepository::class)->save($transaction);
+
+        return $transaction;
     }
 }

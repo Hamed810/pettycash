@@ -98,15 +98,18 @@ final class StaleVersionConflictTest extends TestCase
     /**
      * `DELETE /transactions/{id}`.
      *
-     * No command id, matching the contract's note that deleting a draft row is a *repeatable*
-     * command — T318 removed the header from this operation. Sending one would prove nothing about
-     * the version guard, since the header is not what makes the version stale.
+     * A command id is sent because T436 made this operation replay-gated; without it the endpoint
+     * answers `400` for a different reason entirely. Sending one proves the version guard is what
+     * refuses the request.
      */
     public function testAStaleDraftDeletionIsAConflict(): void
     {
-        $response = $this->request('DELETE', $this->url('/transactions/' . ContractFixtures::transactionId()), [
-            'expectedVersion' => ContractFixtures::transactionVersion() + 1,
-        ]);
+        $response = $this->request(
+            'DELETE',
+            $this->url('/transactions/' . ContractFixtures::transactionId()),
+            ['expectedVersion' => ContractFixtures::transactionVersion() + 1],
+            ['X-PettyCash-Command-ID' => ContractFixtures::commandId()]
+        );
 
         $this->assertStaleConflict($response, 'TRANSACTION_VERSION_CONFLICT');
     }
@@ -123,7 +126,6 @@ final class StaleVersionConflictTest extends TestCase
     {
         $response = $this->request('PATCH', $this->url('/sheets/' . ContractFixtures::sheetId()), [
             'title' => 'A stale edit',
-            'accountId' => ContractFixtures::accountId(),
             'expectedVersion' => ContractFixtures::sheetVersion() + 1,
         ]);
 

@@ -7,6 +7,7 @@ namespace OCA\PettyCash\Infrastructure\Http;
 use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Domain\Configuration\Repository\CostCenterRepository;
 use OCA\PettyCash\Domain\Configuration\Repository\CurrencyRepository;
+use OCA\PettyCash\Domain\Configuration\Repository\ExpenseTypeRepository;
 use OCA\PettyCash\Domain\Configuration\Repository\RoleAssignmentRepository;
 use OCA\PettyCash\Domain\Expense\Repository\ExpenseSheetRepository;
 use OCA\PettyCash\Domain\Expense\TransactionRevision;
@@ -42,7 +43,8 @@ final readonly class TransactionPayloadFormatter
         private CurrencyRepository $currencyRepository,
         private RoleAssignmentRepository $roleAssignmentRepository,
         private ExpenseSheetRepository $sheetRepository,
-        private CurrentUser $currentUser
+        private CurrentUser $currentUser,
+        private ExpenseTypeRepository $expenseTypeRepository
     ) {}
 
     /**
@@ -80,9 +82,30 @@ final readonly class TransactionPayloadFormatter
             'status' => $transaction->status->value,
             'finalOutcome' => $transaction->finalOutcome,
             'latestDecision' => $decisions === [] ? null : $this->decision($decisions[count($decisions) - 1]),
+            // FR-092: the server publishes the rule that submission will apply, rather than making
+            // the client look up the expense type and re-derive it. It is resolved on every read so
+            // an administrator's current setting governs the next submission, not a stale copy.
+            'evidenceRequired' => $this->evidenceRequired($transaction),
             'evidenceCount' => $evidenceCount,
             'version' => $transaction->lockVersion,
         ];
+    }
+
+    /**
+     * The active expense type's current receipt rule.
+     *
+     * A draft saved before an expense type was chosen has nothing to require yet. A missing type is
+     * therefore `false`, not an error: submission's field validation is where an incomplete draft is
+     * refused, and conflating the two would show a receipt blocker on every new row.
+     */
+    private function evidenceRequired(ExpenseTransaction $transaction): bool
+    {
+        $expenseTypeId = $transaction->revision()->expenseTypeId();
+        if ($expenseTypeId === null) {
+            return false;
+        }
+
+        return $this->expenseTypeRepository->findByPublicId($expenseTypeId)?->evidenceRequired ?? false;
     }
 
     /**
@@ -136,7 +159,11 @@ final readonly class TransactionPayloadFormatter
      */
     private function revisionFrom(ExpenseTransaction $transaction): array
     {
-        return $this->revision($transaction->revision());
+        // `revision()` describes the transaction's current revision, so its `active` member is true
+        // by definition. Deriving it from the revision's own flag reports false for a revision that
+        // `attachWorkingRevision()` has just attached, until the next database read projects the
+        // pointer back — while the stored row and the contract already call it active.
+        return array_merge($this->revision($transaction->revision()), ['active' => true]);
     }
 
     /**

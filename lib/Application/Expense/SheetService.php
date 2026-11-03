@@ -149,15 +149,25 @@ final readonly class SheetService
     }
 
     /**
-     * Update an open sheet
+     * Rename an open sheet without changing the account or currency it was created against.
+     *
+     * FR-019 / FR-021 make both immutable after creation. The service therefore takes no account
+     * argument and performs no account lookup, validation, or adoption: accepting one here would give
+     * account replacement a second home even if the controller refused it, and a future caller could
+     * bypass the HTTP boundary. The stored account may be inactive; in that case the title-only save
+     * still succeeds and preserves it, because deactivation retires future funding, not the history
+     * already written against the account.
+     *
+     * The guard order is unchanged from the pre-T440 implementation: owner scoping, then the stale
+     * version `409`, then `OPEN`-only. Only after all three pass are the title and lock version
+     * changed, so every refusal leaves the stored sheet untouched.
      *
      * @param string $sheetId
      * @param string $title
-     * @param string $accountId
      * @param int $expectedVersion
      * @return ExpenseSheet
      */
-    public function updateSheet(string $sheetId, string $title, string $accountId, int $expectedVersion): ExpenseSheet
+    public function updateSheet(string $sheetId, string $title, int $expectedVersion): ExpenseSheet
     {
         $ownerUid = $this->currentUser->uid();
         $sheet = $this->sheetRepository->findByPublicId($sheetId);
@@ -182,7 +192,6 @@ final readonly class SheetService
         }
 
         $sheet->title = $title;
-        $sheet->accountId = $accountId;
         $sheet->lockVersion++;
         $sheet->updatedAt = new DateTimeImmutable('now', new DateTimeZone('UTC'));
 

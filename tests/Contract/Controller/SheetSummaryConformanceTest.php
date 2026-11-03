@@ -101,17 +101,20 @@ final class SheetSummaryConformanceTest extends TestCase
     /**
      * `SheetDetail` is `allOf: [SheetSummary, …]`, so every `SheetSummary` property must be present there
      * too — the same comparison T327 asked for on `SheetDetail`, which is what this check generalises.
+     *
+     * T439 added `accountId` to the detail-only branch, and **only** there: the list check above still
+     * rejects it, because `SheetSummary` declares no account identity.
      */
     public function testTheDetailRouteEmitsNoUndeclaredSheetSummaryProperty(): void
     {
         $declared = $this->contractProperties('SheetSummary');
         $detail = $this->detail(ContractFixtures::sheetId());
 
-        $extra = array_diff(array_keys($detail), array_merge($declared, ['allowedActions', 'transactions']));
+        $extra = array_diff(array_keys($detail), array_merge($declared, ['accountId', 'allowedActions', 'transactions']));
         $this->assertSame(
             [],
             array_values($extra),
-            'SheetDetail adds allowedActions and transactions and nothing else'
+            'SheetDetail adds accountId, allowedActions, and transactions and nothing else'
         );
     }
 

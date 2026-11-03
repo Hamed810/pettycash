@@ -19,9 +19,10 @@ use OCA\PettyCash\Infrastructure\Persistence\Expense\SheetSummaryQuery;
  * That is why FR-062 was unimplemented end to end rather than merely mis-formatted: the three
  * stage-approved columns the requirement names have nowhere to be read from.
  *
- * `formatSheet()` also emitted an `accountId` the contract does not declare. It is dropped here
- * rather than kept as an extra: the schema is what the frontend is written against, and a field
- * the contract does not describe is one nothing can be tested against.
+ * `formatSheet()` also emitted an `accountId`. The contract declared it on neither `SheetSummary` nor
+ * `SheetDetail`, so it was dropped rather than kept as an extra: a field the schema does not describe
+ * is one nothing can be tested against. T439 amended the contract to declare it on `SheetDetail` only,
+ * and `detail()` now emits the stored account there — never on the list shape.
  */
 final readonly class SheetPayloadFormatter
 {
@@ -210,6 +211,13 @@ final readonly class SheetPayloadFormatter
         $transactions = $this->sheetTransactions($sheet);
 
         return $this->summary($sheet) + [
+            // T439 / FR-019 / FR-021. The persisted account's public UUID — `ExpenseSheet::$accountId`
+            // as resolved by the repository from the stored `account_id` (T438). It is the account the
+            // sheet was created with, not the caller's first active account and never the internal
+            // database id, so the edit form can display it read-only. **Detail only**: `summary()` and
+            // `summaries()` deliberately do not emit it, because `SheetSummary` and `GET /sheets` must
+            // not gain an account field.
+            'accountId' => $sheet->accountId,
             'allowedActions' => SheetCapabilities::derive($sheet, $actorUid, count($transactions)),
             'transactions' => $transactions,
         ];

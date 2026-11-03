@@ -6,6 +6,7 @@ namespace OCA\PettyCash\Controller;
 
 use OCA\PettyCash\Infrastructure\Http\CommandId;
 use OCA\PettyCash\Application\Expense\SheetService;
+use OCA\PettyCash\Application\Expense\SheetAccountInvalid;
 use OCA\PettyCash\Application\Expense\DeleteSheet;
 use OCA\PettyCash\Application\Expense\SheetListFilterFactory;
 use OCA\PettyCash\Domain\Expense\ExpenseSheet;
@@ -134,31 +135,45 @@ class SheetController extends OCSController
         }
     }
 
+    /**
+     * FR-019 / FR-021: a sheet's title is editable; its account and currency are not.
+     *
+     * `SheetUpdate` declares only `title` and `expectedVersion`, and this method enforces that
+     * boundary rather than silently ignoring an undeclared field. The check is on the **presence** of
+     * the raw request key, not on the bound argument's value: an explicit `accountId: null`, an empty
+     * string, the current account, or another owned account are all the same refusal. Treating any of
+     * them as "unchanged" would let a client believe it had successfully replaced the account, and
+     * would make the update schema's `additionalProperties: false` a paper promise.
+     *
+     * The presence check runs before the service and before any title, account, currency, or
+     * lock-version mutation. `expectedVersion` remains required, and the service keeps the existing
+     * owner-scoping → stale-version `409` → `OPEN`-only ordering for title-only requests.
+     */
     #[NoAdminRequired]
     public function update(
         string $sheetId,
         ?string $title = null,
-        ?string $accountId = null,
         ?int $expectedVersion = null
     ): DataResponse {
         $commandId = $this->request->getHeader('X-PettyCash-Command-ID');
 
-        $fieldErrors = [];
-        if ($title === null || trim($title) === '') {
-            $fieldErrors['title'] = ['title is required'];
-        }
-        if ($accountId === null || trim($accountId) === '') {
-            $fieldErrors['accountId'] = ['accountId is required'];
-        }
-        if ($expectedVersion === null) {
-            $fieldErrors['expectedVersion'] = ['expectedVersion is required'];
-        }
-        if ($fieldErrors !== []) {
-            return $this->ocsErrorMapper->validation('Required fields are missing', $commandId, $fieldErrors);
-        }
-
         try {
-            $sheet = $this->sheetService->updateSheet($sheetId, $title, $accountId, $expectedVersion);
+            if (array_key_exists('accountId', $this->request->getParams())) {
+                throw new SheetAccountInvalid();
+            }
+
+            $fieldErrors = [];
+            if ($title === null || trim($title) === '') {
+                $fieldErrors['title'] = ['title is required'];
+            }
+            if ($expectedVersion === null) {
+                $fieldErrors['expectedVersion'] = ['expectedVersion is required'];
+            }
+            if ($fieldErrors !== []) {
+                return $this->ocsErrorMapper->validation('Required fields are missing', $commandId, $fieldErrors);
+            }
+
+            $sheet = $this->sheetService->updateSheet($sheetId, $title, $expectedVersion);
             return new DataResponse($this->formatSheetDetail($sheet));
         } catch (\Throwable $e) {
             return $this->ocsErrorMapper->map($e, $commandId, ['publicId' => $sheetId]);

@@ -208,6 +208,30 @@ class TransactionController extends OCSController
     public function destroy(string $transactionId, ?int $expectedVersion = null): DataResponse
     {
         $commandId = $this->request->getHeader('X-PettyCash-Command-ID');
+
+        // T436: this operation is replay-gated (contracts/ocs-api.yaml `delete` on
+        // `/transactions/{transactionId}`), so the header is a transport precondition. Its absence is a
+        // `400`, matching every other non-repeatable command in this controller, while a missing body
+        // field stays the `422` below.
+        if ($commandId === null || trim($commandId) === '') {
+            return $this->ocsErrorMapper->badRequest(
+                'Required fields are missing',
+                null,
+                ['commandId' => ['commandId is required']]
+            );
+        }
+
+        // T415's split: a present-but-unstoreable id is still the caller's request being malformed.
+        try {
+            $commandId = CommandId::fromString((string) $commandId)->__toString();
+        } catch (\InvalidArgumentException $malformed) {
+            return $this->ocsErrorMapper->badRequest(
+                'Malformed command ID',
+                null,
+                ['commandId' => [$malformed->getMessage()]]
+            );
+        }
+
         if ($expectedVersion === null) {
             return $this->ocsErrorMapper->validation(
                 'Required fields are missing',
@@ -217,7 +241,7 @@ class TransactionController extends OCSController
         }
 
         try {
-            $this->transactionService->deleteTransaction($transactionId, $expectedVersion);
+            $this->transactionService->deleteTransaction($transactionId, $commandId, $expectedVersion);
             return new DataResponse(null, 204);
         } catch (\Throwable $e) {
             return $this->ocsErrorMapper->map($e, $commandId, ['publicId' => $transactionId]);

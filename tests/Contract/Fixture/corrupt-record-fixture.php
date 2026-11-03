@@ -26,8 +26,10 @@ declare(strict_types=1);
  * Four properties, each of them separately checked rather than asserted here:
  *
  * 1. **The corruption is one column, on a row the product itself created.** The sheet, transaction and
- *    revision are written exactly as `seed-contract-fixtures.php` writes them, and only then is
- *    `pettycash_sheets.currency_id` pointed at an id that does not exist. So the thing under test is
+ *    revision are written exactly as `seed-contract-fixtures.php` writes them, and only then is one
+ *    stored reference broken: `pettycash_sheets.currency_id` is pointed at an id that does not exist,
+ *    or `pettycash_sheets.account_id` is pointed at a missing account, or the sheet's currency is
+ *    changed to a different real currency while its account keeps its own. So the thing under test is
  *    the *reference*, not a hand-built approximation of a business record -- a fixture that invented
  *    its own rows could be unreadable for a reason the product would never produce.
  * 2. **`insert` sweeps before it writes.** A previous run that was killed between the write and the
@@ -50,7 +52,7 @@ declare(strict_types=1);
  * `DataIntegrityReportTest`.
  *
  * Usage (inside the container):
- *   php tests/Contract/Fixture/corrupt-record-fixture.php <nextcloud-user> insert
+ *   php tests/Contract/Fixture/corrupt-record-fixture.php <nextcloud-user> insert [currency|account|account-currency]
  *   php tests/Contract/Fixture/corrupt-record-fixture.php <nextcloud-user> remove
  */
 
@@ -89,11 +91,27 @@ const PROBE_IDS = [
  */
 const DANGLING_CURRENCY_ID = 4294000000;
 
+/**
+ * A `pettycash_accounts.id` that has never existed and never will.
+ *
+ * The same reasoning as {@see DANGLING_CURRENCY_ID}, kept a separate value so a message that happens to
+ * quote one number cannot be accepted as evidence about the other column.
+ */
+const DANGLING_ACCOUNT_ID = 4294000001;
+
+/** The three references this fixture can break, named rather than positional. */
+const FAULTS = ['currency', 'account', 'account-currency'];
+
 $userUid = $argv[1] ?? '';
 $action = $argv[2] ?? '';
+$fault = $argv[3] ?? 'currency';
 
 if ($userUid === '' || !in_array($action, ['insert', 'remove'], true)) {
-    fwrite(STDERR, "Usage: corrupt-record-fixture.php <nextcloud-user> <insert|remove>\n");
+    fwrite(STDERR, "Usage: corrupt-record-fixture.php <nextcloud-user> <insert|remove> [currency|account|account-currency]\n");
+    exit(1);
+}
+if ($action === 'insert' && !in_array($fault, FAULTS, true)) {
+    fwrite(STDERR, "Unknown fault '{$fault}'; expected one of " . implode(', ', FAULTS) . ".\n");
     exit(1);
 }
 
@@ -160,13 +178,14 @@ function probeScalar(IDBConnection $db, string $table, string $publicId, string 
 /**
  * An active account of the acting user, and the currency it is denominated in.
  *
- * @return array{int, int} `[account id, currency id]`
+ * @return array{int, int, string} `[account id, currency id, account public id]`
  */
 function probeAccountAndCurrency(IDBConnection $db, string $userUid): array
 {
     $qb = $db->getQueryBuilder();
     $qb->select('id')
         ->addSelect('currency_id')
+        ->addSelect('public_id')
         ->from('pettycash_accounts')
         ->where($qb->expr()->eq('user_uid', $qb->createNamedParameter($userUid)))
         ->andWhere($qb->expr()->eq('active', $qb->createNamedParameter(1, \OCP\DB\QueryBuilder\IQueryBuilder::PARAM_INT)))
@@ -179,7 +198,7 @@ function probeAccountAndCurrency(IDBConnection $db, string $userUid): array
         );
     }
 
-    return [(int) $row['id'], (int) $row['currency_id']];
+    return [(int) $row['id'], (int) $row['currency_id'], (string) $row['public_id']];
 }
 
 try {
@@ -196,7 +215,7 @@ try {
         // user keeps this file free of the seeder's fixed UUIDs: a copy of an id here would be a second
         // place that has to change when the fixture is renumbered, and would fail as a bare
         // "No row carries public id" rather than as the missing setup it actually is.
-        [$accountDbId, $currencyDbId] = probeAccountAndCurrency($db, $userUid);
+        [$accountDbId, $currencyDbId, $accountPublicId] = probeAccountAndCurrency($db, $userUid);
 
         probeUpsert($db, 'pettycash_sheets', 'public_id', PROBE_IDS['sheet'], [
             'public_id' => PROBE_IDS['sheet'],
@@ -269,24 +288,62 @@ try {
 
         // The corruption, in one statement, after every row above is real.
         //
-        // `UNSIGNED BIGINT` reaches 18446744073709551615, so 4294000000 is a legal value for the column:
-        // MariaDB accepts the write, which is the point. The row is now one that no application path
-        // can produce, because `ExpenseSheet` takes a `Currency` aggregate and the aggregate's `id` comes
-        // from a row that exists.
+        // `UNSIGNED BIGINT` reaches 18446744073709551615, so 4294000000 and 4294000001 are legal values
+        // for the columns: MariaDB accepts the write, which is the point. The row is now one that no
+        // application path can produce, because `ExpenseSheet` takes a `Currency` aggregate and an
+        // account public id that came from a row that exists.
+        //
+        // The three faults are deliberately one column each. A fixture that broke the account *and* the
+        // currency would not show which reference the read path refused, and the two classifications
+        // are the subject of T438.
+        $storedCurrencyId = $currencyDbId;
         $break = $db->getQueryBuilder()->update('pettycash_sheets');
-        $break->set('currency_id', $break->createNamedParameter(DANGLING_CURRENCY_ID))
-            ->where($break->expr()->eq('id', $break->createNamedParameter($sheetDbId)))
+
+        if ($fault === 'currency') {
+            $storedCurrencyId = DANGLING_CURRENCY_ID;
+            $break->set('currency_id', $break->createNamedParameter(DANGLING_CURRENCY_ID));
+        } elseif ($fault === 'account') {
+            $break->set('account_id', $break->createNamedParameter(DANGLING_ACCOUNT_ID));
+        } else {
+            // A real currency, not a dangling one. The account still points at a valid row, so the only
+            // fault is the disagreement between the sheet's currency and the account's own currency.
+            // Picking a different existing row is what keeps `mapRow()`'s currency lookup succeeding --
+            // otherwise the probe would be the dangling-currency case wearing another name.
+            $other = $db->getQueryBuilder();
+            $other->select('id')
+                ->from('pettycash_currencies')
+                ->where($other->expr()->neq('id', $other->createNamedParameter($currencyDbId)))
+                ->setMaxResults(1);
+            $otherRow = $other->executeQuery()->fetchAssociative();
+            if ($otherRow === false) {
+                throw new RuntimeException(
+                    'The account-currency probe needs a second configured currency; the fixture set '
+                    . 'contains only the one the acting user\'s account uses.'
+                );
+            }
+            $storedCurrencyId = (int) $otherRow['id'];
+            $break->set('currency_id', $break->createNamedParameter($storedCurrencyId));
+        }
+
+        $break->where($break->expr()->eq('id', $break->createNamedParameter($sheetDbId)))
             ->executeStatement();
 
         echo json_encode([
+            'fault' => $fault,
             'sheetId' => PROBE_IDS['sheet'],
+            'sheetDbId' => $sheetDbId,
             'transactionId' => PROBE_IDS['transaction'],
             'revisionId' => PROBE_IDS['revision'],
             // The surrogate ids, so the test can assert they are *absent* from the response body. The
             // exception message names the revision's surrogate key, and T029's whole point was that
             // this must not reach a caller -- which cannot be asserted without knowing the number.
             'revisionDbId' => $revisionDbId,
-            'danglingCurrencyId' => DANGLING_CURRENCY_ID,
+            'accountId' => $accountPublicId,
+            'accountDbId' => $accountDbId,
+            'accountCurrencyId' => $currencyDbId,
+            'sheetCurrencyId' => $storedCurrencyId,
+            'danglingAccountId' => $fault === 'account' ? DANGLING_ACCOUNT_ID : null,
+            'danglingCurrencyId' => $fault === 'currency' ? DANGLING_CURRENCY_ID : null,
             'repairedBeforeWriting' => array_sum($sweptFirst),
         ], JSON_UNESCAPED_SLASHES);
 

@@ -59,6 +59,44 @@ final class TransactionSheetIdConformanceTest extends TestCase
     }
 
     /**
+     * T435: a create carrying the FR-022 minimum plus every optional field is one save, and its
+     * `TransactionSummary` still points at the owning sheet's public uuid.
+     *
+     * This is here as well as in `PurchaserFlowControllerTest` because the two assertions together
+     * cover the whole save shape: the other file checks that the optional fields survive, and this
+     * one checks that the newly created row is addressable through the same public sheet id the
+     * queue and detail routes use.
+     */
+    public function testCreateWithEveryOptionalFieldEmitsTheOwningSheetPublicId(): void
+    {
+        ContractFixtures::prepare('draft');
+
+        $response = $this->client->request(
+            'POST',
+            '/ocs/v2.php/apps/pettycash/api/v1/sheets/' . ContractFixtures::sheetId() . '/transactions',
+            [
+                'headers' => ['X-PettyCash-Command-ID' => ContractFixtures::commandId()],
+                'json' => [
+                    'expenseDate' => '2026-09-20',
+                    'amountMinor' => 1200,
+                    'description' => 'Conformance draft',
+                    'costCenterId' => ContractFixtures::costCenterId(),
+                    'expenseTypeId' => ContractFixtures::expenseTypeId(),
+                ],
+            ]
+        );
+
+        self::assertSame(201, $response->getStatusCode(), (string) $response->getBody());
+        $data = json_decode((string) $response->getBody(), true)['ocs']['data'] ?? [];
+
+        self::assertSame(ContractFixtures::sheetId(), $data['sheetId'] ?? null);
+        self::assertSame('Conformance draft', $data['activeRevision']['description'] ?? null);
+        self::assertSame(ContractFixtures::costCenterId(), $data['activeRevision']['costCenter']['id'] ?? null);
+        self::assertSame(ContractFixtures::expenseTypeId(), $data['activeRevision']['expenseType']['id'] ?? null);
+        self::assertFalse($data['evidenceRequired'] ?? true, 'Saving must not require a receipt');
+    }
+
+    /**
      * The queue rows, which is where the integer was actually rendered.
      *
      * Asserted against every row of every queue rather than one row, so a queue that resolves the
