@@ -55,6 +55,16 @@
     </dependencies>
 
     <!--
+      T060: development-only fixture command. The class refuses to run unless
+      Nextcloud's `debug` system value is true; registration here makes the
+      command discoverable through `occ`, which is how the lab wrapper reaches
+      it. There is no startup hook, route, or migration for this fixture.
+    -->
+    <commands>
+        <command>OCA\PettyCash\Command\DevSeedSheetsCommand</command>
+    </commands>
+
+    <!--
       App-menu entry. Without a <navigations> block Nextcloud never lists the
       app in the menu, even though page#index answers /apps/pettycash/ fine.
       Route follows the {appid}.{controller}.{method} convention for

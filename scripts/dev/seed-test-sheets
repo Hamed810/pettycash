@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# T060 development fixtures.
+#
+# This is a thin wrapper around the debug-gated occ command so the lab has one
+# documented entry point. It does not weaken the gate: `occ` is only reached
+# through the repository container wrapper, and the command refuses unless
+# Nextcloud reports `debug === true`.
+#
+# Usage:
+#   scripts/dev/seed-test-sheets [--owner <uid>]
+#   scripts/dev/seed-test-sheets --cleanup [--owner <uid>]
+#
+# The default owner is `admin`, matching the lab fixture user. Every run first
+# removes the fixture namespace, so rerunning is a replacement rather than an
+# append.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+exec "$SCRIPT_DIR/occ" pettycash:dev:seed-sheets "$@"
