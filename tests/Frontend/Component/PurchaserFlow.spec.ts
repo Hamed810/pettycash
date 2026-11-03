@@ -444,6 +444,7 @@ async function createWrapperWithRouter(component: any, path: string, options: an
 function sheetFixture(currency: string, overrides: Partial<SheetDetail> = {}): SheetDetail {
 	return {
 		id: 'sh-1',
+		accountId: 'b4b0b3a4-1111-4c2d-9e0f-000000000001',
 		title: 'March travel',
 		ownerId: 'employee1',
 		ownerDisplayName: 'Employee One',
@@ -479,6 +480,7 @@ function sheetTotalsFixture(currency: string): SheetTotals {
 
 /** A `TransactionDetail` in the shape the transaction store holds. */
 function transactionFixture(overrides: Partial<TransactionDetail> = {}): TransactionDetail {
+	const status = overrides.status ?? 'DRAFT'
 	return {
 		id: 'tx-1',
 		sheetId: 'sh-1',
@@ -487,9 +489,17 @@ function transactionFixture(overrides: Partial<TransactionDetail> = {}): Transac
 		status: 'DRAFT',
 		finalOutcome: null,
 		latestDecision: undefined,
+		evidenceRequired: false,
 		evidenceCount: 0,
 		version: 0,
-		allowedActions: {},
+		// T067: the detail's capability projection is the action source. The fixture mirrors what the
+		// server emits for this status so a test that changes only the status does not accidentally
+		// keep a capability the real payload would clear.
+		allowedActions: status === 'DRAFT'
+			? { canEdit: true, canDelete: true, canCorrect: false }
+			: status === 'AWAITING_PURCHASER_CORRECTION'
+				? { canEdit: false, canDelete: false, canCorrect: true }
+				: {},
 		decisions: [],
 		evidence: [],
 		...overrides
@@ -506,6 +516,7 @@ function transactionSummaryFixture(overrides: Partial<TransactionSummary> = {}):
 		status: 'DRAFT',
 		finalOutcome: null,
 		latestDecision: undefined,
+		evidenceRequired: false,
 		evidenceCount: 0,
 		version: 0,
 		...overrides
@@ -783,9 +794,12 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 
 		it('renders the six contractual columns, in the approved order', async () => {
 			const wrapper = await mountWithFullSheet()
+			// The approved headers draw the disabled sort affordance beside the label; the contractual
+			// assertion is the label text, so the affordance's own node is excluded before comparing
+			// (and asserted itself below). The label is the header's first text node.
 			const headers = wrapper
 				.findAll('[data-test="sheet-list-table"] thead th')
-				.map((header) => header.text())
+				.map((header) => header.element.firstChild?.textContent?.trim() ?? header.text())
 
 			expect(headers).toEqual([
 				'sheets.sheet',
@@ -800,6 +814,23 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 			expect(headers).not.toContain('sheets.actions')
 		})
 
+		it('draws the sort affordance on every header, disabled and explained, without acting as a control', async () => {
+			const wrapper = await mountWithFullSheet()
+			const affordances = wrapper.findAll('[data-test="sheet-list-table"] thead [data-test="responsive-table-sort-unavailable"]')
+
+			// The approved headers carry the paired arrows on all six columns. The server owns ordering
+			// (BE-CR-002 is unapproved; FR-005-012 forbids a client-side sort), so the affordance is a
+			// non-interactive span, hidden from assistive technology, with the unavailable reason in
+			// its title -- visual-first (2026-10-21): the approved control is present and clearly
+			// non-operational, never a quiet fake control.
+			expect(affordances).toHaveLength(6)
+			for (const affordance of affordances) {
+				expect(affordance.attributes('aria-hidden')).toBe('true')
+				expect(affordance.attributes('title')).toBe('sheets.filter.sortUnavailable')
+				expect(affordance.find('button').exists()).toBe(false)
+			}
+		})
+
 		it('shows the title above the sheet id, and no creator cell', async () => {
 			const wrapper = await mountWithFullSheet()
 			const id = wrapper.find('[data-test="sheet-list-id"]')
@@ -811,32 +842,23 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 		})
 
 		/**
-		 * The submitted total beside the current one, because they answer different questions.
-		 *
-		 * `submitted_total_minor` is a snapshot at first submission and does not move on correction
-		 * (`data-model.md`), so this fixture gives the two different amounts and each cell must render its
-		 * own. Asserted as *two non-empty cells that differ* rather than against a literal formatted string:
-		 * the grouping separator and the digits belong to `Intl`, and a hardcoded Persian string would fail
-		 * on an ICU version that groups differently without the behaviour having changed.
+		 * The approved list has one recorded figure per row. The submitted snapshot belongs to the
+		 * sheet workspace, where it can be read beside the stage breakdown; repeating it under the
+		 * recorded amount made the list a financial report rather than a list.
 		 */
-		it('shows the submitted total beside the current one', async () => {
+		it('shows the recorded amount without a second submitted-total line', async () => {
 			const wrapper = await mountWithFullSheet()
 
-			const current = wrapper.find('[data-test="sheet-list-current-total"]').text()
-			const submitted = wrapper.find('[data-test="sheet-list-submitted-total"]').text()
-
-			expect(current).not.toBe('')
-			expect(submitted).not.toBe('')
-			expect(current).not.toBe(submitted)
+			expect(wrapper.find('[data-test="sheet-list-current-total"]').text()).not.toBe('')
+			expect(wrapper.find('[data-test="sheet-list-submitted-total"]').exists()).toBe(false)
 		})
 
-		it('shows the three summary amounts of the latest effective outcome', async () => {
+		it('shows the latest approved amount without the rejected and pending breakdown', async () => {
 			const wrapper = await mountWithFullSheet()
 
-			const group = wrapper.find('[data-test="sheet-list-effective-outcome"]')
-			expect(group.find('[data-test="sheet-list-effective-approved"]').text()).not.toBe('')
-			expect(group.find('[data-test="sheet-list-effective-rejected"]').text()).not.toBe('')
-			expect(group.find('[data-test="sheet-list-effective-pending"]').text()).not.toBe('')
+			expect(wrapper.find('[data-test="sheet-list-effective-approved"]').text()).not.toBe('')
+			expect(wrapper.find('[data-test="sheet-list-effective-rejected"]').exists()).toBe(false)
+			expect(wrapper.find('[data-test="sheet-list-effective-pending"]').exists()).toBe(false)
 		})
 
 		it('shows the first-submitted date in its own column and drops the other key dates', async () => {
@@ -872,10 +894,7 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 			await flushPromises()
 
 			expect(wrapper.find('[data-test="sheet-list-submitted-at"]').text()).toBe(ABSENT_MARKER)
-			const submittedTotal = wrapper.find('[data-test="sheet-list-submitted-total"]').text()
-			expect(submittedTotal).toContain(ABSENT_MARKER)
-			// The fixture's submitted total is 900_000; a dash must not be the amount either.
-			expect(submittedTotal).not.toContain('۹۰۰')
+			expect(wrapper.find('[data-test="sheet-list-submitted-total"]').exists()).toBe(false)
 			expect(wrapper.text()).not.toContain('۱۹۷۰')
 			expect(wrapper.text()).not.toContain('1970')
 		})
@@ -891,34 +910,25 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 		})
 
 		/**
-		 * FR-062's three stage-approved figures are **T365's**, and this list still carries them.
+		 * The stage breakdown belongs to the workspace Overview tab, not to every list row.
 		 *
-		 * Proven by *value* rather than by hook presence alone: the fixture gives the three distinctive
-		 * amounts (11_111, 22_222, 33_333), so any column rendering them puts those formatted strings
-		 * into the row. The figures moved inside the "Latest Approved Amount" cell (D-04) but each keeps
-		 * its own label and hook, which is what the assertion checks.
+		 * The fixture gives three distinctive stage amounts (11_111, 22_222, 33_333); none of them
+		 * may be printed in the list after the owner's visual correction.
 		 */
-		it('carries FR-062’s three stage-approved figures beside the latest-effective group', async () => {
+		it('keeps the stage-approved breakdown out of the list', async () => {
 			const wrapper = await mountWithFullSheet()
 
 			const rows = wrapper.findAll('[data-test="sheet-row"]')
 			expect(rows).toHaveLength(1)
 			const row = rows[0]
 			expect(row).toBeDefined()
-			const group = row?.find('[data-test="sheet-list-stage-approved"]')
-			expect(group?.exists()).toBe(true)
-			for (const [hook, amountMinor] of [
-				['sheet-list-cost-center-approved', 11_111],
-				['sheet-list-senior-approved', 22_222],
-				['sheet-list-finance-approved', 33_333],
-			] as const) {
-				const cell = group?.find(`[data-test="${hook}"]`)
-				expect(cell?.exists(), `${hook} must be rendered`).toBe(true)
-				expect(cell?.text()).toContain(amountMinor.toLocaleString('fa-IR'))
-			}
-			// The latest-effective group this surface already owned is still present, so the stage
-			// figures sit beside it rather than replacing it — FR-062 distinguishes the two.
+			expect(row?.find('[data-test="sheet-list-stage-approved"]').exists()).toBe(false)
 			expect(row?.find('[data-test="sheet-list-effective-outcome"]').exists()).toBe(true)
+
+			const text = row?.text() ?? ''
+			for (const amountMinor of [11_111, 22_222, 33_333]) {
+				expect(text).not.toContain(amountMinor.toLocaleString('fa-IR'))
+			}
 		})
 	})
 
@@ -1241,15 +1251,9 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 			for (const name of [
 				'id',
 				'current-total',
-				'submitted-total',
 				'submitted-at',
 				'transaction-count',
-				'effective-approved',
-				'effective-rejected',
-				'effective-pending',
-				'cost-center-approved',
-				'senior-approved',
-				'finance-approved'
+				'effective-approved'
 			]) {
 				const fromTable = wrapper.find(`[data-test="sheet-list-${name}"]`).text()
 				const fromCard = card.find(`[data-test="sheet-list-${name}"]`).text()
@@ -1305,7 +1309,7 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 
 	describe('sheet list filters and pager', () => {
 		/**
-		 * Mounts the list with a server page of `total` rows at the default size of 25.
+		 * Mounts the list with a server page of `total` rows at the approved page size of 8.
 		 *
 		 * The page response is built per call rather than returned from a constant, so the `total` under
 		 * test is the one the pager reads -- a fixed fixture with `total: 0` and a pager test asserting on
@@ -1375,14 +1379,15 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 		})
 
 		it('shows no pager when everything fits on one page', async () => {
-			const wrapper = mountWithTotal(25)
+			const wrapper = mountWithTotal(8)
 			await flushPromises()
 
 			expect(wrapper.find('[data-test="sheet-pager"]').exists()).toBe(false)
 		})
 
 		/**
-		 * The acceptance criterion: `total: 40` at the default `pageSize: 25` must reach page 2.
+		 * The acceptance criterion: `total: 40` at the approved `pageSize: 8` spans five pages, and
+		 * page 2 must be reachable.
 		 *
 		 * Asserted as a **request**, not as a rendering: the point is that the control reaches the server
 		 * with `page=2`, and a test that only checked the pager appeared would pass for a pager wired to
@@ -1408,13 +1413,13 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 		})
 
 		it('disables the next control on the last page', async () => {
-			const wrapper = mountWithTotal(40)
+			const wrapper = mountWithTotal(16)
 			await flushPromises()
 
 			await wrapper.find('[data-test="sheet-page-next"]').trigger('click')
 			await flushPromises()
 
-			// 40 rows at 25 per page is two pages, so page 2 is the last and both directions are now closed.
+			// 16 rows at 8 per page is two pages, so page 2 is the last and both directions are now closed.
 			expect(wrapper.find('[data-test="sheet-page-next"]').attributes('disabled')).toBeDefined()
 			expect(wrapper.find('[data-test="sheet-page-previous"]').attributes('disabled')).toBeUndefined()
 		})
@@ -1585,6 +1590,82 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 			await wrapper.find('[data-test="sheet-title-input"]').setValue('March travel')
 			expect(wrapper.find('[data-test="sheet-create-submit"]').attributes('disabled')).toBeUndefined()
 		})
+
+		/**
+		 * T440: the edit form's account is the one stored on the sheet, not the first listed account.
+		 *
+		 * The fixture's account is the **second** account the caller holds. An implementation that
+		 * kept `accounts[0]` would show the IRR account and its balance, so asserting the second
+		 * account's currency is what makes the test able to fail.
+		 */
+		it('reads the edit form account from SheetDetail rather than accounts[0]', async () => {
+			setAccounts([{ ...RIAL_ACCOUNT }, { ...USD_ACCOUNT }])
+			setSheetDetail(sheetFixture('USD', { id: 'sh-1', accountId: 'acc-2', title: 'March travel' }))
+
+			const wrapper = await createWrapperAtRoute(SheetFormView, '/sheets/sh-1/edit')
+
+			expect(wrapper.find('[data-test="sheet-account-select"]').exists()).toBe(false)
+			const account = wrapper.find('[data-test="sheet-account-display"]')
+			expect(account.exists()).toBe(true)
+			// T080: the identity is the persisted account id; the balance is a separate, read-only
+			// statement. `accounts[0]` is IRR, so list order cannot satisfy either assertion.
+			expect(wrapper.find('[data-test="sheet-account-value"]').text()).toBe('acc-2')
+			expect(wrapper.find('[data-test="sheet-account-balance"]').text()).toContain('USD')
+			expect(account.text()).not.toContain('IRR')
+			expect(account.find('input').exists()).toBe(false)
+
+			const currency = wrapper.find('[data-test="currency-display"]')
+			expect(currency.exists()).toBe(true)
+			expect((currency.element as HTMLInputElement).value).toBe('USD')
+			expect(currency.attributes('readonly')).toBeDefined()
+			expect(wrapper.find('[data-test="sheet-account-inactive"]').exists()).toBe(false)
+			expect(wrapper.find('[data-test="sheet-create-submit"]').text()).toBe('sheets.saveChanges')
+		})
+
+		/**
+		 * T440: an inactive stored account is absent from the active-account list but must remain
+		 * visible. The view shows the persisted id and an explicit inactive note; it never fills the
+		 * gap with another account.
+		 */
+		it('keeps an inactive stored account visible without substituting another one', async () => {
+			setAccounts([{ ...RIAL_ACCOUNT }])
+			setSheetDetail(sheetFixture('IRR', { id: 'sh-1', accountId: 'retired-account', title: 'March travel' }))
+
+			const wrapper = await createWrapperAtRoute(SheetFormView, '/sheets/sh-1/edit')
+
+			const account = wrapper.find('[data-test="sheet-account-display"]')
+			expect(account.exists()).toBe(true)
+			expect(wrapper.find('[data-test="sheet-account-value"]').text()).toBe('retired-account')
+			expect(wrapper.find('[data-test="sheet-account-inactive"]').exists()).toBe(true)
+			expect(wrapper.find('[data-test="sheet-account-select"]').exists()).toBe(false)
+			expect(wrapper.find('[data-test="account-balance"]').exists()).toBe(false)
+			expect(wrapper.find('[data-test="sheet-account-balance"]').exists()).toBe(false)
+		})
+
+		/**
+		 * T440: the edit request carries only `title` and `expectedVersion`.
+		 *
+		 * Asserted at the transport, which is the last point before the wire. A form that kept an
+		 * account in its state and spread it into the body would fail here even if its UI hid the
+		 * selector, and that is the defect this test exists to catch.
+		 */
+		it('submits only the title and expectedVersion from the edit form', async () => {
+			setAccounts([{ ...RIAL_ACCOUNT }, { ...USD_ACCOUNT }])
+			setSheetDetail(sheetFixture('USD', { id: 'sh-1', accountId: 'acc-2', title: 'March travel', version: 7 }))
+
+			const wrapper = await createWrapperAtRoute(SheetFormView, '/sheets/sh-1/edit')
+			await wrapper.find('[data-test="sheet-title-input"]').setValue('Renamed travel')
+			await wrapper.find('[data-test="sheet-form"]').trigger('submit.prevent')
+			await flushPromises()
+
+			const patch = ocsRequest.mock.calls
+				.map((call) => call[0] as { url?: string, method?: string, data?: unknown })
+				.find((config) => config.method === 'PATCH' && String(config.url).endsWith('/sheets/sh-1'))
+
+			expect(patch, 'the edit form must actually issue the PATCH request').toBeDefined()
+			expect(patch?.data).toEqual({ title: 'Renamed travel', expectedVersion: 7 })
+			expect(patch?.data).not.toHaveProperty('accountId')
+		})
 	})
 
 	describe('Sheet Detail View', () => {
@@ -1664,10 +1745,10 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 		/**
 		 * T394: the sheet detail view's transaction table reflows with the same figures.
 		 *
-		 * The detail view's table is the one T389 converted last and carries **eight** columns, built from
-		 * a derived column list rather than a hand-written header. A column added to `transactionHeaders`
-		 * without a case in `transactionCell` renders its key in **both** layouts -- T396's subject -- and
-		 * this asserts the columns that do have cases are identical on both sides.
+		 * The detail view's table carries seven columns, built from a derived column list rather than a
+		 * hand-written header. A column added to `transactionHeaders` without a case in `transactionCell`
+		 * renders its key in **both** layouts -- T396's subject -- and this asserts the columns that do
+		 * have cases are identical on both sides.
 		 */
 		it('carries the same figures in the narrow card as in the table', async () => {
 			setSheetDetail(
@@ -1694,7 +1775,6 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 					'data-test="transaction-expense-date"',
 					'data-test="transaction-amount"',
 					'data-test="transaction-status-badge"',
-					'data-test="evidence-count"',
 					'data-test="view-transaction"'
 				]
 			})
@@ -1912,30 +1992,10 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 	})
 
 	describe('Transaction Forms', () => {
-		// `NcSelect` renders a `v-select`: the `data-test` lands on its root element and the accessible
-		// name and the `aria-describedby` live on the inner `input`. Reading the attribute off the root
-		// would find nothing and prove nothing about what the combobox announces.
-		function selectInput(wrapper: VueWrapper, testId: string) {
-			return wrapper.find(`[data-test="${testId}"] input`)
-		}
-
 		/** The value the cost-center combobox is holding, as the form would submit it. */
 		function selectedCostCenter(wrapper: VueWrapper): unknown {
 			const target = wrapper.findComponent('[data-test="cost-center-select"]') as VueWrapper
 			return (target.vm as unknown as { modelValue?: unknown }).modelValue
-		}
-
-		/**
-		 * The text a control announces, resolved through its own `aria-describedby`.
-		 *
-		 * The requirement is not that a message exists somewhere in the document but that the control
-		 * points at it, so the ids the control names are what gets read back. A message rendered but not
-		 * referenced — or referenced but empty — both fail here.
-		 */
-		function announcedMessage(wrapper: VueWrapper, control: ReturnType<typeof selectInput>): string {
-			const ids = (control.attributes('aria-describedby') ?? '').split(/\s+/).filter(Boolean)
-			expect(ids.length, 'the control must reference the message it announces').toBeGreaterThan(0)
-			return ids.map((id) => wrapper.find(`#${id}`).text()).join(' ').trim()
 		}
 
 		/**
@@ -1975,6 +2035,19 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 			expect(wrapper.find('[data-test="expense-type-select"]').exists()).toBe(true)
 		})
 
+		// T075 refinement (A): CREATE has one save action, and it is the existing native submit
+		// control. The secondary `transaction-save-draft` is the same save through a different
+		// handler, so showing both offered the purchaser two buttons for one outcome.
+		it('offers exactly one primary Save draft action on create', async () => {
+			const wrapper = await createWrapperAtRoute(TransactionFormView, '/sheets/sh-1/transactions/create')
+
+			const saveActions = wrapper.findAll('[data-test="submit-btn"]')
+			expect(saveActions).toHaveLength(1)
+			expect(saveActions[0]?.text()).toBe('transactions.saveDraft')
+			expect(saveActions[0]?.attributes('type')).toBe('submit')
+			expect(wrapper.find('[data-test="transaction-save-draft"]').exists()).toBe(false)
+		})
+
 		// FR-032: the transaction is routed to the manager the server holds for its cost center, so the
 		// options have to be the configured ones. The view previously answered with hard-coded
 		// `cc-1`/`et-1` placeholders that exist nowhere in the instance.
@@ -1988,7 +2061,7 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 			const wrapper = await createWrapperAtRoute(TransactionFormView, '/sheets/sh-1/transactions/create')
 			await wrapper.find('[data-test="expense-date-input"]').setValue('2026-01-15')
 			await wrapper.find('[data-test="amount-input"]').setValue('1000')
-			await wrapper.find('[data-test="transaction-save-draft"]').trigger('click')
+			await submitTransactionForm(wrapper)
 			await flushPromises()
 
 			// The original assertion was `expect(wrapper.emitted('save-draft')).toBeTruthy()`. This is a
@@ -2011,86 +2084,73 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 			// The date is pre-filled with today, so the amount is what has to fail the draft rules.
 			await wrapper.find('[data-test="expense-date-input"]').setValue('')
 			await wrapper.find('[data-test="amount-input"]').setValue('1000')
-			expect(wrapper.find('[data-test="transaction-save-draft"]').attributes('disabled')).toBeDefined()
+			expect(wrapper.find('[data-test="submit-btn"]').attributes('disabled')).toBeDefined()
 
 			await wrapper.find('[data-test="expense-date-input"]').setValue('2026-01-15')
 			await wrapper.find('[data-test="amount-input"]').setValue('0')
-			expect(wrapper.find('[data-test="transaction-save-draft"]').attributes('disabled')).toBeDefined()
+			expect(wrapper.find('[data-test="submit-btn"]').attributes('disabled')).toBeDefined()
 
-			await wrapper.find('[data-test="transaction-save-draft"]').trigger('click')
+			await submitTransactionForm(wrapper)
 			await flushPromises()
 			expect(createdTransactionBody()).toBeUndefined()
 		})
 
-		// The four `*-error` tests below previously mounted an empty form and required the error to be
-		// there already. They never submitted, so they asserted a state the component had no reason to
-		// be in — the same defect corrected for `submission-errors` in the Sheet Detail slice. They are
-		// rewritten to submit, and then to check the two things FR-071 asks of error presentation: the
-		// control announces its own message, and the summary names the field without hunting for it.
-
-		it('should show field-level errors for missing cost center at submission', async () => {
-			const wrapper = createWrapper(TransactionFormView)
-			expect(wrapper.find('[data-test="validation-summary-costCenterId"]').exists()).toBe(false)
-
-			await submitTransactionForm(wrapper)
-			expect(wrapper.find('[data-test="validation-summary-costCenterId"]').exists()).toBe(true)
-			expect(announcedMessage(wrapper, selectInput(wrapper, 'cost-center-select'))).toContain('validation.required')
-		})
-
-		it('should show field-level errors for missing expense type at submission', async () => {
-			const wrapper = createWrapper(TransactionFormView)
-			await submitTransactionForm(wrapper)
-			expect(wrapper.find('[data-test="validation-summary-expenseTypeId"]').exists()).toBe(true)
-			expect(announcedMessage(wrapper, selectInput(wrapper, 'expense-type-select'))).toContain('validation.required')
-		})
-
-		it('should show field-level errors for missing description at submission', async () => {
-			const wrapper = createWrapper(TransactionFormView)
-			await submitTransactionForm(wrapper)
-			expect(wrapper.find('[data-test="validation-summary-description"]').exists()).toBe(true)
-			expect(announcedMessage(wrapper, wrapper.find('[data-test="description-input"]'))).toContain('validation.required')
-		})
-
-		it('should announce the summary of everything still missing', async () => {
-			const wrapper = createWrapper(TransactionFormView)
-			// The date is pre-filled with today, so it is cleared to reach a wholly empty submission.
-			await wrapper.find('[data-test="expense-date-input"]').setValue('')
-			await submitTransactionForm(wrapper)
-
-			const summary = wrapper.find('[data-test="validation-summary"]')
-			expect(summary.exists()).toBe(true)
-			// Announced, not merely painted.
-			expect(summary.attributes('role')).toBe('alert')
-			expect(summary.attributes('aria-live')).toBe('assertive')
-			for (const field of ['expenseDate', 'amountMinor', 'description', 'costCenterId', 'expenseTypeId']) {
-				expect(wrapper.find(`[data-test="validation-summary-${field}"]`).exists(), `${field} must be named`).toBe(true)
-			}
-		})
-
-		// FR-023 requires "all required evidence" at submission, and the requirement is the expense
-		// type's: `data-model.md` gives `evidence_required` the meaning "at least one active item
-		// required at submission when true". The rule is therefore conditional, and both branches are
-		// asserted — a form that always demanded evidence would fail the second, and a form that never
-		// did would fail the first.
-		it('should show field-level errors for missing required evidence at submission', async () => {
+		// T053/T055: the primary create action is a save. It uses the FR-022 draft minimum only; the
+		// submission-only dataset (description, cost center, expense type, receipt) must not gate it.
+		// The old `*-error` assertions here required a create form to behave like a submission form,
+		// which is exactly the behavior the owner directive reversed for UI-PUR-010.
+		it('saves through the primary action with only the expense date and a positive amount', async () => {
 			const wrapper = await createWrapperAtRoute(TransactionFormView, '/sheets/sh-1/transactions/create')
-			await fillTransactionForm(wrapper, { costCenterId: COST_CENTER_ENGINEERING, expenseTypeId: EXPENSE_TYPE_TRAVEL })
-			await submitTransactionForm(wrapper)
-			expect(wrapper.find('[data-test="validation-summary-evidence"]').exists()).toBe(true)
-		})
+			await wrapper.find('[data-test="expense-date-input"]').setValue('2026-01-15')
+			await wrapper.find('[data-test="amount-input"]').setValue('1000')
 
-		it('should not demand evidence for an expense type that does not require it', async () => {
-			const wrapper = await createWrapperAtRoute(TransactionFormView, '/sheets/sh-1/transactions/create')
-			await fillTransactionForm(wrapper, { costCenterId: COST_CENTER_ENGINEERING, expenseTypeId: EXPENSE_TYPE_SUPPLIES })
 			await submitTransactionForm(wrapper)
-			expect(wrapper.find('[data-test="validation-summary-evidence"]').exists()).toBe(false)
-		})
+			await flushPromises()
 
-		it('should accept a submitted transaction once every required field is present', async () => {
-			const wrapper = await createWrapperAtRoute(TransactionFormView, '/sheets/sh-1/transactions/create')
-			await fillTransactionForm(wrapper, { costCenterId: COST_CENTER_ENGINEERING, expenseTypeId: EXPENSE_TYPE_SUPPLIES })
+			const body = createdTransactionBody()
+			expect(body, 'the primary create action must persist a draft').toBeDefined()
+			expect(body?.expenseDate).toBe('2026-01-15')
+			expect(body?.amountMinor).toBe(1000)
 			expect(wrapper.find('[data-test="validation-summary"]').exists()).toBe(false)
-			expect(wrapper.find('[data-test="submit-btn"]').attributes('disabled')).toBeUndefined()
+		})
+
+		it('accepts every optional draft field in the same save', async () => {
+			const wrapper = await createWrapperAtRoute(TransactionFormView, '/sheets/sh-1/transactions/create')
+			await fillTransactionForm(wrapper, {
+				costCenterId: COST_CENTER_ENGINEERING,
+				expenseTypeId: EXPENSE_TYPE_SUPPLIES
+			})
+
+			await submitTransactionForm(wrapper)
+			await flushPromises()
+
+			const posts = ocsRequest.mock.calls.filter((call: unknown[]) => {
+				const config = (call[0] ?? {}) as { method?: string; url?: string }
+				return config.method === 'POST' && /\/transactions$/.test(config.url ?? '')
+			})
+			expect(posts).toHaveLength(1)
+			expect(createdTransactionBody()).toMatchObject({
+				expenseDate: '2026-01-15',
+				amountMinor: 1000,
+				description: 'Taxi to the airport',
+				costCenterId: COST_CENTER_ENGINEERING,
+				expenseTypeId: EXPENSE_TYPE_SUPPLIES
+			})
+		})
+
+		it('does not require a receipt to save, even for a receipt-required expense type', async () => {
+			const wrapper = await createWrapperAtRoute(TransactionFormView, '/sheets/sh-1/transactions/create')
+			await fillTransactionForm(wrapper, {
+				costCenterId: COST_CENTER_ENGINEERING,
+				expenseTypeId: EXPENSE_TYPE_TRAVEL
+			})
+
+			await submitTransactionForm(wrapper)
+			await flushPromises()
+
+			expect(createdTransactionBody(), 'a save must never wait for a receipt').toBeDefined()
+			expect(wrapper.find('[data-test="validation-summary-evidence"]').exists()).toBe(false)
+			expect(wrapper.find('[data-test="validation-summary"]').exists()).toBe(false)
 		})
 
 		// FR-021: the transaction inherits the sheet currency and defines none of its own.
@@ -2129,7 +2189,7 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 			const wrapper = createWrapper(TransactionFormView)
 			await wrapper.find('[data-test="expense-date-input"]').setValue('2026-01-15')
 			await wrapper.find('[data-test="amount-input"]').setValue('500')
-			expect(wrapper.find('[data-test="transaction-save-draft"]').attributes('disabled')).toBeUndefined()
+			expect(wrapper.find('[data-test="submit-btn"]').attributes('disabled')).toBeUndefined()
 		})
 
 		// FR-026: after submission the purchaser must not edit a transaction's business information.
@@ -2152,6 +2212,7 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 				expect(wrapper.find(`[data-test="${control}"]`).attributes('disabled'), `${control} must be locked`).toBeDefined()
 			}
 			expect(wrapper.find('[data-test="submit-btn"]').attributes('disabled')).toBeDefined()
+			expect(wrapper.find('[data-test="submit-btn"]').text()).toBe('common.update')
 			expect(wrapper.find('[data-test="transaction-save-draft"]').attributes('disabled')).toBeDefined()
 			// FR-025 allows evidence to be added and removed before submission only.
 			expect(wrapper.find('[data-test="evidence-read-only-hint"]').exists()).toBe(true)
@@ -2207,6 +2268,73 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 			// handed, and `findByPublicId('Office Supplies')` returns null.
 			expect(body?.expenseTypeId).not.toBe('Office Supplies')
 			expect(body?.costCenterId).toBe(COST_CENTER_ENGINEERING)
+		})
+
+		// T075 refinement (B): an ordinary DRAFT on an OPEN sheet has the same one-save footer as
+		// CREATE, but its label names the edit. The sheet status is part of the discriminator: `DRAFT`
+		// alone is also the legacy state the next test preserves.
+		it('offers exactly one primary Save changes action when editing a DRAFT on an OPEN sheet', async () => {
+			setTransactionDetail(transactionFixture())
+			setSheetDetail(sheetFixture('IRR', { status: 'OPEN' }))
+			const wrapper = await createWrapperAtRoute(TransactionFormView, '/transactions/tx-1/edit')
+
+			const saveActions = wrapper.findAll('[data-test="submit-btn"]')
+			expect(saveActions).toHaveLength(1)
+			expect(saveActions[0]?.text()).toBe('transactions.saveChanges')
+			expect(saveActions[0]?.attributes('type')).toBe('submit')
+			expect(wrapper.find('[data-test="transaction-save-draft"]').exists()).toBe(false)
+
+			await wrapper.find('[data-test="description-input"]').setValue('Airport taxi, corrected')
+			await submitTransactionForm(wrapper)
+			await flushPromises()
+
+			expect(updatedTransactionBody()?.description).toBe('Airport taxi, corrected')
+			const patches = ocsRequest.mock.calls.filter((call: unknown[]) =>
+				(call[0] as { method?: string })?.method === 'PATCH')
+			expect(patches, 'one save must issue one PATCH').toHaveLength(1)
+			expect(useTransactionStore().currentTransaction?.status).toBe('DRAFT')
+			expect(useSheetStore().currentSheet?.status).toBe('OPEN')
+		})
+
+		// T075 refinement (E): a DRAFT is not enough to infer the OPEN-sheet footer. A legacy draft on
+		// a submitted sheet keeps both existing controls and the existing `Update` label.
+		it('keeps the legacy two-control footer for a DRAFT on a non-OPEN sheet', async () => {
+			setTransactionDetail(transactionFixture())
+			setSheetDetail(sheetFixture('IRR', { status: 'COST_CENTER' }))
+			const wrapper = await createWrapperAtRoute(TransactionFormView, '/transactions/tx-1/edit')
+
+			expect(wrapper.find('[data-test="submit-btn"]').text()).toBe('common.update')
+			expect(wrapper.find('[data-test="transaction-save-draft"]').exists()).toBe(true)
+		})
+
+		// T075 refinement: the single action keeps the store's write lock while the request is in
+		// flight. The save handler itself is unchanged, so this proves the footer still reflects the
+		// existing `mutationLoading` guard rather than offering a second save.
+		it('disables the single save action while a save is in flight', async () => {
+			let settleCreate!: (response: unknown) => void
+			const createResponse = new Promise((resolve) => { settleCreate = resolve })
+			ocsRequest.mockImplementation((config: { url?: string; method?: string }) => {
+				if (config?.method === 'POST' && /\/transactions$/.test(config?.url ?? '')) {
+					return createResponse
+				}
+				return Promise.resolve(emptyOcsResponse(config))
+			})
+
+			const wrapper = await createWrapperAtRoute(TransactionFormView, '/sheets/sh-1/transactions/create')
+			await wrapper.find('[data-test="expense-date-input"]').setValue('2026-01-15')
+			await wrapper.find('[data-test="amount-input"]').setValue('1000')
+
+			await submitTransactionForm(wrapper)
+			await flushPromises()
+
+			expect(useTransactionStore().mutationLoading).toBe(true)
+			expect(wrapper.find('[data-test="submit-btn"]').attributes('disabled')).toBeDefined()
+
+			settleCreate({
+				status: 200,
+				data: { ocs: { meta: { status: 'ok', statuscode: 200 }, data: transactionFixture() } }
+			})
+			await flushPromises()
 		})
 
 		// UI-PUR-009: the newest *saved* transaction's cost center, not the first row and not the
@@ -2284,13 +2412,15 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 			expect(selectedCostCenter(wrapper)).toBe(COST_CENTER_ENGINEERING)
 		})
 
-		// UI-PUR-010: evidence is attached to a stored transaction, so the create route offers the
-		// catalogued explanation rather than a control that could only fail.
-		it('offers no file control on the create route, only the save-first hint', async () => {
+		// UI-PUR-010 (T053–T055): the owner directive reverses the historical create-route rule. The
+		// create form stages receipts locally before the first save; the edit-route uploader remains.
+		it('offers receipt staging on the create route without touching the edit uploader', async () => {
 			const wrapper = await createWrapperAtRoute(TransactionFormView, '/sheets/sh-1/transactions/create')
 			expect(wrapper.find('[data-test="evidence-upload-area"]').exists()).toBe(true)
-			expect(wrapper.find('[data-test="evidence-after-save-hint"]').text()).toBe('transactions.evidenceAfterSave')
-			expect(wrapper.find('[data-test="evidence-upload-input"]').exists()).toBe(false)
+			expect(wrapper.find('[data-test="receipt-stager"]').exists()).toBe(true)
+			expect(wrapper.find('[data-test="staged-receipt-input"]').exists()).toBe(true)
+			expect(wrapper.find('[data-test="staged-receipt-input"]').attributes('multiple')).toBeDefined()
+			expect(wrapper.find('[data-test="evidence-after-save-hint"]').exists()).toBe(false)
 			expect(wrapper.find('[data-test="evidence-uploader"]').exists()).toBe(false)
 		})
 
@@ -2305,6 +2435,7 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 		// purchaser actually saw. Cancel must not send anything at all.
 		it('deletes a draft only after a confirmation that names it, sending one versioned DELETE', async () => {
 			setTransactionDetail(transactionFixture({ version: 4 }))
+			setSheetDetail(sheetFixture('IRR'))
 			const { wrapper, router } = await createWrapperWithRouter(TransactionFormView, '/transactions/tx-1/edit')
 
 			await wrapper.find('[data-test="delete-transaction-btn"]').trigger('click')
@@ -2337,6 +2468,15 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 
 		it('offers no delete control once the transaction is no longer a draft', async () => {
 			setTransactionDetail(transactionFixture({ status: 'AWAITING_COST_CENTER_REVIEW', version: 4 }))
+			const wrapper = await createWrapperAtRoute(TransactionFormView, '/transactions/tx-1/edit')
+			expect(wrapper.find('[data-test="delete-transaction-btn"]').exists()).toBe(false)
+		})
+
+		// T067: the server refuses a delete on a sheet that is no longer OPEN, so the control must
+		// follow the same gate instead of offering an action that would be rejected.
+		it('offers no delete control on a draft whose sheet is no longer open', async () => {
+			setTransactionDetail(transactionFixture({ version: 4 }))
+			setSheetDetail(sheetFixture('IRR', { status: 'COST_CENTER' }))
 			const wrapper = await createWrapperAtRoute(TransactionFormView, '/transactions/tx-1/edit')
 			expect(wrapper.find('[data-test="delete-transaction-btn"]').exists()).toBe(false)
 		})
@@ -2590,10 +2730,49 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 		}
 
 		it('should display transaction details with revision history', async () => {
-			const wrapper = await mountDetail(transactionFixture(), [revisionFixture()])
+			// T069: a never-submitted draft shows a working-draft state, not official revision tabs.
+			// A submitted transaction is the state that has an official revision chain to display.
+			const wrapper = await mountDetail(
+				transactionFixture({ status: 'AWAITING_COST_CENTER_REVIEW', stage: 'COST_CENTER' }),
+				[revisionFixture()]
+			)
 			expect(wrapper.find('[data-test="revision-history"]').exists()).toBe(true)
 			// The header is only meaningful when there is something to choose between.
 			expect(wrapper.findAll('[data-test="revision-tab"]')).toHaveLength(1)
+		})
+
+		// T069. A draft's revisions are working state, not an official chain. Hiding them here is a
+		// read-side projection: nothing is deleted, and the rows become history after submission.
+		it('shows a never-submitted draft as working state without selectors, tabs or prior revisions', async () => {
+			const wrapper = await mountDetail(transactionFixture(), [
+				revisionFixture({ id: 'rev-1', number: 1 }),
+				revisionFixture({ id: 'rev-2', number: 2, active: false })
+			])
+
+			expect(wrapper.find('[data-test="working-draft"]').exists()).toBe(true)
+			expect(wrapper.find('[data-test="revision-selector"]').exists()).toBe(false)
+			expect(wrapper.find('[data-test="revision-tabs"]').exists()).toBe(false)
+			expect(wrapper.findAll('[data-test="revision-tab"]')).toHaveLength(0)
+		})
+
+		// T069. A correction that has not been resubmitted is the active revision, so it is named as
+		// working state and excluded from the official chain — not numbered into it.
+		it('names an un-resubmitted correction as working state and keeps it out of the official tabs', async () => {
+			const working = revisionFixture({ id: 'rev-2', number: 2, active: true })
+			const wrapper = await mountDetail(
+				transactionFixture({
+					status: 'AWAITING_PURCHASER_CORRECTION',
+					stage: 'CORRECTION',
+					activeRevision: working
+				}),
+				[revisionFixture({ id: 'rev-1', number: 1, active: false }), working]
+			)
+
+			expect(wrapper.find('[data-test="working-correction"]').exists()).toBe(true)
+			expect(wrapper.find('[data-test="working-correction"]').text()).toContain('2')
+			const tabs = wrapper.findAll('[data-test="revision-tab"]')
+			expect(tabs).toHaveLength(1)
+			expect(tabs[0]?.text()).toContain('1')
 		})
 
 		// FR-052 makes the actor a snapshot rather than a live lookup: display name and role are the
@@ -2759,7 +2938,7 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 
 				// The *request* is the assertion. Asserting the button's presence is what every other
 				// test did, and it is satisfied by a button whose handler is an empty function.
-				expect(contentSpy).toHaveBeenCalledWith('ev-1')
+				expect(contentSpy).toHaveBeenCalledWith('ev-1', 'attachment')
 			} finally {
 				contentSpy.mockRestore()
 				vi.unstubAllGlobals()
@@ -2824,7 +3003,10 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 				revisionFixture(),
 				revisionFixture({ id: 'rev-2', number: 2, createdAt: '2026-01-22T09:00:00+00:00' })
 			]
-			const wrapper = await mountDetail(transactionFixture(), revisions)
+			const wrapper = await mountDetail(
+				transactionFixture({ status: 'AWAITING_COST_CENTER_REVIEW', stage: 'COST_CENTER' }),
+				revisions
+			)
 			expect(wrapper.find('[data-test="revision-selector"]').exists()).toBe(true)
 			expect(wrapper.findAll('[data-test="revision-tab"]')).toHaveLength(2)
 		})
@@ -2835,7 +3017,10 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 		it('should open the revision panel on the active revision', async () => {
 			const prior = revisionFixture({ id: 'rev-1', number: 1, active: false, amount: { amountMinor: 900, currency: 'IRR', minorUnit: 0 } })
 			const active = revisionFixture({ id: 'rev-2', number: 2, active: true, description: 'Taxi to the airport, corrected' })
-			const wrapper = await mountDetail(transactionFixture({ activeRevision: active }), [prior, active])
+			const wrapper = await mountDetail(
+				transactionFixture({ status: 'AWAITING_COST_CENTER_REVIEW', stage: 'COST_CENTER', activeRevision: active }),
+				[prior, active]
+			)
 
 			const panel = wrapper.find('[role="tabpanel"]')
 			expect(panel.text()).toContain('Taxi to the airport, corrected')
@@ -2863,7 +3048,12 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 			const prior = revisionFixture({ id: 'rev-1', number: 1, active: false })
 			const active = revisionFixture({ id: 'rev-2', number: 2, active: true, description: 'Taxi to the airport, corrected' })
 			const wrapper = await mountDetail(
-				transactionFixture({ activeRevision: active, decisions: [decisionFixture()] }),
+				transactionFixture({
+					status: 'AWAITING_COST_CENTER_REVIEW',
+					stage: 'COST_CENTER',
+					activeRevision: active,
+					decisions: [decisionFixture()]
+				}),
 				[prior, active]
 			)
 			const region = wrapper.find('[data-test="prior-revisions"]')
@@ -2918,6 +3108,28 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 				await pendingUpload
 			} finally {
 				uploadSpy.mockRestore()
+			}
+		})
+
+		it('should start an upload when crypto.randomUUID is unavailable', async () => {
+			const uploadSpy = vi.spyOn(evidenceApi, 'uploadEvidence')
+				.mockResolvedValue({ id: 'ev-1' } as never)
+			const original = globalThis.crypto
+			vi.stubGlobal('crypto', {
+				getRandomValues: original.getRandomValues.bind(original)
+			})
+			try {
+				const wrapper = createWrapper(EvidenceUploader, {
+					props: { transactionId: 'test-tx-1', isDraft: true }
+				})
+				await selectFile(wrapper, new File(['receipt-content'], 'receipt.pdf', { type: 'application/pdf' }))
+				await wrapper.find('[data-test="upload-btn"]').trigger('click')
+				await flushPromises()
+
+				expect(uploadSpy).toHaveBeenCalledWith('test-tx-1', expect.any(File))
+			} finally {
+				uploadSpy.mockRestore()
+				vi.unstubAllGlobals()
 			}
 		})
 
@@ -3187,34 +3399,27 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 			return sheetFixture('IRR', overrides)
 		}
 
-		it('should display all open sheets in purchaser dashboard', async () => {
+		it('shows open and submitted sheets in one table instead of a second OPEN region', async () => {
 			const wrapper = await mountSheetList([
 				sheetRow({ id: 'sh-1', title: 'March travel', status: 'OPEN' }),
 				sheetRow({ id: 'sh-2', title: 'April supplies', status: 'OPEN' }),
 				sheetRow({ id: 'sh-3', title: 'February review', status: 'COST_CENTER' })
 			])
 
-			const open = wrapper.find('[data-test="open-sheets"]')
-			expect(open.exists()).toBe(true)
-			// Both open sheets, and only those: the one under review belongs to the other region.
-			//
-			// `open-sheet-row`, not `sheet-row`: T389 gave each region its own hook when both became
-			// `ResponsiveTable`s, because the two regions render overlapping sheets and a shared row hook
-			// makes any global row count double. This assertion was already scoped to `[data-test="open-sheets"]`,
-			// so the region-specific hook is the more precise selector, not a workaround.
-			expect(open.findAll('[data-test="open-sheet-row"]')).toHaveLength(2)
-			expect(open.text()).toContain('March travel')
-			expect(open.text()).toContain('April supplies')
-			expect(open.text()).not.toContain('February review')
+			expect(wrapper.find('[data-test="open-sheets"]').exists()).toBe(false)
+			const table = wrapper.find('[data-test="sheet-list-table"]')
+			expect(table.exists()).toBe(true)
+			expect(table.text()).toContain('March travel')
+			expect(table.text()).toContain('April supplies')
+			expect(table.text()).toContain('February review')
+			expect(wrapper.findAll('[data-test="sheet-row"]')).toHaveLength(3)
 		})
 
-		it('should show every sheet, and say plainly when none are open', async () => {
-			const noneOpen = await mountSheetList([sheetRow({ id: 'sh-3', status: 'COMPLETED' })])
-			expect(noneOpen.findAll('[data-test="sheet-row"]').length).toBeGreaterThanOrEqual(1)
-			expect(noneOpen.find('[data-test="no-open-sheets"]').exists()).toBe(true)
-
-			const someOpen = await mountSheetList([sheetRow({ id: 'sh-1', status: 'OPEN' })])
-			expect(someOpen.find('[data-test="no-open-sheets"]').exists()).toBe(false)
+		it('does not invent an empty OPEN region when no sheet is open', async () => {
+			const wrapper = await mountSheetList([sheetRow({ id: 'sh-3', status: 'COMPLETED' })])
+			expect(wrapper.findAll('[data-test="sheet-row"]').length).toBeGreaterThanOrEqual(1)
+			expect(wrapper.find('[data-test="open-sheets"]').exists()).toBe(false)
+			expect(wrapper.find('[data-test="no-open-sheets"]').exists()).toBe(false)
 		})
 
 		it('should allow creating multiple open sheets simultaneously', async () => {

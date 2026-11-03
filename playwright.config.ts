@@ -22,13 +22,16 @@ export default defineConfig({
 		trace: 'retain-on-failure',
 		storageState: 'test-results/.auth/e2e-storage-state.json',
 	},
+	// Constitution v1.4.0, Principle V: automated browser evidence runs on official Google
+	// Chrome only. `channel: 'chrome'` resolves to the system installation; bundling Chromium,
+	// Firefox, WebKit, or Edge is prohibited, and there is deliberately no fallback. If Chrome
+	// is not installed the run must fail as an environment blocker rather than launch another
+	// engine. The T405 guard in `tests/Frontend/e2e-runnability.spec.ts` reports that blocker.
 	projects: [
-		{ name: 'chromium-desktop', use: { ...devices['Desktop Chrome'] } },
-		{ name: 'firefox-desktop', use: { ...devices['Desktop Firefox'] } },
-		{ name: 'edge-desktop', use: { ...devices['Desktop Edge'], channel: 'msedge' } },
+		{ name: 'chrome-desktop', use: { ...devices['Desktop Chrome'], browserName: 'chromium', channel: 'chrome' } },
 		// The 390px viewport FR-071 names is not a separate project on purpose: Pixel 7 is 412px wide,
 		// so a genuine 390px assertion belongs in a test that sets the viewport itself. Declaring the
 		// device and calling it 390px would be a claim the configuration does not back.
-		{ name: 'chromium-mobile', use: { ...devices['Pixel 7'] } },
+		{ name: 'chrome-mobile', use: { ...devices['Pixel 7'], browserName: 'chromium', channel: 'chrome' } },
 	],
 })

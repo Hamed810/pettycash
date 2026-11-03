@@ -44,7 +44,7 @@ async function addTransaction(page: Page): Promise<void> {
 	await pickOptionNamed(page, /E2E Cost/)
 	await page.click('[data-test="expense-type-select"]')
 	await pickFirstOption(page)
-	await page.click('[data-test="transaction-save-draft"]')
+	await page.click('[data-test="submit-btn"]')
 }
 
 async function submitSheet(page: Page): Promise<void> {

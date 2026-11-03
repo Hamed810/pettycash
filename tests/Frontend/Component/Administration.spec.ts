@@ -136,6 +136,18 @@ describe('US5 administration views', () => {
 		}
 	})
 
+	it('offers a dashboard back-link from both administration views (FR-004)', async () => {
+		const configuration = await mountConfiguration()
+		const configurationBack = configuration.find('[data-test="configuration-back-dashboard"]')
+		expect(configurationBack.exists(), 'configuration must offer a way back to the dashboard').toBe(true)
+		expect(configurationBack.attributes('href')).toBe('#/')
+
+		const funding = await mountFunding()
+		const fundingBack = funding.find('[data-test="funding-back-dashboard"]')
+		expect(fundingBack.exists(), 'funding must offer a way back to the dashboard').toBe(true)
+		expect(fundingBack.attributes('href')).toBe('#/')
+	})
+
 	it('lists the served currencies with an edit control each', async () => {
 		const wrapper = await mountConfiguration()
 

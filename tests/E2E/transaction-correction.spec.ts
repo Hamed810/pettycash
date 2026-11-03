@@ -45,7 +45,7 @@ async function createAndSubmitSheet(page: Page, title: string): Promise<void> {
 	await pickOptionNamed(page, /E2E Cost/)
 	await page.click('[data-test="expense-type-select"]')
 	await pickFirstOption(page)
-	await page.click('[data-test="transaction-save-draft"]')
+	await page.click('[data-test="submit-btn"]')
 	await page.click('[data-test="submit-sheet-button"]')
 }
 

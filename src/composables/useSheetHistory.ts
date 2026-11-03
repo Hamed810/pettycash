@@ -1,6 +1,6 @@
 import { computed, reactive } from 'vue'
 import { listTransactionAudit } from '@/services/auditApi'
-import type { AuditEvent } from '@/types/api'
+import type { AuditEvent, TransactionStatus } from '@/types/api'
 
 /**
  * The workspace History tab's data, assembled from the **only** history endpoints the API
@@ -10,8 +10,23 @@ import type { AuditEvent } from '@/types/api'
  * history. Each loaded page is bounded, and every feed that holds more events than it has loaded
  * is reported separately so the tab can offer a further request instead of implying it showed
  * everything.
+ *
+ * ## T069 — the draft boundary
+ *
+ * A never-submitted `DRAFT` has working revisions, not official history. Its audit feed is not
+ * requested at all, so no draft event can appear here. For a submitted transaction, legacy
+ * `REVISION_CREATED`/`TRANSACTION_CHANGED` events written while the transaction was still a draft
+ * are hidden: they describe draft working state, which the official timeline does not contain.
+ * Nothing is deleted or rewritten — this is a read-side projection only.
  */
 const PAGE_SIZE = 20
+
+/** Events that describe the pre-submission working state, not official history. */
+export const LEGACY_DRAFT_EVENT_TYPES = new Set(['REVISION_CREATED', 'TRANSACTION_CHANGED'])
+
+export function isLegacyDraftEvent(event: Pick<AuditEvent, 'eventType' | 'stage'>): boolean {
+	return event.stage === 'DRAFT' && LEGACY_DRAFT_EVENT_TYPES.has(event.eventType)
+}
 
 interface FeedState {
 	items: AuditEvent[]
@@ -24,6 +39,8 @@ interface FeedState {
 export interface HistoryTransaction {
 	id: string
 	label: string
+	/** Drives T069's draft boundary. Absent is treated as "history eligible" for older callers. */
+	status?: TransactionStatus
 }
 
 export interface MergedHistoryEvent extends AuditEvent {
@@ -44,6 +61,7 @@ function occurredAtValue(event: AuditEvent): number {
 export function useSheetHistory() {
 	const feeds = reactive<Record<string, FeedState>>({})
 	const labels = reactive<Record<string, string>>({})
+	const statuses = reactive<Record<string, TransactionStatus | undefined>>({})
 
 	async function loadPage(transactionId: string, page: number): Promise<void> {
 		const feed = feeds[transactionId] ?? (feeds[transactionId] = emptyFeed())
@@ -65,10 +83,15 @@ export function useSheetHistory() {
 		}
 	}
 
-	/** Loads page one for every transaction that has not been read yet. Idempotent by design. */
+	/**
+	 * Loads page one for every submitted transaction that has not been read yet. A draft is never
+	 * eligible: its revisions are working state, so there is no official feed to fetch.
+	 */
 	function ensureLoaded(transactions: HistoryTransaction[]): void {
 		for (const transaction of transactions) {
 			labels[transaction.id] = transaction.label
+			statuses[transaction.id] = transaction.status
+			if (transaction.status === 'DRAFT') continue
 			if (!feeds[transaction.id]) {
 				feeds[transaction.id] = emptyFeed()
 				void loadPage(transaction.id, 1)
@@ -85,7 +108,10 @@ export function useSheetHistory() {
 	const merged = computed<MergedHistoryEvent[]>(() => {
 		const events: MergedHistoryEvent[] = []
 		for (const [transactionId, feed] of Object.entries(feeds)) {
+			// Belt and braces: a skipped draft has no feed, but a status change must not resurrect one.
+			if (statuses[transactionId] === 'DRAFT') continue
 			for (const event of feed.items) {
+				if (isLegacyDraftEvent(event)) continue
 				events.push({
 					...event,
 					transactionId,
@@ -119,6 +145,8 @@ export function useSheetHistory() {
 			total: feed.total,
 		})))
 	const hasLoaded = computed(() => Object.keys(feeds).length > 0)
+	/** How many transactions the tab actually has an official history to show for. */
+	const tracked = computed(() => Object.values(statuses).filter((status) => status !== 'DRAFT').length)
 
 	return {
 		feeds,
@@ -129,6 +157,7 @@ export function useSheetHistory() {
 		errors,
 		truncated,
 		hasLoaded,
+		tracked,
 		ensureLoaded,
 		loadMore,
 	}

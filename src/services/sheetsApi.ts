@@ -1,6 +1,7 @@
-import { ocs, mutate, commandId } from './http'
+import { ocs, mutate, mutateVoid, commandId } from './http'
 import type {
 	SheetCreate,
+	SheetUpdate,
 	SheetSummary,
 	SheetDetail,
 	Page,
@@ -44,11 +45,10 @@ export async function getSheet(sheetId: string): Promise<SheetDetail> {
 
 export async function updateSheet(
 	sheetId: string,
-	data: SheetCreate,
-	expectedVersion: number,
+	data: SheetUpdate,
 	options: CommandOptions = {}
 ): Promise<SheetDetail> {
-	return mutate<SheetDetail>(`/sheets/${sheetId}`, 'PATCH', { ...data, expectedVersion }, options.commandId ?? commandId())
+	return mutate<SheetDetail>(`/sheets/${sheetId}`, 'PATCH', data, options.commandId ?? commandId())
 }
 
 export async function submitSheet(sheetId: string, expectedVersion: number, options: CommandOptions = {}): Promise<SheetDetail> {
@@ -66,12 +66,13 @@ export async function submitSheet(sheetId: string, expectedVersion: number, opti
  * fresh id.
  *
  * Answers `204` with no body, so this returns `void` rather than a sheet — the caller reloads the list, which
- * is also what proves the sheet is really gone.
+ * is also what proves the sheet is really gone. `mutateVoid` is what makes the bodyless answer a success
+ * without weakening `ocs()`'s rejection of a truncated body (T064).
  */
 export async function deleteSheet(
 	sheetId: string,
 	expectedVersion: number,
 	options: CommandOptions = {}
 ): Promise<void> {
-	await mutate<void>(`/sheets/${sheetId}`, 'DELETE', { expectedVersion }, options.commandId ?? commandId())
+	await mutateVoid(`/sheets/${sheetId}`, 'DELETE', { expectedVersion }, options.commandId ?? commandId())
 }

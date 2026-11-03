@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
+import { createRouter, createWebHashHistory } from 'vue-router'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { routes } from '@/router'
 
 // `generateOcsUrl` only prefixes the OCS base path; the caller supplies the app route, exactly as
 // the real helper does, so the requested URL can be asserted end to end.
@@ -588,6 +590,64 @@ describe('US7 Role-aware Dashboard — Vue Component Tests', () => {
 			return mount(DashboardView, { global: { plugins: [pinia] } })
 		}
 
+		/**
+		 * T023: the dashboard's action links reuse `visibleEntries`, so the view needs the real
+		 * `RouterLink` machinery to prove each role gets the entries the table promises. The route
+		 * components are inert because the view is mounted directly; only the names and hrefs matter.
+		 */
+		async function mountWithSession(roles: Role[], canAdminister: boolean) {
+			const pinia = createPinia()
+			setActivePinia(pinia)
+			useAuthStore().setUser({ userId: 'u-1', displayName: 'کاربر آزمایشی', roles })
+			useAuthStore().setCapabilities({ canAdminister })
+			const router = createRouter({
+				history: createWebHashHistory(),
+				routes: routes.map(({ path, name, props }) => ({
+					path,
+					name,
+					props,
+					component: { template: '<div />' }
+				}))
+			})
+			await router.push('/')
+			await router.isReady()
+			const wrapper = mount(DashboardView, { global: { plugins: [pinia, router] } })
+			await flushPromises()
+			return wrapper
+		}
+
+		it('offers the purchaser one-click sheets, returns, accounts, and reports', async () => {
+			const wrapper = await mountWithSession(['PURCHASER'], false)
+			const links = wrapper.findAll('[data-testid^="dashboard-link-"]')
+
+			expect(links.map((link) => link.attributes('data-testid'))).toEqual([
+				'dashboard-link-sheets',
+				'dashboard-link-review-queue-returns',
+				'dashboard-link-accounts',
+				'dashboard-link-reports'
+			])
+			expect(wrapper.find('[data-testid="dashboard-link-review-queue-finance"]').exists()).toBe(false)
+		})
+
+		it('offers each reviewer only the queue in their role scope', async () => {
+			const wrapper = await mountWithSession(['PURCHASER', 'SENIOR_MANAGER'], false)
+
+			expect(wrapper.find('[data-testid="dashboard-link-review-queue-senior"]').exists()).toBe(true)
+			expect(wrapper.find('[data-testid="dashboard-link-review-queue-cost-center"]').exists()).toBe(false)
+			expect(wrapper.find('[data-testid="dashboard-link-review-queue-finance"]').exists()).toBe(false)
+		})
+
+		it('offers administration only when the session can administer', async () => {
+			const administrator = await mountWithSession(['PURCHASER', 'ADMINISTRATOR'], true)
+			expect(administrator.find('[data-testid="dashboard-link-admin-configuration"]').exists()).toBe(true)
+			expect(administrator.find('[data-testid="dashboard-link-admin-funding"]').exists()).toBe(true)
+			expect(administrator.find('[data-testid="dashboard-link-review-queue-finance"]').exists()).toBe(false)
+
+			const nonAdministrator = await mountWithSession(['PURCHASER', 'ADMINISTRATOR'], false)
+			expect(nonAdministrator.find('[data-testid="dashboard-link-admin-configuration"]').exists()).toBe(false)
+			expect(nonAdministrator.find('[data-testid="dashboard-link-admin-funding"]').exists()).toBe(false)
+		})
+
 		it('shows the loading state until the projection answers', async () => {
 			let resolve: (value: unknown) => void = () => undefined
 			requestMock.mockReturnValue(new Promise((r) => { resolve = r }))
@@ -662,9 +722,15 @@ it('renders one card per bucket the projection sent', async () => {
 			expect(scoped.length).toBeGreaterThan(0)
 		})
 
-		it('declares the right-to-left direction on every rendered surface', () => {
+		it('derives the direction from the running language on every rendered surface', () => {
+			// UI-PUR-001: the dashboard used to pin `dir="rtl"` in the view and in its card. The view now
+			// declares the shared value and the card inherits it, so the page follows the language while
+			// staying a single direction for its whole subtree.
+			for (const { file, source } of SOURCES.filter((entry) => entry.file.endsWith('DashboardView.vue'))) {
+				expect(source, `${file} must declare the shared direction`).toContain(':dir="direction"')
+			}
 			for (const { file, source } of SOURCES.filter((entry) => entry.file.endsWith('.vue'))) {
-				expect(source, `${file} must render right-to-left`).toContain('dir="rtl"')
+				expect(source, `${file} must not hardcode a direction`).not.toContain('dir="rtl"')
 			}
 		})
 

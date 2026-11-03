@@ -1,4 +1,4 @@
-// Persian catalog completeness (T119): every key the UI can ask for exists.
+// Catalog completeness (T119): every key the UI can ask for exists in both shipped locales.
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, extname } from 'node:path'
@@ -7,23 +7,25 @@ import { DYNAMIC_KEY_FAMILIES, expandFamily } from '@/l10n'
 const SRC = join(process.cwd(), 'src')
 const FA_JSON = join(process.cwd(), 'l10n/fa.json')
 const FA_JS = join(process.cwd(), 'l10n/fa.js')
+const EN_JSON = join(process.cwd(), 'l10n/en.json')
+const EN_JS = join(process.cwd(), 'l10n/en.js')
 
 /** The catalog as the server loads it: `l10n/<lang>.json` for API consumers. */
-function loadCatalog(): Record<string, string> {
-	const document = JSON.parse(readFileSync(FA_JSON, 'utf8')) as {
+function loadCatalog(path = FA_JSON): Record<string, string> {
+	const document = JSON.parse(readFileSync(path, 'utf8')) as {
 		translations?: Record<string, string>
 	}
 	const catalog = document.translations
-	expect(catalog, 'l10n/fa.json must hold the pettycash translations').toBeTruthy()
+	expect(catalog, `${path} must hold the pettycash translations`).toBeTruthy()
 	if (catalog === undefined) {
-		throw new Error('l10n/fa.json must hold the pettycash translations')
+		throw new Error(`${path} must hold the pettycash translations`)
 	}
 	return catalog
 }
 
 /** The legacy `.js` registration the app page injects must carry the same catalog. */
-function loadJsCatalog(): Record<string, string> {
-	const code = readFileSync(FA_JS, 'utf8')
+function loadJsCatalog(path = FA_JS): Record<string, string> {
+	const code = readFileSync(path, 'utf8')
 	const registered: Record<string, Record<string, string>> = {}
 	const OC = {
 		L10N: {
@@ -34,9 +36,9 @@ function loadJsCatalog(): Record<string, string> {
 	}
 	new Function('OC', code)(OC)
 	const catalog = registered['pettycash']
-	expect(catalog, 'l10n/fa.js must register the pettycash catalog').toBeTruthy()
+	expect(catalog, `${path} must register the pettycash catalog`).toBeTruthy()
 	if (catalog === undefined) {
-		throw new Error('l10n/fa.js must register the pettycash catalog')
+		throw new Error(`${path} must register the pettycash catalog`)
 	}
 	return catalog
 }
@@ -133,5 +135,34 @@ describe('Persian catalog completeness', () => {
 			}
 		}
 		expect(offenders, `hardcoded aria-labels: ${offenders.join(' | ')}`).toEqual([])
+	})
+})
+
+describe('English catalog completeness', () => {
+	it('registers the same complete, non-empty catalog as Persian', () => {
+		const fa = loadCatalog()
+		const en = loadCatalog(EN_JSON)
+		const legacy = loadJsCatalog(EN_JS)
+
+		expect(Object.keys(en).sort()).toEqual(Object.keys(fa).sort())
+		expect(legacy).toEqual(en)
+		for (const [key, value] of Object.entries(en)) {
+			expect(value.trim().length, `empty English translation for ${key}`).toBeGreaterThan(0)
+		}
+	})
+
+	it('has no English value that is only the raw message key', () => {
+		const en = loadCatalog(EN_JSON)
+		const raw = Object.entries(en)
+			.filter(([key, value]) => value === key)
+			// These three literal keys are already English and are intentionally identical.
+			.filter(([key]) => ![
+				'Delete permanently',
+				'Delete this sheet?',
+				'Only a sheet that has not been submitted can be deleted.',
+				'“{title}” and everything in it will be permanently deleted, including its draft transactions and their uploaded evidence files. This cannot be undone.',
+			].includes(key))
+			.map(([key]) => key)
+		expect(raw, `raw English keys: ${raw.join(', ')}`).toEqual([])
 	})
 })

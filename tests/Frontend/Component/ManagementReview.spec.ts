@@ -64,6 +64,16 @@ function emptyOcsResponse(config: { url?: string }) {
   return { status: 200, data: { ocs: { meta: { status: 'ok', statuscode: 200 }, data } } }
 }
 
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+
+/** The browser shape on a plain-HTTP non-loopback origin: `randomUUID` is absent. */
+function stubCryptoWithoutRandomUUID(): void {
+  const original = globalThis.crypto
+  vi.stubGlobal('crypto', {
+    getRandomValues: original.getRandomValues.bind(original)
+  })
+}
+
 function createTestRouter(): Router {
   // The real route table is reused for its names and parameters, but its components are replaced
   // with inert placeholders: the view under test is mounted directly, so resolving the route would
@@ -110,7 +120,7 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
     function queueItem(id: string, overrides: Record<string, unknown> = {}) {
       return {
         id, sheetId: 'sheet-1', stage: 'COST_CENTER', status: 'AWAITING_COST_CENTER_REVIEW',
-        finalOutcome: null, evidenceCount: 1, version: 0,
+        finalOutcome: null, evidenceRequired: false, evidenceCount: 1, version: 0,
         latestDecision: {
           id: 'd-1', stage: 'COST_CENTER', decision: 'APPROVE',
           actor: { userId: 'user1', displayName: 'User 1', role: 'COST_CENTER_MANAGER' },
@@ -135,6 +145,18 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
       return mountView(CostCenterQueueView, '/reviews/cost-center')
     }
 
+    /**
+     * The sheet-first queue keeps the transaction table as an explicit fallback
+     * (`FR-006-017`). These tests exercise the preserved transaction-level
+     * surface, so they open that view rather than asserting it is the default.
+     */
+    async function openTransactionView(wrapper: VueWrapper) {
+      const toggle = wrapper.find('[data-testid="show-transactions-btn"]')
+      expect(toggle.exists(), 'the transaction fallback must remain reachable').toBe(true)
+      await toggle.trigger('click')
+      await flushPromises()
+    }
+
     it('should render cost center queue with paginated transactions', async () => {
       // The original asked for `[data-testid="queue-item"]`, which matches nothing: the view emits
       // `queue-row-{id}` per row, which is the design that lets a row be told apart from its
@@ -145,6 +167,7 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
       const wrapper = await mountQueue(items, { total: 30, page: 1, pageSize: 25 })
 
       expect(wrapper.find('[data-testid="cost-center-queue"]').exists()).toBe(true)
+      await openTransactionView(wrapper)
       // The view renders the page the server sent rather than slicing it again, so the first page is
       // 25 items against a total of 30 — which is two pages. (Seeding 30 into `items` and expecting 25
       // back would be asserting a client-side slice that does not exist and should not.)
@@ -168,6 +191,7 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
         queueItem('tx-1'),
         queueItem('tx-2', { sheetId: 'sheet-2' })
       ])
+      await openTransactionView(wrapper)
 
       expectCardAgreesWithTable(wrapper, {
         rows: 2,
@@ -185,6 +209,7 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
 
     it('should offer no pagination when the queue fits one page', async () => {
       const wrapper = await mountQueue([queueItem('tx-1'), queueItem('tx-2')])
+      await openTransactionView(wrapper)
       expect(wrapper.findAll('[data-testid^="queue-row-"]')).toHaveLength(2)
       expect(wrapper.find('[data-testid="queue-pagination"]').exists()).toBe(false)
     })
@@ -193,6 +218,88 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
       const wrapper = await mountQueue([])
       expect(wrapper.find('[data-testid="empty-queue"]').exists()).toBe(true)
       expect(wrapper.findAll('[data-testid^="queue-row-"]')).toHaveLength(0)
+    })
+
+    it('should present one sheet row per sheet from a complete pending set', async () => {
+      const wrapper = await mountQueue([
+        queueItem('tx-1'),
+        queueItem('tx-2'),
+        queueItem('tx-3', { sheetId: 'sheet-2' })
+      ], { total: 3, page: 1, pageSize: 500 })
+
+      const rows = wrapper.findAll('[data-testid^="sheet-row-"]')
+      expect(rows).toHaveLength(2)
+      // `ManagementReview.spec.ts` pins the Persian locale, so counts render with Persian digits.
+      expect(wrapper.find('[data-testid="stat-sheets"]').text()).toContain('۲')
+      expect(wrapper.find('[data-testid="stat-transactions"]').text()).toContain('۳')
+
+      const first = wrapper.find('[data-testid="sheet-row-sheet-1"]')
+      expect(first.exists()).toBe(true)
+      expect(first.find('[data-testid="sheet-transaction-count"]').text()).toContain('۲')
+      expect(first.find('[data-testid="sheet-title"]').text()).toContain('reviews.sheetQueue.sheetTitleUnavailable')
+      expect(first.find('[data-testid="sheet-purchaser"]').text()).toContain('reviews.sheetQueue.purchaserUnavailable')
+      expect(first.find('[data-testid="sheet-submitted"]').text()).toContain('reviews.sheetQueue.submittedUnavailable')
+      expect(first.find('[data-testid="sheet-status"]').text()).toContain('reviews.sheetQueue.needsAttention')
+      expect(first.find('[data-testid="status-badge-cost_center"]').exists()).toBe(true)
+      expect(first.find('[data-testid="sheet-latest-activity"]').exists()).toBe(false)
+      // The Phase 1 queue must not claim sheet-wide completion or Senior eligibility.
+      expect(first.text()).not.toContain('Eligible for Senior Review')
+      expect(wrapper.findAll('[data-testid^="queue-row-"]'), 'the flat table is not the primary surface').toHaveLength(0)
+    })
+
+    it('should keep unsupported history visibly disabled with a reason', async () => {
+      const wrapper = await mountQueue([queueItem('tx-1')], { total: 1, page: 1, pageSize: 500 })
+
+      const reviewedTab = wrapper.find('[data-testid="tab-reviewed"]')
+      expect(reviewedTab.exists()).toBe(true)
+      expect(reviewedTab.attributes('disabled')).toBeDefined()
+      expect(wrapper.find('[data-testid="reviewed-unavailable"]').text().trim()).not.toBe('')
+
+      const reviewedCard = wrapper.find('[data-testid="stat-reviewed"]')
+      expect(reviewedCard.text()).toContain('reviews.sheetQueue.stats.reviewedUnavailable')
+      expect(reviewedCard.text()).toContain('reviews.sheetQueue.stats.reviewedReason')
+    })
+
+    it('should hand off to a transaction-level review path when a sheet is expanded', async () => {
+      const wrapper = await mountQueue([queueItem('tx-1'), queueItem('tx-2')], { total: 2, page: 1, pageSize: 500 })
+      const row = wrapper.find('[data-testid="sheet-row-sheet-1"]')
+      await row.find('.sheet-row__summary').trigger('click')
+
+      const detail = wrapper.find('[data-testid="sheet-detail-sheet-1"]')
+      expect(detail.exists()).toBe(true)
+      expect(detail.find('[data-testid="review-transaction-tx-1"]').exists()).toBe(true)
+      expect(detail.find('[data-testid="review-transaction-tx-2"]').exists()).toBe(true)
+
+      // There is no sheet-level decision unit in the DOM.
+      const labels = wrapper.findAll('button').map((button) => button.text().trim())
+      expect(labels).not.toContain('Approve')
+      expect(labels).not.toContain('Reject')
+      expect(labels).not.toContain('Return')
+    })
+
+    it('should refuse to group a partial pending set and offer the transaction list', async () => {
+      const items = Array.from({ length: 25 }, (_, index) => queueItem(`tx-${index + 1}`))
+      const wrapper = await mountQueue(items, { total: 30, page: 1, pageSize: 25 })
+
+      expect(wrapper.find('[data-testid="grouping-unavailable"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="stat-sheets"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="sheet-list"]').exists()).toBe(false)
+
+      await wrapper.find('[data-testid="open-transactions-btn"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.findAll('[data-testid^="queue-row-"]')).toHaveLength(25)
+    })
+
+    it('should filter the complete sheet set locally', async () => {
+      const wrapper = await mountQueue([
+        queueItem('tx-1'),
+        queueItem('tx-2', { sheetId: 'sheet-2' })
+      ], { total: 2, page: 1, pageSize: 500 })
+
+      await wrapper.find('[data-testid="sheet-search"]').setValue('sheet-2')
+      const rows = wrapper.findAll('[data-testid^="sheet-row-"]')
+      expect(rows).toHaveLength(1)
+      expect(rows[0]?.attributes('data-testid')).toBe('sheet-row-sheet-2')
     })
 
     // FR-072 / FR-071's "no horizontal scroll at 390px viewport".
@@ -235,6 +342,7 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
     // the half of the requirement that actually excludes colour-only signalling.
     it('should display WCAG AA compliant status colors/icons', async () => {
       const wrapper = await mountQueue([queueItem('tx-1'), queueItem('tx-2', { status: 'COST_CENTER_APPROVED' })])
+      await openTransactionView(wrapper)
 
       const rows = wrapper.findAll('[data-testid^="queue-row-"]')
       expect(rows).toHaveLength(2)
@@ -284,7 +392,7 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
     it('should render senior queue with advisory cost center decisions visible', async () => {
       const wrapper = await mountSeniorQueue([{
         id: 'tx-1', sheetId: 'sheet-1', stage: 'SENIOR', status: 'AWAITING_SENIOR_REVIEW',
-        finalOutcome: null, evidenceCount: 1, version: 0,
+        finalOutcome: null, evidenceRequired: false, evidenceCount: 1, version: 0,
         latestDecision: COST_CENTER_APPROVAL,
         activeRevision: {
           id: 'rev-1', number: 1, expenseDate: '2026-09-20',
@@ -324,7 +432,7 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
       const wrapper = await mountSeniorQueue([
         {
           id: 'tx-1', sheetId: 'sheet-1', stage: 'SENIOR', status: 'AWAITING_SENIOR_REVIEW',
-          finalOutcome: null, evidenceCount: 0, version: 0,
+          finalOutcome: null, evidenceRequired: false, evidenceCount: 0, version: 0,
           latestDecision: COST_CENTER_APPROVAL,
           activeRevision: {
             id: 'rev-1', number: 1, expenseDate: '2026-09-20',
@@ -349,7 +457,7 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
     it('should allow senior to decide independently without forced acknowledgment', async () => {
       const wrapper = await mountSeniorQueue([{
         id: 'tx-1', sheetId: 'sheet-1', stage: 'SENIOR', status: 'AWAITING_SENIOR_REVIEW',
-        finalOutcome: null, evidenceCount: 1, version: 0,
+        finalOutcome: null, evidenceRequired: false, evidenceCount: 1, version: 0,
         latestDecision: COST_CENTER_APPROVAL,
         activeRevision: {
           id: 'rev-1', number: 1, expenseDate: '2026-09-20',
@@ -375,7 +483,7 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
       const reviewsStore = useReviewsStore()
       reviewsStore.selectedTransaction = {
         id: 'tx-1', sheetId: 'sheet-1', stage: 'SENIOR', status: 'AWAITING_SENIOR_REVIEW',
-        finalOutcome: null, evidenceCount: 1, version: 0,
+        finalOutcome: null, evidenceRequired: false, evidenceCount: 1, version: 0,
         latestDecision: COST_CENTER_APPROVAL,
         activeRevision: {
           id: 'rev-1', number: 1, expenseDate: '2026-09-20',
@@ -418,6 +526,7 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
         stage: 'COST_CENTER',
         status: 'AWAITING_COST_CENTER_REVIEW',
         finalOutcome: null,
+        evidenceRequired: false,
         evidenceCount: 1,
         version: 0,
         activeRevision: {
@@ -450,6 +559,16 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
       reviewsStore.fetchTransactionForReview = vi.fn().mockResolvedValue(undefined)
       return mountView(TransactionReviewDetailView, `/reviews/${stage}/tx-1`)
     }
+
+    it('links back to the dashboard and the owning queue (FR-004)', async () => {
+      const wrapper = await mountReview(reviewedTransaction(), 'senior')
+      const breadcrumbs = wrapper.findAll('.breadcrumbs a')
+
+      expect(breadcrumbs.map((link) => link.attributes('href'))).toEqual([
+        '#/',
+        '#/reviews/senior'
+      ])
+    })
 
     it('should display transaction details with evidence and history', async () => {
       // With a prior decision in hand, so "and history" is a claim about content rather than about
@@ -854,6 +973,29 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
       // A command identity has to be a real one, not an empty string that would satisfy `toHaveProperty`.
       expect(payload?.commandId).toMatch(/^[0-9a-f-]{36}$/)
     })
+
+    it('records a decision when crypto.randomUUID is unavailable', async () => {
+      stubCryptoWithoutRandomUUID()
+      try {
+        const wrapper = await mountView(DecisionForm, '/', { stage: 'COST_CENTER', transactionId: 'tx-1', allowIndependentDecision: false, allowedActions: { canApprove: true, canReject: true, canReturn: true } })
+
+        await chooseDecision(wrapper, 'APPROVE')
+        await submitForm(wrapper)
+
+        expect(wrapper.emitted('submit-decision')).toBeTruthy()
+        const payload = wrapper.emitted('submit-decision')?.[0]?.[0] as { commandId?: string } | undefined
+        expect(payload?.commandId).toMatch(UUID_V4)
+        // The identity the component emits is the one that travels on the wire, not a second one
+        // generated inside `mutate()`.
+        expect(ocsRequest).toHaveBeenCalledWith(
+          expect.objectContaining({
+            headers: expect.objectContaining({ 'X-PettyCash-Command-ID': payload?.commandId })
+          })
+        )
+      } finally {
+        vi.unstubAllGlobals()
+      }
+    })
   })
 
   describe('PriorDecisionHistory', () => {
@@ -959,7 +1101,7 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
 
       const reviewsStore = useReviewsStore()
       reviewsStore.costCenterQueue = {
-        items: [{ id: 'tx-1', sheetId: 'sheet-1', stage: 'COST_CENTER', status: 'AWAITING_COST_CENTER_REVIEW', finalOutcome: null, evidenceCount: 1, version: 0, latestDecision: { id: 'd-1', stage: 'COST_CENTER', decision: 'APPROVE', actor: { userId: 'user1', displayName: 'User 1', role: 'COST_CENTER_MANAGER' }, decidedAt: '2026-09-20T10:00:00Z' }, activeRevision: { id: 'rev-1', number: 1, expenseDate: '2026-09-20', amount: { amountMinor: 50000, currency: 'IRR', minorUnit: 0 }, description: 'Expense', costCenter: { id: 'cc-1', code: 'CC001', name: 'Cost Center' }, expenseType: { id: 'et-1', name: 'Travel' }, createdBy: 'user1', createdAt: '2026-09-20T10:00:00Z', active: true } }],
+        items: [{ id: 'tx-1', sheetId: 'sheet-1', stage: 'COST_CENTER', status: 'AWAITING_COST_CENTER_REVIEW', finalOutcome: null, evidenceRequired: false, evidenceCount: 1, version: 0, latestDecision: { id: 'd-1', stage: 'COST_CENTER', decision: 'APPROVE', actor: { userId: 'user1', displayName: 'User 1', role: 'COST_CENTER_MANAGER' }, decidedAt: '2026-09-20T10:00:00Z' }, activeRevision: { id: 'rev-1', number: 1, expenseDate: '2026-09-20', amount: { amountMinor: 50000, currency: 'IRR', minorUnit: 0 }, description: 'Expense', costCenter: { id: 'cc-1', code: 'CC001', name: 'Cost Center' }, expenseType: { id: 'et-1', name: 'Travel' }, createdBy: 'user1', createdAt: '2026-09-20T10:00:00Z', active: true } }],
         total: 1,
         page: 1,
         pageSize: 25
@@ -967,6 +1109,13 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
       reviewsStore.fetchCostCenterQueue = vi.fn().mockResolvedValue(undefined)
 
       const wrapper = await mountView(CostCenterQueueView, '/reviews/cost-center')
+
+      // The sheet-first queue is the default; the transaction-level row this test
+      // describes lives in the preserved transaction fallback.
+      const toggle = wrapper.find('[data-testid="show-transactions-btn"]')
+      expect(toggle.exists(), 'the transaction fallback must remain reachable').toBe(true)
+      await toggle.trigger('click')
+      await flushPromises()
 
       // FR-002/FR-008 permit a multi-role user to review their own transaction when scope and stage
       // match. The original asserted `[data-testid="queue-item"]`, which matches nothing (the view

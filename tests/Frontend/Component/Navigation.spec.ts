@@ -20,6 +20,7 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 import AppNavigation from '@/components/navigation/AppNavigation.vue'
 import { routes } from '@/router'
 import { useAuthStore } from '@/stores/auth'
+import { NAVIGATION_ENTRIES } from '@/types/navigation'
 import type { Role } from '@/types/permissions'
 
 vi.mock('@nextcloud/l10n', () => ({
@@ -45,11 +46,12 @@ function testRouter() {
 	return createRouter({ history: createWebHashHistory(), routes })
 }
 
-async function mountNav() {
+async function mountNav(options: { attachTo?: HTMLElement } = {}) {
 	const router = testRouter()
 	router.push('/')
 	await router.isReady()
 	const wrapper = mount(AppNavigation, {
+		attachTo: options.attachTo,
 		global: { plugins: [router] },
 	})
 	await flushPromises()
@@ -148,9 +150,65 @@ describe('AppNavigation', () => {
 			expect(to.startsWith('#/')).toBe(true)
 		}
 		// And the entry table itself only names declared routes.
-		const { NAVIGATION_ENTRIES } = await import('@/types/navigation')
 		for (const entry of NAVIGATION_ENTRIES) {
 			expect(declaredNames.has(entry.name)).toBe(true)
 		}
+	})
+
+	/**
+	 * The approved narrow shell is one row of four tabs. A multi-role session carries more
+	 * destinations than that, so the row keeps three and folds the rest into the More disclosure
+	 * instead of wrapping to a second row. Every destination is still rendered once, in table
+	 * order, and the wide sidebar is untouched.
+	 */
+	it('folds destinations beyond the four-slot row into More on narrow viewports', async () => {
+		signInAs(['PURCHASER', 'COST_CENTER_MANAGER', 'SENIOR_MANAGER', 'FINANCE'], false)
+		const wide = await mountNav()
+		const expected = wide.findAll('a[data-test^="nav-"]').map((link) => link.attributes('data-test'))
+		expect(expected.length).toBeGreaterThan(4)
+		wide.unmount()
+
+		const originalMatchMedia = window.matchMedia
+		window.matchMedia = vi.fn().mockReturnValue({
+			matches: true,
+			media: '(max-width: 900px)',
+			onchange: null,
+			addEventListener: vi.fn(),
+			removeEventListener: vi.fn(),
+			addListener: vi.fn(),
+			removeListener: vi.fn(),
+			dispatchEvent: vi.fn(),
+		}) as unknown as typeof window.matchMedia
+
+		try {
+			const wrapper = await mountNav()
+			expect(wrapper.find('[data-test="nav-more"]').exists()).toBe(true)
+			// Three destinations plus the More slot; the remaining entries live in the disclosure.
+			expect(wrapper.findAll('.pettycash-nav__item').length).toBe(4)
+			expect(wrapper.findAll('a[data-test^="nav-"]').map((link) => link.attributes('data-test'))).toEqual(expected)
+			wrapper.unmount()
+		} finally {
+			window.matchMedia = originalMatchMedia
+		}
+	})
+
+	it('keeps every rendered entry focusable in table order (Tab order)', async () => {
+		signInAs(['PURCHASER', 'COST_CENTER_MANAGER', 'SENIOR_MANAGER', 'FINANCE', 'ADMINISTRATOR'], true)
+		const wrapper = await mountNav({ attachTo: document.body })
+		const links = wrapper.findAll('a[data-test^="nav-"]')
+
+		// jsdom has no native Tab traversal. A keyboard user can reach exactly the entries the
+		// table promises, in table order, when each rendered link is focusable; the Playwright
+		// keyboard spec owns the real keypress.
+		expect(links.map((link) => link.attributes('data-test'))).toEqual(
+			NAVIGATION_ENTRIES.map((entry) => entry.testId),
+		)
+		for (const link of links) {
+			const element = link.element as HTMLAnchorElement
+			element.focus()
+			expect(document.activeElement).toBe(element)
+		}
+
+		wrapper.unmount()
 	})
 })

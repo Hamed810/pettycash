@@ -48,7 +48,7 @@ async function createAndSubmitSheet(page: Page, title: string): Promise<void> {
 	await listbox.getByRole('option', { name: /E2E Cost/ }).click()
 	await page.click('[data-test="expense-type-select"]')
 	await pickFirstOption(page)
-	await page.click('[data-test="transaction-save-draft"]')
+	await page.click('[data-test="submit-btn"]')
 	await page.click('[data-test="submit-sheet-button"]')
 	await page.waitForTimeout(1200)
 }
@@ -273,7 +273,7 @@ test.describe('finance settlement journeys', () => {
 		await listbox.getByRole('option', { name: /E2E Cost/ }).click()
 		await page.click('[data-test="expense-type-select"]')
 		await pickFirstOption(page)
-		await page.click('[data-test="transaction-save-draft"]')
+		await page.click('[data-test="submit-btn"]')
 		await page.click('[data-test="submit-sheet-button"]')
 		await page.waitForTimeout(1200)
 

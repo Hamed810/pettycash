@@ -204,7 +204,8 @@ export default async function globalSetup(config: FullConfig): Promise<void> {
 	const baseURL = config.projects[0]?.use?.baseURL ?? 'http://localhost:8081'
 	const { user, password } = credentials()
 
-	const browser = await chromium.launch()
+	// Constitution v1.4.0: official Google Chrome only. No bundled-Chromium fallback.
+	const browser = await chromium.launch({ channel: 'chrome' })
 	try {
 		const context = await browser.newContext()
 		await signIn(context, baseURL, user, password)

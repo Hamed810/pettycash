@@ -4,6 +4,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createWebHashHistory, type Router } from 'vue-router'
 import SheetListView from '@/views/sheets/SheetListView.vue'
 import SheetDetailView from '@/views/sheets/SheetDetailView.vue'
+import { useSheetStore } from '@/stores/sheets'
 import { routes } from '@/router'
 import { formatNumber } from '@/utils/number'
 import type { AuditEvent, Money, SheetDetail, SheetSummary, TransactionStatus, TransactionSummary } from '@/types/api'
@@ -99,6 +100,7 @@ function transactionFixture(id: string, overrides: Partial<TransactionSummary> =
 		stage: 'DRAFT',
 		status: 'DRAFT',
 		finalOutcome: null,
+		evidenceRequired: false,
 		evidenceCount: 0,
 		version: 1,
 		...overrides
@@ -108,6 +110,7 @@ function transactionFixture(id: string, overrides: Partial<TransactionSummary> =
 function sheetFixture(overrides: Partial<SheetDetail> = {}): SheetDetail {
 	return {
 		id: 'sh-1',
+		accountId: 'b4b0b3a4-1111-4c2d-9e0f-000000000001',
 		title: 'March travel',
 		ownerId: 'purchaser',
 		ownerDisplayName: 'Sara Ahmadi',
@@ -348,6 +351,30 @@ describe('sheet workspace (UI-PUR-005/006)', () => {
 		expect(wrapper.find('[data-test="sheet-not-found-back"]').exists()).toBe(true)
 	})
 
+	// T070: the full-page loader is only for "there is no sheet yet". A re-read of the sheet that is
+	// already on screen must not replace the workspace with "Loading sheet…", because the reader
+	// would lose their tab and scroll position to a request that may only be refreshing totals.
+	it('keeps the loaded workspace visible while the same sheet is re-read', async () => {
+		stubTransport()
+		const wrapper = await mountAt('/sheets/sh-1', SheetDetailView)
+		expect(wrapper.find('[data-test="sheet-loading"]').exists()).toBe(false)
+
+		let release: (value: unknown) => void = () => undefined
+		ocsRequest.mockImplementationOnce(() => new Promise((resolve) => { release = resolve }))
+		const store = useSheetStore()
+		const reread = store.loadSheet('sh-1')
+		await flushPromises()
+
+		expect(store.detailLoadingId).toBe('sh-1')
+		expect(wrapper.find('[data-test="sheet-loading"]').exists()).toBe(false)
+		expect(wrapper.find('[data-test="sheet-workspace"]').exists()).toBe(true)
+
+		release({ data: { ocs: { meta: { status: 'ok', statuscode: 200 }, data: sheetFixture() } } })
+		await reread
+		await flushPromises()
+		expect(store.detailLoadingId).toBeNull()
+	})
+
 	it('renders the transaction table from the sheet payload with a view-only action', async () => {
 		stubTransport()
 		const wrapper = await mountAt('/sheets/sh-1', SheetListView)
@@ -375,11 +402,13 @@ describe('sheet workspace (UI-PUR-005/006)', () => {
 		for (const badge of badges) expect(badge.text()).toBe('—')
 	})
 
-	it('names the missing server-enforced fields and reports evidence as unknown', async () => {
+	it('names the missing server-enforced fields and a required receipt, never an unknown state', async () => {
 		stubTransport({
 			sheet: sheetFixture({
 				transactions: [
 					transactionFixture('tx-1', {
+						evidenceRequired: true,
+						evidenceCount: 0,
 						activeRevision: revisionFixture({ description: '', costCenter: { id: '', name: '' }, expenseType: { id: '', name: '' } })
 					})
 				]
@@ -393,9 +422,90 @@ describe('sheet workspace (UI-PUR-005/006)', () => {
 		expect(text).toContain('readiness.missingDescription')
 		expect(text).toContain('readiness.missingCostCenter')
 		expect(text).toContain('readiness.missingExpenseType')
-		expect(wrapper.find('[data-test="readiness-evidence-unknown"]').text()).toContain('readiness.evidenceUnknown')
+		expect(text).toContain('readiness.missingReceipt')
+		// The historical permanent "the server checks this, we do not know" note is gone: the payload
+		// now carries the exact server-derived rule and the active count (T057).
+		expect(wrapper.find('[data-test="readiness-evidence-unknown"]').exists()).toBe(false)
 		// Readiness never disables the server-enforced action.
 		expect(wrapper.find('[data-test="submit-sheet-button"]').exists()).toBe(true)
+	})
+
+	it('does not make a receipt blocker when the server says the type is receipt-exempt', async () => {
+		stubTransport({
+			sheet: sheetFixture({
+				transactions: [
+					transactionFixture('tx-1', { evidenceRequired: false, evidenceCount: 0 })
+				]
+			})
+		})
+		const wrapper = await mountAt('/sheets/sh-1', SheetListView)
+
+		expect(wrapper.find('[data-test="readiness-blocker"]').exists()).toBe(false)
+		expect(wrapper.find('[data-test="readiness-ready"]').exists()).toBe(true)
+	})
+
+	it('does not make a receipt blocker when a required receipt is already active', async () => {
+		stubTransport({
+			sheet: sheetFixture({
+				transactions: [
+					transactionFixture('tx-1', { evidenceRequired: true, evidenceCount: 1 })
+				]
+			})
+		})
+		const wrapper = await mountAt('/sheets/sh-1', SheetListView)
+
+		expect(wrapper.find('[data-test="readiness-blocker"]').exists()).toBe(false)
+		expect(wrapper.find('[data-test="readiness-ready"]').exists()).toBe(true)
+	})
+
+	it('maps a submission 422 evidence field error to the named transaction and focuses the summary', async () => {
+		const detail = sheetFixture({
+			transactions: [
+				transactionFixture('tx-1', { evidenceRequired: true, evidenceCount: 0 })
+			],
+			transactionCount: 1
+		})
+		stubTransport({ sheet: detail })
+		const wrapper = await mountAt('/sheets/sh-1', SheetListView)
+
+		ocsRequest.mockImplementation((config: { url?: string; method?: string }) => {
+			if (config?.method === 'POST' && /\/submit$/.test(config?.url ?? '')) {
+				return Promise.reject(Object.assign(new Error('Request failed with status code 422'), {
+					isAxiosError: true,
+					response: {
+						status: 422,
+						data: {
+							ocs: {
+								meta: { status: 'failure', statuscode: 422 },
+								data: {
+									error: {
+										code: 'VALIDATION_FAILED',
+										message: 'Required receipts are missing',
+										fieldErrors: {
+											'transactions.tx-1.evidence': ['A receipt is required for this transaction']
+										}
+									}
+								}
+							}
+						}
+					}
+				}))
+			}
+			return ocsOk(detail)
+		})
+
+		await wrapper.find('[data-test="submit-sheet-button"]').trigger('click')
+		await flushPromises()
+
+		const summary = wrapper.find('[data-test="submission-evidence-errors"]')
+		expect(summary.exists()).toBe(true)
+		expect(summary.text()).toContain('Taxi to the airport')
+		expect(summary.text()).toContain('A receipt is required for this transaction')
+		expect(summary.attributes('role')).toBe('alert')
+		expect(summary.attributes('tabindex')).toBe('-1')
+		expect(document.activeElement).toBe(summary.element)
+		// The named refusal replaces the generic line; the two must not be presented side by side.
+		expect(wrapper.find('[data-test="submission-errors"]').exists()).toBe(false)
 	})
 
 	it('shows only server-published approval figures and says counts are unavailable', async () => {
@@ -411,6 +521,14 @@ describe('sheet workspace (UI-PUR-005/006)', () => {
 
 	it('merges per-transaction history newest-first, reads the decision from `after`, and pages honestly', async () => {
 		stubTransport({
+			// T069: a never-submitted DRAFT has no official feed, so the merge fixture uses submitted
+			// transactions. The draft boundary itself is asserted in DraftHistory.spec.ts.
+			sheet: sheetFixture({
+				transactions: [
+					transactionFixture('tx-1', { status: 'AWAITING_COST_CENTER_REVIEW' as TransactionStatus, stage: 'COST_CENTER' }),
+					transactionFixture('tx-2', { status: 'AWAITING_COST_CENTER_REVIEW' as TransactionStatus, stage: 'COST_CENTER' }),
+				]
+			}),
 			audit: {
 				'tx-1': (page) => page === 1
 					? [

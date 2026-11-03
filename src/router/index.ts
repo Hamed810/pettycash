@@ -5,7 +5,6 @@ import { installSheetListReturnTracking } from '../utils/sheetListSession'
 
 const DashboardView = () => import('../views/DashboardView.vue')
 const SheetListView = () => import('../views/sheets/SheetListView.vue')
-const SheetFormView = () => import('../views/sheets/SheetFormView.vue')
 const TransactionListView = () => import('../views/transactions/TransactionListView.vue')
 const TransactionFormView = () => import('../views/transactions/TransactionFormView.vue')
 const TransactionDetailView = () => import('../views/transactions/TransactionDetailView.vue')
@@ -54,12 +53,15 @@ const NotFoundView = defineComponent({
 export const routes: RouteRecordRaw[] = [
 	{ path: '/', name: 'dashboard', component: DashboardView },
 	{ path: '/sheets', name: 'sheets', component: SheetListView },
-	{ path: '/sheets/create', name: 'sheet-create', component: SheetFormView },
+	// T079/T080: both sheet-form routes are the list with one route-driven modal open, not a second
+	// full-page form. The list stays mounted behind the dialog, and `sheet-edit` never mounts the
+	// workspace as well, so exactly one `[role="dialog"]` exists on either route.
+	{ path: '/sheets/create', name: 'sheet-create', component: SheetListView },
 	// UI-PUR-005: the sheet workspace is an overlay **over the list**, not a separate page. Both
 	// records render the list so the rows underneath survive opening and closing a sheet; the
 	// `:id` record stays addressable and still resolves by the `sheet-detail` name every caller uses.
 	{ path: '/sheets/:id', name: 'sheet-detail', component: SheetListView },
-	{ path: '/sheets/:id/edit', name: 'sheet-edit', component: SheetFormView },
+	{ path: '/sheets/:id/edit', name: 'sheet-edit', component: SheetListView },
 	{ path: '/sheets/:sheetId/transactions', name: 'transactions', component: TransactionListView },
 	{ path: '/sheets/:sheetId/transactions/create', name: 'transaction-create', component: TransactionFormView },
 	{ path: '/transactions/:id', name: 'transaction-detail', component: TransactionDetailView },

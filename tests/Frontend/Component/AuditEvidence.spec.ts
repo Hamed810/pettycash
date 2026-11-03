@@ -220,7 +220,8 @@ describe('AuditEvidence (US6)', () => {
 
 		it('renders images inline rather than as a download', async () => {
 			const { wrapper } = mountView(EvidencePreview, '/audit/tx-1', {
-				evidence: { id: 'ev-1', name: 'scan.png', mediaType: 'image/png', sizeBytes: 100, active: true }
+				evidence: { id: 'ev-1', name: 'scan.png', mediaType: 'image/png', sizeBytes: 100, active: true },
+				open: true
 			})
 			await flushPromises()
 
@@ -230,7 +231,8 @@ describe('AuditEvidence (US6)', () => {
 
 		it('renders PDFs inline', async () => {
 			const { wrapper } = mountView(EvidencePreview, '/audit/tx-1', {
-				evidence: { id: 'ev-1', name: 'bill.pdf', mediaType: 'application/pdf', sizeBytes: 100, active: true }
+				evidence: { id: 'ev-1', name: 'bill.pdf', mediaType: 'application/pdf', sizeBytes: 100, active: true },
+				open: true
 			})
 			await flushPromises()
 
@@ -239,23 +241,26 @@ describe('AuditEvidence (US6)', () => {
 
 		it('never renders an unsafe type inline: download fallback only', async () => {
 			const { wrapper } = mountView(EvidencePreview, '/audit/tx-1', {
-				evidence: { id: 'ev-1', name: 'run.html', mediaType: 'text/html', sizeBytes: 100, active: true }
+				evidence: { id: 'ev-1', name: 'run.html', mediaType: 'text/html', sizeBytes: 100, active: true },
+				open: true
 			})
 			await flushPromises()
 
 			expect(wrapper.find('[data-test="evidence-preview-image"]').exists()).toBe(false)
 			expect(wrapper.find('[data-test="evidence-preview-pdf"]').exists()).toBe(false)
-			expect(wrapper.find('[data-test="download-evidence-btn"]').exists()).toBe(true)
+			expect(wrapper.find('[data-test="preview-download-only"]').exists()).toBe(true)
+			expect(wrapper.find('[data-test="preview-download-btn"]').exists()).toBe(true)
 		})
 
 		it('notes inactive state instead of previewing withdrawn files', async () => {
 			const { wrapper } = mountView(EvidencePreview, '/audit/tx-1', {
-				evidence: { id: 'ev-1', name: 'old.png', mediaType: 'image/png', sizeBytes: 100, active: false }
+				evidence: { id: 'ev-1', name: 'old.png', mediaType: 'image/png', sizeBytes: 100, active: false },
+				open: true
 			})
 			await flushPromises()
 
 			expect(wrapper.find('[data-test="evidence-preview-image"]').exists()).toBe(false)
-			expect(wrapper.find('[data-test="download-evidence-btn"]').exists()).toBe(false)
+			expect(wrapper.find('[data-test="preview-download-btn"]').exists()).toBe(false)
 			expect(wrapper.find('[data-test="preview-inactive-note"]').exists()).toBe(true)
 		})
 	})

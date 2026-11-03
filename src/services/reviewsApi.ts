@@ -1,5 +1,5 @@
 import { ocs, mutate } from './http'
-import type { Page, TransactionSummary, TransactionDetail, DecisionWrite, DecisionResult } from '@/types/api'
+import type { Page, TransactionSummary, TransactionDetail, DecisionWrite, DecisionResult, CommandOptions } from '@/types/api'
 
 export interface QueueParams {
   stage: 'cost-center' | 'senior' | 'finance'
@@ -38,11 +38,13 @@ export async function fetchTransactionForReview(transactionId: string): Promise<
 
 export async function recordDecision(
   transactionId: string,
-  payload: DecisionWrite
+  payload: DecisionWrite,
+  options: CommandOptions = {}
 ): Promise<DecisionResult> {
   return mutate<DecisionResult>(
     `/transactions/${transactionId}/decisions`,
     'POST',
-    payload
+    payload,
+    options.commandId
   )
 }

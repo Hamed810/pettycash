@@ -113,7 +113,7 @@ describe('Finance Review - Vue Component Tests (US3)', () => {
     function financeQueueItem(id: string, overrides: Record<string, unknown> = {}) {
       return {
         id, sheetId: 'sheet-1', stage: 'FINANCE', status: 'AWAITING_FINANCE_REVIEW',
-        finalOutcome: null, evidenceCount: 1, version: 0,
+        finalOutcome: null, evidenceRequired: false, evidenceCount: 1, version: 0,
         latestDecision: {
           id: 'd-1', stage: 'COST_CENTER', decision: 'APPROVE',
           actor: { userId: 'user1', displayName: 'User 1', role: 'COST_CENTER_MANAGER' },
@@ -342,6 +342,7 @@ describe('Finance Review - Vue Component Tests (US3)', () => {
         stage: 'FINANCE',
         status: 'AWAITING_FINANCE_REVIEW',
         finalOutcome: null,
+        evidenceRequired: false,
         evidenceCount: 1,
         version: 0,
         activeRevision: {
@@ -384,6 +385,16 @@ describe('Finance Review - Vue Component Tests (US3)', () => {
       })
       return mountView(FinanceReviewView, path)
     }
+
+    it('links back to the dashboard and the finance queue (FR-004)', async () => {
+      const wrapper = await mountReview(reviewedTransaction())
+      const breadcrumbs = wrapper.findAll('.breadcrumbs a')
+
+      expect(breadcrumbs.map((link) => link.attributes('href'))).toEqual([
+        '#/',
+        '#/reviews/finance'
+      ])
+    })
 
     it('should show the management decision finance is deciding on top of', async () => {
       // FR-036: the senior decision is the final management decision, so finance acts on top of a

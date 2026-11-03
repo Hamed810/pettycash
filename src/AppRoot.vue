@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { nextTick, useTemplateRef, watch } from 'vue'
 import { RouterView, useRoute } from 'vue-router'
+import { mdiWallet } from '@mdi/js'
+import NcIconSvgWrapper from '@nextcloud/vue/components/NcIconSvgWrapper'
 import AppNavigation from '@/components/navigation/AppNavigation.vue'
 import { direction } from '@/utils/direction'
 
@@ -35,16 +37,53 @@ watch(
 
 <template>
 	<main class="pettycash-shell" :dir="direction" aria-labelledby="pettycash-heading">
-		<h1 id="pettycash-heading" ref="heading" tabindex="-1" class="pettycash-shell__heading">
-			Petty Cash
-		</h1>
-		<AppNavigation />
-		<RouterView />
+		<aside class="pettycash-sidebar">
+			<div class="pettycash-brand">
+				<span class="pettycash-brand__mark" aria-hidden="true">
+					<NcIconSvgWrapper :path="mdiWallet" :size="22" />
+				</span>
+				<h1 id="pettycash-heading" ref="heading" tabindex="-1" class="pettycash-brand__name">
+					Petty Cash
+				</h1>
+			</div>
+			<AppNavigation />
+		</aside>
+		<div class="pettycash-content">
+			<RouterView />
+		</div>
 	</main>
 </template>
 
 <style scoped>
-.pettycash-shell__heading:focus:not(:focus-visible) {
-	outline: none;
+.pettycash-brand {
+	display: flex;
+	align-items: center;
+	gap: 0.65rem;
+	padding: 0.25rem 0.5rem 1.25rem;
+}
+
+.pettycash-brand__mark {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex: none;
+	inline-size: 2rem;
+	block-size: 2rem;
+	border-radius: var(--border-radius-small);
+	background-color: var(--color-primary-element-light);
+	color: var(--color-primary-element);
+}
+
+.pettycash-brand__name {
+	margin: 0;
+	font-size: var(--font-size-section);
+	font-weight: 700;
+	color: var(--color-main-text);
+}
+
+@media (width <= 900px) {
+	.pettycash-brand {
+		padding-block-end: 0.75rem;
+	}
 }
 </style>

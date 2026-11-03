@@ -9,6 +9,7 @@ import { useSheetStore } from '@/stores/sheets'
 import NcButton from '@nextcloud/vue/components/NcButton'
 import DeleteSheetDialog from '@/components/shared/DeleteSheetDialog.vue'
 import AsyncState from '@/components/shared/AsyncState.vue'
+import SheetFormDialog from '@/components/sheets/SheetFormDialog.vue'
 import NcIconSvgWrapper from '@nextcloud/vue/components/NcIconSvgWrapper'
 import NcNoteCard from '@nextcloud/vue/components/NcNoteCard'
 import NcSelect from '@nextcloud/vue/components/NcSelect'
@@ -16,10 +17,10 @@ import NcTextField from '@nextcloud/vue/components/NcTextField'
 import ResponsiveTable from '@/components/shared/ResponsiveTable.vue'
 import SheetDetailView from '@/views/sheets/SheetDetailView.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
-import { mdiPlus } from '@mdi/js'
+import { mdiChevronLeft, mdiChevronRight, mdiDotsVertical, mdiMagnify, mdiPlus, mdiRefresh, mdiWalletOutline } from '@mdi/js'
 import { t } from '@nextcloud/l10n'
 import type { AsyncStatus } from '@/composables/useAsyncAction'
-import { ABSENT_MARKER, formatSheetDate as formatDate } from '@/utils/date'
+import { formatSheetDate as formatDate } from '@/utils/date'
 import { formatMoney } from '@/utils/money'
 import { formatNumber } from '@/utils/number'
 import { selectOptionKey, selectOptionValue } from '@/utils/selectOption'
@@ -30,22 +31,72 @@ import {
 	restoreScrollOffset,
 	takeSheetListScroll,
 } from '@/utils/sheetListSession'
-import { SHEET_STATUSES, type Money, type SheetFilters, type SheetSummary } from '@/types/api'
+import { SHEET_STATUSES, type SheetFilters, type SheetSummary } from '@/types/api'
 
 const router = useRouter()
 const route = useRoute()
 const sheetStore = useSheetStore()
 
-/** UI-PUR-005: the detail is an overlay over this list, so the list keeps its rows and scroll. */
-const isWorkspaceOpen = computed(() => !!route.params.id)
+/**
+ * UI-PUR-005: the detail is an overlay over this list, so the list keeps its rows and scroll.
+ *
+ * T080: `sheet-edit` carries an `:id` too, but only a workspace-originated edit keeps the workspace
+ * mounted behind the modal. A list-row or direct edit renders the list behind it. The route name and
+ * the explicit provenance marker decide this; the bare presence of a parameter cannot, because it is
+ * true for both routes.
+ */
+const isWorkspaceOpen = computed(() =>
+	route.name === 'sheet-detail'
+	|| (route.name === 'sheet-edit' && route.query.from === 'workspace')
+)
+
+/**
+ * T079: `/sheets/create` is the list with the Create Sheet dialog open.
+ *
+ * The route, not local state, decides whether the dialog is mounted. That is what keeps the URL
+ * addressable and the browser's Back button meaningful: closing the dialog navigates to `/sheets`,
+ * and arriving at `/sheets/create` opens it again.
+ */
+const isCreateOpen = computed(() => route.name === 'sheet-create')
+/** T080: the edit route is the same list with the shared edit modal open. */
+const isEditOpen = computed(() => route.name === 'sheet-edit')
+const createButton = ref<InstanceType<typeof NcButton> | null>(null)
+const listHeading = ref<HTMLElement | null>(null)
+/**
+ * Which control takes focus when the dialog closes. A click on the list's Create button returns to
+ * that button; a direct visit to `/sheets/create` has no invoking button, so the list heading is the
+ * honest place to resume.
+ */
+const createFocusTarget = ref<'button' | 'heading'>(isCreateOpen.value ? 'heading' : 'button')
+
+function focusCreateReturnTarget(): void {
+	const target = createFocusTarget.value === 'heading'
+		? listHeading.value
+		: (createButton.value?.$el as HTMLElement | undefined)
+	target?.focus()
+}
+
+watch(isCreateOpen, async (open, wasOpen) => {
+	if (!wasOpen || open) return
+	await nextTick()
+	// `AppRoot` focuses the app heading after the same route change. A zero-delay turn runs after
+	// that handler has resumed, so the control the user came from wins.
+	window.setTimeout(focusCreateReturnTarget, 0)
+})
 const lastOpenedSheetId = ref<string | null>(null)
 
 watch(() => route.params.id, (id, previous) => {
-	if (!previous || id || !lastOpenedSheetId.value) return
+	if (!previous || id) return
 	const opened = lastOpenedSheetId.value
 	lastOpenedSheetId.value = null
 	void nextTick(() => {
-		document.querySelector<HTMLElement>(`[data-sheet-open="${opened}"]`)?.focus()
+		// A surface opened from a row returns focus to that row. A direct `/sheets/:id[/edit]` visit
+		// has no invoking row, so the list heading is the honest place to resume (T080 direct-entry
+		// behavior, matching the create dialog's direct-entry contract).
+		const row = opened
+			? document.querySelector<HTMLElement>(`[data-sheet-open="${opened}"]`)
+			: null
+		;(row ?? listHeading.value)?.focus()
 	})
 })
 
@@ -85,8 +136,15 @@ const listRoot = ref<HTMLElement | null>(null)
  */
 const draft = ref<SheetFilters>({ ...sheetStore.filters })
 
+// The catalogue spells the sheet-status keys in lower case (`sheets.status.open`) while the API's
+// enum values are upper case, so the key is built from the lower-cased member: passing the enum
+// verbatim looks up a key the catalogue does not carry and prints the raw key as the user's chosen
+// value.
 const statusOptions = computed(() =>
-	SHEET_STATUSES.map((status) => ({ label: t('pettycash', `sheets.status.${status}`), value: status }))
+	SHEET_STATUSES.map((status) => ({
+		label: t('pettycash', `sheets.status.${status.toLowerCase()}`),
+		value: status,
+	}))
 )
 
 /**
@@ -157,6 +215,29 @@ async function resetFilters(): Promise<void> {
 	await reloadList(1, {})
 }
 
+/**
+ * The approved toolbar's secondary facet panel.
+ *
+ * The approved toolbar carries three controls (search, status, account). Two of them name values the
+ * list endpoint does not accept, and three of FR-064's four facets have no slot in that row. This flag
+ * is the one piece of state the "More filters" control drives, so the row keeps the approved shape
+ * while every supported facet stays reachable.
+ */
+const moreFiltersOpen = ref(false)
+
+/**
+ * Applies the status facet the moment it changes, without waiting for an Apply click.
+ *
+ * The approved toolbar gives Status the only active slot in its row, and the prototype it was drawn
+ * from narrows the rows as the value changes. Waiting for a submit button that the row no longer
+ * displays would leave the select looking broken, so the apply path is the same one the form's submit
+ * uses — page 1, the whole draft — and only the trigger is different.
+ */
+async function onStatusChange(value: string | number | null | undefined): Promise<void> {
+	draft.value.status = orUndefined(value ?? undefined)
+	await applyFilters()
+}
+
 /** The last page the current total supports, never below 1 for an empty result. */
 const totalPages = computed(() =>
 	Math.max(1, Math.ceil(sheetStore.pagination.total / Math.max(1, sheetStore.pagination.pageSize)))
@@ -165,6 +246,26 @@ const totalPages = computed(() =>
 const currentPage = computed(() => sheetStore.pagination.page)
 const canGoPrevious = computed(() => currentPage.value > 1)
 const canGoNext = computed(() => currentPage.value < totalPages.value)
+
+/**
+ * The page buttons the numbered pager renders.
+ *
+ * The approved pager draws one round button per page instead of a "page 3 of 9" readout. A page count
+ * is unpredictable — a purchaser whose list grows past the first screen — so the window is bounded
+ * rather than rendered in full: a pager that grows a button per page would repeat the
+ * horizontal-overflow failure FR-071 exists to prevent, at desktop widths rather than only at 390px.
+ * Five is the window the pagers around Nextcloud use, and it is wide enough that a page is usually
+ * reachable in one step.
+ */
+const pageNumbers = computed(() => {
+	const total = totalPages.value
+	const window = 5
+	if (total <= window) return Array.from({ length: total }, (_, index) => index + 1)
+
+	const end = Math.min(total, Math.max(window, currentPage.value + 2))
+	const start = Math.max(1, end - window + 1)
+	return Array.from({ length: end - start + 1 }, (_, index) => start + index)
+})
 
 /** The visible range, for the "showing X to Y of Z" readout beside the pager. */
 const rangeStart = computed(() => sheetStore.pagination.total === 0
@@ -203,77 +304,22 @@ async function goToPage(page: number): Promise<void> {
  * "Totals".
  */
 const LIST_COLUMNS = computed(() => [
-	{ key: 'sheet', label: t('pettycash', 'sheets.sheet') },
-	{ key: 'status', label: t('pettycash', 'sheets.status') },
-	{ key: 'transactionCount', label: t('pettycash', 'sheets.transactionCount') },
-	{ key: 'recordedAmount', label: t('pettycash', 'sheets.currentTotal') },
-	// The latest-effective figure names the column; FR-062's stage approvals stay beside it inside the
-	// same cell, each labelled, because a merged headline erases a senior approval finance later rejected.
-	{ key: 'latestApproved', label: t('pettycash', 'sheets.effectiveApproved') },
-	{ key: 'firstSubmitted', label: t('pettycash', 'sheets.firstSubmitted') },
+	// The approved headers draw the paired sort arrows on every column. Sorting itself is
+	// **server-owned** (`GET /sheets` has no order parameter): `BE-CR-002` is unapproved and
+	// `FR-005-012` forbids sorting the loaded page client-side, so under the visual-first
+	// directive (2026-10-21) the affordance is drawn **disabled** -- the visual is complete and
+	// clearly non-operational, with its reason in the title and the unavailable note under the
+	// toolbar. Connecting it later is a prop away, with no redesign.
+	{ key: 'sheet', label: t('pettycash', 'sheets.sheet'), sortTitle: t('pettycash', 'sheets.filter.sortUnavailable') },
+	{ key: 'status', label: t('pettycash', 'sheets.status'), sortTitle: t('pettycash', 'sheets.filter.sortUnavailable') },
+	{ key: 'transactionCount', label: t('pettycash', 'sheets.transactionCount'), sortTitle: t('pettycash', 'sheets.filter.sortUnavailable') },
+	{ key: 'recordedAmount', label: t('pettycash', 'sheets.currentTotal'), sortTitle: t('pettycash', 'sheets.filter.sortUnavailable') },
+	// The approved list answers one question at a time. The stage breakdown remains on the sheet's
+	// Overview tab; repeating six figures in a row made the table unreadable and pushed the last two
+	// columns outside the surface.
+	{ key: 'latestApproved', label: t('pettycash', 'sheets.effectiveApproved'), sortTitle: t('pettycash', 'sheets.filter.sortUnavailable') },
+	{ key: 'firstSubmitted', label: t('pettycash', 'sheets.firstSubmitted'), sortTitle: t('pettycash', 'sheets.filter.sortUnavailable') },
 ])
-
-/**
- * One list cell, rendered identically by the table and by the narrow-viewport card.
- *
- * A render function rather than template markup because the two layouts must show the **same** figures:
- * duplicating the content would make the narrow layout a second, silently divergent presentation of the
- * same money and dates — the defect this component exists to close.
- *
- * The composite cells (totals, latest-effective, key dates, actions) are built by named helpers so this
- * switch reads as a column list rather than a tree of `h()` calls.
- */
-/**
- * The open-sheets region's six columns.
- *
- * **A second, smaller list rather than a subset of {@link LIST_COLUMNS}.** The region deliberately omits the
- * fields T381/T384/T385 added below it — it is a prompt to act on sheets still open, not a second sheet
- * list — so sharing the wider list would print figures here that the region exists to omit. Two lists, one
- * per surface, and each cell renderer below says which.
- */
-const OPEN_SHEET_COLUMNS = computed(() => [
-	{ key: 'title', label: t('pettycash', 'sheets.title') },
-	{ key: 'currency', label: t('pettycash', 'sheets.currency') },
-	{ key: 'transactionCount', label: t('pettycash', 'sheets.transactionCount') },
-	{ key: 'totals', label: t('pettycash', 'sheets.totals') },
-	{ key: 'createdAt', label: t('pettycash', 'sheets.createdAt') },
-])
-
-/**
- * One open-sheets cell, rendered identically by the table and by the narrow-viewport card.
- *
- * **Narrower than {@link listCell} on purpose**: the current total is printed as the bare figure this
- * region has always shown, with no submitted total, latest-effective group or key dates — the fields the
- * main table below carries and this region omits. A shared renderer would have forced one or the other.
- */
-function openSheetCell(item: SheetSummary, column: { key: string }): VNode {
-	switch (column.key) {
-	case 'title':
-		// UI-PUR-008: the actions moved from a dedicated column into the sheet cell, in the same
-		// position as the main table's, so the two surfaces behave alike instead of one having a
-		// menu and the other a row of buttons.
-		return h('div', { class: 'sheet-identity' }, [
-			h('div', { class: 'sheet-identity__text' }, [
-				h(
-					NcButton,
-					{ variant: 'tertiary', onClick: () => goToDetail(item.id), 'data-test': 'open-sheet-item', 'data-sheet-open': item.id },
-					() => item.title
-				),
-			]),
-			sheetActionsMenu(item),
-		])
-	case 'currency':
-		return h('span', null, item.currency)
-	case 'transactionCount':
-		return h('span', null, item.transactionCount)
-	case 'totals':
-		return h('span', { 'data-test': 'open-sheet-total' }, formatMoney(item.totals.current))
-	case 'createdAt':
-		return h('span', { 'data-test': 'open-sheet-created-at' }, formatDate(item.createdAt))
-	default:
-		return h('span', { 'data-test': `open-sheet-unrendered-${column.key}` }, column.key)
-	}
-}
 
 function sheetRowKey(item: SheetSummary, index: number): string {
 	return item.id || `sheet-row-${index}`
@@ -314,6 +360,7 @@ function sheetActionsMenu(item: SheetSummary): VNode {
 			{
 				'aria-label': t('pettycash', 'sheets.viewNamed', { name: item.title }),
 				onClick: () => goToDetail(item.id),
+				closeAfterClick: true,
 				'data-test': 'view-sheet',
 			},
 			() => t('pettycash', 'common.view')
@@ -327,6 +374,9 @@ function sheetActionsMenu(item: SheetSummary): VNode {
 				{
 					'aria-label': t('pettycash', 'sheets.editNamed', { name: item.title }),
 					onClick: () => goToEdit(item.id),
+					// T080: the list remains mounted behind the edit dialog, so an open row menu would
+					// be painted above the modal. The action dismisses its own menu on selection.
+					closeAfterClick: true,
 					'data-test': 'edit-sheet',
 				},
 				() => t('pettycash', 'common.edit')
@@ -336,6 +386,7 @@ function sheetActionsMenu(item: SheetSummary): VNode {
 				{
 					'aria-label': t('pettycash', 'sheets.deleteNamed', { name: item.title }),
 					onClick: () => askDelete(item),
+					closeAfterClick: true,
 					'data-test': 'delete-sheet',
 				},
 				() => t('pettycash', 'common.delete')
@@ -350,22 +401,11 @@ function sheetActionsMenu(item: SheetSummary): VNode {
 			'aria-label': t('pettycash', 'sheets.actionsNamed', { name: item.title }),
 			'data-test': 'sheet-actions-trigger',
 		},
-		{ default: () => actions }
+		{
+			default: () => actions,
+			icon: () => h(NcIconSvgWrapper, { path: mdiDotsVertical, size: 20 }),
+		}
 	)
-}
-
-/**
- * One labelled amount inside a composite amount cell.
- *
- * The label is per figure rather than per column: three money values stacked under one heading would be
- * three unlabelled numbers, and the reader cannot tell which is approved, which is rejected and which is
- * still pending. This is FR-062 / D-04's requirement in one place.
- */
-function amountFigure(money: Money, testId: string, label: string): VNode {
-	return h('span', { class: 'amount-figure' }, [
-		h('span', { class: 'amount', 'data-test': testId }, formatMoney(money)),
-		h('small', { class: 'text-caption' }, label),
-	])
 }
 
 /**
@@ -375,8 +415,10 @@ function amountFigure(money: Money, testId: string, label: string): VNode {
  * duplicating the content would make the narrow layout a second, silently divergent presentation of the
  * same money and dates — the defect this component exists to close.
  *
- * The composite cells (sheet identity, recorded amount, latest approved) are built by named helpers so
- * this switch reads as a column list rather than a tree of `h()` calls.
+ * The approved list is deliberately quiet. Recorded and latest-approved amounts are headline values;
+ * the stage breakdown lives in the sheet workspace's Overview tab, where a reader who needs it is
+ * already looking at the sheet. Repeating six figures per row was the visual failure the redesign
+ * exists to remove.
  */
 function listCell(item: SheetSummary, column: { key: string }): VNode {
 	switch (column.key) {
@@ -388,10 +430,19 @@ function listCell(item: SheetSummary, column: { key: string }): VNode {
 			h('div', { class: 'sheet-identity__text' }, [
 				h(
 					NcButton,
-					{ variant: 'tertiary', onClick: () => goToDetail(item.id), 'data-test': 'sheet-list-item', 'data-sheet-open': item.id },
+					{ variant: 'tertiary', onClick: () => goToDetail(item.id), 'data-test': 'sheet-list-item', 'data-sheet-open': item.id, title: item.title },
 					() => item.title
 				),
-				h('small', { class: 'sheet-identity__id', 'data-test': 'sheet-list-id' }, item.id),
+				// The approved cell marks the reference line with the sheet's own glyph. The ID is
+				// metadata rather than the row's primary text, and the glyph is what keeps the line from
+				// reading as a muted second copy of the title above it.
+				h('small', { class: 'sheet-identity__id', 'data-test': 'sheet-list-id', title: item.id }, [
+					h(
+						NcIconSvgWrapper,
+						{ path: mdiWalletOutline, size: 15, 'aria-hidden': 'true', class: 'sheet-identity__id-icon' }
+					),
+					h('span', { class: 'sheet-identity__id-text' }, item.id),
+				]),
 			]),
 			sheetActionsMenu(item),
 		])
@@ -405,65 +456,21 @@ function listCell(item: SheetSummary, column: { key: string }): VNode {
 			formatNumber(item.transactionCount)
 		)
 	case 'recordedAmount':
-		// FR-063's recorded total, with the submitted snapshot beneath it. `submitted_total_minor`
-		// is captured at first submission and does not move on correction, so the two figures
-		// answer different questions. A never-submitted sheet has no submitted total at all: the
-		// payload's `submittedAt` is null, and a dash says "not yet" where "0 IRR" would read as a
-		// successful submission of nothing (UI-PUR-002 AC5).
-		return h('div', { class: 'amounts-cell' }, [
+		return h(
+			'span',
+			{ class: 'amount amount--strong', 'data-test': 'sheet-list-current-total' },
+			formatMoney(item.totals.current)
+		)
+	case 'latestApproved':
+		return h('div', { class: 'amounts-cell', 'data-test': 'sheet-list-effective-outcome' }, [
 			h(
 				'span',
-				{ class: 'amount amount--strong', 'data-test': 'sheet-list-current-total' },
-				formatMoney(item.totals.current)
+				{
+					class: ['amount', { 'amount--success': item.totals.effectiveApproved.amountMinor > 0 }],
+					'data-test': 'sheet-list-effective-approved',
+				},
+				formatMoney(item.totals.effectiveApproved)
 			),
-			h(
-				'small',
-				{ class: 'text-caption', 'data-test': 'sheet-list-submitted-total' },
-				`${t('pettycash', 'sheets.submittedTotal')}: ${
-					item.submittedAt ? formatMoney(item.totals.submitted) : ABSENT_MARKER
-				}`
-			),
-		])
-	case 'latestApproved':
-		// FR-062 (D-04): the latest-effective figure and the three stage approvals stay separate,
-		// each with its own label, inside this one column. Merging them into a single headline would
-		// erase a senior approval that finance later rejected — the exact distinction FR-062 asks
-		// both surfaces to preserve.
-		return h('div', { class: 'amounts-cell' }, [
-			h('div', { class: 'amount-group', 'data-test': 'sheet-list-effective-outcome' }, [
-				amountFigure(
-					item.totals.effectiveApproved,
-					'sheet-list-effective-approved',
-					t('pettycash', 'sheets.effectiveApproved')
-				),
-				amountFigure(
-					item.totals.effectiveRejected,
-					'sheet-list-effective-rejected',
-					t('pettycash', 'sheets.effectiveRejected')
-				),
-				amountFigure(
-					item.totals.effectivePending,
-					'sheet-list-effective-pending',
-					t('pettycash', 'sheets.effectivePending')
-				),
-			]),
-			h('div', { class: 'amount-group', 'data-test': 'sheet-list-stage-approved' }, [
-				amountFigure(
-					item.totals.costCenterApproved,
-					'sheet-list-cost-center-approved',
-					t('pettycash', 'sheets.costCenterApproved')
-				),
-				amountFigure(
-					item.totals.seniorApproved,
-					'sheet-list-senior-approved',
-					t('pettycash', 'sheets.seniorApproved')
-				),
-				amountFigure(
-					item.totals.financeApproved,
-					'sheet-list-finance-approved',
-					t('pettycash', 'sheets.financeApproved')
-				),
-			]),
 		])
 	case 'firstSubmitted':
 		// FR-063's first-submission date, in the sixth column. The hook keeps its old name so the
@@ -486,13 +493,13 @@ function listCell(item: SheetSummary, column: { key: string }): VNode {
  * "there are rows"; a load failure with nothing to show goes through `AsyncState` exactly once.
  */
 const listStatus = computed<AsyncStatus>(() => {
-	if (sheetStore.loading && sheetStore.sheets.length === 0) return 'loading'
-	if (sheetStore.error && sheetStore.sheets.length === 0) return 'error'
+	if (sheetStore.listLoading && sheetStore.sheets.length === 0) return 'loading'
+	if (sheetStore.listError && sheetStore.sheets.length === 0) return 'error'
 	return 'idle'
 })
 
 const listEmpty = computed(
-	() => !sheetStore.loading && !sheetStore.error && sheetStore.sheets.length === 0
+	() => !sheetStore.listLoading && !sheetStore.listError && sheetStore.sheets.length === 0
 )
 
 /**
@@ -580,8 +587,34 @@ const sheetPendingDeletion = ref<SheetSummary | null>(null)
  * and the router decides on the return whether that offset is still this list's.
  */
 function goToCreate() {
+	createFocusTarget.value = 'button'
 	rememberSheetListScroll(readScrollOffset(listRoot.value))
 	router.push({ name: 'sheet-create' })
+}
+
+/**
+ * T079: the form emitted after the sheet was stored.
+ *
+ * The store's temporary `unshift` is not the list's authority. Close the dialog, confirm the create
+ * politely, then reload the current page with the current filters so the rows and the pager describe
+ * what the server actually holds. The new sheet is deliberately not opened: a purchaser who is
+ * creating several sheets in a row stays where they can see them.
+ */
+async function handleCreated(): Promise<void> {
+	const page = sheetStore.pagination.page
+	const filters = { ...sheetStore.filters }
+	await router.push({ name: 'sheets' })
+	try {
+		const { showSuccess } = await import('@nextcloud/dialogs')
+		showSuccess(t('pettycash', 'sheets.createSuccess'))
+	} catch {
+		// The toast is a courtesy; a toast failure must not make a stored sheet look unsaved.
+	}
+	await reloadList(page, filters)
+}
+
+function onCreated(): void {
+	void handleCreated()
 }
 
 function goToDetail(sheetId: string) {
@@ -592,6 +625,9 @@ function goToDetail(sheetId: string) {
 
 function goToEdit(sheetId: string) {
 	rememberSheetListScroll(readScrollOffset(listRoot.value))
+	// Remember the row as the return-focus target. The edit route has no `?from=workspace`, so the
+	// shared form returns to this list when the modal is saved or cancelled.
+	lastOpenedSheetId.value = sheetId
 	router.push({ name: 'sheet-edit', params: { id: sheetId } })
 }
 
@@ -624,29 +660,35 @@ async function confirmDelete() {
 	<div ref="listRoot" class="sheet-list-view" :dir="direction" data-test="sheet-list-view">
 		<div class="header-row sheet-list-header">
 			<div class="sheet-list-header__text">
-				<h1 class="mb-0">{{ t('pettycash', 'sheets.title') }}</h1>
+				<h1 ref="listHeading" class="mb-0" tabindex="-1" data-test="sheet-list-heading">{{ t('pettycash', 'sheets.title') }}</h1>
 				<p class="sheet-list-subtitle">{{ t('pettycash', 'sheets.subtitle') }}</p>
 			</div>
 			<NcButton
+				ref="createButton"
 				variant="primary"
 				class="create-sheet-button"
-				:aria-label="t('pettycash', 'sheets.create')"
+				:aria-label="t('pettycash', 'sheets.newSheet')"
 				data-test="create-sheet-button"
 				@click="goToCreate"
 			>
 				<NcIconSvgWrapper :path="mdiPlus" :size="16" class="mr-2" />
-				{{ t('pettycash', 'sheets.create') }}
+				{{ t('pettycash', 'sheets.newSheet') }}
 			</NcButton>
 		</div>
 
 		<!--
-			FR-064's four sheet facets: status, date, currency and creator. T333 delivered the server half
-			of these and recorded the client half as a limitation; these controls are that half.
+			The approved toolbar. Its row carries three controls — search, status, account — and a reset
+			action; the facets FR-064 supports that the row has no slot for stay reachable behind "More
+			filters", and nothing here overrides the endpoint.
 
-			Every name here is one of `SheetListFilterFactory::ACCEPTED_FILTERS` -- `status`, `ownerId`,
-			`currency`, `from`, `to`. That vocabulary is **closed**: an unrecognised value is refused with a
-			422 naming the accepted set rather than ignored, because an ignored filter returns the
-			unfiltered answer and the caller cannot tell the difference.
+			Every filter name this form can send is one of `SheetListFilterFactory::ACCEPTED_FILTERS` --
+			`status`, `ownerId`, `currency`, `from`, `to`. That vocabulary is **closed**: an unrecognised
+			value is refused with a 422 naming the accepted set rather than ignored, because an ignored
+			filter returns the unfiltered answer and the caller cannot tell the difference.
+
+			Search and account are drawn and **disabled**, on an explicit visual-first decision: the
+			endpoint accepts neither, and a control that accepts text and changes nothing is the
+			misleading filter the decision forbids.
 		-->
 		<form
 			class="sheet-filters"
@@ -655,7 +697,29 @@ async function confirmDelete() {
 			data-test="sheet-filters"
 			@submit.prevent="applyFilters"
 		>
-			<div class="sheet-filters__grid">
+			<div class="sheet-filters__toolbar">
+				<!--
+					The approved row's first control. `GET /sheets` reads no search value and the filter
+					factory refuses everything outside its closed set, so the box is drawn **disabled**: a
+					control that accepts text and changes nothing is the misleading filter the approved
+					decision forbids.
+				-->
+				<label class="sheet-filters__field sheet-filters__field--search">
+					<!-- No visible label in the approved row: the placeholder names the box, and the
+					     accessible name is supplied below. -->
+					<span class="sheet-filters__search" :title="t('pettycash', 'sheets.filter.unavailable')">
+						<NcIconSvgWrapper :path="mdiMagnify" :size="18" class="sheet-filters__search-icon" />
+						<input
+							class="sheet-filters__search-input"
+							type="search"
+							disabled
+							:placeholder="t('pettycash', 'sheets.filter.searchPlaceholder')"
+							:aria-label="t('pettycash', 'sheets.filter.search')"
+							data-test="sheet-filter-search-input"
+						>
+					</span>
+				</label>
+
 				<label class="sheet-filters__field">
 					<span class="sheet-filters__label">{{ t('pettycash', 'sheets.filter.status') }}</span>
 					<NcSelect
@@ -664,12 +728,53 @@ async function confirmDelete() {
 						:reduce="selectOptionValue"
 						:get-option-key="selectOptionKey"
 						:clearable="true"
-						:placeholder="t('pettycash', 'sheets.filter.allStatuses')"
+						:placeholder="t('pettycash', 'sheets.filter.all')"
 						:aria-label="t('pettycash', 'sheets.filter.status')"
 						data-test="sheet-filter-status"
-						@update:model-value="draft.status = orUndefined($event)"
+						@update:model-value="onStatusChange($event)"
 					/>
 				</label>
+
+				<label class="sheet-filters__field">
+					<span class="sheet-filters__label">{{ t('pettycash', 'sheets.account') }}</span>
+					<NcSelect
+						:model-value="null"
+						:options="[]"
+						disabled
+						:placeholder="t('pettycash', 'sheets.filter.all')"
+						:aria-label="t('pettycash', 'sheets.account')"
+						:title="t('pettycash', 'sheets.filter.unavailable')"
+						data-test="sheet-filter-account"
+					/>
+				</label>
+
+				<div class="sheet-filters__actions">
+					<NcButton
+						variant="secondary"
+						data-test="sheet-filter-more"
+						:aria-expanded="moreFiltersOpen ? 'true' : 'false'"
+						@click="moreFiltersOpen = !moreFiltersOpen"
+					>
+						{{ t('pettycash', 'sheets.filters.more') }}
+					</NcButton>
+					<NcButton variant="secondary" data-test="sheet-filter-reset" @click="resetFilters">
+						<NcIconSvgWrapper :path="mdiRefresh" :size="16" />
+						{{ t('pettycash', 'sheets.filters.reset') }}
+					</NcButton>
+				</div>
+			</div>
+
+			<p class="sheet-filters__notice" data-test="sheet-filter-notice">
+				{{ t('pettycash', 'sheets.filter.unavailableNote') }}
+			</p>
+
+			<!--
+				The facets the approved row has no slot for. They are **supported** by the endpoint, so a
+				panel the user has to open must still carry them: the panel is always mounted and only
+				visually collapsed, which keeps the facet hooks in the DOM and reachable by keyboard and
+				test alike.
+			-->
+			<div class="sheet-filters__more" :class="{ 'sheet-filters__more--open': moreFiltersOpen }">
 				<NcTextField
 					:model-value="draft.currency ?? ''"
 					:label="t('pettycash', 'sheets.filter.currency')"
@@ -708,12 +813,7 @@ async function confirmDelete() {
 						{{ creatorScope || t('pettycash', 'sheets.filter.creatorSelf') }}
 					</span>
 				</div>
-			</div>
 
-			<div class="sheet-filters__actions">
-				<NcButton variant="secondary" data-test="sheet-filter-reset" @click="resetFilters">
-					{{ t('pettycash', 'sheets.filters.reset') }}
-				</NcButton>
 				<NcButton variant="primary" type="submit" data-test="sheet-filter-apply">
 					{{ t('pettycash', 'sheets.filters.apply') }}
 				</NcButton>
@@ -721,47 +821,19 @@ async function confirmDelete() {
 		</form>
 
 		<!--
-			FR-018 lets a purchaser hold several open sheets at once and FR-061 asks for a dashboard of
-			the caller's relevant open work. The open sheets are the actionable ones — a transaction can
-			still be added to them and they can still be submitted — so they are listed as their own
-			region instead of sitting in one undifferentiated table. The store already computed
-			`openSheets`; the view simply never used it.
+			The approved list is a single table. The earlier OPEN-first note card above the table
+			duplicated the same sheets and the same money, and it made the page read as two products.
+			An OPEN sheet is still visible in this table (its status column says so); the server keeps
+			ordering authority, so the client does not pretend to reorder the page.
+
+			UI-PUR-002: the loading/empty/error states around it are the shared `AsyncState` component,
+			not a fourth hand-rolled block. The two empty messages ("nothing yet" vs "nothing matches")
+			are supplied by the view, because only the view knows whether a filter is applied.
 		-->
-		<NcNoteCard type="info" :heading="t('pettycash', 'sheets.openSheets')" data-test="open-sheets">
-			<ResponsiveTable
-				v-if="sheetStore.openSheets.length"
-				:columns="OPEN_SHEET_COLUMNS"
-				:rows="sheetStore.openSheets"
-				:cell="openSheetCell"
-				:row-key="sheetRowKey"
-				:caption="t('pettycash', 'sheets.openSheets')"
-				test-id="open-sheets-table"
-				test-id-prefix="open-sheet"
-				row-test-id="open-sheet-row"
-			/>
-			<p v-else class="empty-hint" data-test="no-open-sheets">
-				{{ t('pettycash', 'sheets.noOpenSheets') }}
-			</p>
-		</NcNoteCard>
-
-		<NcNoteCard type="info" data-test="sheets">
-			<!--
-				FR-071 (T389): this table used to sit in `overflow-x: auto`, which produces a horizontal
-				scrollbar at 390px rather than satisfying the requirement -- exactly what
-				`src/styles/app.scss` says must not be done. `ResponsiveTable` renders the same rows as a
-				`<table>` above 640px and as one card per row below it, from **one** column list and **one**
-				cell renderer, so the narrow layout cannot become a second presentation of the same figures.
-
-				The `open-sheets` card above keeps its own table and its own narrow-viewport handling: it is a
-				separate surface, and T389 lists it separately rather than widening this one.
-
-				UI-PUR-002: the loading/empty/error states around it are the shared `AsyncState` component,
-				not a fourth hand-rolled block. The two empty messages ("nothing yet" vs "nothing matches")
-				are supplied by the view, because only the view knows whether a filter is applied.
-			-->
+		<section class="sheet-list-panel" data-test="sheets">
 			<AsyncState
 				:status="listStatus"
-				:error="sheetStore.error"
+				:error="sheetStore.listError"
 				:empty="listEmpty"
 				:empty-message="listEmptyMessage"
 				retry-test-id="sheet-list-retry"
@@ -772,67 +844,86 @@ async function confirmDelete() {
 					:rows="sheetStore.sheets"
 					:cell="listCell"
 					:row-key="sheetRowKey"
-					:loading="sheetStore.loading"
+					:loading="sheetStore.listLoading"
 					:caption="t('pettycash', 'sheets.title')"
 					test-id="sheet-list-table"
 					test-id-prefix="sheet-list"
 					row-test-id="sheet-row"
 				/>
 			</AsyncState>
-		</NcNoteCard>
+		</section>
 
 		<!--
-			The pager, driven by the total the server reported.
+			The list footer: the server's count on the inline-start edge, the pager on the inline-end.
 
-			## Why this is not a cosmetic addition
+			## Why the footer exists at all
 
 			A sheet beyond the first page is a sheet whose **status** the caller cannot see, so a returned
 			transaction they must correct and a sheet they must submit are both potentially invisible.
-			FR-073's documented V1 scale is 100 active users, so 25 sheets per purchaser is inside the
-			stated operating envelope rather than beyond it -- the default page size is not protecting
-			anyone from paging.
+			One row carries both halves: `sheet-range` says how much of the list is on screen, the pager
+			moves within it.
 
-			## Why previous/next and not a row of page numbers
+			## Why the buttons are a window, not the full set
 
-			`total` is unbounded -- a purchaser with hundreds of sheets would render hundreds of buttons, and
-			that is the FR-071 failure (everything visible without horizontal scroll at 390px) arriving from
-			the other direction. Two controls plus a position readout stay one row at any total.
+			The approved pager draws one button per page, and `total` is unbounded -- a purchaser with
+			hundreds of sheets would render hundreds of buttons, which is the FR-071 failure (everything
+			visible without horizontal scroll at 390px) arriving from the other direction. `pageNumbers`
+			bounds the row to five buttons, and the chevrons cover the pages the window is not showing.
 		-->
-		<p v-if="sheetStore.pagination.total > 0" class="sheet-range" data-test="sheet-range">
-			{{ t('pettycash', 'sheets.showing', {
-				from: formatNumber(rangeStart),
-				to: formatNumber(rangeEnd),
-				total: formatNumber(sheetStore.pagination.total)
-			}) }}
-		</p>
+		<div class="sheet-list-foot">
+			<p v-if="sheetStore.pagination.total > 0" class="sheet-range" data-test="sheet-range">
+				{{ t('pettycash', 'sheets.showing', {
+					from: formatNumber(rangeStart),
+					to: formatNumber(rangeEnd),
+					total: formatNumber(sheetStore.pagination.total)
+				}) }}
+			</p>
 
-		<nav
-			v-if="totalPages > 1"
-			class="sheet-pager"
-			:aria-label="t('pettycash', 'sheets.pager')"
-			data-test="sheet-pager"
-		>
-			<NcButton
-				:disabled="!canGoPrevious || sheetStore.loading"
+			<nav
+				v-if="totalPages > 1"
+				class="sheet-pager"
+				:aria-label="t('pettycash', 'sheets.pager')"
+				data-test="sheet-pager"
+			>
+			<!-- The approved pager is one round button per page flanked by two chevrons, and no "page 3 of 9"
+			     readout: `sheet-range` above already says how much of the list is on screen. The chevron
+			     glyphs flip for RTL, because the previous page sits on the right in a Persian reading
+			     order rather than being a mirrored arrow over an unchanged direction. -->
+			<button
+				type="button"
+				class="sheet-pager__chevron"
+				:disabled="!canGoPrevious || sheetStore.listLoading"
+				:aria-label="t('pettycash', 'sheets.pager.previous')"
 				data-test="sheet-page-previous"
 				@click="goToPage(currentPage - 1)"
 			>
-				{{ t('pettycash', 'sheets.pager.previous') }}
-			</NcButton>
-			<span class="sheet-pager__position" data-test="sheet-page-position">
-				<!-- UI-PUR-001: the numerals are formatted like every other number on the screen. `t()`
-				     substitutes its parameters verbatim, so passing the raw integers here is what printed
-				     Latin digits in an otherwise Persian page. -->
-				{{ t('pettycash', 'sheets.pager.position', { page: formatNumber(currentPage), total: formatNumber(totalPages) }) }}
-			</span>
-			<NcButton
-				:disabled="!canGoNext || sheetStore.loading"
+				<NcIconSvgWrapper :path="direction === 'rtl' ? mdiChevronRight : mdiChevronLeft" :size="20" />
+			</button>
+			<button
+				v-for="page in pageNumbers"
+				:key="page"
+				type="button"
+				class="sheet-pager__page"
+				:class="{ 'sheet-pager__page--active': page === currentPage }"
+				:aria-current="page === currentPage ? 'page' : undefined"
+				:disabled="sheetStore.listLoading"
+				:data-test="`sheet-page-${page}`"
+				@click="goToPage(page)"
+			>
+				{{ formatNumber(page) }}
+			</button>
+			<button
+				type="button"
+				class="sheet-pager__chevron"
+				:disabled="!canGoNext || sheetStore.listLoading"
+				:aria-label="t('pettycash', 'sheets.pager.next')"
 				data-test="sheet-page-next"
 				@click="goToPage(currentPage + 1)"
 			>
-				{{ t('pettycash', 'sheets.pager.next') }}
-			</NcButton>
-		</nav>
+				<NcIconSvgWrapper :path="direction === 'rtl' ? mdiChevronLeft : mdiChevronRight" :size="20" />
+			</button>
+			</nav>
+		</div>
 
 		<!--
 			UI-PUR-004: the restored page no longer exists.
@@ -868,12 +959,25 @@ async function confirmDelete() {
 			:sheet-id="sheetPendingDeletion?.id ?? ''"
 			:sheet-title="sheetPendingDeletion?.title ?? ''"
 			:open="sheetPendingDeletion !== null"
-			:busy="sheetStore.loading"
+			:busy="sheetStore.mutationLoading"
 			@cancel="sheetPendingDeletion = null"
 			@confirm="confirmDelete"
 		/>
 
-		<!-- UI-PUR-005: the sheet detail is a large workspace over this list. -->
+		<!-- T079/T080: one route-driven modal over the list it belongs to. The two routes are
+		     mutually exclusive, so only one SheetFormDialog can be mounted. -->
+		<SheetFormDialog
+			v-if="isCreateOpen"
+			:open="isCreateOpen"
+			@created="onCreated"
+		/>
+		<SheetFormDialog
+			v-if="isEditOpen"
+			:open="isEditOpen"
+		/>
+
+		<!-- UI-PUR-005: the sheet detail is a large workspace over this list. T080's route-name
+		     check above keeps it unmounted while the edit modal is open. -->
 		<SheetDetailView v-if="isWorkspaceOpen" />
 	</div>
 </template>
@@ -882,11 +986,26 @@ async function confirmDelete() {
 .sheet-list-view {
 	display: flex;
 	flex-direction: column;
-	gap: 1rem;
+	gap: 1.25rem;
+
+	/*
+	 * The approved surface keys this screen's primary actions to its own green. The global primary
+	 * is Nextcloud blue, so the green is defined once here as a local variable and re-keyed onto the
+	 * tokens the shared components actually read, rather than hardcoded into each component.
+	 */
+	--pettycash-brand: #008c67;
+	--pettycash-brand-hover: #007b5a;
 }
 
 .sheet-list-header {
 	align-items: flex-start;
+}
+
+.sheet-list-header h1 {
+	margin: 0;
+	font-size: 2rem;
+	font-weight: 700;
+	line-height: 1.2;
 }
 
 .sheet-list-header__text {
@@ -896,10 +1015,31 @@ async function confirmDelete() {
 	min-inline-size: 0;
 }
 
-/* On a wrapped mobile header the button gets a full line of its own; without `nowrap` its
-   label breaks into "ایجاد / برگه" even though the line has room for the phrase. */
+/*
+ * On a wrapped mobile header the button gets a full line of its own; without `nowrap` its
+ * label breaks into "ایجاد / برگه" even though the line has room for the phrase.
+ *
+ * The approved design colours this action green. The variables below are the ones
+ * `NcButton`'s primary rules read (`--color-primary-element[-hover|-text]`), so overriding them
+ * here re-keys the shared component rather than restyling it.
+ */
+.create-sheet-button {
+	--color-primary-element: var(--pettycash-brand);
+	--color-primary-element-hover: var(--pettycash-brand-hover);
+	--color-primary-element-text: #fff;
+
+	min-inline-size: 10.5rem;
+}
+
 .create-sheet-button :deep(.button-vue__text) {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.35rem;
 	white-space: nowrap;
+}
+
+.create-sheet-button :deep(.button-vue__text .icon-vue) {
+	display: inline-flex;
 }
 
 .sheet-list-subtitle,
@@ -909,29 +1049,15 @@ async function confirmDelete() {
 }
 
 /*
- * UI-PUR-002: `NcNoteCard` renders its slot in an **unnamed child `div`**, and the card is a flex
- * column, so that div is a flex item whose automatic minimum size is its content's min-content size —
- * the six-column table. The card therefore stretched to the table instead of the table reflowing to
- * the card, and the columns past the `max-width: 1200px` application shell were painted outside it and
- * were unreachable at every desktop width.
- *
- * Making the slot shrinkable is the whole fix: the table keeps its `width: 100%` and wraps its cells
- * instead of overflowing. It is also the only fix the repository allows here — T389 and
- * `fr071NarrowViewport.spec.ts` forbid answering an overflow with `overflow-x: auto|scroll`, because
- * FR-071 requires the overflow to be *fixed*, not scrolled.
+ * The approved list sits in a card with a slightly more present edge than the flat default, so the
+ * table reads as one object on the page instead of lines floating on the background.
  */
-:deep(.notecard > div) {
-	min-width: 0;
-
-	/* The card is a row: the slot's unnamed div is the content column. Without `flex-grow` it
-	   shrink-wraps its table (565px inside a 1152px card), which squeezes every column and makes
-	   the amount groups wrap into a very tall row. Let it take the card's remaining width. */
-	flex: 1 1 auto;
-}
-
-.empty-hint {
-	margin: 0;
-	color: var(--color-text-maxcontrast);
+.sheet-list-panel {
+	overflow: hidden;
+	border: 1px solid var(--color-border);
+	border-radius: var(--border-radius-large);
+	background-color: var(--color-main-background);
+	box-shadow: 0 1px 2px rgb(0 0 0 / 4%), 0 2px 6px rgb(0 0 0 / 5%);
 }
 
 .header-row {
@@ -943,37 +1069,155 @@ async function confirmDelete() {
 }
 
 /*
- * The filter bar and the pager.
+ * The filter surface, drawn as the approved toolbar.
  *
- * Both use `auto-fit`/`minmax` rather than a fixed column count, so the controls reflow to the viewport
- * instead of forcing one: FR-071 requires everything visible without horizontal scroll at 390px, and a
- * four-column grid is what would break that. `flex-wrap` on the action rows is the same rule one level
- * down.
+ * One row: the search field takes the free space, the two selects hold a compact width, and the
+ * action pair is pushed to the inline-end. `flex-wrap` rather than a fixed column count, because
+ * FR-071 requires everything to reflow without horizontal scroll at 390px and a five-column grid is
+ * what broke that.
  */
 .sheet-filters {
 	display: flex;
 	flex-direction: column;
 	gap: 0.75rem;
-	padding: 0.75rem;
+	padding: 0;
+	border: 0;
+	background-color: transparent;
+
+	/* The panel's Apply action is this screen's primary action too, so it reads from the same
+	   brand green as the header CTA instead of introducing a second primary colour. */
+	--color-primary-element: var(--pettycash-brand);
+	--color-primary-element-hover: var(--pettycash-brand-hover);
+	--color-primary-element-text: #fff;
+}
+
+.sheet-filters__toolbar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-end;
+	gap: 0.75rem;
+}
+
+/* A flex item is allowed to grow past its basis; every control must still be able to shrink. */
+.sheet-filters__toolbar > * {
+	min-inline-size: 0;
+}
+
+/*
+ * The approved row's opt-in facets: currency, the two dates and the creator, with the Apply action
+ * they still need. The panel is always mounted so the facet hooks stay in the DOM; only the visual
+ * state is toggled by `moreFiltersOpen`.
+ */
+.sheet-filters__more {
+	display: none;
+}
+
+.sheet-filters__more--open {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-end;
+	gap: 0.75rem;
+	padding: 0.75rem 0 0;
+	border-block-start: 1px solid var(--color-border);
+}
+
+/*
+ * Disabled on purpose: `GET /sheets` accepts neither a search nor an account facet. Muted rather
+ * than 50% transparent, so the value never drops below the contrast a real control needs.
+ */
+.sheet-filters__search {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	min-block-size: 2.6rem;
+	padding: 0 0.75rem;
 	border: 1px solid var(--color-border);
 	border-radius: var(--border-radius-large);
 	background-color: var(--color-main-background);
 }
 
-.sheet-filters__grid {
-	display: grid;
-	grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-	gap: 0.75rem;
+.sheet-filters__search-icon {
+	color: var(--color-text-maxcontrast);
+}
+
+.sheet-filters__search-input {
+	flex: 1 1 auto;
+	min-inline-size: 0;
+	border: 0;
+	background-color: transparent;
+	color: var(--color-main-text);
+	font-size: var(--font-size-floor);
+}
+
+.sheet-filters__search-input:focus-visible {
+	outline: 2px solid var(--color-primary-element);
+	outline-offset: -2px;
+	border-radius: var(--border-radius-small);
+}
+
+.sheet-filters__search:has(input:disabled) {
+	background-color: var(--color-background-hover);
+	cursor: not-allowed;
+}
+
+.sheet-filters__notice {
+	margin: 0;
+	color: var(--color-text-maxcontrast);
+	font-size: var(--font-size-floor);
 }
 
 /*
- * At 390px the two 180px tracks plus the form's padding made the shell's min-content wider than
- * the viewport; Nextcloud clips the overflow, so the left-hand fields were painted off-screen.
- * One full-width column lets each control shrink instead of disappearing.
+ * At narrow widths the search field keeps its basis and the row wraps; the action pair drops onto a
+ * full row of its own rather than squeezing the selects.
  */
+@media (width <= 1100px) {
+	.sheet-filters__actions {
+		inline-size: 100%;
+		justify-content: flex-start;
+	}
+}
+
 @media (width <= 640px) {
-	.sheet-filters__grid {
-		grid-template-columns: minmax(0, 1fr);
+	.sheet-list-header {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
+		gap: 0.6rem 1rem;
+		align-items: start;
+	}
+
+	.sheet-list-header__text {
+		display: contents;
+	}
+
+	.sheet-list-header h1 {
+		grid-column: 1;
+		grid-row: 1;
+	}
+
+	.sheet-list-subtitle {
+		grid-column: 1 / -1;
+		grid-row: 2;
+	}
+
+	.create-sheet-button {
+		grid-column: 2;
+		grid-row: 1;
+		min-inline-size: 0;
+	}
+
+	/* The creator facet is the caller themselves; the server refuses any other value. It is
+	   already stated by the page context, so the mobile layout spends no row on it. */
+	.sheet-filters__field[data-test='sheet-filter-creator'] {
+		display: none;
+	}
+
+	.sheet-filters__field--search {
+		/* The search field takes the free space; at 390px there is almost none, so it takes the row. */
+		flex-basis: 100%;
+	}
+
+	.sheet-filters__actions {
+		inline-size: 100%;
 	}
 
 	/* When the header row wraps, the single action lands on the main-start edge by default.
@@ -983,17 +1227,6 @@ async function confirmDelete() {
 	}
 }
 
-/* A grid track is a minimum, not a maximum: a control with a wider intrinsic minimum would
-   overlap its neighbour (the status select did exactly that). Let every cell shrink. */
-.sheet-filters__grid > * {
-	min-inline-size: 0;
-}
-
-.sheet-filters__grid :deep(.nc-select) {
-	inline-size: 100%;
-	min-inline-size: 0;
-}
-
 .sheet-filters__field {
 	display: flex;
 	flex-direction: column;
@@ -1001,9 +1234,24 @@ async function confirmDelete() {
 	min-inline-size: 0;
 }
 
+/* The two selects keep the compact width the approved row gives them; the search field takes the
+   rest. A flex item's basis is a target, not a floor, so the shrink rule above still applies. */
+.sheet-filters__toolbar > .sheet-filters__field:not(.sheet-filters__field--search) {
+	flex: 0 1 11rem;
+}
+
+.sheet-filters__toolbar .sheet-filters__field--search {
+	flex: 1 1 18rem;
+}
+
 .sheet-filters__field input {
 	inline-size: 100%;
 	box-sizing: border-box;
+}
+
+.sheet-filters__field :deep(.nc-select) {
+	inline-size: 100%;
+	min-inline-size: 0;
 }
 
 .sheet-filters__label {
@@ -1025,52 +1273,205 @@ async function confirmDelete() {
  * not an input lives in the component's script.
  */
 .sheet-filters__scope {
+	display: flex;
+	align-items: center;
+	min-block-size: 2.4rem;
+	padding: 0.4rem 0.75rem;
+	border: 1px solid var(--color-border);
+	border-radius: var(--border-radius-large);
+	color: var(--color-main-text);
 	font-size: var(--font-size-floor);
-	color: var(--color-text-maxcontrast);
 }
 
 .sheet-filters__actions {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 0.5rem;
-	justify-content: flex-start;
+	justify-content: flex-end;
+	margin-inline-start: auto;
 }
 
+.sheet-filters__field :deep(input),
+.sheet-filters__field :deep(.select__select),
+.sheet-filters__field :deep(.nc-select) {
+	min-block-size: 2.4rem;
+}
+
+/*
+ * The approved footer: the count on the inline-start edge, the pager on the inline-end, one row
+ * while there is room for both.
+ */
+.sheet-list-foot {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.5rem 1rem;
+	justify-content: space-between;
+}
+
+/*
+ * The approved pager: square-ish numbered buttons between two chevrons.
+ *
+ * `8px` matches the approved surface's field radius, not a pill: the pager's buttons read as form
+ * controls there rather than chips.
+ */
 .sheet-pager {
 	display: flex;
 	flex-wrap: wrap;
 	align-items: center;
-	gap: 0.75rem;
+	gap: 0.4rem;
+	padding: 0;
+}
+
+.sheet-pager__chevron,
+.sheet-pager__page {
+	display: inline-flex;
+	align-items: center;
 	justify-content: center;
-	padding: 0.5rem 0;
-}
-
-.sheet-pager__position {
+	min-inline-size: 2.25rem;
+	min-block-size: 2.25rem;
+	padding: 0;
+	border: 1px solid var(--color-border);
+	border-radius: 8px;
+	background-color: var(--color-main-background);
+	color: var(--color-main-text);
 	font-size: var(--font-size-floor);
-	color: var(--color-text-maxcontrast);
+	font-weight: 600;
+	cursor: pointer;
 }
 
-.nc-table {
-	width: 100%;
+.sheet-pager__chevron:disabled,
+.sheet-pager__page:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+.sheet-pager__chevron:hover:not(:disabled),
+.sheet-pager__page:hover:not(:disabled) {
+	border-color: var(--color-border-dark, var(--color-border));
+	background-color: var(--color-background-hover);
+}
+
+.sheet-pager__page--active {
+	border-color: var(--pettycash-brand);
+	background-color: var(--pettycash-brand);
+	color: #fff;
+}
+
+.sheet-pager__page--active:hover:not(:disabled) {
+	border-color: var(--pettycash-brand-hover);
+	background-color: var(--pettycash-brand-hover);
+}
+
+/*
+ * The table lives inside `ResponsiveTable`, so these selectors must cross that component's scope.
+ * The old `.nc-table` rules never matched: `ResponsiveTable` renders a bare `<table>`, which is why
+ * the list had no row rhythm and every header competed with its neighbour.
+ */
+.sheet-list-panel :deep(.responsive-table__desktop table) {
+	inline-size: 100%;
 	border-collapse: collapse;
 	font-size: var(--font-size-floor);
+	table-layout: fixed;
 }
 
-.nc-table th,
-.nc-table td {
-	padding: 0.75rem;
+.sheet-list-panel :deep(.responsive-table__desktop thead) {
+	background-color: var(--color-background-dark);
+}
+
+.sheet-list-panel :deep(.responsive-table__desktop th) {
+	padding: 0.7rem 0.625rem;
 	text-align: start;
-	border-bottom: 1px solid var(--color-border);
-}
-
-.nc-table th {
 	font-weight: 600;
-	color: var(--color-text-maxcontrast);
-	background-color: var(--color-main-background);
+	color: var(--color-main-text);
+
+	/* The label may wrap within its own cell: with `table-layout: fixed` a nowrap header that
+	   could not fit its disabled sort affordance spilled over the neighbouring header's box. */
 }
 
-.nc-table tbody tr:hover {
+.sheet-list-panel :deep(.responsive-table__desktop td) {
+	padding: 0.5rem 0.625rem;
+	text-align: start;
+	vertical-align: middle;
+	border-block-start: 1px solid var(--color-border);
+}
+
+.sheet-list-panel :deep(.responsive-table__desktop tbody tr:hover) {
 	background-color: var(--color-background-hover);
+}
+
+/* The approved table gives the status pill and the date cell the room their content needs; the
+   money columns hold a fixed rhythm and the sheet column absorbs what is left. The proportions
+   follow the approved reference as closely as the 16px typography floor allows: the mock draws
+   "Latest Approved Amount" at a smaller size, while here the label itself measures ~200px before
+   the disabled sort affordance, so the two money columns take a little more and the sheet/status
+   columns give up the difference. The measurable outcome at 1440px is the one that matters: no
+   header wraps inside its cell. */
+.sheet-list-panel :deep(.responsive-table__desktop th:nth-child(1)) { inline-size: 19.5%; }
+.sheet-list-panel :deep(.responsive-table__desktop th:nth-child(2)) { inline-size: 14%; }
+.sheet-list-panel :deep(.responsive-table__desktop th:nth-child(3)) { inline-size: 13%; }
+.sheet-list-panel :deep(.responsive-table__desktop th:nth-child(4)) { inline-size: 17%; }
+.sheet-list-panel :deep(.responsive-table__desktop th:nth-child(5)) { inline-size: 21.5%; }
+.sheet-list-panel :deep(.responsive-table__desktop th:nth-child(6)) { inline-size: 15%; }
+
+.sheet-list-panel :deep(.responsive-table__card) {
+	display: grid;
+	grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+	gap: 0.75rem 1.25rem;
+	padding: 1rem;
+}
+
+.sheet-list-panel :deep(.responsive-table__field) {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 0.15rem;
+}
+
+.sheet-list-panel :deep(.responsive-table__field:nth-child(1)) {
+	grid-column: 1;
+	grid-row: 1;
+}
+
+.sheet-list-panel :deep(.responsive-table__field:nth-child(2)) {
+	grid-column: 2;
+	grid-row: 1;
+	align-items: flex-end;
+	text-align: end;
+}
+
+.sheet-list-panel :deep(.responsive-table__field:nth-child(3)) {
+	grid-column: 1;
+	grid-row: 2;
+}
+
+.sheet-list-panel :deep(.responsive-table__field:nth-child(4)) {
+	grid-column: 2;
+	grid-row: 2;
+}
+
+.sheet-list-panel :deep(.responsive-table__field:nth-child(5)) {
+	grid-column: 1;
+	grid-row: 3;
+}
+
+.sheet-list-panel :deep(.responsive-table__field:nth-child(6)) {
+	grid-column: 2;
+	grid-row: 3;
+}
+
+.sheet-list-panel :deep(.responsive-table__field:nth-child(1) .responsive-table__label),
+.sheet-list-panel :deep(.responsive-table__field:nth-child(2) .responsive-table__label) {
+	position: absolute;
+	inline-size: 1px;
+	block-size: 1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+}
+
+.sheet-list-panel :deep(.responsive-table__label) {
+	color: var(--color-text-maxcontrast);
 }
 
 /*
@@ -1084,70 +1485,157 @@ async function confirmDelete() {
  * render pass, so the nodes it returns carry ResponsiveTable's scope id, not this view's — a plain
  * scoped selector like `.sheet-identity` never matches them, and the styles silently do nothing.
  */
-:deep(.sheet-identity) {
+.sheet-list-panel :deep(.sheet-identity) {
 	display: flex;
+	flex-wrap: wrap;
 	align-items: flex-start;
 	justify-content: space-between;
 	gap: 0.5rem;
+	min-inline-size: 0;
 }
 
-:deep(.sheet-identity__text) {
+.sheet-list-panel :deep(.sheet-identity__text) {
 	display: flex;
 	flex-direction: column;
-	min-width: 0;
+	flex: 1 1 7rem;
+	min-inline-size: 0;
 }
 
-:deep(.sheet-identity__id) {
-	color: var(--color-text-maxcontrast);
-	overflow-wrap: anywhere;
+/* The reference rows keep one line per title. A sheet named longer than its column must not paint
+   across the status pill or cover its own action menu, so the desktop title is clamped to one line
+   with an ellipsis; the button keeps the full accessible name and carries the name as a hover title.
+   The clamp is used instead of `text-overflow: ellipsis` because the latter does not paint the
+   ellipsis for a Latin title inside the RTL layout -- the string was silently cut instead. The
+   mobile card is exempt: there the title may use two lines inside its card. */
+.sheet-list-panel :deep(.responsive-table__desktop .sheet-identity .button-vue__text) {
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 1;
+	overflow: hidden;
+	white-space: normal;
+}
+
+/* The clamp otherwise stops at the last whole word ("Sheet for..."), which discards most of a
+   long title. Character-level breaking fills the line before the ellipsis, matching the
+   reference's truncation density. It is limited to LTR text: under RTL the same rule clips the
+   bidi run at both ends, so RTL keeps the word-boundary clamp and its single trailing ellipsis. */
+.sheet-list-panel :deep(.responsive-table__desktop .sheet-identity .button-vue__text:dir(ltr)) {
+	word-break: break-all;
+}
+
+.sheet-list-panel :deep(.responsive-table__desktop .sheet-identity .button-vue) {
+	max-inline-size: 100%;
+}
+
+.sheet-list-panel :deep(.responsive-table__desktop .sheet-identity .button-vue__wrapper) {
+	min-inline-size: 0;
+}
+
+/* The reference stacks a 16px title over a ~13px reference line with tight leading. The title is
+   still a real button (`NcButton`), whose text wrapper inherits the core's `normal` leading; pinning
+   the line box here removes the half-line of dead space per row without touching the type scale. */
+.sheet-list-panel :deep(.sheet-identity .button-vue__wrapper),
+.sheet-list-panel :deep(.sheet-identity .button-vue__text) {
+	line-height: 1.25;
+}
+
+@media (width <= 480px) {
+	.sheet-list-panel :deep(.sheet-identity .button-vue__text) {
+		white-space: normal;
+		text-align: start;
+		overflow-wrap: anywhere;
+	}
+}
+
+
+/* The title is the row's primary action; strip the button chrome so it reads like the reference's
+   row label while keeping the real button semantics and keyboard behaviour. */
+.sheet-list-panel :deep(.sheet-identity .button-vue) {
+	min-block-size: 0;
+	padding: 0;
+	color: var(--color-main-text);
+	font-weight: 700;
+	text-align: start;
+}
+
+.sheet-list-panel :deep(.sheet-identity .button-vue__text) {
+	font-weight: 700;
 }
 
 /*
- * The two money columns.
- *
- * A column stack rather than a row: the recorded amount sits above its submitted snapshot, and the
- * latest-approved column holds two groups of three labelled figures each (FR-062 / D-04). `tabular-nums`
- * keeps the digits aligned so two rows can be compared by eye.
+ * The approved cell puts the sheet's glyph ahead of its reference number. The line is a flex row so
+ * the icon holds still while the number itself ellipsises.
  */
-:deep(.amounts-cell) {
+.sheet-list-panel :deep(.sheet-identity__id) {
+	display: flex;
+	align-items: center;
+	gap: 0.3rem;
+	max-inline-size: 22ch;
+	overflow: hidden;
+	color: var(--color-text-maxcontrast);
+	white-space: nowrap;
+	line-height: 1.25;
+}
+
+.sheet-list-panel :deep(.sheet-identity__id-icon) {
+	flex: 0 0 auto;
+	color: var(--color-text-maxcontrast);
+	opacity: 0.85;
+
+	/* Core's `.icon-vue` floor is 34px: the wrapper, not the 15px glyph, was setting the height of
+	   the whole reference line. Pin the box to the glyph so the line can be as tall as its text. */
+	min-inline-size: 15px;
+	min-block-size: 15px;
+	inline-size: 15px;
+	block-size: 15px;
+}
+
+.sheet-list-panel :deep(.sheet-identity__id-text) {
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.sheet-list-panel :deep(.amounts-cell) {
 	display: flex;
 	flex-direction: column;
 	gap: 0.35rem;
 }
 
-:deep(.amount-group) {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 0.75rem;
-}
-
-:deep(.amount-figure) {
-	display: flex;
-	flex-direction: column;
-	gap: 0.05rem;
-}
-
-:deep(.amount) {
+/*
+ * Money in the approved list: the recorded figure is the green outcome colour, the latest approved
+ * figure stays neutral -- the pair reads "recorded" against "settled" rather than two competing
+ * greens. Both stay bold and tabular, because a money column whose digits drift is unreadable.
+ */
+.sheet-list-panel :deep(.amount) {
+	color: var(--color-main-text);
 	font-variant-numeric: tabular-nums;
+	font-weight: 700;
+	white-space: nowrap;
 }
 
-:deep(.amount--strong) {
-	font-weight: 600;
+.sheet-list-panel :deep(.amount--strong) {
+	color: var(--color-success-text, var(--color-success));
 }
 
 /*
- * UI-PUR-002: the table must fit the shell by reflowing, and an unbreakable word is what stops it.
- *
- * The English render currently falls back to raw message keys (`sheets.effectiveApproved`), which are
- * longer than any real label and cannot wrap at a space — they set the column's min-content width and
- * pushed two columns past the shell edge. `overflow-wrap: anywhere` (not `break-word`, which does not
- * change min-content) lets a long word break only when it genuinely cannot fit, so translated copy is
- * untouched while the fallback state stays inside the shell.
+ * The approved status chip is a pill with a leading dot, not Nextcloud's rectangular chip. Scoped
+ * here rather than in `StatusBadge` so every other surface keeps the shared chip; the dot inherits
+ * `currentColor`, so each variant keeps its own hue in both themes. Uppercase matches the approved
+ * chip and is a no-op in Persian, which has no letter case to transform.
  */
-:deep(th),
-:deep(.text-caption),
-:deep(.amount) {
-	overflow-wrap: anywhere;
+.sheet-list-panel :deep(.status-badge) {
+	border-radius: 999px;
+	letter-spacing: 0.02em;
+	text-transform: uppercase;
+}
+
+.sheet-list-panel :deep(.status-badge)::before {
+	content: '';
+	flex: 0 0 auto;
+	inline-size: 7px;
+	block-size: 7px;
+	border-radius: 50%;
+	background-color: currentcolor;
 }
 
 .alert {

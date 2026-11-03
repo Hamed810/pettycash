@@ -68,6 +68,7 @@ import NcLoadingIcon from '@nextcloud/vue/components/NcLoadingIcon'
 import NcSelect from '@nextcloud/vue/components/NcSelect'
 import NcTextArea from '@nextcloud/vue/components/NcTextArea'
 import { useReviewsStore } from '@/stores/reviews'
+import { commandId as newCommandId } from '@/services/http'
 import { selectOptionKey, selectOptionValue } from '@/utils/selectOption'
 import { DECISION_CAPABILITY, type AllowedActions, type DecisionValue } from '@/types/api'
 
@@ -141,16 +142,16 @@ async function submitDecision() {
 
 	submitting.value = true
 	try {
-		const commandId = crypto.randomUUID()
+		const decisionCommandId = newCommandId()
 		await reviewsStore.recordDecision(props.transactionId, {
 			decision: selectedDecision.value,
 			explanation: explanation.value.trim(),
 			expectedVersion: props.expectedVersion ?? 0,
-		})
+		}, { commandId: decisionCommandId })
 		emit('submit-decision', {
 			decision: selectedDecision.value,
 			explanation: explanation.value.trim(),
-			commandId,
+			commandId: decisionCommandId,
 		})
 	} catch (error) {
 		console.error('Failed to record decision:', error)

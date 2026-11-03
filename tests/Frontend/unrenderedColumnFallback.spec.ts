@@ -30,6 +30,7 @@ describe('cell renderer fallback for an unrendered column', () => {
 		sheetId: 'sh-1',
 		stage: 'COST_CENTER',
 		status: 'DRAFT',
+		evidenceRequired: false,
 		evidenceCount: 0,
 		version: 0,
 		activeRevision: {

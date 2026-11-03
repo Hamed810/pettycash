@@ -33,18 +33,143 @@
  * `@use`, and a scale that each component has to import individually is not one scale.
  */
 .pettycash-shell {
+	--pettycash-scrim: color-mix(in srgb, black 55%, transparent);
 	--font-size-floor: 16px;
 	--font-size-emphasis: 18px;
 	--font-size-section: 20px;
 	--font-size-title: 24px;
 
+	/*
+	 * The approved surfaces give the "in review" statuses their own hue (the Senior/Finance
+	 * stages in the approved sheets list and the "returned for correction" chip in the approved
+	 * workspace). Nextcloud ships no token for it, so it is declared here -- once, on the shell,
+	 * beside the type scale -- instead of hardcoded into each badge, and re-keyed for the dark
+	 * theme the same way the host re-keys its own status colours.
+	 */
+	--pettycash-review: #6f43c9;
+
 	box-sizing: border-box;
-	max-inline-size: 1200px;
-	margin-inline: auto;
-	padding: 24px;
+	display: grid;
+	grid-template-columns: 232px minmax(0, 1fr);
+	align-items: start;
+	inline-size: 100%;
+	min-block-size: 100%;
+	margin: 0;
+	padding: 0;
 	color: var(--color-main-text);
 	background: var(--color-main-background);
 	font-size: var(--font-size-floor);
+}
+
+/*
+ * The dark theme re-keys the review hue the same way the host re-keys its own colours.
+ */
+html[data-theme-dark] .pettycash-shell {
+	--pettycash-review: #b18cff;
+}
+
+/*
+ * The application runs inside Nextcloud's full-height content frame. The host paints that frame
+ * with the instance theme (a blue canvas in the lab), and the previous 1200px centred card left it
+ * visible as two gutters. The approved redesign is one full-width surface: the app owns the frame
+ * background, the sidebar and the content column, so no host colour is framed around the product.
+ */
+#content.app-pettycash {
+	inline-size: 100%;
+	block-size: calc(100% - var(--header-height, 50px));
+	margin: var(--header-height, 50px) 0 0;
+	border-radius: 0;
+	background: var(--color-main-background);
+}
+
+#content.app-pettycash .pettycash-shell {
+	margin: 0;
+	padding: 0;
+	max-inline-size: none;
+}
+
+.pettycash-sidebar {
+	position: fixed;
+	inset-block-start: var(--header-height, 50px);
+	inset-inline-start: 0;
+	z-index: 2;
+	align-self: start;
+	inline-size: 232px;
+	block-size: calc(100vh - var(--header-height, 50px));
+	min-block-size: 0;
+	padding: 24px 12px;
+	overflow-y: auto;
+	border-inline-end: 1px solid var(--color-border);
+	background-color: var(--color-main-background);
+}
+
+.pettycash-shell[dir='rtl'] .sheet-identity__id {
+	direction: ltr;
+	unicode-bidi: isolate;
+	text-align: end;
+}
+
+.pettycash-content {
+	grid-column: 2;
+	min-inline-size: 0;
+	padding: 28px 32px 48px;
+	background-color: var(--color-main-background);
+}
+
+/*
+ * `NcButton` puts a default-slot icon inside `.button-vue__text`. The icon component is a block, so
+ * a short button ("Create sheet", "Add transaction") wrapped the icon above its label and grew to
+ * 63px. The approved surface uses one-line buttons; keep the icon inline with the label.
+ */
+.pettycash-shell .button-vue__text {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.35rem;
+	white-space: nowrap;
+}
+
+.pettycash-shell .button-vue__text .icon-vue {
+	display: inline-flex;
+}
+
+.pettycash-shell .button-vue__icon {
+	display: inline-flex;
+}
+
+@media (width <= 900px) {
+	.pettycash-shell {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.pettycash-sidebar {
+		position: static;
+		inset: auto;
+		z-index: auto;
+		inline-size: auto;
+		min-block-size: 0;
+		block-size: max-content;
+		overflow: visible;
+		padding: 12px 16px;
+		border-inline-end: 0;
+		border-block-end: 1px solid var(--color-border);
+	}
+
+	.pettycash-content {
+		grid-column: 1;
+		padding: 20px 16px 12rem;
+	}
+}
+
+@media (width <= 480px) {
+	.pettycash-content {
+		padding: 16px 12px 12rem;
+	}
+}
+
+@media (width <= 360px) {
+	.pettycash-content {
+		padding-block-end: 13rem;
+	}
 }
 
 /*
@@ -102,18 +227,29 @@
  * **This block is not optional polish.** FR-071's "a perceivable change" and SC-009's theme coverage
  * both fail in exactly this mode, and a rule that only works when colours are under author control is
  * a rule that fails for the users who asked for it.
+ *
+ * The `tabindex="-1"` exclusion is for programmatic route-heading focus only. The heading is not
+ * interactive, and a ring around the sidebar brand after every pointer navigation communicates
+ * nothing; every interactive control still receives the indicator.
  */
-.pettycash-shell :focus-visible,
-.pettycash-shell :focus:not(:focus-visible) {
+.pettycash-shell :focus-visible:not([tabindex='-1']),
+.pettycash-shell :focus:not(:focus-visible):not([tabindex='-1']) {
 	outline-style: solid;
 	outline-width: 2px;
 	outline-offset: 2px;
 	outline-color: var(--color-primary-element, currentColor);
 }
 
+/* Programmatic focus targets (the route heading and modal dialog) are not interactive, so the
+   user-agent's default ring is suppressed without matching `:focus`; the test scanner and
+   keyboard floor both apply to interactive controls, and those keep the rule above. */
+.pettycash-shell [tabindex='-1'] {
+	outline: none;
+}
+
 @media (forced-colors: active) {
-	.pettycash-shell :focus-visible,
-	.pettycash-shell :focus:not(:focus-visible) {
+	.pettycash-shell :focus-visible:not([tabindex='-1']),
+	.pettycash-shell :focus:not(:focus-visible):not([tabindex='-1']) {
 		// `Highlight` is the system "selected/emphasised" colour and is what a forced-colours mode
 		// expects a focus ring to be drawn with. `CanvasText` is the fallback for the reduced palettes
 		// that do not define it.
@@ -151,6 +287,8 @@
 #pettycash-app {
 	display: flex;
 	flex-direction: column;
+	inline-size: 100%;
 	min-height: 0;
+	overflow-x: hidden;
 	overflow-y: auto;
 }

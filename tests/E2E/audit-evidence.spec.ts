@@ -300,7 +300,7 @@ async function fillTransaction(page: Page, description: string, amount: string, 
 	await page.fill('[data-test="description-input"]', description)
 	await pickSelectOption(page, 'cost-center-select', costCenter)
 	await pickSelectOption(page, 'expense-type-select', E2E_EXPENSE_TYPE)
-	await page.click('[data-test="transaction-save-draft"]')
+	await page.click('[data-test="submit-btn"]')
 }
 
 /** Upload evidence on the transaction detail (the create form has no transaction id yet). */

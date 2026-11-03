@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // The real generateOcsUrl owns the /ocs/v2.php/apps/<app> prefix, so the mock stays an identity
 // function and the test asserts on the path http.ts asks it to resolve.
@@ -15,8 +15,9 @@ vi.mock('@nextcloud/axios', () => ({
 	default: { request: (...args: unknown[]) => request(...args) }
 }))
 
-import { ocs, mutate, commandId } from '@/services/http'
-import { submitTransactionDecision } from '@/services/transactionsApi'
+import { ocs, ocsVoid, mutate, mutateVoid, commandId } from '@/services/http'
+import { submitTransactionDecision, deleteTransaction } from '@/services/transactionsApi'
+import { deleteSheet } from '@/services/sheetsApi'
 import { ApiError } from '@/types/api'
 
 /** An OCS response the server would legitimately return. */
@@ -28,6 +29,23 @@ function ocsOk<T>(data: T) {
 function notOcs(body: unknown, status = 200) {
 	return { status, data: body }
 }
+
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+
+/**
+ * The browser shape on a plain-HTTP non-loopback origin: `crypto` still exposes
+ * `getRandomValues`, but the secure-context-only `randomUUID` is absent.
+ */
+function stubCryptoWithoutRandomUUID(): void {
+	const original = globalThis.crypto
+	vi.stubGlobal('crypto', {
+		getRandomValues: original.getRandomValues.bind(original)
+	})
+}
+
+afterEach(() => {
+	vi.unstubAllGlobals()
+})
 
 describe('ocs()', () => {
 	beforeEach(() => {
@@ -244,11 +262,179 @@ describe('mutate()', () => {
 			})
 		)
 	})
+
+	it('still sends a valid command id when crypto.randomUUID is unavailable', async () => {
+		stubCryptoWithoutRandomUUID()
+		request.mockResolvedValue(ocsOk(null))
+
+		await mutate('/sheets/sheet-1/submit', 'POST', {})
+
+		expect(request).toHaveBeenCalledWith(
+			expect.objectContaining({
+				headers: expect.objectContaining({ 'X-PettyCash-Command-ID': expect.stringMatching(UUID_V4) })
+			})
+		)
+	})
+})
+
+/**
+ * T064: a bodyless success is only a success for a bodyless command.
+ *
+ * The two functions are asserted against the *same* machine because the split is the requirement:
+ * `ocs()` rejecting an empty body is what keeps a truncated `200` from reading as `undefined`, and
+ * `ocsVoid()` accepting `204` is what lets a delete succeed at all. A regression in either direction
+ * is a defect, so both are pinned.
+ */
+describe('ocsVoid()', () => {
+	beforeEach(() => {
+		request.mockReset()
+	})
+
+	it('resolves a 204 with no body as success', async () => {
+		request.mockResolvedValue({ status: 204, data: undefined })
+
+		await expect(ocsVoid('/sheets/sheet-1', { method: 'DELETE' })).resolves.toBeUndefined()
+	})
+
+	it('resolves a 204 whose body is null or an empty string', async () => {
+		request.mockResolvedValue({ status: 204, data: null })
+		await expect(ocsVoid('/sheets/sheet-1', { method: 'DELETE' })).resolves.toBeUndefined()
+
+		request.mockResolvedValue({ status: 204, data: '' })
+		await expect(ocsVoid('/sheets/sheet-1', { method: 'DELETE' })).resolves.toBeUndefined()
+	})
+
+	it('still rejects a 200 with an empty body as malformed', async () => {
+		for (const body of [undefined, null, '']) {
+			request.mockResolvedValue({ status: 200, data: body })
+			const error = (await ocsVoid('/sheets/sheet-1', { method: 'DELETE' }).catch((e: unknown) => e)) as ApiError
+
+			expect(error).toBeInstanceOf(ApiError)
+			expect(error.status).toBe(200)
+			expect(error.body.code).toBe('MALFORMED_RESPONSE')
+		}
+	})
+
+	it('rejects a 204 that carries bytes, because that is not the declared answer', async () => {
+		request.mockResolvedValue({ status: 204, data: '<html>truncated</html>' })
+
+		const error = (await ocsVoid('/sheets/sheet-1', { method: 'DELETE' }).catch((e: unknown) => e)) as ApiError
+
+		expect(error).toBeInstanceOf(ApiError)
+		expect(error.body.code).toBe('MALFORMED_RESPONSE')
+	})
+
+	it('rejects an error envelope even when the status is 204', async () => {
+		request.mockResolvedValue({ status: 204, data: { ocs: { data: { error: { code: 'STATE_CONFLICT', message: 'no' } } } } })
+
+		const error = (await ocsVoid('/sheets/sheet-1', { method: 'DELETE' }).catch((e: unknown) => e)) as ApiError
+
+		expect(error).toBeInstanceOf(ApiError)
+		expect(error.body.code).toBe('STATE_CONFLICT')
+	})
+
+	it('keeps the server status and code for a refusal', async () => {
+		request.mockRejectedValue(
+			Object.assign(new Error('Request failed'), {
+				isAxiosError: true,
+				response: {
+					status: 404,
+					data: { ocs: { data: { error: { code: 'NOT_FOUND', message: 'Transaction not found' } } } }
+				}
+			})
+		)
+
+		const error = (await ocsVoid('/transactions/tx-1', { method: 'DELETE' }).catch((e: unknown) => e)) as ApiError
+
+		expect(error.status).toBe(404)
+		expect(error.body.code).toBe('NOT_FOUND')
+	})
+
+	it('does not weaken ocs(): an empty 204 is still unreadable for a value-returning call', async () => {
+		request.mockResolvedValue({ status: 204, data: undefined })
+
+		const error = (await ocs('/sheets/sheet-1').catch((e: unknown) => e)) as ApiError
+
+		expect(error).toBeInstanceOf(ApiError)
+		expect(error.body.code).toBe('MALFORMED_RESPONSE')
+	})
+})
+
+describe('mutateVoid()', () => {
+	beforeEach(() => {
+		request.mockReset()
+	})
+
+	it('sends the caller-supplied command id and accepts the bodyless success', async () => {
+		request.mockResolvedValue({ status: 204, data: undefined })
+
+		await mutateVoid('/transactions/tx-1', 'DELETE', { expectedVersion: 2 }, 'cmd-fixed')
+
+		expect(request).toHaveBeenCalledWith(
+			expect.objectContaining({
+				method: 'DELETE',
+				data: { expectedVersion: 2 },
+				headers: expect.objectContaining({ 'X-PettyCash-Command-ID': 'cmd-fixed' })
+			})
+		)
+	})
+
+	it('drives the transaction delete through the bodyless path with a stable command id', async () => {
+		request.mockResolvedValue({ status: 204, data: undefined })
+
+		await deleteTransaction('tx-1', 4, { commandId: 'cmd-delete-intent' })
+
+		expect(request).toHaveBeenCalledWith(
+			expect.objectContaining({
+				method: 'DELETE',
+				url: '/ocs/v2.php/apps/pettycash/api/v1/transactions/tx-1',
+				data: { expectedVersion: 4 },
+				headers: expect.objectContaining({ 'X-PettyCash-Command-ID': 'cmd-delete-intent' })
+			})
+		)
+	})
+
+	it('drives the sheet delete through the bodyless path too', async () => {
+		request.mockResolvedValue({ status: 204, data: undefined })
+
+		await deleteSheet('sh-1', 7, { commandId: 'cmd-sheet-delete' })
+
+		expect(request).toHaveBeenCalledWith(
+			expect.objectContaining({
+				method: 'DELETE',
+				url: '/ocs/v2.php/apps/pettycash/api/v1/sheets/sh-1',
+				data: { expectedVersion: 7 },
+				headers: expect.objectContaining({ 'X-PettyCash-Command-ID': 'cmd-sheet-delete' })
+			})
+		)
+	})
 })
 
 describe('commandId()', () => {
 	it('returns a distinct UUID per call', () => {
 		expect(commandId()).not.toBe(commandId())
 		expect(commandId()).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+	})
+
+	it('builds a UUID v4 from getRandomValues when randomUUID is unavailable', () => {
+		stubCryptoWithoutRandomUUID()
+
+		const first = commandId()
+		const second = commandId()
+
+		expect(first).toMatch(UUID_V4)
+		expect(first).toHaveLength(36)
+		expect(first).not.toBe(second)
+	})
+
+	it('does not weaken the fallback with Math.random', () => {
+		stubCryptoWithoutRandomUUID()
+		const random = vi.spyOn(Math, 'random')
+		try {
+			commandId()
+			expect(random).not.toHaveBeenCalled()
+		} finally {
+			random.mockRestore()
+		}
 	})
 })

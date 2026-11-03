@@ -59,6 +59,20 @@ export interface TransactionFilters {
  */
 export interface SheetCreate { title: string; accountId?: string }
 
+/**
+ * `PATCH /sheets/{sheetId}`'s request body (T439).
+ *
+ * The pre-submission update is **title-only**, so it is deliberately not `SheetCreate`: that schema is
+ * create-specific (its optional `accountId` selects or provisions the account for a *new* sheet, FR-020)
+ * and reusing it declared a field the update must refuse. `expectedVersion` travels in the body rather
+ * than beside it, so the request cannot be sent without a staleness guard.
+ *
+ * There is no `accountId` field. The sheet keeps the account it was created with; a body that supplies
+ * `accountId` is schema-invalid and server-refused with `fieldErrors.accountId`, and a supplied value
+ * does not authorize account replacement. That enforcement belongs to T440.
+ */
+export interface SheetUpdate { title: string; expectedVersion: number }
+
 export interface SheetSummary {
 	id: string
 	title: string
@@ -133,6 +147,16 @@ export const SHEET_STATUSES = [
 ] as const satisfies readonly SheetStatus[]
 
 export interface SheetDetail extends SheetSummary {
+	/**
+	 * The public UUID of the account this sheet is stored against (T439).
+	 *
+	 * This is the persisted account identity, not the caller's first active account: the detail payload
+	 * carries the account the sheet was actually created with, so the edit form can display it
+	 * authoritatively and read-only instead of guessing from list order. It is detail-only —
+	 * `SheetSummary` and the Sheets List declare no account — and it is a response fact, not an update
+	 * input: `SheetUpdate` accepts no `accountId`.
+	 */
+	accountId: string
 	allowedActions: CapabilitySet
 	transactions: TransactionSummary[]
 }
@@ -168,6 +192,14 @@ export interface TransactionSummary {
 	 * decision yet" belongs.
 	 */
 	latestDecision?: Decision
+	/**
+	 * The active expense type's current receipt rule, as resolved by the server (FR-092).
+	 *
+	 * The readiness surface must not re-derive this from the expense-type catalog: the server publishes
+	 * the exact flag submission will apply, and `false` is a real answer (including for a draft with no
+	 * expense type yet), not "unknown".
+	 */
+	evidenceRequired: boolean
 	evidenceCount: number
 	version: number
 }

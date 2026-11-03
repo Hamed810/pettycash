@@ -238,7 +238,7 @@ test.describe('Purchaser Capture and Submission', () => {
 		await page.fill('[data-test="amount-input"]', '50000')
 
 		// Save as draft
-		await page.click('[data-test="transaction-save-draft"]')
+		await page.click('[data-test="submit-btn"]')
 
 		// Verify transaction appears in sheet
 		await expectDraftTransaction(page, 'IRR')
@@ -252,7 +252,7 @@ test.describe('Purchaser Capture and Submission', () => {
 		// Fill only date and amount (missing description, cost center, expense type, evidence)
 		await page.fill('[data-test="expense-date-input"]', '2026-09-20')
 		await page.fill('[data-test="amount-input"]', '50000')
-		await page.click('[data-test="transaction-save-draft"]')
+		await page.click('[data-test="submit-btn"]')
 
 		// Try to submit sheet
 		await page.click('[data-test="submit-sheet-button"]')
@@ -285,7 +285,7 @@ test.describe('Purchaser Capture and Submission', () => {
 		await page.click('[data-test="expense-type-select"]')
 		await pickFirstOption(page)
 
-		await page.click('[data-test="transaction-save-draft"]')
+		await page.click('[data-test="submit-btn"]')
 
 		// Saved first (FR-088 lands on the sheet detail), uploaded second: the
 		// create form has no transaction id to upload against.
@@ -309,7 +309,7 @@ test.describe('Purchaser Capture and Submission', () => {
 		await page.click('[data-test="expense-type-select"]')
 		await pickFirstOption(page)
 
-		await page.click('[data-test="transaction-save-draft"]')
+		await page.click('[data-test="submit-btn"]')
 
 		await uploadEvidenceFile(page)
 		await backToSheet(page)
@@ -353,7 +353,7 @@ test.describe('Purchaser Capture and Submission', () => {
 		await page.click('[data-test="expense-type-select"]')
 		await pickFirstOption(page)
 
-		await page.click('[data-test="transaction-save-draft"]')
+		await page.click('[data-test="submit-btn"]')
 
 		await uploadEvidenceFile(page)
 		await backToSheet(page)
@@ -382,7 +382,7 @@ test.describe('Audit Trail Verification', () => {
 		await page.click('[data-test="expense-type-select"]')
 		await pickFirstOption(page)
 
-		await page.click('[data-test="transaction-save-draft"]')
+		await page.click('[data-test="submit-btn"]')
 		await page.click('[data-test="submit-sheet-button"]')
 
 		// The sheet carries no audit tab by design (FR-070: the ordered event

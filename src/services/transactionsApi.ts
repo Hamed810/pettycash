@@ -1,4 +1,4 @@
-import { ocs, mutate, commandId } from './http'
+import { ocs, mutate, mutateVoid, commandId } from './http'
 import type {
 	TransactionDraftWrite,
 	TransactionDetail,
@@ -29,8 +29,20 @@ export async function updateTransaction(
 	return mutate<TransactionDetail>(`/transactions/${transactionId}`, 'PATCH', { ...data, expectedVersion }, options.commandId ?? commandId())
 }
 
+/**
+ * `DELETE /transactions/{id}` — a draft row, with its draft evidence.
+ *
+ * **Replay-gated since 001 T436.** The server requires `X-PettyCash-Command-ID` and records the
+ * command; the same id and payload returns the original `204` even after the row is gone, a
+ * different payload under the same id is `409`, and a *new* id after deletion is `404`. The caller
+ * therefore owns the command identity for one delete intent (005 T065): generate it when the
+ * purchaser confirms, keep it for retries of that confirmation, and never mint a fresh one to
+ * "try again" — that turns a recovered success into a not-found.
+ *
+ * The answer is bodyless `204`, hence `mutateVoid` rather than `mutate` (T064).
+ */
 export async function deleteTransaction(transactionId: string, expectedVersion: number, options: CommandOptions = {}): Promise<void> {
-	await mutate<void>(`/transactions/${transactionId}`, 'DELETE', { expectedVersion }, options.commandId ?? commandId())
+	await mutateVoid(`/transactions/${transactionId}`, 'DELETE', { expectedVersion }, options.commandId ?? commandId())
 }
 
 /**

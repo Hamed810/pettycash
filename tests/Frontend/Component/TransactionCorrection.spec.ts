@@ -187,6 +187,7 @@ function revisionFixture(overrides: Partial<Revision> = {}): Revision {
 
 /** A transaction detail in the shape `contracts/ocs-api.yaml`'s `TransactionDetail` declares. */
 function transactionFixture(overrides: Partial<TransactionDetail> = {}): TransactionDetail {
+	const status = overrides.status ?? 'AWAITING_PURCHASER_CORRECTION'
 	return {
 		id: 'tx-1',
 		sheetId: 'sheet-1',
@@ -197,12 +198,31 @@ function transactionFixture(overrides: Partial<TransactionDetail> = {}): Transac
 		stage: 'CORRECTION',
 		status: 'AWAITING_PURCHASER_CORRECTION',
 		finalOutcome: null,
+		evidenceRequired: false,
 		evidenceCount: 0,
 		version: 3,
-		allowedActions: {},
+		allowedActions: status === 'DRAFT'
+			? { canEdit: true, canDelete: true, canCorrect: false }
+			: status === 'AWAITING_PURCHASER_CORRECTION'
+				? { canEdit: false, canDelete: false, canCorrect: true }
+				: {},
 		decisions: [],
 		evidence: [],
 		...overrides
+	}
+}
+
+function activeEvidenceFixture() {
+	return {
+		id: 'ev-1',
+		transactionId: 'tx-1',
+		revisionId: 'rev-1',
+		name: 'receipt.pdf',
+		mediaType: 'application/pdf',
+		sizeBytes: 1024,
+		active: true,
+		uploadedBy: 'user1',
+		uploadedAt: '2026-09-20T08:05:00Z'
 	}
 }
 
@@ -234,14 +254,20 @@ describe('Transaction Correction - Vue Component Tests (RED: behavior not implem
 		ocsRequest.mockImplementation(() => Promise.resolve(ocsOk({ items: [], page: 1, pageSize: 25, total: 0 })))
 	})
 
-	async function mountView(component: unknown, path = '/', props?: Record<string, unknown>): Promise<VueWrapper> {
+	async function mountView(
+		component: unknown,
+		path = '/',
+		props?: Record<string, unknown>,
+		mountOptions: Record<string, unknown> = {}
+	): Promise<VueWrapper> {
 		// A navigation is always performed: `router.isReady()` resolves only after the first one, so
 		// asking a never-navigated router leaves it pending for ~5s per test.
 		await router.push(path)
 		await router.isReady()
 		const wrapper = mount(component as never, {
 			props: props as never,
-			global: { plugins: [pinia, router] }
+			global: { plugins: [pinia, router] },
+			...mountOptions
 		})
 		await flushPromises()
 		return wrapper
@@ -426,6 +452,106 @@ describe('Transaction Correction - Vue Component Tests (RED: behavior not implem
 			expect((resubmit.element as HTMLButtonElement).disabled).toBe(false)
 		})
 
+		// T075 refinement (C): correction is not a one-save footer. Saving preserves the correction
+		// draft; resubmitting restarts review. Collapsing them would make the two side effects
+		// indistinguishable, so both controls stay and the plain `submit-btn` stays absent.
+		it('keeps Save draft and Resubmit as the two correction actions', async () => {
+			givenCorrection(transactionFixture())
+
+			const wrapper = await mountView(TransactionFormView, '/transactions/tx-1/edit')
+
+			expect(wrapper.find('[data-test="transaction-save-draft"]').exists()).toBe(true)
+			expect(wrapper.find('[data-test="resubmit-correction-btn"]').exists()).toBe(true)
+			expect(wrapper.find('[data-test="submit-btn"]').exists()).toBe(false)
+		})
+
+		it('requires an active receipt when the server publishes evidenceRequired for the correction', async () => {
+			// T059: the correction form uses `TransactionSummary.evidenceRequired`, the same
+			// server-resolved rule sheet submission uses. It must not read a stale catalog or assume
+			// evidence is always required.
+			givenCorrection(transactionFixture({ evidenceRequired: true, evidenceCount: 0, evidence: [] }))
+
+			const wrapper = await mountView(TransactionFormView, '/transactions/tx-1/edit')
+
+			const resubmit = wrapper.find('[data-test="resubmit-correction-btn"]')
+			expect(resubmit.exists()).toBe(true)
+			expect((resubmit.element as HTMLButtonElement).disabled).toBe(true)
+		})
+
+		it('resubmits a receipt-exempt correction with no evidence', async () => {
+			// The same fixture's expense type is named "Travel"; the client must not infer a receipt
+			// rule from that name. The server says false, so false is the rule.
+			givenCorrection(transactionFixture({ evidenceRequired: false, evidenceCount: 0, evidence: [] }))
+
+			const wrapper = await mountView(TransactionFormView, '/transactions/tx-1/edit')
+
+			const resubmit = wrapper.find('[data-test="resubmit-correction-btn"]')
+			expect((resubmit.element as HTMLButtonElement).disabled).toBe(false)
+			expect(wrapper.find('[data-test="validation-summary-evidence"]').exists()).toBe(false)
+		})
+
+		it('counts only active evidence when the server requires a receipt', async () => {
+			givenCorrection(transactionFixture({
+				evidenceRequired: true,
+				evidenceCount: 2,
+				evidence: [
+					activeEvidenceFixture(),
+					{ ...activeEvidenceFixture(), id: 'ev-2', name: 'old.pdf', active: false }
+				]
+			}))
+
+			const wrapper = await mountView(TransactionFormView, '/transactions/tx-1/edit')
+
+			const resubmit = wrapper.find('[data-test="resubmit-correction-btn"]')
+			expect((resubmit.element as HTMLButtonElement).disabled).toBe(false)
+		})
+
+		it('maps a resubmission 422 evidence key to the named transaction and focuses the summary', async () => {
+			// The server's refusal is authoritative even when the client's published rule says false:
+			// the expense type can change between the read and the resubmission. The form must send the
+			// request, then present the named refusal rather than a generic failure.
+			const tx = transactionFixture({ evidenceRequired: false, evidenceCount: 0, evidence: [] })
+			useTransactionStore().currentTransaction = tx
+			ocsRequest.mockImplementation((config: { url?: string; method?: string }) => {
+				const url = config?.url ?? ''
+				if ((config?.method ?? 'GET').toUpperCase() === 'POST' && /\/resubmit$/.test(url)) {
+					return Promise.resolve({
+						status: 422,
+						data: {
+							ocs: {
+								meta: { status: 'failure', statuscode: 422 },
+								data: {
+									error: {
+										code: 'VALIDATION_FAILED',
+										message: 'Required receipts are missing',
+										fieldErrors: {
+											'transactions.tx-1.evidence': ['A receipt is required for this transaction']
+										}
+									}
+								}
+							}
+						}
+					})
+				}
+				if (url.includes('/transactions/tx-1')) return Promise.resolve(ocsOk(tx))
+				return Promise.resolve(ocsOk(transactionFixture()))
+			})
+
+			const wrapper = await mountView(TransactionFormView, '/transactions/tx-1/edit', undefined, { attachTo: document.body })
+			await wrapper.find('[data-test="resubmit-correction-btn"]').trigger('click')
+			await flushPromises()
+
+			const summary = wrapper.find('[data-test="correction-evidence-errors"]')
+			expect(summary.exists()).toBe(true)
+			expect(summary.text()).toContain('Original expense')
+			expect(summary.text()).toContain('A receipt is required for this transaction')
+			expect(summary.attributes('role')).toBe('alert')
+			expect(summary.attributes('tabindex')).toBe('-1')
+			expect(document.activeElement).toBe(summary.element)
+			// The named block replaces the generic line rather than presenting the refusal twice.
+			expect(wrapper.find('[data-test="form-error"]').exists()).toBe(false)
+		})
+
 		it('renders no resubmit control when the transaction is not awaiting correction', async () => {
 			givenCorrection(transactionFixture({ status: 'DRAFT' }))
 
@@ -606,7 +732,7 @@ describe('Transaction Correction - Vue Component Tests (RED: behavior not implem
 				items: [
 					{
 						id: 'tx-1', sheetId: 'sheet-1', stage: 'COST_CENTER', status: 'AWAITING_COST_CENTER_REVIEW',
-						finalOutcome: null, evidenceCount: 0, version: 0,
+						finalOutcome: null, evidenceRequired: false, evidenceCount: 0, version: 0,
 						latestDecision: {
 							id: 'd-1', stage: 'SENIOR', decision: 'REJECT',
 							actor: { userId: 'u1', displayName: 'User 1', role: 'SENIOR_MANAGER' },
@@ -674,7 +800,7 @@ describe('Transaction Correction - Vue Component Tests (RED: behavior not implem
 						])
 					)
 				}
-				return Promise.resolve(ocsOk(transactionFixture()))
+				return Promise.resolve(ocsOk(transactionFixture({ status: 'AWAITING_COST_CENTER_REVIEW', stage: 'COST_CENTER' })))
 			})
 		})
 
@@ -683,7 +809,7 @@ describe('Transaction Correction - Vue Component Tests (RED: behavior not implem
 			// on the *oldest* revision and therefore displayed superseded data as current. The list
 			// arrives newest-first, so the assertion is that revision 2 is shown, not revision 1.
 			const store = useTransactionStore()
-			store.currentTransaction = transactionFixture()
+			store.currentTransaction = transactionFixture({ status: 'AWAITING_COST_CENTER_REVIEW', stage: 'COST_CENTER' })
 
 			const wrapper = await mountView(TransactionDetailView, '/transactions/tx-1')
 
@@ -698,7 +824,7 @@ describe('Transaction Correction - Vue Component Tests (RED: behavior not implem
 			// and recorded change remains available." Selecting a prior revision must change what the
 			// panel shows rather than being inert.
 			const store = useTransactionStore()
-			store.currentTransaction = transactionFixture()
+			store.currentTransaction = transactionFixture({ status: 'AWAITING_COST_CENTER_REVIEW', stage: 'COST_CENTER' })
 
 			const wrapper = await mountView(TransactionDetailView, '/transactions/tx-1')
 
@@ -724,7 +850,7 @@ describe('Transaction Correction - Vue Component Tests (RED: behavior not implem
 			// looking at. Hiding it would be a UI opinion no artifact states, so the earlier draft of
 			// this test asserting that was removed rather than left to fail on an inference.
 			const store = useTransactionStore()
-			store.currentTransaction = transactionFixture()
+			store.currentTransaction = transactionFixture({ status: 'AWAITING_COST_CENTER_REVIEW', stage: 'COST_CENTER' })
 
 			const wrapper = await mountView(TransactionDetailView, '/transactions/tx-1')
 

@@ -42,11 +42,18 @@ import type { VNode } from 'vue'
  * is the same reason this component's `rowTestId` accepts a per-row function rather than a fixed string.
  */
 const props = defineProps<{
-	/** Column descriptors in display order. `label` is already translated by the caller. */
-	columns: ReadonlyArray<{ key: string; label: string }>
+	/**
+	 * Column descriptors in display order. `label` is already translated by the caller. A column
+	 * may carry `sortTitle`: the translated "unavailable" note behind a *disabled* sort affordance
+	 * drawn beside the label, as the approved headers do. **The affordance is never interactive**
+	 * -- the server owns ordering (`BE-CR-002` remains unapproved, `FR-005-012` forbids a
+	 * client-side sort) -- so it is a non-element `<span>`, hidden from assistive technology and
+	 * explained by its `title` instead of acting like a control.
+	 */
+	columns: ReadonlyArray<{ key: string; label: string; sortTitle?: string }>
 	rows: readonly T[]
-	/** Renders one cell. Called for both layouts, so the two cannot disagree. */
-	cell: (row: T, column: { key: string; label: string }) => VNode | string | number
+	/** Renders one cell. Called for both layouts, so the two cannot disagree. The row's index travels with it so a `#` column renders without a second data pass; existing two-argument call sites type-validate unchanged. */
+	cell: (row: T, column: { key: string; label: string }, index: number) => VNode | string | number
 	/** Stable identity per row, so Vue keys rather than array indices. */
 	rowKey: (row: T, index: number) => string
 	/** Accessible name for both layouts. */
@@ -137,6 +144,18 @@ function cardRowHook(index: number): string | undefined {
 					<tr>
 						<th v-for="column in columns" :key="column.key" scope="col">
 							{{ column.label }}
+							<!-- The approved headers carry the paired arrows; sorting itself is server-owned
+							     and unavailable, so the glyphs are drawn disabled: non-interactive, hidden
+							     from AT, explained by the title. -->
+							<span
+								v-if="column.sortTitle"
+								class="responsive-table__sort"
+								:title="column.sortTitle"
+								data-test="responsive-table-sort-unavailable"
+								aria-hidden="true"
+							>
+								<span class="responsive-table__sort-arrow">↑</span><span class="responsive-table__sort-arrow">↓</span>
+							</span>
 						</th>
 					</tr>
 				</thead>
@@ -153,7 +172,7 @@ function cardRowHook(index: number): string | undefined {
 							:data-test="testIdPrefix ? `${testIdPrefix}-cell-${column.key}` : undefined"
 							:data-testid="testIdPrefix ? `${testIdPrefix}-cell-${column.key}` : undefined"
 						>
-							<component :is="cell(row, column)" />
+							<component :is="cell(row, column, index)" />
 						</td>
 					</tr>
 				</tbody>
@@ -181,7 +200,7 @@ function cardRowHook(index: number): string | undefined {
 				>
 					<span class="responsive-table__label">{{ column.label }}</span>
 					<span class="responsive-table__value">
-						<component :is="cell(row, column)" />
+						<component :is="cell(row, column, index)" />
 					</span>
 				</span>
 			</li>
@@ -228,6 +247,26 @@ function cardRowHook(index: number): string | undefined {
 	clip-path: inset(50%);
 	white-space: nowrap;
 	border: 0;
+}
+
+/*
+ * The disabled sort affordance, as the approved headers draw it. It never acts: no button, no
+ * pointer cursor, and `aria-hidden` so assistive technology is not offered a control that does
+ * nothing (the unavailable reason travels in the title for pointer readers). The label text is
+ * never wrapped in it, so the narrow-viewport card labels stay plain.
+ */
+.responsive-table__sort {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.05rem;
+	margin-inline-start: 0.35rem;
+	color: var(--color-text-maxcontrast);
+	opacity: 0.75;
+}
+
+.responsive-table__sort-arrow {
+	display: inline-flex;
+	line-height: 1;
 }
 
 .responsive-table__cards {

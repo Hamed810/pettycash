@@ -5,9 +5,9 @@ import { recordResponses } from './record-responses'
  * US8 browser matrix (T122): desktop and mobile-sized viewports, dark and
  * high-contrast themes, keyboard navigation with visible focus.
  *
- * The projects live in playwright.config.ts (chromium-desktop,
- * firefox-desktop, edge-desktop, chromium-mobile); this spec runs under every
- * one of them, so a failure report names the browser. What remains here after
+ * The projects live in playwright.config.ts (chrome-desktop, chrome-mobile),
+ * both using official Google Chrome via `channel: 'chrome'`; this spec runs
+ * under every one of them, so a failure report names the viewport. What remains here after
  * the FR-073 amendment is the keyboard and visible-focus half plus the 390px
  * no-horizontal-scroll floor and the 12pt type floor as the browser paints
  * them — the error-rate figure belongs to quickstart §8.2, not to this file.

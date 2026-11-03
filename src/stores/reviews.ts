@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import type { TransactionDetail, DecisionWrite, DecisionResult } from '@/types/api'
+import type { TransactionDetail, DecisionWrite, DecisionResult, CommandOptions } from '@/types/api'
 import * as reviewsApi from '@/services/reviewsApi'
 import type { TransactionPage } from '@/services/reviewsApi'
 
@@ -84,11 +84,11 @@ export const useReviewsStore = defineStore('reviews', () => {
     }
   }
 
-  async function recordDecision(transactionId: string, payload: DecisionWrite): Promise<DecisionResult> {
+  async function recordDecision(transactionId: string, payload: DecisionWrite, options: CommandOptions = {}): Promise<DecisionResult> {
     loading.value = true
     error.value = null
     try {
-      const result = await reviewsApi.recordDecision(transactionId, payload)
+      const result = await reviewsApi.recordDecision(transactionId, payload, options)
       if (selectedTransaction.value && selectedTransaction.value.id === transactionId) {
         selectedTransaction.value = result.transaction
       }

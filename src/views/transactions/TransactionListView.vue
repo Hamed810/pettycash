@@ -155,7 +155,7 @@ function transactionCell(item: TransactionSummary, column: { key: string }): VNo
 				390px rather than satisfying the requirement. `ResponsiveTable` renders these same rows as a
 				`<table>` above 640px and one card per row below, from one column list and one cell renderer.
 			-->
-			<p v-if="sheetStore.loading" class="text-center py-8" data-test="transaction-loading">
+			<p v-if="sheetStore.detailLoading" class="text-center py-8" data-test="transaction-loading">
 				{{ t('pettycash', 'common.loading') }}
 			</p>
 			<ResponsiveTable
@@ -165,7 +165,7 @@ function transactionCell(item: TransactionSummary, column: { key: string }): VNo
 				:cell="transactionCell"
 				:row-key="transactionRowKey"
 				:caption="t('pettycash', 'transactions.list')"
-				:loading="sheetStore.loading"
+				:loading="sheetStore.detailLoading"
 				test-id="transaction-table"
 				test-id-prefix="transaction"
 				row-test-id="transaction-row"

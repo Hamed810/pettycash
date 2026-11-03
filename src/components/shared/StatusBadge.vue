@@ -1,8 +1,9 @@
 <template>
 	<NcChip
 		:variant="statusVariant"
-		class="status-badge"
+		:class="isReviewStatus ? 'status-badge status-badge--review' : 'status-badge'"
 		:data-testid="`status-badge-${status.toLowerCase()}`"
+		:title="internalLabel"
 		no-close
 	>
 		{{ label }}
@@ -16,9 +17,31 @@ import NcChip from '@nextcloud/vue/components/NcChip'
 
 interface Props {
 	status: string
+	/**
+	 * Compact display override. The workspace table prints the reviewing stage alone so the chip
+	 * stays single-line; the shared surfaces keep the full vocabulary by omitting the prop.
+	 */
+	label?: string
 }
 
 const props = defineProps<Props>()
+
+/**
+ * The approved pill colours, per state (visual-first owner directive, 2026-10-21).
+ *
+ * The approved sheets list gives the sheet statuses their palette: OPEN green
+ * (`references/desktop/01`), under-cost-center-review amber, under-senior/finance review the
+ * review purple, completed gray. The approved workspace gives a transaction that was returned to
+ * the purchaser that same purple (`references/desktop/03`, "RETURNED"), while its awaiting-review
+ * chips stay blue. Previously everything mid-flight was one blue chip; the decisive brief is that
+ * missing backend capability may colour nothing out of existence, and the palette is purely
+ * presentational -- no status is driven, reordered or derived by these classes.
+ *
+ * The review purple is not a Nextcloud variant, so it rides a class (`status-badge--review`) whose
+ * colour comes from the `--pettycash-review` token declared on `.pettycash-shell` rather than a
+ * hardcoded value here.
+ */
+const REVIEW_STATUSES = new Set(['SENIOR', 'FINANCE', 'CORRECTION', 'AWAITING_PURCHASER_CORRECTION'])
 
 const statusVariant = computed(() => {
 	switch (props.status) {
@@ -26,7 +49,6 @@ const statusVariant = computed(() => {
 	case 'AWAITING_COST_CENTER_REVIEW':
 	case 'AWAITING_SENIOR_REVIEW':
 	case 'AWAITING_FINANCE_REVIEW':
-	case 'AWAITING_PURCHASER_CORRECTION':
 		return 'primary' as const
 	case 'COST_CENTER_APPROVED':
 	case 'SENIOR_APPROVED':
@@ -38,25 +60,32 @@ const statusVariant = computed(() => {
 		return 'error' as const
 	// UI-PUR-002: the sheet summary statuses are a different vocabulary from the per-review ones
 	// above. They reached this component through the sheet list and previously fell through to
-	// `secondary`, printing the raw enum (`COST_CENTER`) in a Persian interface. The pill's colour
-	// distinguishes "still moving" from "returned for correction" from "finished", using the same
-	// design-token variants as every other status rather than a bespoke colour per status.
+	// `secondary`, printing the raw enum (`COST_CENTER`) in a Persian interface.
+	// The approved list (reference 01) colours them: OPEN green, cost-center amber, the two
+	// remaining review stages the review purple (variant rides the class below), and the completed
+	// pair gray.
 	case 'OPEN':
+		return 'success' as const
 	case 'COST_CENTER':
+		return 'warning' as const
+	// REVIEW_STATUSES keep a valid variant (`secondary`) and carry their hue via the class.
 	case 'SENIOR':
 	case 'FINANCE':
-		return 'primary' as const
 	case 'CORRECTION':
-		return 'warning' as const
+	case 'AWAITING_PURCHASER_CORRECTION':
+		return 'secondary' as const
 	case 'COMPLETED':
 	case 'COMPLETED_WITH_REJECTIONS':
-		return 'success' as const
+		return 'secondary' as const
 	default:
 		return 'secondary' as const
 	}
 })
 
-const label = computed(() => {
+/** True for the statuses the approved design hues with the review purple. */
+const isReviewStatus = computed(() => REVIEW_STATUSES.has(props.status))
+
+const internalLabel = computed(() => {
 	const statusMap: Record<string, string> = {
 		DRAFT: t('pettycash', 'reviews.status.draft'),
 		AWAITING_COST_CENTER_REVIEW: t('pettycash', 'reviews.status.awaitingCostCenterReview'),
@@ -81,12 +110,63 @@ const label = computed(() => {
 	}
 	return statusMap[props.status] || props.status
 })
+
+const label = computed(() => props.label ?? internalLabel.value)
 </script>
 
 <style scoped>
 .status-badge {
 	font-size: var(--font-size-floor);
-	font-weight: 500;
+	font-weight: 600;
+	border: 1px solid transparent;
+}
+
+/*
+ * The approved surfaces use a quiet status pill: a tinted background, a readable foreground and no
+ * filled primary/blue block. The colour still comes from the host theme, so light and dark themes
+ * remain legible and no brand colour is hardcoded here.
+ */
+.status-badge.nc-chip--primary {
+	background-color: color-mix(in srgb, var(--color-primary-element) 12%, transparent);
+	border-color: color-mix(in srgb, var(--color-primary-element) 22%, transparent);
+	color: var(--color-primary-element);
+}
+
+.status-badge.nc-chip--success {
+	background-color: color-mix(in srgb, var(--color-success) 14%, transparent);
+	border-color: color-mix(in srgb, var(--color-success) 24%, transparent);
+	color: var(--color-success-text, var(--color-success));
+}
+
+.status-badge.nc-chip--warning {
+	background-color: color-mix(in srgb, var(--color-warning) 16%, transparent);
+	border-color: color-mix(in srgb, var(--color-warning) 28%, transparent);
+	color: var(--color-warning-text, var(--color-warning));
+}
+
+.status-badge.nc-chip--error {
+	background-color: color-mix(in srgb, var(--color-error) 14%, transparent);
+	border-color: color-mix(in srgb, var(--color-error) 24%, transparent);
+	color: var(--color-error-text, var(--color-error));
+}
+
+.status-badge.nc-chip--secondary {
+	background-color: var(--color-background-hover);
+	border-color: var(--color-border);
+	color: var(--color-main-text);
+}
+
+/*
+ * The approved "in review"/returned purple. No Nextcloud variant carries it, so the hue rides the
+ * `--pettycash-review` token declared once on `.pettycash-shell` and re-keyed for the dark theme;
+ * the background and border mix the hue over transparency so the pill stays quiet on both themes.
+ * The extra class raises the specificity above the plain-secondary rule, which is what pulls a
+ * review chip away from Gray.
+ */
+.status-badge.nc-chip--secondary.status-badge--review {
+	background-color: color-mix(in srgb, var(--pettycash-review) 12%, transparent);
+	border-color: color-mix(in srgb, var(--pettycash-review) 22%, transparent);
+	color: var(--pettycash-review);
 }
 
 @media (width <= 390px) {

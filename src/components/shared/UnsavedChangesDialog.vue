@@ -121,7 +121,7 @@ function onKeydown(event: KeyboardEvent): void {
 .unsaved-guard__scrim {
 	position: absolute;
 	inset: 0;
-	background-color: var(--color-backdrop);
+	background-color: var(--pettycash-scrim, color-mix(in srgb, black 55%, transparent));
 }
 
 .unsaved-guard__panel {
