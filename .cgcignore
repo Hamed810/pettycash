@@ -1,0 +1,31 @@
+# Development tools and their databases
+/.tools/
+/.cgc-data/
+/.opencode/
+/.serena/
+/.codegraphcontext/
+
+# Git internals
+/.git/
+
+# Dependencies
+node_modules/
+vendor/
+
+# Generated frontend assets
+/js/
+/css/
+
+# Build and test outputs
+dist/
+build/
+coverage/
+__pycache__/
+.venv/
+artifacts/visual-review/
+
+# Temporary and sensitive files
+*.log
+*.pyc
+.env
+.env.*

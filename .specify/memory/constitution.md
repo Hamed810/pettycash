@@ -1,64 +1,3 @@
-<!--
-Sync Impact Report
-- Version change: 1.2.0 -> 1.3.0 (MINOR)
-- Bump rationale: this amendment corrects a stale normative sentence in Principle III so that it names
-  the declared compatibility targets (`mysql`, `pgsql`, `sqlite`) rather than MariaDB alone. It is a
-  correction toward the target ACC-002 already registered, not a change of target: no requirement is
-  added, removed, widened or narrowed, so PATCH -- which the policy reserves for clarifications that
-  do not change required behaviour -- would understate that a MUST's text changes. MINOR is correct
-  because no principle is removed or redefined and no support is withdrawn, so MAJOR does not apply.
-  It also makes the file internally consistent: as of 1.2.0 the Architecture and Quality Constraints
-  bullet and ACC-002 named three backend families while Principle III still said "MariaDB
-  compatibility MUST be retained", so two normative sentences in one file disagreed and the one an
-  agent reads first was the wrong one.
-- MAJOR counter-argument, recorded because it was considered and rejected: Principle III is a core
-  principle, and a principle's normative text changes. Rejected because the change is a *correction
-  toward* the already-approved target, not a redefinition: the set of backends this application must
-  remain compatible with is unchanged from ACC-002 and unchanged from the 1.1.0 wording's intent, and
-  nothing previously conformant becomes non-conformant. MAJOR is reserved for removals and
-  redefinitions that break something. The prior 1.2.0 amendment's reasoning on the same bullet --
-  recorded in git history -- is carried forward rather than restated as new.
-- Preserved unchanged: ACC-001 (PHP runtime floor) and ACC-002 (database target set) are
-  byte-identical, including their own outstanding follow-up notes. No register entry is added,
-  removed or altered by this amendment.
-- Modified principles:
-  - III. Nextcloud-Native, Boundary-Conscious Architecture -- MODIFIED in this amendment. The 1.2.0
-    report recorded it as NOT modified on the reasoning that "its normative text already required any
-    compatibility-target change to be registered first, which is what made ACC-002 necessary rather
-    than optional". That reasoning was correct about the *registration* requirement and was applied,
-    but it was mistaken about the state of the rest of the sentence: the same paragraph retained a
-    separate, unregistered "MariaDB compatibility MUST be retained" clause, so registering ACC-002
-    did not by itself bring Principle III into conformance. The registration requirement is unchanged
-    and remains what made ACC-002 necessary.
-- Modified sections:
-  - III. Nextcloud-Native, Boundary-Conscious Architecture (the database-compatibility sentence:
-    "MariaDB compatibility MUST be retained" replaced by compatibility with the declared V1 backends
-    per ACC-002, with MariaDB identified as the local development backend only)
-- Added sections: none
-- Removed sections: none
-- Follow-up TODOs:
-  1. CLOSED at T239 (2026-10-09) -- the four-backend CI matrix now exists and all four jobs were
-     executed green, so ACC-002's verification plan is satisfied and appinfo/info.xml's declarations
-     are verified against every declared backend rather than stated intent. SC-013 is still not
-     claimed: that is the acceptance record's to make, not CI's. [carried from 1.2.0, closed by T239]
-  2. appinfo/info.xml declares no <php> element, so the 8.2 floor rests on composer.json alone.
-     Whether info.xsd permits <php> there is unverified. [carried from 1.2.0 item 6, still open]
-  3. CLOSED at 1.2.0 item 2 -- plan.md now carries a "Compatibility Target Register Conformance"
-     section citing ACC-001 and ACC-002 by entry.
-  4. CLOSED -- plan.md's Constitution Check no longer passes ACC-001 on "narrows rather than
-     replaces" reasoning; it records that reasoning as withdrawn as superseded by the entry.
-     [1.2.0 item 3]
-  5. CLOSED -- plan.md's Scale/Scope states 83 functional requirements, reconciled to spec.md on
-     2026-09-30. [1.2.0 item 4, which recorded the count as 76]
-  6. CLOSED -- plan.md's Summary carries a "delivered, not planned" status note for the
-     pc_* -> pettycash_* namespace work. [1.2.0 item 5]
-  7. OPEN, new in this amendment: plan.md's Technical Context "Storage" line still read "MariaDB"
-     alone while the same plan's register-conformance table certified the three-type set, which is a
-     Delivery-rule-9 violation (a plan asserting a superseded target). Corrected in plan.md on
-     2026-10-02; recorded here because the register is where target-assertion defects are tracked.
-- Note: this report is temporary scratch material for human review of the amendment and is expected
-  to be removed before the amended constitution file is committed.
--->
 # PettyCash Constitution
 
 ## Core Principles
@@ -155,14 +94,84 @@ when a suitable harness exists. A plan that temporarily relies on manual verific
 why automation is not yet feasible, list repeatable test steps, and create follow-up work for
 the missing coverage.
 
+Verification MUST be risk-based. Implementation slices MUST run focused checks as they are built.
+Before owner review, a visual change MUST produce the minimal browser evidence needed for the
+approval decision; the comprehensive regression run belongs after approval or at a required
+milestone gate. Risk-based sequencing MUST NOT defer or weaken mandatory focused safety tests for
+financial logic, authorization, destructive operations, persistence, or security. Those safety
+tests are part of the implementation slice, not the post-approval regression pass.
+
 V1 acceptance MUST also include documented functional checks for the complete affected workflow.
-UI changes MUST be checked in current Chrome, Edge, and Firefox and at desktop and mobile
-viewports, including Persian RTL layout. Fixes MUST include a regression test or a repeatable
-regression procedure. Documentation, requirements, specs, plans, task status, operational notes,
-and migration instructions MUST be updated in the same change whenever their claims are affected.
+UI changes MUST be checked in official Google Chrome at desktop and mobile viewports, including
+Persian RTL layout. All Playwright browser tests MUST run in official Google Chrome using the
+`chrome` channel (`{ browserName: 'chromium', channel: 'chrome' }`); bundled Chromium, Firefox,
+WebKit, and Edge MUST NOT be used, and no silent browser fallback is permitted. Desktop and mobile
+emulation MUST both use Google Chrome. If Google Chrome is unavailable, browser verification MUST
+stop and the blocker MUST be reported; substituting another engine is prohibited. Fixes MUST
+include a regression test or a repeatable regression procedure. Documentation, requirements,
+specs, plans, task status, operational notes, and migration instructions MUST be updated in the
+same change whenever their claims are affected.
 
 Rationale: the current requirements identify manual functional testing as the V1 baseline, while
-repeatable automation is necessary as executable business behavior is added.
+repeatable automation is necessary as executable business behavior is added. A single, explicitly
+named browser engine makes automated evidence reproducible and prevents a passing run on an
+unapproved engine from being mistaken for the required check. Separating minimal pre-approval
+evidence from post-approval regression keeps review cheap without weakening safety coverage.
+
+### VI. Small, Independently Reviewable Task Slices
+
+Every implementation task MUST be narrow enough to be reviewed independently and MUST produce one
+meaningful deliverable per execution slice. Tasks SHOULD represent approximately 30-60 minutes of
+focused work where practical; a task that cannot be split into such a slice MUST state why in the
+plan. A slice MUST NOT be expanded during execution to absorb unrelated work. Execution runs MUST
+NOT automatically execute an entire backlog, a whole phase, or every remaining task; they MUST stop
+at the authorized slice boundary.
+
+Splitting MUST NOT separate a mandatory safety test from the change it protects, and MUST NOT split
+an atomic financial or persistence operation into independently shippable halves. A small slice is a
+review unit, not permission to weaken atomicity, authorization, or audit coverage.
+
+Rationale: small slices make review evidence traceable and keep a failed assumption cheap to
+reverse. Automatic backlog execution turns a review gate into a batch release and hides which change
+produced which result.
+
+### VII. Early Owner Approval and Explicit Stop Gates
+
+The mandatory delivery sequence is:
+
+`Small Task -> Minimal Risk-Based Verification -> Owner Review -> Approval -> Comprehensive Verification -> Closure`
+
+No slice may skip owner review, and approval MUST be explicit and recorded in the task ledger with
+its gate identifier, date, and authorized scope. For visual changes, owner approval MUST be obtained
+before expensive browser matrices and comprehensive regression; the minimal focused browser evidence
+needed for the decision is produced first. Mandatory focused safety tests for financial logic,
+authorization, destructive operations, persistence, and security MUST NOT be deferred to the
+post-approval phase; only broad regression may follow approval.
+
+Execution MUST stop after each authorized review slice. A passing test suite is not visual approval.
+Work whose visual result has not been approved MUST NOT be marked fully accepted or complete, and
+the next task MUST NOT start without authorization even when the current task is green. Silence, an
+unreviewed screenshot, or an automated pass MUST NOT be treated as approval.
+
+Rationale: the expensive verification steps are only worth running on a direction the owner has
+accepted. Explicit stop gates prevent a green test run from becoming an implicit release decision.
+
+### VIII. Project-Local Visual Evidence
+
+All generated review screenshots MUST be stored under `artifacts/visual-review/`, organized by task
+and review iteration (for example `artifacts/visual-review/<task-id>/<iteration>/`). The canonical
+evidence location MUST be inside the repository; external temporary directories, including `/tmp`,
+MUST NOT be used as canonical evidence storage. Evidence MUST be preserved until the owner review is
+recorded, and the completion report MUST cite exact repository-relative screenshot paths.
+
+The visual-evidence tree MUST be excluded from Git and from OCI semantic indexing. Existing OCI
+generated-asset exclusions (`js/**` and `css/**`) MUST be preserved. Excluding generated evidence
+MUST NOT exclude the task ledger, specification, or report that cites it. Adding an exclusion MUST
+NOT trigger a forced reindex or a rebuild of the semantic index.
+
+Rationale: evidence that lives only in a temporary directory disappears before review and cannot be
+audited with the change. Keeping it project-local while excluding it from Git and indexing preserves
+reviewability without polluting the repository or the semantic index.
 
 ## Architecture and Quality Constraints
 
@@ -191,6 +200,13 @@ repeatable automation is necessary as executable business behavior is added.
 - Designs MUST target the documented V1 scale of fewer than 100 active users and fewer than
   10,000 expense transactions per year without introducing speculative distributed systems or
   services. Added complexity MUST be justified by a measured or specified requirement.
+- Browser automation used as required evidence MUST run on official Google Chrome through the
+  Playwright `chrome` channel. Bundled Chromium, Firefox, WebKit, Edge, and silent fallback are
+  prohibited for required evidence; a missing Chrome installation is a blocker to report.
+- Generated visual-review evidence under `artifacts/visual-review/` MUST be Git-ignored and
+  OCI-excluded. `.opencode/codebase-index.json` MUST retain the existing `js/**` and `css/**`
+  exclusions and MUST add the visual-evidence tree; it MUST NOT be regenerated or force-reindexed
+  merely to apply the exclusion.
 
 ### Approved Compatibility Change
 
@@ -231,8 +247,7 @@ narrowing reviewable instead of self-certifying.
   requires `>=8.2 <8.6`; the upper bound is unchanged by this entry.
 - **Migration path**: none is required, because no conformant environment needs to move and no
   persisted state changes. Deployments must already satisfy 8.2 to run Nextcloud 34. `composer.json`
-  is the enforcing declaration; see follow-up 5 in the Sync Impact Report about whether
-  `appinfo/info.xml` can also carry the floor.
+  is the enforcing declaration; whether `appinfo/info.xml` can also carry the floor is unverified.
 - **Compatibility verification plan**: the floor is verified by three independent signals, all of
   which MUST hold for a change to be considered verified: (1) the platform's own requirement --
   `nextcloud/ocp` `dev-stable34` and Nextcloud 34 core -- floors at 8.2; (2) the dependency closure
@@ -338,12 +353,16 @@ narrowing reviewable instead of self-certifying.
    and rollback or recovery steps where state can change.
 3. Tasks MUST be dependency-ordered, independently verifiable, and linked to acceptance criteria.
    Implementation MUST follow approved tasks; discoveries that materially change scope MUST return
-   to the specification and plan before code continues.
+   to the specification and plan before code continues. An execution run MUST stop at the authorized
+   slice or review boundary and MUST NOT automatically execute the remaining backlog.
 4. Reviews MUST verify constitution compliance, requirement traceability, preservation of existing
-   behavior, server-side authorization, historical integrity, test evidence, and documentation
-   accuracy. A failed mandatory check blocks merge or release.
-5. Changes MUST be small enough to review safely. Unrelated refactors, dependency upgrades, and
-   behavior changes MUST be separated unless the plan demonstrates that separation is impossible.
+   behavior, server-side authorization, historical integrity, test evidence, documentation accuracy,
+   the recorded owner-approval gate, and the visual-evidence path when the surface changed. A failed
+   mandatory check blocks merge or release.
+5. Changes MUST be small enough to review safely. Each execution slice SHOULD target approximately
+   30-60 minutes of focused work where practical and MUST deliver one meaningful result. Unrelated
+   refactors, dependency upgrades, and behavior changes MUST be separated unless the plan
+   demonstrates that separation is impossible.
 6. Breaking changes require explicit approval, a migration and compatibility strategy, release
    notes, and a MAJOR version decision for the affected public contract. Deprecations MUST state
    the replacement and removal conditions.
@@ -356,6 +375,15 @@ narrowing reviewable instead of self-certifying.
 9. A compatibility target named in the Architecture and Quality Constraints MUST NOT be changed in
    a feature plan or a task. Such a change MUST be approved as a constitution amendment, recorded
    as an `ACC-NNN` entry, and applied to the plans and specifications that assert the old target.
+10. The delivery sequence in Principle VII is mandatory. A task MAY enter comprehensive verification
+    only after an explicit approval is recorded in the ledger; a green test run is not approval and
+    MUST NOT be reported as one.
+11. A change to a visual surface MUST report at least one repository-relative screenshot path under
+    `artifacts/visual-review/`, or record that the change has no visual surface. Evidence MUST remain
+    available until the owner review is recorded.
+12. Browser verification MUST use official Google Chrome. A missing Chrome installation is a blocker
+    to report; substituting bundled Chromium, Firefox, WebKit, or Edge is a constitutional violation,
+    not a workaround.
 
 ## Governance
 
@@ -384,8 +412,16 @@ Constitution versions follow semantic versioning:
 Every feature specification, implementation plan, task list, review, and release readiness check
 MUST include a constitution compliance review. That review MUST also confirm that every
 compatibility target the reviewed artifacts assert matches the current register, and that no
-artifact asserts an unregistered change. Exceptions MUST be written, scoped, risk-assessed,
-approved by the project maintainer, and assigned an expiry or follow-up task. Unrecorded exceptions
-are invalid.
+artifact asserts an unregistered change. It MUST confirm that each execution slice stopped at its
+authorized boundary, that owner approval is recorded before comprehensive verification, that visual
+evidence is stored under `artifacts/visual-review/` and reported by repository-relative path, and
+that Playwright evidence used official Google Chrome. Exceptions MUST be written, scoped,
+risk-assessed, approved by the project maintainer, and assigned an expiry or follow-up task.
+Unrecorded exceptions are invalid.
 
-**Version**: 1.3.0 | **Ratified**: 2026-09-19 | **Last Amended**: 2026-10-02
+An amendment that changes mandatory verification coverage -- the browser matrix, evidence storage,
+or the approval sequence -- MUST state whether evidence produced under the previous rule remains
+valid as historical evidence and MUST NOT retroactively invalidate completed tasks without an
+explicit migration record.
+
+**Version**: 1.4.0 | **Ratified**: 2026-09-19 | **Last Amended**: 2026-10-25

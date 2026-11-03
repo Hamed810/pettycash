@@ -1,0 +1,809 @@
+{
+  "task": "bug-assessment:mobile-evidence-filename-wrap",
+  "base": "http://localhost:8081",
+  "viewport": {
+    "width": 390,
+    "height": 844
+  },
+  "browser": "156.0.8078.47",
+  "language": {
+    "before": "en",
+    "during": "fa",
+    "restored": true
+  },
+  "runs": [
+    {
+      "language": "en",
+      "host": "transaction editing form",
+      "surfaceDir": "ltr",
+      "measurement": {
+        "found": true,
+        "direction": "ltr",
+        "nameText": "t060-receipt-01.txt",
+        "nameLength": 19,
+        "lines": 5,
+        "lineRects": [
+          38.4,
+          36.2,
+          20.8,
+          36.8,
+          5.8
+        ],
+        "style": {
+          "overflowWrap": "anywhere",
+          "wordBreak": "normal",
+          "hyphens": "manual",
+          "fontSize": "16px",
+          "lineHeight": "24px",
+          "itemDisplay": "flex",
+          "itemFlexWrap": "nowrap",
+          "bodyMinWidth": "0px",
+          "bodyFlex": "1 1 0%",
+          "actionsFlexWrap": "wrap",
+          "actionsFlexShrink": "0",
+          "actionsWidth": "219px",
+          "actionsMinWidth": "auto"
+        },
+        "boxes": {
+          "list": {
+            "x": 22.5,
+            "y": 403.5,
+            "width": 345,
+            "height": 440.3,
+            "right": 367.5,
+            "bottom": 843.7
+          },
+          "item": {
+            "x": 22.5,
+            "y": 403.5,
+            "width": 345,
+            "height": 440.3,
+            "right": 367.5,
+            "bottom": 843.7
+          },
+          "icon": {
+            "x": 33.8,
+            "y": 606.6,
+            "width": 34,
+            "height": 34,
+            "right": 67.8,
+            "bottom": 640.6
+          },
+          "body": {
+            "x": 82.8,
+            "y": 414.7,
+            "width": 39.5,
+            "height": 417.8,
+            "right": 122.3,
+            "bottom": 832.5
+          },
+          "name": {
+            "x": 82.8,
+            "y": 414.7,
+            "width": 39.5,
+            "height": 120,
+            "right": 122.3,
+            "bottom": 534.7
+          },
+          "meta": {
+            "x": 82.8,
+            "y": 538.5,
+            "width": 39.5,
+            "height": 294,
+            "right": 122.3,
+            "bottom": 832.5
+          },
+          "actions": {
+            "x": 137.3,
+            "y": 602.1,
+            "width": 219,
+            "height": 43,
+            "right": 356.3,
+            "bottom": 645.1
+          },
+          "buttons": [
+            {
+              "label": "Preview t060-receipt-01.txt",
+              "x": 137.3,
+              "y": 602.1,
+              "width": 68,
+              "height": 43,
+              "right": 205.3,
+              "bottom": 645.1
+            },
+            {
+              "label": "Download t060-receipt-01.txt",
+              "x": 212.8,
+              "y": 602.1,
+              "width": 68,
+              "height": 43,
+              "right": 280.8,
+              "bottom": 645.1
+            },
+            {
+              "label": "Remove t060-receipt-01.txt",
+              "x": 288.3,
+              "y": 602.1,
+              "width": 68,
+              "height": 43,
+              "right": 356.3,
+              "bottom": 645.1
+            }
+          ]
+        },
+        "overflow": {
+          "documentScrollWidth": 390,
+          "documentClientWidth": 390,
+          "bodyScrollWidth": 390,
+          "innerWidth": 390,
+          "listScrollWidth": 345,
+          "listClientWidth": 345,
+          "itemScrollWidth": 345,
+          "itemClientWidth": 345,
+          "actionsOverflowRow": false,
+          "anyButtonOutsideRow": false,
+          "anyButtonOutsideViewport": false
+        },
+        "ancestors": [
+          {
+            "tag": "div",
+            "test": "edit-evidence-list",
+            "width": 345,
+            "display": "grid",
+            "gridTemplateColumns": "345px",
+            "paddingInlineStart": "0px",
+            "paddingInlineEnd": "0px",
+            "minWidth": "auto"
+          },
+          {
+            "tag": "form",
+            "test": null,
+            "width": 345,
+            "display": "flex",
+            "gridTemplateColumns": "none",
+            "paddingInlineStart": "0px",
+            "paddingInlineEnd": "0px",
+            "minWidth": "0px"
+          },
+          {
+            "tag": "section",
+            "test": "transaction-form",
+            "width": 345,
+            "display": "block",
+            "gridTemplateColumns": "none",
+            "paddingInlineStart": "0px",
+            "paddingInlineEnd": "0px",
+            "minWidth": "auto"
+          },
+          {
+            "tag": "div",
+            "test": "transaction-form-view",
+            "width": 345,
+            "display": "flex",
+            "gridTemplateColumns": "none",
+            "paddingInlineStart": "0px",
+            "paddingInlineEnd": "0px",
+            "minWidth": "0px"
+          },
+          {
+            "tag": "section",
+            "test": "transaction-surface",
+            "width": 390,
+            "display": "block",
+            "gridTemplateColumns": "none",
+            "paddingInlineStart": "22.5px",
+            "paddingInlineEnd": "22.5px",
+            "minWidth": "auto"
+          },
+          {
+            "tag": "div",
+            "test": "transaction-surface-layer",
+            "width": 390,
+            "display": "flex",
+            "gridTemplateColumns": "none",
+            "paddingInlineStart": "0px",
+            "paddingInlineEnd": "0px",
+            "minWidth": "0px"
+          }
+        ]
+      }
+    },
+    {
+      "language": "en",
+      "host": "transaction detail view",
+      "surfaceDir": "ltr",
+      "measurement": {
+        "found": true,
+        "direction": "ltr",
+        "nameText": "t060-receipt-01.txt",
+        "nameLength": 19,
+        "lines": 9,
+        "lineRects": [
+          14.9,
+          18.3,
+          5.2,
+          15.3,
+          20.8,
+          20.8,
+          18.3,
+          18.5,
+          5.8
+        ],
+        "style": {
+          "overflowWrap": "anywhere",
+          "wordBreak": "normal",
+          "hyphens": "manual",
+          "fontSize": "16px",
+          "lineHeight": "24px",
+          "itemDisplay": "flex",
+          "itemFlexWrap": "nowrap",
+          "bodyMinWidth": "0px",
+          "bodyFlex": "1 1 0%",
+          "actionsFlexWrap": "wrap",
+          "actionsFlexShrink": "0",
+          "actionsWidth": "219px",
+          "actionsMinWidth": "auto"
+        },
+        "boxes": {
+          "list": {
+            "x": 31.8,
+            "y": 59,
+            "width": 326.5,
+            "height": 776.3,
+            "right": 358.3,
+            "bottom": 835.3
+          },
+          "item": {
+            "x": 31.8,
+            "y": 59,
+            "width": 326.5,
+            "height": 776.3,
+            "right": 358.3,
+            "bottom": 835.3
+          },
+          "icon": {
+            "x": 43,
+            "y": 430.1,
+            "width": 34,
+            "height": 34,
+            "right": 77,
+            "bottom": 464.1
+          },
+          "body": {
+            "x": 92,
+            "y": 70.3,
+            "width": 21,
+            "height": 753.8,
+            "right": 113,
+            "bottom": 824
+          },
+          "name": {
+            "x": 92,
+            "y": 70.3,
+            "width": 21,
+            "height": 216,
+            "right": 113,
+            "bottom": 286.3
+          },
+          "meta": {
+            "x": 92,
+            "y": 290,
+            "width": 21,
+            "height": 534,
+            "right": 113,
+            "bottom": 824
+          },
+          "actions": {
+            "x": 128,
+            "y": 425.6,
+            "width": 219,
+            "height": 43,
+            "right": 347,
+            "bottom": 468.6
+          },
+          "buttons": [
+            {
+              "label": "Preview t060-receipt-01.txt",
+              "x": 128,
+              "y": 425.6,
+              "width": 68,
+              "height": 43,
+              "right": 196,
+              "bottom": 468.6
+            },
+            {
+              "label": "Download t060-receipt-01.txt",
+              "x": 203.5,
+              "y": 425.6,
+              "width": 68,
+              "height": 43,
+              "right": 271.5,
+              "bottom": 468.6
+            },
+            {
+              "label": "Remove t060-receipt-01.txt",
+              "x": 279,
+              "y": 425.6,
+              "width": 68,
+              "height": 43,
+              "right": 347,
+              "bottom": 468.6
+            }
+          ]
+        },
+        "overflow": {
+          "documentScrollWidth": 390,
+          "documentClientWidth": 390,
+          "bodyScrollWidth": 390,
+          "innerWidth": 390,
+          "listScrollWidth": 327,
+          "listClientWidth": 327,
+          "itemScrollWidth": 327,
+          "itemClientWidth": 327,
+          "actionsOverflowRow": false,
+          "anyButtonOutsideRow": false,
+          "anyButtonOutsideViewport": false
+        },
+        "ancestors": [
+          {
+            "tag": "section",
+            "test": "evidence-list",
+            "width": 366,
+            "display": "block",
+            "gridTemplateColumns": "none",
+            "paddingInlineStart": "18.75px",
+            "paddingInlineEnd": "18.75px",
+            "minWidth": "auto"
+          },
+          {
+            "tag": "div",
+            "test": "transaction-detail-view",
+            "width": 366,
+            "display": "flex",
+            "gridTemplateColumns": "none",
+            "paddingInlineStart": "0px",
+            "paddingInlineEnd": "0px",
+            "minWidth": "0px"
+          },
+          {
+            "tag": "div",
+            "test": null,
+            "width": 390,
+            "display": "block",
+            "gridTemplateColumns": "none",
+            "paddingInlineStart": "12px",
+            "paddingInlineEnd": "12px",
+            "minWidth": "0px"
+          },
+          {
+            "tag": "main",
+            "test": null,
+            "width": 390,
+            "display": "grid",
+            "gridTemplateColumns": "390px",
+            "paddingInlineStart": "0px",
+            "paddingInlineEnd": "0px",
+            "minWidth": "auto"
+          },
+          {
+            "tag": "div",
+            "test": null,
+            "width": 390,
+            "display": "flex",
+            "gridTemplateColumns": "none",
+            "paddingInlineStart": "0px",
+            "paddingInlineEnd": "0px",
+            "minWidth": "auto"
+          },
+          {
+            "tag": "div",
+            "test": null,
+            "width": 390,
+            "display": "flex",
+            "gridTemplateColumns": "none",
+            "paddingInlineStart": "0px",
+            "paddingInlineEnd": "0px",
+            "minWidth": "0px"
+          }
+        ]
+      }
+    },
+    {
+      "language": "fa",
+      "host": "transaction editing form",
+      "surfaceDir": "rtl",
+      "measurement": {
+        "found": true,
+        "direction": "rtl",
+        "nameText": "t060-receipt-01.txt",
+        "nameLength": 19,
+        "lines": 5,
+        "lineRects": [
+          38.4,
+          36.2,
+          20.8,
+          36.8,
+          5.8
+        ],
+        "style": {
+          "overflowWrap": "anywhere",
+          "wordBreak": "normal",
+          "hyphens": "manual",
+          "fontSize": "16px",
+          "lineHeight": "24px",
+          "itemDisplay": "flex",
+          "itemFlexWrap": "nowrap",
+          "bodyMinWidth": "0px",
+          "bodyFlex": "1 1 0%",
+          "actionsFlexWrap": "wrap",
+          "actionsFlexShrink": "0",
+          "actionsWidth": "219px",
+          "actionsMinWidth": "auto"
+        },
+        "boxes": {
+          "list": {
+            "x": 22.5,
+            "y": 451.5,
+            "width": 345,
+            "height": 392.3,
+            "right": 367.5,
+            "bottom": 843.7
+          },
+          "item": {
+            "x": 22.5,
+            "y": 451.5,
+            "width": 345,
+            "height": 392.3,
+            "right": 367.5,
+            "bottom": 843.7
+          },
+          "icon": {
+            "x": 322.3,
+            "y": 630.6,
+            "width": 34,
+            "height": 34,
+            "right": 356.3,
+            "bottom": 664.6
+          },
+          "body": {
+            "x": 267.8,
+            "y": 462.7,
+            "width": 39.5,
+            "height": 369.8,
+            "right": 307.3,
+            "bottom": 832.5
+          },
+          "name": {
+            "x": 267.8,
+            "y": 462.7,
+            "width": 39.5,
+            "height": 120,
+            "right": 307.3,
+            "bottom": 582.7
+          },
+          "meta": {
+            "x": 267.8,
+            "y": 586.5,
+            "width": 39.5,
+            "height": 246,
+            "right": 307.3,
+            "bottom": 832.5
+          },
+          "actions": {
+            "x": 33.8,
+            "y": 626.1,
+            "width": 219,
+            "height": 43,
+            "right": 252.8,
+            "bottom": 669.1
+          },
+          "buttons": [
+            {
+              "label": "پیش‌نمایش t060-receipt-01.txt",
+              "x": 184.8,
+              "y": 626.1,
+              "width": 68,
+              "height": 43,
+              "right": 252.8,
+              "bottom": 669.1
+            },
+            {
+              "label": "دانلود t060-receipt-01.txt",
+              "x": 109.3,
+              "y": 626.1,
+              "width": 68,
+              "height": 43,
+              "right": 177.3,
+              "bottom": 669.1
+            },
+            {
+              "label": "حذف t060-receipt-01.txt",
+              "x": 33.8,
+              "y": 626.1,
+              "width": 68,
+              "height": 43,
+              "right": 101.8,
+              "bottom": 669.1
+            }
+          ]
+        },
+        "overflow": {
+          "documentScrollWidth": 390,
+          "documentClientWidth": 390,
+          "bodyScrollWidth": 390,
+          "innerWidth": 390,
+          "listScrollWidth": 345,
+          "listClientWidth": 345,
+          "itemScrollWidth": 345,
+          "itemClientWidth": 345,
+          "actionsOverflowRow": false,
+          "anyButtonOutsideRow": false,
+          "anyButtonOutsideViewport": false
+        },
+        "ancestors": [
+          {
+            "tag": "div",
+            "test": "edit-evidence-list",
+            "width": 345,
+            "display": "grid",
+            "gridTemplateColumns": "345px",
+            "paddingInlineStart": "0px",
+            "paddingInlineEnd": "0px",
+            "minWidth": "auto"
+          },
+          {
+            "tag": "form",
+            "test": null,
+            "width": 345,
+            "display": "flex",
+            "gridTemplateColumns": "none",
+            "paddingInlineStart": "0px",
+            "paddingInlineEnd": "0px",
+            "minWidth": "0px"
+          },
+          {
+            "tag": "section",
+            "test": "transaction-form",
+            "width": 345,
+            "display": "block",
+            "gridTemplateColumns": "none",
+            "paddingInlineStart": "0px",
+            "paddingInlineEnd": "0px",
+            "minWidth": "auto"
+          },
+          {
+            "tag": "div",
+            "test": "transaction-form-view",
+            "width": 345,
+            "display": "flex",
+            "gridTemplateColumns": "none",
+            "paddingInlineStart": "0px",
+            "paddingInlineEnd": "0px",
+            "minWidth": "0px"
+          },
+          {
+            "tag": "section",
+            "test": "transaction-surface",
+            "width": 390,
+            "display": "block",
+            "gridTemplateColumns": "none",
+            "paddingInlineStart": "22.5px",
+            "paddingInlineEnd": "22.5px",
+            "minWidth": "auto"
+          },
+          {
+            "tag": "div",
+            "test": "transaction-surface-layer",
+            "width": 390,
+            "display": "flex",
+            "gridTemplateColumns": "none",
+            "paddingInlineStart": "0px",
+            "paddingInlineEnd": "0px",
+            "minWidth": "0px"
+          }
+        ]
+      }
+    },
+    {
+      "language": "fa",
+      "host": "transaction detail view",
+      "surfaceDir": "rtl",
+      "measurement": {
+        "found": true,
+        "direction": "rtl",
+        "nameText": "t060-receipt-01.txt",
+        "nameLength": 19,
+        "lines": 9,
+        "lineRects": [
+          14.9,
+          18.3,
+          5.2,
+          15.3,
+          20.8,
+          20.8,
+          18.3,
+          18.5,
+          5.8
+        ],
+        "style": {
+          "overflowWrap": "anywhere",
+          "wordBreak": "normal",
+          "hyphens": "manual",
+          "fontSize": "16px",
+          "lineHeight": "24px",
+          "itemDisplay": "flex",
+          "itemFlexWrap": "nowrap",
+          "bodyMinWidth": "0px",
+          "bodyFlex": "1 1 0%",
+          "actionsFlexWrap": "wrap",
+          "actionsFlexShrink": "0",
+          "actionsWidth": "219px",
+          "actionsMinWidth": "auto"
+        },
+        "boxes": {
+          "list": {
+            "x": 31.8,
+            "y": 95,
+            "width": 326.5,
+            "height": 704.3,
+            "right": 358.3,
+            "bottom": 799.3
+          },
+          "item": {
+            "x": 31.8,
+            "y": 95,
+            "width": 326.5,
+            "height": 704.3,
+            "right": 358.3,
+            "bottom": 799.3
+          },
+          "icon": {
+            "x": 313,
+            "y": 430.1,
+            "width": 34,
+            "height": 34,
+            "right": 347,
+            "bottom": 464.1
+          },
+          "body": {
+            "x": 277,
+            "y": 106.3,
+            "width": 21,
+            "height": 681.8,
+            "right": 298,
+            "bottom": 788
+          },
+          "name": {
+            "x": 277,
+            "y": 106.3,
+            "width": 21,
+            "height": 216,
+            "right": 298,
+            "bottom": 322.3
+          },
+          "meta": {
+            "x": 277,
+            "y": 326,
+            "width": 21,
+            "height": 462,
+            "right": 298,
+            "bottom": 788
+          },
+          "actions": {
+            "x": 43,
+            "y": 425.6,
+            "width": 219,
+            "height": 43,
+            "right": 262,
+            "bottom": 468.6
+          },
+          "buttons": [
+            {
+              "label": "پیش‌نمایش t060-receipt-01.txt",
+              "x": 194,
+              "y": 425.6,
+              "width": 68,
+              "height": 43,
+              "right": 262,
+              "bottom": 468.6
+            },
+            {
+              "label": "دانلود t060-receipt-01.txt",
+              "x": 118.5,
+              "y": 425.6,
+              "width": 68,
+              "height": 43,
+              "right": 186.5,
+              "bottom": 468.6
+            },
+            {
+              "label": "حذف t060-receipt-01.txt",
+              "x": 43,
+              "y": 425.6,
+              "width": 68,
+              "height": 43,
+              "right": 111,
+              "bottom": 468.6
+            }
+          ]
+        },
+        "overflow": {
+          "documentScrollWidth": 390,
+          "documentClientWidth": 390,
+          "bodyScrollWidth": 390,
+          "innerWidth": 390,
+          "listScrollWidth": 327,
+          "listClientWidth": 327,
+          "itemScrollWidth": 327,
+          "itemClientWidth": 327,
+          "actionsOverflowRow": false,
+          "anyButtonOutsideRow": false,
+          "anyButtonOutsideViewport": false
+        },
+        "ancestors": [
+          {
+            "tag": "section",
+            "test": "evidence-list",
+            "width": 366,
+            "display": "block",
+            "gridTemplateColumns": "none",
+            "paddingInlineStart": "18.75px",
+            "paddingInlineEnd": "18.75px",
+            "minWidth": "auto"
+          },
+          {
+            "tag": "div",
+            "test": "transaction-detail-view",
+            "width": 366,
+            "display": "flex",
+            "gridTemplateColumns": "none",
+            "paddingInlineStart": "0px",
+            "paddingInlineEnd": "0px",
+            "minWidth": "0px"
+          },
+          {
+            "tag": "div",
+            "test": null,
+            "width": 390,
+            "display": "block",
+            "gridTemplateColumns": "none",
+            "paddingInlineStart": "12px",
+            "paddingInlineEnd": "12px",
+            "minWidth": "0px"
+          },
+          {
+            "tag": "main",
+            "test": null,
+            "width": 390,
+            "display": "grid",
+            "gridTemplateColumns": "390px",
+            "paddingInlineStart": "0px",
+            "paddingInlineEnd": "0px",
+            "minWidth": "auto"
+          },
+          {
+            "tag": "div",
+            "test": null,
+            "width": 390,
+            "display": "flex",
+            "gridTemplateColumns": "none",
+            "paddingInlineStart": "0px",
+            "paddingInlineEnd": "0px",
+            "minWidth": "auto"
+          },
+          {
+            "tag": "div",
+            "test": null,
+            "width": 390,
+            "display": "flex",
+            "gridTemplateColumns": "none",
+            "paddingInlineStart": "0px",
+            "paddingInlineEnd": "0px",
+            "minWidth": "0px"
+          }
+        ]
+      }
+    }
+  ],
+  "errors": []
+}

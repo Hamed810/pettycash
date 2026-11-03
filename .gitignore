@@ -1,20 +1,34 @@
 # Nextcloud
-data/
-config/
+/data/
+/config/
 
-# Node
+# Dependencies
 node_modules/
+vendor/
+
+# Build outputs
 dist/
-npm-debug.log
+js/*.map
+css/*.map
+
+# Test outputs
 coverage/
 playwright-report/
 test-results/
-
-# PHP
-vendor/
 .phpunit.cache/
 .phpunit.result.cache
+
+# Tool caches
 .php-cs-fixer.cache
+
+# Environment
+.env*
+!.env.example
+
+# Logs and temporary files
+*.log
+*.tmp
+npm-debug.log
 
 # IDE
 .idea/
@@ -25,38 +39,28 @@ vendor/
 .DS_Store
 Thumbs.db
 
-# Environment
-.env*
-!.env.example
+# OpenCode local state
+/.opencode/index/
+/.opencode/codebase-index.json
+/.opencode/package.json
+/.opencode/package-lock.json
+/.opencode/bun.lock
+/opencode.local.json
 
-# Local agent tooling backups (may embed private endpoints; never commit)
+# Local agent tooling
+/.serena/
+/.tools/
+/.cgc-data/
+/.specify/integrations/.cache/
+
+# Retired local tooling
+/.codebase-memory/
+/.cbmignore
+
+# Local backups
 *.bak
-opencode.local.json
 /.agents.backup-before-integration-cleanup/
 /.specify.backup-before-integration-cleanup/
 
-# Local agent tooling state. Per-checkout caches and generated indexes, not project
-# source. Narrow rules only, deliberately:
-#   .opencode/commands/ is TRACKED project configuration and stays tracked; so does
-#     this file. .opencode/node_modules, package.json and package-lock.json are
-#     already covered by .opencode/.gitignore and are not duplicated here.
-#   .opencode/index/ is generated index state from a local tool.
-#   .codebase-memory/ is a retired tool's generated call-graph artifact. The tool is
-#     uninstalled, the tracked artifact was deleted, and it must never be reintroduced.
-#   .serena/ holds only local caches, generated memories and per-checkout config —
-#     nothing under it is tracked. Its own .gitignore already covers cache/ and
-#     project.local.yml; the whole directory is ignored here so a checkout stays clean.
-#   .cbmignore belongs beside the index it configures.
-# Shared tool guidance lives in AGENTS.md, which stays tracked.
-/.codebase-memory/
-/.opencode/index/
-/.opencode/codebase-index.json
-/.specify/integrations/.cache/
-/.serena/
-/.cbmignore
-
-# Build
-*.log
-*.tmp
-js/*.map
-css/*.map
+# Generated review artifacts
+/artifacts/visual-review/

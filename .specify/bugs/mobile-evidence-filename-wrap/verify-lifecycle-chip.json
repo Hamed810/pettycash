@@ -1,0 +1,273 @@
+{
+  "task": "bug-fix:mobile-evidence-filename-wrap:lifecycle-chip",
+  "transactionId": "3e330f00-38c0-4f80-98d7-f5cd27011c67",
+  "browser": "156.0.8078.47",
+  "language": {
+    "before": "en",
+    "during": "fa",
+    "restored": true
+  },
+  "runs": [
+    {
+      "language": "en",
+      "surfaceDir": "ltr",
+      "measurement": {
+        "found": true,
+        "direction": "ltr",
+        "list": {
+          "x": 31.8,
+          "y": 480.5,
+          "width": 326.5,
+          "height": 163.8,
+          "right": 358.3,
+          "bottom": 644.2
+        },
+        "documentScrollWidth": 390,
+        "documentClientWidth": 390,
+        "rows": [
+          {
+            "name": "t076-receipt.txt",
+            "lines": 1,
+            "direction": "ltr",
+            "itemDisplay": "grid",
+            "boxes": {
+              "item": {
+                "x": 31.8,
+                "y": 480.5,
+                "width": 326.5,
+                "height": 163.8,
+                "right": 358.3,
+                "bottom": 644.2
+              },
+              "body": {
+                "x": 92,
+                "y": 491.7,
+                "width": 255,
+                "height": 83.3,
+                "right": 347,
+                "bottom": 575
+              },
+              "name": {
+                "x": 92,
+                "y": 491.7,
+                "width": 255,
+                "height": 24,
+                "right": 347,
+                "bottom": 515.7
+              },
+              "actions": {
+                "x": 43,
+                "y": 590,
+                "width": 304,
+                "height": 43,
+                "right": 347,
+                "bottom": 633
+              },
+              "chip": {
+                "x": 117,
+                "y": 599.5,
+                "width": 79,
+                "height": 24,
+                "right": 196,
+                "bottom": 623.5
+              },
+              "deactivation": null,
+              "buttons": [
+                {
+                  "label": "Close",
+                  "x": 170,
+                  "y": 598.5,
+                  "width": 26,
+                  "height": 26,
+                  "right": 196,
+                  "bottom": 624.5
+                },
+                {
+                  "label": "Preview t076-receipt.txt",
+                  "x": 203.5,
+                  "y": 590,
+                  "width": 68,
+                  "height": 43,
+                  "right": 271.5,
+                  "bottom": 633
+                },
+                {
+                  "label": "Download t076-receipt.txt",
+                  "x": 279,
+                  "y": 590,
+                  "width": 68,
+                  "height": 43,
+                  "right": 347,
+                  "bottom": 633
+                }
+              ]
+            },
+            "chip": "Active",
+            "deactivationText": null,
+            "actionsWrapped": false,
+            "anyButtonOutsideRow": false,
+            "anyButtonOutsideViewport": false
+          }
+        ]
+      },
+      "worstCase": {
+        "synthetic": true,
+        "note": "a third action button was cloned in the browser only; no persisted state changed",
+        "item": {
+          "x": 31.8,
+          "y": 480.5,
+          "width": 326.5,
+          "height": 214.3,
+          "right": 358.3,
+          "bottom": 694.7
+        },
+        "actions": {
+          "x": 43,
+          "y": 590,
+          "width": 304,
+          "height": 93.5,
+          "right": 347,
+          "bottom": 683.5
+        },
+        "buttonCount": 4,
+        "actionsWrapped": true,
+        "itemScrollWidth": 327,
+        "itemClientWidth": 327,
+        "actionsOverflowRow": false,
+        "anyButtonOutsideRow": false,
+        "anyButtonOutsideViewport": false
+      }
+    },
+    {
+      "language": "fa",
+      "surfaceDir": "rtl",
+      "measurement": {
+        "found": true,
+        "direction": "rtl",
+        "list": {
+          "x": 31.8,
+          "y": 480,
+          "width": 326.5,
+          "height": 163.8,
+          "right": 358.3,
+          "bottom": 643.8
+        },
+        "documentScrollWidth": 390,
+        "documentClientWidth": 390,
+        "rows": [
+          {
+            "name": "t076-receipt.txt",
+            "lines": 1,
+            "direction": "rtl",
+            "itemDisplay": "grid",
+            "boxes": {
+              "item": {
+                "x": 31.8,
+                "y": 480,
+                "width": 326.5,
+                "height": 163.8,
+                "right": 358.3,
+                "bottom": 643.8
+              },
+              "body": {
+                "x": 43,
+                "y": 491.3,
+                "width": 255,
+                "height": 83.3,
+                "right": 298,
+                "bottom": 574.5
+              },
+              "name": {
+                "x": 43,
+                "y": 491.3,
+                "width": 255,
+                "height": 24,
+                "right": 298,
+                "bottom": 515.3
+              },
+              "actions": {
+                "x": 43,
+                "y": 589.5,
+                "width": 304,
+                "height": 43,
+                "right": 347,
+                "bottom": 632.5
+              },
+              "chip": {
+                "x": 194,
+                "y": 599,
+                "width": 65.9,
+                "height": 24,
+                "right": 259.9,
+                "bottom": 623
+              },
+              "deactivation": null,
+              "buttons": [
+                {
+                  "label": "بستن",
+                  "x": 194,
+                  "y": 598,
+                  "width": 26,
+                  "height": 26,
+                  "right": 220,
+                  "bottom": 624
+                },
+                {
+                  "label": "پیش‌نمایش t076-receipt.txt",
+                  "x": 118.5,
+                  "y": 589.5,
+                  "width": 68,
+                  "height": 43,
+                  "right": 186.5,
+                  "bottom": 632.5
+                },
+                {
+                  "label": "دانلود t076-receipt.txt",
+                  "x": 43,
+                  "y": 589.5,
+                  "width": 68,
+                  "height": 43,
+                  "right": 111,
+                  "bottom": 632.5
+                }
+              ]
+            },
+            "chip": "فعال",
+            "deactivationText": null,
+            "actionsWrapped": false,
+            "anyButtonOutsideRow": false,
+            "anyButtonOutsideViewport": false
+          }
+        ]
+      },
+      "worstCase": {
+        "synthetic": true,
+        "note": "a third action button was cloned in the browser only; no persisted state changed",
+        "item": {
+          "x": 31.8,
+          "y": 480,
+          "width": 326.5,
+          "height": 163.8,
+          "right": 358.3,
+          "bottom": 643.8
+        },
+        "actions": {
+          "x": 43,
+          "y": 589.5,
+          "width": 304,
+          "height": 43,
+          "right": 347,
+          "bottom": 632.5
+        },
+        "buttonCount": 4,
+        "actionsWrapped": false,
+        "itemScrollWidth": 327,
+        "itemClientWidth": 327,
+        "actionsOverflowRow": false,
+        "anyButtonOutsideRow": false,
+        "anyButtonOutsideViewport": false
+      }
+    }
+  ],
+  "errors": []
+}
