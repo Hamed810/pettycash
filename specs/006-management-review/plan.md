@@ -8,7 +8,9 @@
 
 Replace the Cost Center Manager's flat, paginated transaction queue with a **sheet-first queue** that derives its rows from the complete manager-scoped pending transaction set. The view is presentation-only: it reads the existing `GET /queues/cost-center` endpoint and the existing session scope, groups pending transactions by `sheetId` only when the response is provably complete, and labels every unsupported field honestly (sheet title, purchaser, reviewed history, sheet-wide completion, Senior Review eligibility).
 
-Phase 1 covers the queue desktop + mobile and stops at an owner visual gate. No backend file, contract, migration, authorization rule, or 001 requirement is edited.
+Phase 1 covers the queue desktop + mobile and stops at an owner visual gate. No backend file, contract, migration, authorization rule, or 001 requirement is edited by Phase 1.
+
+Phase 2 covers the inline quick-review workspace (§2.3) in five bounded batches, including **Batch 1: the required manager-scoped backend capability** (no longer deferred) and **Batch 2: the queue duplicate/pagination defect moved to the dedicated bug workflow**. Manager-scoped reads reconnect the sheet title/purchaser/submitted-date and decided/returned surfaces once Batch 1 lands, without changing the information architecture.
 
 ## Technical Context
 
@@ -26,7 +28,7 @@ Phase 1 covers the queue desktop + mobile and stops at an owner visual gate. No 
 
 **Performance Goals**: one queue request per refresh, no per-row network calls, no client-side pagination of a partial set presented as complete
 
-**Constraints**: backend frozen; existing working-tree changes preserved; no Git writes; no sheet-level decisions; no fabricated aggregations
+**Constraints**: backend frozen in Phase 1 (presentation-only); Phase 2 Batch 1 is the single planned backend change (additive manager-scoped read, §2.3/§2.4, separately authorized); existing working-tree changes preserved; no Git writes; no sheet-level decisions; no fabricated aggregations
 
 **Scale/Scope**: one queue view, one grouping module, catalogue keys, component tests, screenshot evidence
 
@@ -35,7 +37,7 @@ Phase 1 covers the queue desktop + mobile and stops at an owner visual gate. No 
 | Gate | Status | Evidence / action |
 |---|---|---|
 | Source-of-truth ordering | PASS | 001 spec and contracts remain authoritative; 006 only records the workflow conflict |
-| Backend freeze | PASS | No file under `lib/`, `appinfo/`, or `tests/Backend/` is changed |
+| Backend freeze | PASS (Phase 1) | No file under `lib/`, `appinfo/`, or `tests/Backend/` is changed by Phase 1; Phase 2 Batch 1 (B001–B005) is the documented, separately authorized exception |
 | Visual evidence | PASS | Screenshots under `artifacts/visual-review/<task-id>/<iteration>/`; official Chrome channel |
 | Owner approval gate | PASS | Phase 1 ends at a recorded request for approval; Phase 2 is not started |
 | No fabricated data | PASS | completeness guard; unavailable states; per-currency sums |
@@ -179,3 +181,53 @@ interface SheetQueueItem {
 ## Complexity Tracking
 
 No constitution violations. The only added complexity — a completeness guard and a transaction fallback — is required by the honesty and reachability requirements, not by a backend change.
+
+---
+
+## Phase 2 — Inline Quick Review (technical)
+
+**Spec**: `spec.md` §"Phase 2 — Inline Quick Review". **Design authority**: `docs/frontend-redesign/proposals/006-management-review-quick-review/UX_SPEC.md` + `mockups/`. **Gate**: no implementation before `T022` and the Phase 2 visual gate. **Compatibility constraint**: the mockup is a static harness with invented data; its `mockup.js` renderers MUST NOT be copied into production. Production reuses the existing Vue components, `TransactionDetail` reads, the `DecisionForm` decision semantic, the evidence preview overlay, and the `@nextcloud/vue` 9.x + Pettycash tokens, and adapts the design's interactions to the real data model and the honesty rules (`FR-006-011/015`, `FR-006-036…046`).
+
+### 2.1 Data model and backend boundary (verified)
+
+- `GET /queues/cost-center` returns only `WorkflowStage::CostCenter` transactions (`ManagementReviewService::getCostCenterQueue`), so decided/returned cards are not served today. The Phase 2 panel first shows the **connected** pending set with `useSheetQueue.buildSheetQueue` grouping; the decided/returned set and manager progress connect via planned Batch 1 (`B002`/`B003`).
+- `GET /transactions/{id}` is a role-scoped read (`TransactionController::show` → `visibleTransaction`) returning `TransactionDetail` (`allowedActions`, `version`, `decisions[]` history, `evidence[]`). This backs the Full Details drawer (Description + History) and the attachments list. **The queue summary carries no `allowedActions`/`version`**, so inline decision actions require a **guarded per-transaction detail fetch** when a sheet is expanded — never a fabricated capability (`FR-006-039`).
+- `GET /sheets/{id}` is owner-only (`SheetService::getSheet`), so a manager-scoped sheet read is a required backend capability (**Batch 1**, `B001`). The read reuses `ExpenseSheetRepository` (sheet aggregate fields) and the existing authorization source: only cost centers for which the user holds an active `CostCenterManager` assignment (`RoleAssignmentRepository::findActiveByUserAndRole`, same source as `getCostCenterQueue`). Real fields exist in the domain: `ExpenseSheet::title`, `ownerUid`, `firstSubmittedAt` (genuine submission date, set at submit in `ExpenseSheet::submit`, `ExpenseSheet.php:117`, persisted `first_submitted_at`, exposed by `SheetPayloadFormatter` `submittedAt`), `submittedTotalMinor`. Purchaser display name comes from the `UserDirectory` port. Until Batch 1 lands these render unavailable/absent.
+- Merchant, paid-on, payment method and category are absent from `TransactionPayloadFormatter::summary`/`revisionFrom`; they remain unavailable placeholders (NOT in the required-capability scope, `spec.md` §2.4).
+
+### 2.2 Reuse map (existing components → Phase 2 surface)
+
+| Approved surface | Reuse / adapt | Gap to build |
+|---|---|---|
+| Collapsed queue row, scope banner, toolbar, fallback table | `CostCenterQueueView.vue`, `useSheetQueue`, `StatusBadge.vue`, `ResponsiveTable.vue` + `queueColumns.ts` | Rework summary to 2 stats and tabs to All/Awaiting/In progress; remove disabled "reviewed" stat (final decision #2) |
+| Quick-review panel (expanded) | `CostCenterQueueView.vue` expansion branch | Replace pending-only rows with compact `tx-card`s + footer note + Collapse (FR-006-036/038) |
+| Compact tx card + action bar | new `QuickReviewCard.vue`-style component; decision semantic from `DecisionForm.vue` | Card renderer; backend-required fields as unavailable; per-tx detail fetch for `allowedActions`/`version` |
+| Decision confirmation modal | `DecisionForm` logic (`requiresExplanation` = REJECT‖RETURN, `expectedVersion`, `commandId`/FR-085 via `reviewsStore.recordDecision`) | Per-kind copy/warning, submitting/error toast flow (FR-006-043) |
+| Full details drawer | `TransactionDetail`, `PriorDecisionHistory.vue` (history), `RevisionInfo.vue`/`TransactionHeader.vue` (field set) | Drawer overlay + Description/History tabs + footer decide controls (FR-006-042) |
+| Document thumbnails | `Evidence` type + `getEvidenceContent` + `isInlineSafeMediaType` | Thumbnail row + `+N more` tile (FR-006-040) |
+| Preview overlay | `EvidencePreview.vue`, `EvidenceContentPolicy`, `FR-060`/`FR-005-042` | Add Previous/Next + `1 / N` counter + open-at-doc (FR-006-041) |
+| Single-layer overlays, focus, RTL, mobile | `direction`, `formatMoney`, `formatSheetDate`/`formatNumber`, `EvidencePreview` focus trap/scrim | Overlay stack rules, RTL drawer mirror, mobile full-screen + expand-to-panel scroll (FR-006-037/044) |
+
+### 2.3 Build sequence — five bounded batches
+
+Phase 2 is organized into five bounded batches. **Backend batches are prerequisites for the fields/cards they connect; frontend batches are sized so the core surface works on connected data first** (`spec.md` §2.4). No batch starts before `T022` + the Phase 2 visual gate.
+
+- **Batch 1 — Backend authorization + manager-scoped data capabilities** (backend; required product capability, no longer deferred). Backend B-tasks: `B001` manager-scoped sheet-summary read (title, purchaser identity/display name via `UserDirectory`, currency, submitted total, genuine `firstSubmittedAt` date), `B002` decided/returned transactions in the manager's scope, `B003` accurate manager progress with strict workflow separation (`FR-006-047/048` — never whole-sheet completion or Senior eligibility), `B004` API/route/contract + payload exposure, `B005` backend tests (authorization, no scope leak, workflow/date provenance). Reuses `ExpenseSheetRepository`, `RoleAssignmentRepository`, `UserDirectory`, `TransactionPayloadFormatter`/`SheetPayloadFormatter`; scope = managed cost centers only. Requires the separate backend-change authorization recorded in `spec.md` §2.4.
+- **Batch 2 — Queue-defect correction (dedicated bug workflow — NOT a Feature 006 task).** The duplicate-transaction + pagination defect is backlogged to `.specify/bugs/cost-center-queue-duplicate-transactions/` and driven through the Spec Kit bug lifecycle (`/speckit-bug-assess → /speckit-bug-fix → /speckit-bug-test`), verified only when `verified`. Remediation (from its `assessment.md`): de-duplicate managed cost-center IDs/roles, fetch+merge each cost centre once, paginate once post-merge, add regression tests, cover `getSeniorQueue` too. It does not appear in the Feature 006 task ledger.
+- **Batch 3 — Inline quick-review interface** (frontend). Core surface that works on connected data: panel shell, compact transaction cards (connected fields), per-card awaiting/decided presentation, single-overlay/expand-in-place, connected summary/tabs. **Backend-independent components** in this batch: T024, T025, T035 (see ledger). **Backend-connected** pieces reconnect once Batch 1 lands (sheet title, purchaser display name, submitted date on cards/panel; decided/returned cards and "X of Y decided" once `B002`/`B003` exist).
+- **Batch 4 — Transaction details, evidence preview, and decision workflows** (frontend). Details drawer (Description + History), shared decision confirmation modal, attachments thumbnails + preview navigation. Mostly backend-independent (T026–T034, built on `TransactionDetail` + `decisions[]` + existing evidence policy); purchaser/sheet-title/submitted drawer fields reconnect with Batch 1.
+- **Batch 5 — l10n + accessibility + targeted testing + visual verification.** Catalogue keys, responsive/390px/RTL/accessibility conformance, targeted Vitest, minimal gates, build/deploy, screenshots, mockup comparison, owner visual gate (T023, T036–T043). Note: evidence screenshots after Batch 1 (T040/T041/T042) show connected backend fields; pre-Batch-1 renders show unavailable states.
+
+**Queue defect**: see Batch 2 — a dedicated bug-workflow item (`/speckit-bug-*`), never folded into a Feature 006 task.
+
+### 2.4 Risks and mitigations
+
+| Risk | Mitigation |
+|---|---|
+| Copying mockup JS/renderers into production | reuse existing Vue components and tokens; mockup is reference only |
+| Inline decision without `allowedActions` | guarded `GET /transactions/{id}` fetch per expanded sheet; never enable an unproven action |
+| Decided/returned cards + "X of Y decided" expected | Batch 1 (`B002`/`B003`) is the required capability; until it lands the panel shows the connected pending set (`FR-006-046`) |
+| Manager progress conflated with sheet completion | `B003` keeps awaiting/decided/returned/manager-complete distinct and never infers whole-stage or Senior (`FR-006-047/048`) |
+| Preview without navigation looked complete | add navigation only over a transaction's returned evidence; never fabricate a page |
+| Honesty drift on summary/tabs | connect every stat to the complete set; remove invented/disabled placeholders (final decision #2) |
+| Phase 2 starting before gates | plan stops at `T022` and the Phase 2 visual gate; no implementation task is marked runnable |

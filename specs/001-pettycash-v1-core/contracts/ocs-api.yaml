@@ -707,6 +707,30 @@ paths:
         '200':
           $ref: '#/components/responses/TransactionPage'
 
+  /queues/cost-center/sheets/{sheetId}:
+    get:
+      tags: [Workflow]
+      summary: Return one sheet as the acting cost-centre manager may see it
+      description: >
+        Additive manager-scoped read introduced for Feature 006 Batch 1 (B001–B004). Authorization
+        is the acting user's active `COST_CENTER_MANAGER` assignments; an unknown sheet and a sheet
+        outside those cost centres both answer `404`, so the endpoint cannot confirm a sheet exists
+        outside the caller's scope. The transaction list contains only current-revision transactions
+        that await this manager, were decided by this manager, or were returned by this manager.
+        Transactions decided by another manager are never included. `progress.managerComplete` means only that no
+        transaction in this manager's scope still awaits their decision; it is not whole-sheet
+        cost-centre completion and says nothing about Senior eligibility (FR-006-047/048).
+      parameters:
+        - $ref: '#/components/parameters/SheetId'
+      responses:
+        '200':
+          description: Manager-scoped sheet review projection
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ManagerSheetReview' }
+        '404':
+          $ref: '#/components/responses/NotFound'
+
   /returns:
     get:
       tags: [Workflow]
@@ -1557,6 +1581,94 @@ components:
             allowedActions: { $ref: '#/components/schemas/CapabilitySet' }
             decisions: { type: array, items: { $ref: '#/components/schemas/Decision' } }
             evidence: { type: array, items: { $ref: '#/components/schemas/Evidence' } }
+    ManagerSheetSummary:
+      type: object
+      required: [id, title, ownerId, ownerDisplayName, currency, status, submittedTotalMinor, submittedTotal, submittedAt, version]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        ownerId: { type: string }
+        ownerDisplayName: { type: string }
+        currency: { type: string }
+        status: { $ref: '#/components/schemas/SheetStatus' }
+        submittedTotalMinor:
+          type: integer
+          format: int64
+          nullable: true
+          description: >
+            The sheet's submission snapshot from `submitted_total_minor`, set once by the domain's
+            submit transition. It is the sheet total, not a sum of the manager-scoped transactions
+            in this response. Nullable only for a stored record that predates or lacks a submission
+            snapshot; the endpoint is reachable through submitted transactions, so normal responses
+            carry a value.
+        submittedTotal:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/Money'
+          description: >
+            `submittedTotalMinor` in the contract's currency-safe Money shape. `minorUnit` comes from
+            configured currency data, so a client never infers the scale.
+        submittedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: >
+            The genuine first-submission instant (`ExpenseSheet::firstSubmittedAt`), not the sheet's
+            creation time and not a later correction's timestamp.
+        version: { type: integer }
+    ManagerSheetProgress:
+      type: object
+      required: [awaitingManager, decidedByManager, returnedForCorrection, total, managerComplete]
+      properties:
+        awaitingManager:
+          type: integer
+          minimum: 0
+          description: Current-revision transactions in the manager's scope still awaiting their decision.
+        decidedByManager:
+          type: integer
+          minimum: 0
+          description: Current-revision transactions this manager approved or rejected at cost-centre review.
+        returnedForCorrection:
+          type: integer
+          minimum: 0
+          description: Current-revision transactions this manager returned for correction.
+        total:
+          type: integer
+          minimum: 0
+          description: Sum of the three manager-scoped counts. It is not the sheet's transaction count.
+        managerComplete:
+          type: boolean
+          description: >
+            True only when no manager-scoped transaction awaits this manager. This MUST NOT be read
+            as whole-sheet cost-centre completion, and it does not establish Senior eligibility
+            (FR-006-047/048).
+    ManagerTransactionState:
+      type: string
+      enum: [AWAITING_MANAGER_DECISION, DECIDED_BY_MANAGER, RETURNED_FOR_CORRECTION]
+    ManagerTransactionSummary:
+      allOf:
+        - $ref: '#/components/schemas/TransactionSummary'
+        - type: object
+          required: [managerState, managerDecision]
+          properties:
+            managerState: { $ref: '#/components/schemas/ManagerTransactionState' }
+            managerDecision:
+              nullable: true
+              allOf:
+                - $ref: '#/components/schemas/Decision'
+              description: >
+                This manager's cost-centre decision on the transaction's current revision, present
+                only for `DECIDED_BY_MANAGER` and `RETURNED_FOR_CORRECTION`. It is not the
+                transaction's `latestDecision`, which may belong to a later stage.
+    ManagerSheetReview:
+      type: object
+      required: [sheet, progress, transactions]
+      properties:
+        sheet: { $ref: '#/components/schemas/ManagerSheetSummary' }
+        progress: { $ref: '#/components/schemas/ManagerSheetProgress' }
+        transactions:
+          type: array
+          items: { $ref: '#/components/schemas/ManagerTransactionSummary' }
     Revision:
       type: object
       required: [id, number, expenseDate, amount, createdBy, createdAt]

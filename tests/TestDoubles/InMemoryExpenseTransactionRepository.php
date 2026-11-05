@@ -75,8 +75,39 @@ final class InMemoryExpenseTransactionRepository implements \OCA\PettyCash\Domai
      */
     public function findByCostCenterId(int $costCenterId, ?WorkflowStage $stage = null, ?TransactionStatus $status = null, int $offset = 0, int $limit = 100): array
     {
-        $result = array_filter($this->transactions, function ($t) use ($costCenterId, $stage, $status) {
-            if ($t->revision()->costCenterId() !== $costCenterId) {
+        $result = $this->transactionsInCostCenters([$costCenterId], $stage, $status);
+        return array_slice($result, $offset, $limit);
+    }
+
+    /**
+     * @param list<int> $costCenterIds
+     * @return list<ExpenseTransaction>
+     */
+    public function findByCostCenterIds(array $costCenterIds, ?WorkflowStage $stage = null, ?TransactionStatus $status = null): array
+    {
+        return $this->transactionsInCostCenters($costCenterIds, $stage, $status);
+    }
+
+    /**
+     * The same predicate and ordering as `DbExpenseTransactionRepository`.
+     *
+     * The cost centre is matched on the revision's numeric join key, not its public code: the
+     * production query filters `r.cost_center_id`, and comparing a code here silently returned no
+     * rows at all.
+     *
+     * @param list<int> $costCenterIds
+     * @return list<ExpenseTransaction>
+     */
+    private function transactionsInCostCenters(array $costCenterIds, ?WorkflowStage $stage, ?TransactionStatus $status): array
+    {
+        $ids = [];
+        foreach ($costCenterIds as $costCenterId) {
+            $ids[(int) $costCenterId] = true;
+        }
+
+        $result = array_filter($this->transactions, function (ExpenseTransaction $t) use ($ids, $stage, $status) {
+            $costCenterId = $t->revision()->costCenterDbId;
+            if ($costCenterId === null || !isset($ids[$costCenterId])) {
                 return false;
             }
             if ($stage !== null && $t->stage !== $stage) {
@@ -87,7 +118,28 @@ final class InMemoryExpenseTransactionRepository implements \OCA\PettyCash\Domai
             }
             return true;
         });
-        return array_slice(array_values($result), 0, $limit);
+
+        $result = array_values($result);
+        usort($result, static function (ExpenseTransaction $a, ExpenseTransaction $b): int {
+            $aCreatedAt = $a->createdAt;
+            $bCreatedAt = $b->createdAt;
+            if ($aCreatedAt === null && $bCreatedAt !== null) {
+                return 1;
+            }
+            if ($aCreatedAt !== null && $bCreatedAt === null) {
+                return -1;
+            }
+            if ($aCreatedAt !== null && $bCreatedAt !== null) {
+                $comparison = $bCreatedAt <=> $aCreatedAt;
+                if ($comparison !== 0) {
+                    return $comparison;
+                }
+            }
+
+            return ($b->dbId ?? 0) <=> ($a->dbId ?? 0);
+        });
+
+        return $result;
     }
 
     /**

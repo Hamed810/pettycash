@@ -154,7 +154,8 @@ $container->register(AuditEventRepository::class, fn() => new InMemoryAuditEvent
 $container->register(AccountRepository::class, fn() => new InMemoryAccountRepository());
 $container->register(AccountMovementRepository::class, fn() => new InMemoryAccountMovementRepository());
 $container->register(WorkflowDecisionRepository::class, fn($c) => new InMemoryWorkflowDecisionRepository(
-    $c->query(TransactionRevisionRepository::class)
+    $c->query(TransactionRevisionRepository::class),
+    $c->query(ExpenseTransactionRepository::class)
 ));
 
 // Register IdempotencyService

@@ -4,7 +4,7 @@
 
 **Created**: 2026-10-29
 
-**Status**: Draft — visual-first implementation authorized for the Cost Center Manager Sheets Queue only. The Sheet Review Workspace is planned but MUST NOT be implemented before the first owner visual gate is recorded. No backend, API-contract, workflow-contract, authorization, financial-rule, or 001-specification change is authorized by this specification.
+**Status**: Phase 1 (Cost Center Manager Sheets Queue) delivered and awaiting owner visual approval (`T022`). Phase 2 (Sheet Review Workspace) is **planned** as the **inline quick review** approved by the owner on 2026-11-02 (`docs/frontend-redesign/proposals/006-management-review-quick-review/UX_SPEC.md`) and specified in the Phase 2 section below. Phase 2 MUST NOT be implemented until the Phase 1 gate (`T022`) and the Phase 2 visual gate are recorded. The manager-scoped backend capability (`P4`) is a **required product capability**, not an optional enhancement: it is planned as the Phase 2 backend batch (Batch 1) with its own backend tasks, and is NO LONGER deferred. Because it changes backend/API-contract/authorization surfaces, it remains subject to a separate backend-change authorization before implementation (see §2.4); it is no longer described as "not part of Phase 2". The known Cost Center queue duplicate/pagination defect is tracked as a **separate bug-workflow item** (`/speckit-bug-*`) and is not a Feature 006 task.
 
 **Input**: Owner directive: "Implement the new sheet-first Cost Center Manager review interface inside the existing Nextcloud application, using the approved Manus management information architecture and the established Purchaser UI visual language. Preserve existing working functionality. Where backend support is missing, implement honest unavailable or empty states and keep unsupported functionality disabled. Do not modify the backend in this phase."
 
@@ -27,9 +27,9 @@ Existing requirements, canonical task IDs, and working functionality MUST be pre
 
 **Phase 1 (this authorization): Cost Center Manager — Sheets Queue.** Desktop and mobile presentation, using the approved visual language, rendered inside Nextcloud, with a fresh screenshot comparison and a mandatory owner visual gate.
 
-**Phase 2 (next, after Phase 1 approval): Cost Center Manager — Sheet Review Workspace.** Planned in this specification and task ledger, but not implemented before the Phase 1 gate is recorded.
+**Phase 2 (next, after Phase 1 approval): Cost Center Manager — Sheet Review Workspace.** Planned in this specification and task ledger, but not implemented before the Phase 1 gate is recorded. The approved form of the workspace is the **inline quick review** (`UX_SPEC.md`) — adoption of the proposed P1/P2 refinement (`FR-006-002/003`): the Phase 1 queue is retained as the persistent shell and a sheet expands **in place** into a decision surface (Queue → Sheet (expand) → Transaction Card → [Preview | Full details | Decision]). The preserved `review-detail` route stays reachable for deep links (`FR-006-017`). Full detail in the Phase 2 section below.
 
-**Out of scope for both phases:** Senior Manager screens, Finance screens, transaction decision redesign, backend changes, sheet-level approval, new workflow actions, and any change to a public contract.
+**Out of scope for both phases:** Senior Manager screens, Finance screens, transaction decision redesign, sheet-level approval, new workflow actions, and any change to an existing public contract. **Backend changes** are out of scope for Phase 1; for Phase 2 the only planned backend change is the **additive manager-scoped read capability** (`§2.4`, Batch 1), which remains separately authorized. The manager-scoped capability is not broader than the authorization boundaries described in `§2.4`.
 
 ---
 
@@ -45,7 +45,7 @@ The owner-approved rules below are explicit. They conflict with parts of the cur
 | A returned-for-correction transaction remains unresolved until the required correction workflow completes. | Return routes the transaction to Correction; the sheet status derivation already treats Correction as outstanding. | Consistent with the owner rule at the sheet level; per-transaction senior eligibility still lacks a sheet-wide gate. |
 | A Cost Center Manager finishing their own assignments does **not** mean the entire sheet completed Cost Center Review. | No manager-scoped sheet aggregation or sheet-wide completion indicator exists. | **Conflict recorded.** Backend change required. The interface MUST NOT infer sheet completion from the current manager's remaining queue. |
 
-**No backend behavior is changed by this specification.** The conflict is recorded here so it is not silently preserved or silently redefined in code. Resolving it requires a separate owner authorization, an amendment to 001, and backend work.
+**No backend behavior is changed without separate authorization.** The conflicts are recorded here so they are not silently preserved or silently redefined in code. Phase 2 Batch 1 plans the manager-scoped read capability (`§2.4`) without resolving these sheet-wide/senior-eligibility conflicts; resolving those still requires a separate owner authorization, an amendment to 001, and separate backend work. In particular, Batch 1 MUST NOT derive whole-sheet Cost Center completion or Senior eligibility from a manager's own decisions (`FR-006-047/048`).
 
 ---
 
@@ -210,7 +210,7 @@ The interface explains the owner-approved stage rule and never claims a sheet is
 
 ### Scope Protection and Change Control
 
-- **FR-006-030**: This feature MUST NOT modify backend PHP source, API contracts, database schema, migrations, authorization rules, financial rules, or workflow transitions in this phase.
+- **FR-006-030**: In Phase 1, this feature MUST NOT modify backend PHP source, API contracts, database schema, migrations, authorization rules, financial rules, or workflow transitions. In Phase 2, the only permitted backend change is the additive manager-scoped read capability (`§2.4`, Batch 1): no new schema/migration, no change to financial rules, decision semantics, or workflow transitions, and no broadening of authorization.
 - **FR-006-031**: This feature MUST NOT change the existing transaction decision semantics or renumber/reopen existing canonical tasks.
 - **FR-006-032**: Existing working-tree changes, including unrelated user changes, MUST be preserved.
 - **FR-006-033**: The feature MUST be implemented under `specs/006-management-review/` and MUST NOT be placed inside `005-purchaser-ui-redesign`.
@@ -244,6 +244,66 @@ The interface explains the owner-approved stage rule and never claims a sheet is
 - The manager's session scope from `GET /me` is trustworthy for disclosure and is not the authorization boundary; the server remains authoritative.
 - A complete pending queue is normally small enough to fit in one high-page-size response. The completeness guard exists because this is not guaranteed.
 - The existing Purchaser UI design system is the visual baseline; the Manus management screenshots define information architecture and emphasis, not typography or brand marks.
-- "Reviewed" sheets and sheet-wide completion require backend capabilities that are not authorized in this phase.
+- "Reviewed" sheets and sheet-wide completion require backend capabilities that are not authorized in Phase 1. In Phase 2, the **manager-scoped** read (title/purchaser/submitted/decided-set/manager-progress) is planned as Batch 1 (`§2.4`); sheet-wide completion / Senior eligibility remain unauthorized there too.
 - No development-only fixture is required for Phase 1 if a real manager queue can be seeded through the existing development seed command. If a fixture is used, it must be explicitly labeled simulated.
 - Git writes remain unauthorized; the working tree is preserved as found.
+
+---
+
+## Phase 2 — Inline Quick Review (Sheet Review Workspace)
+
+**Status**: Planned. The visual form and its decisions are the approved design reference recorded in `docs/frontend-redesign/proposals/006-management-review-quick-review/UX_SPEC.md` (owner approval 2026-11-02) and its mockup `mockups/{index.html,mockup.js,mockup.css}`. This section makes those decisions explicit as Phase 2 requirements and capability boundaries. No Phase 2 task is authorized to start before the Phase 1 gate (`T022`) and the Phase 2 visual gate are recorded (`FR-006-025/026`).
+
+### 2.1 Adopted design decisions carried from the approved design reference
+
+1. **Workspace form — inline quick review (adopts P1/P2).** `FR-006-002/003` are refined so the sheet workspace is delivered as an inline expansion of the Phase 1 queue, never as a separate page replacing the queue; the queue stays mounted. Navigation hierarchy: Manager Queue → Sheet (expand) → Transaction Card → [Preview | Full details | Decision]. The preserved `review-detail` route remains reachable (`FR-006-017`).
+2. **Decision actions live in the full-details drawer footer only** (`UX_SPEC` §0.5.1). They appear once, in the drawer footer behind the "Decide this transaction" label; the drawer body never duplicates them.
+3. **Unavailable statistics and unsupported history counts are removed from the UI entirely** (`UX_SPEC` §0.5.2): no `Decisions this week`, no `Load per cost center`, no `Done`/`Reviewed` count. The summary shows only the two connected stats; the tabs only the three derived sets (`All sheets / Awaiting decision / In progress`).
+4. **Distinct purple Return-for-correction confirmation is kept** (`UX_SPEC` §0.5.3), with a required explanation matching `FR-033` and `DecisionForm.vue` (`requiresExplanation` = REJECT || RETURN). Shipped copy and mockups cite `FR-006-011/FR-006-015` for the unavailable-field rule (`P7`).
+5. **Preview reuse** (`P5`): document preview MUST reuse `001` `FR-060` + `005` `FR-005-042` verbatim — same inline-safe closed set (`application/pdf`, PNG, JPEG, GIF, WebP, BMP, `text/plain`), same download-only fallback and copy, same accessible dialog name = file name, Escape close, scrim close, object-URL revocation, single dialog. The mockup adds cross-attachment Previous/Next with a `1 / N` counter; that is a Phase 2 surface addition, not a policy loosening.
+6. **Round-trip of every decision is transaction-level** (`FR-006-005`, `FR-033`). One decision per post; no sheet-level action.
+
+### 2.2 Phase 2 capability classification (verified against current backend)
+
+| Approved surface | Classification | Evidence (backend source of truth) | Phase 2 rendering |
+|---|---|---|---|
+| Inline sheet expansion, per-sheet pending set | **Frontend adaptation** | `GET /queues/cost-center` returns `TransactionSummary[]` with `sheetId`; grouping `useSheetQueue.buildSheetQueue` | Expand in place |
+| Compact tx card connected fields (id, amount, currency, status, cost center, description, evidence) | **Supported** | `TransactionPayloadFormatter::summary` (`lib/Infrastructure/Http/TransactionPayloadFormatter.php:49-91`) | Render |
+| Card meta merchant / paid-on / payment method / category | **Backend change required** (NOT in Batch 1 scope) | Not in `Revision` payload (`TransactionPayloadFormatter::revisionFrom`, `:156-166`) | Unavailable placeholder (§12); not part of the required-capability batches |
+| Decided / returned cards inside the panel, "1 of 2 decided" aggregate | **Required backend capability** (planned, B002/B003) | `getCostCenterQueue` filters `WorkflowStage::CostCenter` (`ManagementReviewService.php:364-415`); `WorkflowStateMachine::next` maps Approve/Reject → Senior, Return → Correction (`lib/Domain/Workflow/WorkflowStateMachine.php:4`) — decided transactions are **not** returned | Pending-only until Batch 1 lands; decided/returned cards + "X of Y decided" connect once B002/B003 exist |
+| Details drawer / inventory (Description tab: sheet, purchaser, merchant, paid-on, method, category fields) | **Partial**: connected (amount, sheet ref, cost center, status, description, attachments) vs required-backend (merchant/paid-on/method/category) and required capability (purchaser, sheet title/submitted once B001/B004 land) | `GET /transactions/{id}` role-scoped read `TransactionController::show` via `visibleTransaction` (`TransactionController.php:107-127`) | Connected fields real; merchant/paid-on/method/category placeholders; purchaser/sheet-title/submitted reconnect with Batch 1 |
+| Details History tab (timeline) | **Supported** | `TransactionDetail.decisions[]` from `POST/resubmit` responses and `GET /transactions/{id}`; `TransactionPayloadFormatter::decision` (`:430-454`) | Timeline from `decisions[]` |
+| Decision actions on cards and in drawer footer | **Frontend adaptation** | `allowedActions` + `version` only in `TransactionDetail`; queue summary carries neither (`TransactionPayloadFormatter::summary`). `review-detail` DecisionForm reads them | Guarded per-transaction detail fetch; never fabricated |
+| Approve / Reject / Return for Correction decisions | **Supported** | `POST /transactions/{id}/decisions` (`reviewsApi.recordDecision`), first-write-wins FR-085 | Same single-transaction decision; confirmation modal |
+| Document thumbnails + preview overlay with cross-doc nav | **Partial reuse** | `GET /evidence/{id}/content` inline-safe policy (`EvidenceContentPolicy`, contract `:762-817`); frontend `EvidencePreview.vue` overlay exists but has no prev/next nav | Reuse overlay; add navigation |
+| Sheet title, purchaser, sheet total, submitted date | **Required backend capability** (planned, B001/B004) | `SheetService::getSheet` is owner-scoped (`SheetService.php:101-117`) — manager has no sheet read; `ExpenseSheet` carries `title`, `ownerUid`, `firstSubmittedAt`, `submittedTotalMinor` (`ExpenseSheet.php:20-37`, `:117`) | Unavailable until Batch 1; connect once B001/B004 land |
+| Sheet-wide completion, Senior eligibility | **Backend change required** (separately gated; NOT produced by Batch 1) | No sheet-wide gate exists (`WorkflowStateMachine.php`) | Unavailable — explained; Batch 1 must NOT derive it from one manager's decisions |
+| Whole-sheet or bulk decisions | **Unavailable by policy** | `ReviewController::refuseBulkDecision` (`ReviewController.php:278-318`) | Never rendered (`FR-006-005`) |
+
+### 2.3 Phase 2 requirements (new, additive — existing FR-006-001…035 unchanged)
+
+- **FR-006-036**: A sheet row in the Phase 1 queue MUST expand **in place** into the inline quick review panel; the queue must remain mounted behind every overlay.
+- **FR-006-037**: Preview, full details, and decision confirmation MUST render as a single overlay layer at a time; opening one closes/replaces none and never unmounts the panel; closing returns focus to the originating control.
+- **FR-006-038**: Each relevant transaction MUST render as a compact card with connected id, amount, currency, status, cost-centre scope and description; merchant, paid-on, payment method and category remain unavailable placeholders (not in the required-capability scope). Sheet title, purchaser identity/display name, and submitted date connect once the Batch 1 backend capability (B001/B004) lands. Cards MUST NOT invent a value.
+- **FR-006-039**: Awaiting cards MUST expose Approve / Reject / Return-for-correction and Full details; decided cards MUST show their current state with no action buttons. No card action may be enabled without a server-granted `allowedActions` value (refuse-don't-ignore).
+- **FR-006-040**: Attachment thumbnails show the first two documents of a transaction, plus a `+N more` tile when more exist; every thumbnail opens the preview overlay at exactly that document.
+- **FR-006-041**: The preview overlay MUST reuse `001` `FR-060` and `005` `FR-005-042` verbatim (inline-safe set, download-only fallback, accessible dialog name, Escape/scrim close, object-URL revocation) and add Previous/Next navigation across the transaction's documents with a `1 / N` counter, disabling at the ends.
+- **FR-006-042**: `Full details` MUST open a read-only drawer with a Description panel (hero amount, detail grid, description, attachments) and a History timeline panel; the drawer's only writes are the decision actions in its footer (final decision #1).
+- **FR-006-043**: Every decision — from a card or the drawer — MUST open the same confirmation modal with per-kind copy/warning, per-kind note rules (Reject and Return require an explanation, Approve never does, `FR-033`), a submitting state (controls disabled, scrim no-close, first-write-wins `FR-085`), an error state for a reject/return without a note, and a success path that re-renders the card in its decided state plus a toast. Both entry points share one workflow (`UX_SPEC` §7.5/§8).
+- **FR-006-044**: On mobile the panel, drawer, and decision modal MUST honour the 390px floor, full-screen overlays one at a time, expand-to-panel scroll, `≥44px` touch targets, and the RTL-mirrored drawer (`UX_SPEC` §7.4), with no horizontal scroll, in English LTR and Persian RTL.
+- **FR-006-045**: The focused summary, scope banner, and tabs MUST show only connected data (`Sheets awaiting decisions`, `Transactions pending decision`) and the three derived tabs (`All sheets / Awaiting decision / In progress`); unavailable stats and unsupported counts are absent from the UI entirely — no invented number and no disabled placeholder for a capability that does not exist (final decision #2).
+- **FR-006-046**: The panel MUST NOT render a decided/returned card, a sheet title, purchaser, sheet total, submitted date, or merchant/paid-on/method/category as real — every not-yet-connected field shows its unavailable state or is absent — until the Batch 1 backend capability connects it; once B001/B002/B003/B004 land those surfaces connect (`FR-011/015` honesty applies to every state). `FR-006-046` is satisfied only when the phase renders `0%` fabricated values in every state.
+- **FR-006-047**: The interface and its backend MUST keep distinct transactions awaiting the current manager's decision, transactions already decided by that manager, transactions returned for correction, completion of the manager's own responsibilities, completion of the entire Cost Center stage, and Senior Review eligibility; none may be conflated or presented as another.
+- **FR-006-048**: The interface and its backend MUST NOT infer whole-sheet Cost Center completion or Senior Review eligibility from one manager's decisions, and MUST NOT invent history records or derive totals from pending-only data; every count/status traces to the manager's authorized scope and the server's proven state.
+
+### 2.4 Required manager-scoped backend capability (`P4` — planned, Batch 1)
+
+The owner directive (`UX_SPEC` §13.P4) is adopted as a **required product capability** and planned as the Phase 2 backend batch (Batch 1). It is no longer deferred. Until it is implemented and its separate backend-change authorization is recorded, the affected surfaces render unavailable/absent (`FR-006-011/015`); when it lands they connect without changing the information architecture.
+
+**In scope (required)**: real sheet titles and purchaser identity/display name, genuine submission dates, authorized manager-scoped sheet metadata, previously-decided transactions belonging to the manager's review scope, and accurate manager-specific review progress — reusing existing services (`ExpenseSheetRepository`, `RoleAssignmentRepository`, `UserDirectory`, audit events, `TransactionPayloadFormatter`/`SheetPayloadFormatter`).
+
+**Authorization rule (mandatory, `FR-006-004`/`FR-006-011`)**: manager-scoped reads are authorized **only** to the cost centers for which the current user holds an active Cost Center Manager assignment (`RoleAssignmentRepository::findActiveByUserAndRole`, same source as `ManagementReviewService::getCostCenterQueue`). This never broadens manager entitlement, never exposes a transaction or sheet outside the managed scope, and never crosses into Senior/Finance surfaces.
+
+**Workflow-correctness rule (mandatory)**: the backend MUST keep distinct (a) transactions awaiting this manager's decision, (b) transactions already decided by this manager, (c) transactions returned for correction, (d) completion of this manager's own responsibilities, (e) completion of the entire Cost Center stage, (f) Senior Review eligibility. It MUST NOT infer (e) or (f) from (d) or from pending-only data, and MUST NOT invent history records or derive totals from an incomplete set.
+
+**Explicitly out of scope (unchanged)**: merchant/paid-on/payment-method/category fields, the sheet-wide-completion/Senior-eligibility gate (remains a separately gated backend change — see Workflow Reconciliation §), and any change to decision semantics, financial rules, or public contract beyond the additive manager-scoped read surface.

@@ -97,6 +97,109 @@ final class ManagementReviewControllerTest extends TestCase
         );
     }
 
+    // ===== MANAGER-SCOPED SHEET REVIEW (B001–B004) =====
+
+    public function testManagerScopedSheetReturnsAuthorizedMetadataAndAwaitingState(): void
+    {
+        $response = $this->managerSheet(ContractFixtures::sheetId());
+
+        $this->assertEquals(200, $response->getStatusCode(), 'A managed sheet must be readable');
+        $this->assertOcsResponseStructure($response, 200);
+
+        $data = $this->ocsData($response);
+
+        self::assertSame(ContractFixtures::sheetId(), $data['sheet']['id']);
+        self::assertSame('Contract Fixture Sheet', $data['sheet']['title']);
+        self::assertSame(getenv('PETTYCASH_TEST_USER'), $data['sheet']['ownerId']);
+        self::assertNotEmpty($data['sheet']['ownerDisplayName'], 'The purchaser display name must be resolved');
+        self::assertSame('IRR', $data['sheet']['currency']);
+        self::assertSame('COST_CENTER', $data['sheet']['status']);
+        self::assertSame(100000, $data['sheet']['submittedTotalMinor']);
+        self::assertSame(
+            ['amountMinor' => 100000, 'currency' => 'IRR', 'minorUnit' => 0],
+            $data['sheet']['submittedTotal'],
+            'The submitted total must be currency-safe and derived from the submission snapshot'
+        );
+        self::assertNotEmpty($data['sheet']['submittedAt'], 'firstSubmittedAt must be exposed as submittedAt');
+
+        self::assertSame(1, $data['progress']['awaitingManager']);
+        self::assertSame(0, $data['progress']['decidedByManager']);
+        self::assertSame(0, $data['progress']['returnedForCorrection']);
+        self::assertSame(1, $data['progress']['total']);
+        self::assertFalse($data['progress']['managerComplete']);
+
+        self::assertCount(1, $data['transactions']);
+        self::assertSame(ContractFixtures::transactionId(), $data['transactions'][0]['id']);
+        self::assertSame('AWAITING_MANAGER_DECISION', $data['transactions'][0]['managerState']);
+        self::assertNull($data['transactions'][0]['managerDecision']);
+    }
+
+    public function testManagerScopedSheetReportsDecidedByThisManager(): void
+    {
+        $decision = $this->decide('APPROVE');
+        $this->assertEquals(201, $decision->getStatusCode(), 'The fixture transaction should be decidable');
+
+        $response = $this->managerSheet(ContractFixtures::sheetId());
+        $this->assertEquals(200, $response->getStatusCode());
+
+        $data = $this->ocsData($response);
+
+        self::assertSame(0, $data['progress']['awaitingManager']);
+        self::assertSame(1, $data['progress']['decidedByManager']);
+        self::assertSame(0, $data['progress']['returnedForCorrection']);
+        self::assertTrue($data['progress']['managerComplete']);
+        self::assertSame('DECIDED_BY_MANAGER', $data['transactions'][0]['managerState']);
+        self::assertSame('APPROVE', $data['transactions'][0]['managerDecision']['decision']);
+        self::assertSame(getenv('PETTYCASH_TEST_USER'), $data['transactions'][0]['managerDecision']['actor']['userId']);
+    }
+
+    public function testManagerScopedSheetReportsReturnedForCorrectionDistinctly(): void
+    {
+        $decision = $this->decide('RETURN', 'Missing evidence');
+        $this->assertEquals(201, $decision->getStatusCode(), 'The fixture transaction should be returnable');
+
+        $response = $this->managerSheet(ContractFixtures::sheetId());
+        $this->assertEquals(200, $response->getStatusCode());
+
+        $data = $this->ocsData($response);
+
+        self::assertSame(0, $data['progress']['awaitingManager']);
+        self::assertSame(0, $data['progress']['decidedByManager']);
+        self::assertSame(1, $data['progress']['returnedForCorrection']);
+        self::assertTrue($data['progress']['managerComplete']);
+        self::assertSame('RETURNED_FOR_CORRECTION', $data['transactions'][0]['managerState']);
+        self::assertSame('RETURN', $data['transactions'][0]['managerDecision']['decision']);
+    }
+
+    public function testManagerScopedSheetHidesAnOutOfScopeSheetAndItsTransactions(): void
+    {
+        ContractFixtures::prepare('scope');
+
+        $outOfScope = $this->managerSheet(ContractFixtures::outOfScopeSheetId());
+        $this->assertEquals(
+            404,
+            $outOfScope->getStatusCode(),
+            'A sheet whose only transaction is in an unmanaged cost centre must not be disclosed'
+        );
+        $this->assertOcsResponseStructure($outOfScope, 404);
+
+        $managed = $this->managerSheet(ContractFixtures::sheetId());
+        $this->assertEquals(200, $managed->getStatusCode());
+
+        $data = $this->ocsData($managed);
+        self::assertCount(1, $data['transactions']);
+        self::assertSame(ContractFixtures::transactionId(), $data['transactions'][0]['id']);
+        self::assertSame(1, $data['progress']['total']);
+    }
+
+    public function testManagerScopedSheetUnknownSheetReturns404(): void
+    {
+        $response = $this->managerSheet(ContractFixtures::unknownId());
+
+        $this->assertEquals(404, $response->getStatusCode());
+        $this->assertOcsResponseStructure($response, 404);
+    }
+
     // ===== RETURNS (PURCHASER CORRECTION QUEUE) =====
 
     public function testReturnsQueueReturns200WithPagedTransactions(): void
@@ -274,6 +377,25 @@ final class ManagementReviewControllerTest extends TestCase
     }
 
     // ===== HELPER METHODS =====
+
+    private function managerSheet(string $sheetId): \Psr\Http\Message\ResponseInterface
+    {
+        return $this->client->request(
+            'GET',
+            '/ocs/v2.php/apps/pettycash/api/v1/queues/cost-center/sheets/' . $sheetId
+        );
+    }
+
+    /** @return array<string, mixed> */
+    private function ocsData(\Psr\Http\Message\ResponseInterface $response): array
+    {
+        $body = json_decode((string) $response->getBody(), true);
+        self::assertIsArray($body);
+        self::assertArrayHasKey('ocs', $body);
+        self::assertArrayHasKey('data', $body['ocs']);
+
+        return $body['ocs']['data'];
+    }
 
     /**
      * Assert that the response follows the OCS standard envelope structure.

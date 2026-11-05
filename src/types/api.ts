@@ -210,6 +210,68 @@ export interface TransactionDetail extends TransactionSummary {
 	evidence: Evidence[]
 }
 
+/**
+ * The manager's own state for one transaction, as the Batch 1 manager-scoped read returns it.
+ *
+ * Deliberately not the transaction's global `status`: `DECIDED_BY_MANAGER` means *this* manager
+ * approved or rejected the current revision at Cost Center, while `RETURNED_FOR_CORRECTION` means
+ * *this* manager returned it. Neither is a sheet-wide or Senior-eligibility claim (FR-006-047/048).
+ */
+export type ManagerTransactionState =
+	| 'AWAITING_MANAGER_DECISION'
+	| 'DECIDED_BY_MANAGER'
+	| 'RETURNED_FOR_CORRECTION'
+
+/** `GET /queues/cost-center/sheets/{sheetId}`'s sheet header. */
+export interface ManagerSheetSummary {
+	id: string
+	title: string
+	ownerId: string
+	ownerDisplayName: string
+	currency: string
+	status: SheetStatus
+	submittedTotalMinor: number | null
+	submittedTotal: Money | null
+	/** The genuine first-submission instant, not the sheet's creation time. */
+	submittedAt: string | null
+	version: number
+}
+
+/**
+ * Manager-scoped progress. `managerComplete` means only "nothing awaits this manager"; it is not
+ * whole-sheet Cost Center completion and does not establish Senior eligibility.
+ */
+export interface ManagerSheetProgress {
+	awaitingManager: number
+	decidedByManager: number
+	returnedForCorrection: number
+	total: number
+	managerComplete: boolean
+}
+
+export interface ManagerTransactionSummary extends TransactionSummary {
+	managerState: ManagerTransactionState
+	/** This manager's current-revision Cost Center decision; absent while awaiting. */
+	managerDecision: Decision | null
+}
+
+export interface ManagerSheetReview {
+	sheet: ManagerSheetSummary
+	progress: ManagerSheetProgress
+	transactions: ManagerTransactionSummary[]
+}
+
+/**
+ * T026: how the guarded per-transaction detail read ended.
+ *
+ * `loading` is in flight; `loaded` means a detail is cached. The three failure states are kept
+ * apart on purpose: `forbidden` is the server's refusal of this manager for this transaction,
+ * `notFound` is no such transaction in the manager's scope, and `unavailable` is every other
+ * failure. Rendering a refusal as "not found" — or either as a network fault — hides a broken
+ * authorization boundary behind a message the reader cannot act on.
+ */
+export type ManagerTransactionReadState = 'loading' | 'loaded' | 'forbidden' | 'notFound' | 'unavailable'
+
 export interface Revision {
 	id: string
 	number: number
@@ -517,6 +579,19 @@ export const DECISION_CAPABILITY: Record<DecisionValue, AllowedActionKey> = {
 	REJECT: 'canReject',
 	RETURN: 'canReturn',
 }
+
+/**
+ * T026: a decision is possible only on an explicit server-granted `true`.
+ *
+ * `undefined` (the server said nothing) and `false` (the server refused) are different answers, and
+ * both must gate the action off. Treating "not present" as "allowed" — the `!== false` mistake —
+ * would enable a decision the server never offered, including for a transaction whose detail read
+ * failed and therefore carries no capabilities at all.
+ */
+export function decisionAllowed(allowedActions: AllowedActions | null | undefined, decision: DecisionValue): boolean {
+	return allowedActions?.[DECISION_CAPABILITY[decision]] === true
+}
+
 export interface SessionContext {
 	userId: string
 	displayName: string

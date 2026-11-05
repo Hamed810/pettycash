@@ -30,6 +30,17 @@ interface ExpenseTransactionRepository
     public function findByOwnerUid(string $ownerUid, ?WorkflowStage $stage = null, ?TransactionStatus $status = null, int $offset = 0, int $limit = 100): array;
     /** @return list<ExpenseTransaction> */
     public function findByCostCenterId(int $costCenterId, ?WorkflowStage $stage = null, ?TransactionStatus $status = null, int $offset = 0, int $limit = 100): array;
+    /**
+     * Every transaction whose current revision belongs to one of these cost centres.
+     *
+     * Used by the manager queues: one read over the de-duplicated authorized scope, ordered
+     * deterministically so the caller can merge, de-duplicate, and paginate once. Asking per
+     * cost centre instead let overlapping assignments fetch the same rows repeatedly.
+     *
+     * @param list<int> $costCenterIds
+     * @return list<ExpenseTransaction>
+     */
+    public function findByCostCenterIds(array $costCenterIds, ?WorkflowStage $stage = null, ?TransactionStatus $status = null): array;
     /** @return list<ExpenseTransaction> */
     public function findByStageAndStatus(WorkflowStage $stage, ?TransactionStatus $status = null, int $offset = 0, int $limit = 100): array;
     /** @return list<ExpenseTransaction> */

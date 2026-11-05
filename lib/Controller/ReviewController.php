@@ -18,6 +18,7 @@ use OCA\PettyCash\Domain\Workflow\Decision;
 use OCA\PettyCash\Domain\Workflow\Repository\WorkflowDecisionRepository;
 use OCA\PettyCash\Domain\Workflow\WorkflowStage;
 use OCA\PettyCash\Infrastructure\Http\OcsErrorMapper;
+use OCA\PettyCash\Infrastructure\Http\SheetPayloadFormatter;
 use OCA\PettyCash\Infrastructure\Http\TransactionPayloadFormatter;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
 use OCP\AppFramework\Http\DataResponse;
@@ -43,6 +44,7 @@ class ReviewController extends OCSController
         private CurrentUser $currentUser,
         private OcsErrorMapper $ocsErrorMapper,
         private TransactionPayloadFormatter $payloadFormatter,
+        private SheetPayloadFormatter $sheetPayloadFormatter,
         private AccountPayloadFormatter $accountFormatter,
         private WorkflowDecisionRepository $decisionRepository
     ) {
@@ -89,6 +91,42 @@ class ReviewController extends OCSController
             ]);
         } catch (\Throwable $e) {
             return $this->ocsErrorMapper->map($e);
+        }
+    }
+
+    /**
+     * B001–B004: one sheet as the acting cost-centre manager may see it.
+     *
+     * A separate manager-scoped route rather than a widening of `GET /sheets/{sheetId}` or
+     * `GET /queues/cost-center`: those surfaces already have owners and contracts, and making the
+     * sheet detail role-dependent would change behaviour existing callers rely on. This path is
+     * additive and its authorization is the service's active-manager scope.
+     *
+     * Unknown and out-of-scope sheets answer the same `404`. Distinguishing them would let a caller
+     * enumerate sheets outside their cost centres, and FR-004/FR-005 make scope a server-side rule.
+     *
+     * @param string $sheetId
+     * @return DataResponse
+     */
+    #[NoAdminRequired]
+    public function costCenterSheet(string $sheetId): DataResponse
+    {
+        try {
+            $review = $this->managementReviewService->getCostCenterSheetForManager($sheetId);
+            if ($review === null) {
+                return $this->ocsErrorMapper->notFound('Sheet not found');
+            }
+
+            return new DataResponse([
+                'sheet' => $this->sheetPayloadFormatter->managerSummary($review['sheet']),
+                'progress' => $review['progress'],
+                'transactions' => array_map(
+                    fn (array $item): array => $this->formatManagerTransaction($item),
+                    $review['transactions']
+                ),
+            ]);
+        } catch (\Throwable $e) {
+            return $this->ocsErrorMapper->map($e, null, ['publicId' => $sheetId]);
         }
     }
 
@@ -371,6 +409,31 @@ class ReviewController extends OCSController
     private function formatSummary(\OCA\PettyCash\Domain\Expense\ExpenseTransaction $transaction): array
     {
         return $this->payloadFormatter->summary($transaction);
+    }
+
+    /**
+     * `ManagerTransactionSummary`: the existing transaction summary plus this manager's own state.
+     *
+     * `managerDecision` is emitted only for a state that has one. It is the manager's current-revision
+     * cost-centre decision, not `latestDecision` (which may belong to a later stage), so a card can
+     * distinguish "I approved this" from "I returned this" without inferring it from a stage name.
+     *
+     * @param array{
+     *   transaction: \OCA\PettyCash\Domain\Expense\ExpenseTransaction,
+     *   state: \OCA\PettyCash\Domain\Workflow\ManagerTransactionState,
+     *   decision: ?\OCA\PettyCash\Domain\Workflow\WorkflowDecision
+     * } $item
+     * @return array<string, mixed>
+     */
+    private function formatManagerTransaction(array $item): array
+    {
+        $summary = $this->payloadFormatter->summary($item['transaction']);
+        $summary['managerState'] = $item['state']->value;
+        $summary['managerDecision'] = $item['decision'] === null
+            ? null
+            : $this->payloadFormatter->decision($item['decision']);
+
+        return $summary;
     }
 
     /**

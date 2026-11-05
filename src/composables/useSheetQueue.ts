@@ -204,11 +204,17 @@ export function buildSheetQueue(items: readonly TransactionSummary[]): SheetQueu
 /**
  * Local search over a proven-complete set.
  *
- * Sheet titles and purchasers are not in the response, so the placeholder and this matcher name
- * only what they can actually search: the sheet reference and the cost centre. Searching a
- * transaction description would match a row the manager cannot see identified, so it is excluded.
+ * Sheet titles and purchasers are not in the queue response, so the placeholder and this matcher
+ * name only what they can actually search: the sheet reference and the cost centre. A caller that
+ * has loaded the manager-scoped sheet read may pass those real fields through `additionalTerms`;
+ * the queue itself still never searches a transaction description, because that would match a row
+ * the manager cannot see identified.
  */
-export function searchSheetQueue(items: readonly SheetQueueItem[], query: string): SheetQueueItem[] {
+export function searchSheetQueue(
+	items: readonly SheetQueueItem[],
+	query: string,
+	additionalTerms: (item: SheetQueueItem) => readonly (string | null | undefined)[] = () => []
+): SheetQueueItem[] {
 	const needle = query.trim().toLocaleLowerCase()
 	if (needle === '') return [...items]
 
@@ -217,6 +223,9 @@ export function searchSheetQueue(items: readonly SheetQueueItem[], query: string
 		|| item.costCenters.some((center) =>
 			center.code.toLocaleLowerCase().includes(needle)
 			|| center.name.toLocaleLowerCase().includes(needle)
+		)
+		|| additionalTerms(item).some((term) =>
+			typeof term === 'string' && term.toLocaleLowerCase().includes(needle)
 		)
 	)
 }
