@@ -18,6 +18,7 @@ final class InMemoryWorkflowDecisionRepository implements \OCA\PettyCash\Domain\
      */
     public function __construct(
         private readonly ?\OCA\PettyCash\Domain\Expense\Repository\TransactionRevisionRepository $revisions = null,
+        private readonly ?\OCA\PettyCash\Domain\Expense\Repository\ExpenseTransactionRepository $transactions = null,
     ) {}
 
     /**
@@ -55,7 +56,27 @@ final class InMemoryWorkflowDecisionRepository implements \OCA\PettyCash\Domain\
      */
     public function findByTransactionId(int $transactionId): array
     {
-        return array_values(array_filter($this->decisions, fn($d) => $d->transactionId === $transactionId));
+        // `WorkflowDecision::$transactionId` is the transaction's **public UUID** (production's
+        // `mapRow()` resolves it that way), while the port parameter is the surrogate key the DB
+        // adapter joins on. The double compared the two directly, which could never match, so every
+        // caller saw an empty history and a green suite. Resolve the public id to its stored row.
+        return array_values(array_filter(
+            $this->decisions,
+            fn (WorkflowDecision $d): bool => $this->surrogateTransactionIdOf($d) === $transactionId
+        ));
+    }
+
+    private function surrogateTransactionIdOf(WorkflowDecision $decision): ?int
+    {
+        if ($this->transactions !== null) {
+            $transaction = $this->transactions->findByPublicId($decision->transactionId);
+            if ($transaction?->dbId !== null) {
+                return $transaction->dbId;
+            }
+        }
+
+        $revision = $this->revisions?->findByPublicId($decision->revisionId);
+        return $revision?->transactionDbId;
     }
 
     /**
@@ -97,5 +118,10 @@ final class InMemoryWorkflowDecisionRepository implements \OCA\PettyCash\Domain\
             $decision->dbId = count($this->decisions) + 1;
         }
         $this->decisions[$decision->dbId] = $decision;
+    }
+
+    public function clear(): void
+    {
+        $this->decisions = [];
     }
 }

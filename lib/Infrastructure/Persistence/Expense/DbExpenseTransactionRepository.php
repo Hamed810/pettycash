@@ -111,8 +111,40 @@ final class DbExpenseTransactionRepository implements ExpenseTransactionReposito
             $qb->andWhere($qb->expr()->eq('t.current_status', $qb->createNamedParameter($status->value)));
         }
         $qb->orderBy('t.created_at', 'DESC')
+            ->addOrderBy('t.id', 'DESC')
             ->setFirstResult($offset)
             ->setMaxResults($limit);
+        $rows = $qb->executeQuery()->fetchAllAssociative();
+        return array_map([$this, 'mapRow'], $rows);
+    }
+
+    /** @return list<ExpenseTransaction> */
+    public function findByCostCenterIds(array $costCenterIds, ?WorkflowStage $stage = null, ?TransactionStatus $status = null): array
+    {
+        $costCenterIds = array_values(array_unique(array_map('intval', $costCenterIds)));
+        if ($costCenterIds === []) {
+            return [];
+        }
+
+        $qb = $this->connection->getQueryBuilder();
+        $qb->select('t.*')
+            ->from('pettycash_transactions', 't')
+            ->join('t', 'pettycash_transaction_revisions', 'r', $qb->expr()->eq('t.active_revision_id', 'r.id'))
+            ->where($qb->expr()->in(
+                'r.cost_center_id',
+                $qb->createNamedParameter($costCenterIds, IQueryBuilder::PARAM_INT_ARRAY)
+            ));
+        if ($stage) {
+            $qb->andWhere($qb->expr()->eq('t.current_stage', $qb->createNamedParameter($stage->value)));
+        }
+        if ($status) {
+            $qb->andWhere($qb->expr()->eq('t.current_status', $qb->createNamedParameter($status->value)));
+        }
+        // A page boundary needs a total order. `created_at` has second precision, so the surrogate
+        // key is the tiebreaker that keeps page N and page N+1 disjoint.
+        $qb->orderBy('t.created_at', 'DESC')
+            ->addOrderBy('t.id', 'DESC');
+
         $rows = $qb->executeQuery()->fetchAllAssociative();
         return array_map([$this, 'mapRow'], $rows);
     }

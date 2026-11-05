@@ -64,3 +64,24 @@ Thumbs.db
 
 # Generated review artifacts
 /artifacts/visual-review/
+
+# Local code-intelligence backups
+/.opencode/index-before-rebuild/
+
+# Spec Kit extension caches
+/.specify/extensions/.cache/
+
+# Temporary browser capture
+/capture-tmp.mjs
+
+# Local project-size report
+/project-size-report.txt
+
+# Local visual verification scripts
+/tests/E2E/t026-quick-review-evidence.mjs
+/tests/E2E/t040-t041-batch5-visual-evidence.mjs
+
+# Local development tools and configuration
+/.specify/extensions/.registry
+/opencode.json
+/project-size-report.sh

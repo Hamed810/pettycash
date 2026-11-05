@@ -24,9 +24,12 @@ use OCA\PettyCash\Domain\Expense\Repository\ExpenseSheetRepository;
 use OCA\PettyCash\Domain\Expense\Repository\ExpenseTransactionRepository;
 use OCA\PettyCash\Domain\Expense\Repository\TransactionRevisionRepository;
 use OCA\PettyCash\Domain\Shared\ActorSnapshot;
+use OCA\PettyCash\Domain\Shared\Enum\Role;
 use OCA\PettyCash\Domain\Shared\Uuid;
 use OCA\PettyCash\Domain\Workflow\Decision;
+use OCA\PettyCash\Domain\Workflow\ManagerTransactionState;
 use OCA\PettyCash\Domain\Workflow\Repository\WorkflowDecisionRepository;
+use OCA\PettyCash\Domain\Workflow\TransactionStatus;
 use OCA\PettyCash\Domain\Workflow\WorkflowDecision;
 use OCA\PettyCash\Domain\Workflow\WorkflowStage;
 use OCA\PettyCash\Application\Audit\DecisionEventType;
@@ -372,47 +375,212 @@ final readonly class ManagementReviewService
     public function getCostCenterQueue(int $page = 1, int $pageSize = 25): array
     {
         $actorUid = $this->currentUser->uid();
-        $roles = $this->getUserRoles($actorUid);
-        
-        // Get cost centers managed by this user
-        $managedCostCenterIds = [];
-        $now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
-        foreach ($roles as $role) {
-            if ($role === \OCA\PettyCash\Domain\Shared\Enum\Role::CostCenterManager) {
-                $assignments = $this->roleAssignmentRepository->findActiveByUserAndRole($actorUid, $role, $now);
-                foreach ($assignments as $assignment) {
-                    if ($assignment->costCenterId !== null) {
-                        $managedCostCenterIds[] = $assignment->costCenterId;
-                    }
-                }
-            }
-        }
+        $managedCostCenterIds = $this->managedCostCenterIds($actorUid, Role::CostCenterManager);
 
         if ($managedCostCenterIds === []) {
             return ['items' => [], 'total' => 0];
         }
 
-        $offset = ($page - 1) * $pageSize;
-        $allTransactions = [];
-        foreach ($managedCostCenterIds as $costCenterId) {
-            $transactions = $this->transactionRepository->findByCostCenterId(
-                $costCenterId,
-                WorkflowStage::CostCenter,
-                null,
-                $offset,
-                $pageSize
-            );
-            $allTransactions = array_merge($allTransactions, $transactions);
-        }
-        
-        // Sort by created_at descending
-        usort($allTransactions, fn($a, $b) => ($b->createdAt ?? new DateTimeImmutable()) <=> ($a->createdAt ?? new DateTimeImmutable()));
-        
-        // Apply pagination
-        $items = array_slice($allTransactions, 0, $pageSize);
-        $total = count($allTransactions);
+        // One query over the de-duplicated scope, then one global pagination pass. Fetching per
+        // assignment (or per role entry) merged the same rows repeatedly and applied the page offset
+        // inside each cost centre before the outer slice, so `total` was inflated and pages could
+        // repeat or skip transactions.
+        return $this->paginateUniqueQueue(
+            $this->transactionRepository->findByCostCenterIds(
+                $managedCostCenterIds,
+                WorkflowStage::CostCenter
+            ),
+            $page,
+            $pageSize
+        );
+    }
 
-        return ['items' => $items, 'total' => $total];
+    /**
+     * One sheet as the acting cost-centre manager may see it — B001/B002/B003.
+     *
+     * **Authorization is the scope check, and the scope is the actor's active manager assignments.**
+     * A sheet is answered only when at least one of its current-revision transactions is in a cost
+     * centre this manager actively manages. An unknown sheet and an out-of-scope sheet produce the
+     * same `null`, so the controller can answer one `404` for both and the endpoint cannot be used to
+     * confirm that a sheet exists outside the caller's scope (FR-004/FR-005/FR-009).
+     *
+     * **The transaction set is this manager's, not the sheet's.** A transaction is included only when
+     * it is awaiting any manager of that cost centre, was decided by *this* manager, or was returned
+     * by *this* manager. Another manager's cost-centre decision is therefore never disclosed here, and
+     * a sheet holding only such a decision is indistinguishable from an absent sheet to this caller.
+     *
+     * **Historical revisions do not count.** Manager state is read from the transaction's current
+     * revision only. A return recorded on revision 1 is not this manager's state once revision 2 is
+     * active and awaiting review again; the new revision is awaiting a decision, which is what the
+     * purchaser's resubmission actually produced.
+     *
+     * The returned `progress` is manager-scoped on purpose. `managerComplete` means *nothing awaits
+     * this manager*; it says nothing about whole-sheet cost-centre completion or Senior eligibility,
+     * which FR-006-047/048 keeps as a separate, sheet-wide question.
+     *
+     * @return array{
+     *   sheet: \OCA\PettyCash\Domain\Expense\ExpenseSheet,
+     *   transactions: list<array{
+     *     transaction: ExpenseTransaction,
+     *     state: ManagerTransactionState,
+     *     decision: ?WorkflowDecision
+     *   }>,
+     *   progress: array{
+     *     awaitingManager: int,
+     *     decidedByManager: int,
+     *     returnedForCorrection: int,
+     *     total: int,
+     *     managerComplete: bool
+     *   }
+     * }|null
+     */
+    public function getCostCenterSheetForManager(string $sheetPublicId): ?array
+    {
+        $actorUid = $this->currentUser->uid();
+        ['ids' => $managedCostCenterIds, 'codes' => $managedCostCenterCodes] = $this->managedCostCenterScope($actorUid);
+
+        if ($managedCostCenterIds === [] && $managedCostCenterCodes === []) {
+            return null;
+        }
+
+        $sheet = $this->sheetRepository->findByPublicId($sheetPublicId);
+        if ($sheet === null || $sheet->dbId === null) {
+            return null;
+        }
+
+        $transactions = [];
+        $progress = [
+            'awaitingManager' => 0,
+            'decidedByManager' => 0,
+            'returnedForCorrection' => 0,
+            'total' => 0,
+            'managerComplete' => false,
+        ];
+
+        foreach ($this->transactionRepository->findBySheetId($sheet->dbId) as $transaction) {
+            $revision = $transaction->revision();
+            $costCenterDbId = $revision->costCenterDbId;
+
+            if ($costCenterDbId === null || !isset($managedCostCenterIds[$costCenterDbId])) {
+                $code = $revision->costCenterCode;
+                if (($code === null || $code === '') && $costCenterDbId !== null) {
+                    $code = $this->costCenterRepository->findById($costCenterDbId)?->code();
+                }
+                if ($code === null || $code === '' || !isset($managedCostCenterCodes[$code])) {
+                    continue;
+                }
+            }
+
+            $decision = $this->currentCostCenterDecision($transaction);
+
+            if ($decision === null) {
+                if ($transaction->stage !== WorkflowStage::CostCenter
+                    || $transaction->status !== TransactionStatus::AwaitingCostCenterReview
+                ) {
+                    continue;
+                }
+                $state = ManagerTransactionState::AwaitingManagerDecision;
+            } elseif ($decision->actorUid !== $actorUid) {
+                // Another manager's decision is outside this manager's scoped read. It is skipped,
+                // not reported as pending, so a sheet they decided cannot be made to look unfinished.
+                continue;
+            } elseif ($decision->decision === Decision::Return) {
+                $state = ManagerTransactionState::ReturnedForCorrection;
+            } else {
+                $state = ManagerTransactionState::DecidedByManager;
+            }
+
+            $transactions[] = [
+                'transaction' => $transaction,
+                'state' => $state,
+                'decision' => $state === ManagerTransactionState::AwaitingManagerDecision ? null : $decision,
+            ];
+
+            $progress['total']++;
+            match ($state) {
+                ManagerTransactionState::AwaitingManagerDecision => $progress['awaitingManager']++,
+                ManagerTransactionState::DecidedByManager => $progress['decidedByManager']++,
+                ManagerTransactionState::ReturnedForCorrection => $progress['returnedForCorrection']++,
+            };
+        }
+
+        if ($transactions === []) {
+            return null;
+        }
+
+        // "Complete" for this manager only: no current-revision transaction in their scope still
+        // awaits their decision. It is deliberately not a claim about the other managers, the
+        // sheet's cost-centre stage as a whole, or Senior eligibility (FR-006-047/048).
+        $progress['managerComplete'] = $progress['awaitingManager'] === 0;
+
+        return [
+            'sheet' => $sheet,
+            'transactions' => $transactions,
+            'progress' => $progress,
+        ];
+    }
+
+    /**
+     * The active cost centres this user manages, by surrogate key and by code.
+     *
+     * Assignments are read through the same repository/date rule as `getCostCenterQueue()`, but the
+     * result is de-duplicated here. The queue's own duplicate/pagination defect is a separate bug
+     * workflow item and is deliberately not touched by this read.
+     *
+     * @return array{ids: array<int, true>, codes: array<string, true>}
+     */
+    private function managedCostCenterScope(string $actorUid): array
+    {
+        $ids = [];
+        $codes = [];
+        $now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
+
+        foreach ($this->roleAssignmentRepository->findActiveByUserAndRole($actorUid, Role::CostCenterManager, $now) as $assignment) {
+            if ($assignment->costCenterId === null) {
+                continue;
+            }
+
+            $ids[$assignment->costCenterId] = true;
+
+            $code = $this->costCenterRepository->findById($assignment->costCenterId)?->code();
+            if ($code !== null && $code !== '') {
+                $codes[$code] = true;
+            }
+        }
+
+        return ['ids' => $ids, 'codes' => $codes];
+    }
+
+    /**
+     * The cost-centre decision recorded against this transaction's **current** revision.
+     *
+     * The repository answers every revision of the transaction, so the decision has to be narrowed
+     * to the revision that is active now. A decision on a superseded revision is history: after a
+     * correction and resubmission, the transaction is awaiting review on its new revision even
+     * though the old one carries a decision from this same manager.
+     */
+    private function currentCostCenterDecision(ExpenseTransaction $transaction): ?WorkflowDecision
+    {
+        if ($transaction->dbId === null) {
+            return null;
+        }
+
+        $currentRevisionId = $transaction->revision()->id();
+        $current = null;
+
+        foreach ($this->decisionRepository->findByTransactionId($transaction->dbId) as $decision) {
+            if ($decision->stage !== WorkflowStage::CostCenter) {
+                continue;
+            }
+            if ($decision->revisionId !== $currentRevisionId) {
+                continue;
+            }
+            // Ordered by `decided_at ASC`; the unique index admits one per (revision, stage), so the
+            // last match is the decision in force rather than a guess between alternatives.
+            $current = $decision;
+        }
+
+        return $current;
     }
 
     /**
@@ -425,44 +593,101 @@ final readonly class ManagementReviewService
     public function getSeniorQueue(int $page = 1, int $pageSize = 25): array
     {
         $actorUid = $this->currentUser->uid();
-        $roles = $this->getUserRoles($actorUid);
-        
-        $managedCostCenterIds = [];
-        $now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
-        foreach ($roles as $role) {
-            if ($role === \OCA\PettyCash\Domain\Shared\Enum\Role::SeniorManager) {
-                $assignments = $this->roleAssignmentRepository->findActiveByUserAndRole($actorUid, $role, $now);
-                foreach ($assignments as $assignment) {
-                    if ($assignment->costCenterId !== null) {
-                        $managedCostCenterIds[] = $assignment->costCenterId;
-                    }
-                }
-            }
-        }
+        $managedCostCenterIds = $this->managedCostCenterIds($actorUid, Role::SeniorManager);
 
         if ($managedCostCenterIds === []) {
             return ['items' => [], 'total' => 0];
         }
 
-        $offset = ($page - 1) * $pageSize;
-        $allTransactions = [];
-        foreach ($managedCostCenterIds as $costCenterId) {
-            $transactions = $this->transactionRepository->findByCostCenterId(
-                $costCenterId,
-                WorkflowStage::Senior,
-                null,
-                $offset,
-                $pageSize
-            );
-            $allTransactions = array_merge($allTransactions, $transactions);
-        }
-        
-        usort($allTransactions, fn($a, $b) => ($b->createdAt ?? new DateTimeImmutable()) <=> ($a->createdAt ?? new DateTimeImmutable()));
-        
-        $items = array_slice($allTransactions, 0, $pageSize);
-        $total = count($allTransactions);
+        // The Senior queue had the same role-loop/merge shape. The scope and page are resolved once
+        // here as well; Senior review authorization and workflow transitions are unchanged.
+        return $this->paginateUniqueQueue(
+            $this->transactionRepository->findByCostCenterIds(
+                $managedCostCenterIds,
+                WorkflowStage::Senior
+            ),
+            $page,
+            $pageSize
+        );
+    }
 
-        return ['items' => $items, 'total' => $total];
+    /**
+     * The active cost-centre IDs for one manager role, resolved once as a set.
+     *
+     * A user may hold several overlapping assignments for the same cost centre, and
+     * `findActiveByUserAndRole()` deliberately returns every assignment row. The queue must not
+     * fetch that scope once per row: duplicate IDs are collapsed here before any transaction read.
+     *
+     * @return list<int>
+     */
+    private function managedCostCenterIds(string $actorUid, Role $role): array
+    {
+        $now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
+        $ids = [];
+
+        foreach ($this->roleAssignmentRepository->findActiveByUserAndRole($actorUid, $role, $now) as $assignment) {
+            if ($assignment->costCenterId !== null) {
+                $ids[$assignment->costCenterId] = true;
+            }
+        }
+
+        return array_map('intval', array_keys($ids));
+    }
+
+    /**
+     * De-duplicate the authorized set, order it once, and apply the page after that.
+     *
+     * The ID map is the primary guarantee: even if a caller or a future repository implementation
+     * returns the same transaction more than once, it contributes one queue row and one count.
+     * `created_at` is the contract's ordering; `dbId` is the deterministic tiebreaker for rows
+     * written in the same second, which is what keeps page N and page N+1 from overlapping.
+     *
+     * @param list<ExpenseTransaction> $transactions
+     * @return array{items: list<ExpenseTransaction>, total: int}
+     */
+    private function paginateUniqueQueue(array $transactions, int $page, int $pageSize): array
+    {
+        $unique = [];
+        foreach ($transactions as $transaction) {
+            $unique[$transaction->id] ??= $transaction;
+        }
+
+        $ordered = array_values($unique);
+        usort($ordered, static function (ExpenseTransaction $a, ExpenseTransaction $b): int {
+            $createdAtComparison = self::compareCreatedAtDescending($a->createdAt, $b->createdAt);
+            if ($createdAtComparison !== 0) {
+                return $createdAtComparison;
+            }
+
+            $dbIdComparison = ($b->dbId ?? 0) <=> ($a->dbId ?? 0);
+            if ($dbIdComparison !== 0) {
+                return $dbIdComparison;
+            }
+
+            return $b->id <=> $a->id;
+        });
+
+        $offset = max(0, ($page - 1) * $pageSize);
+
+        return [
+            'items' => array_slice($ordered, $offset, $pageSize),
+            'total' => count($ordered),
+        ];
+    }
+
+    private static function compareCreatedAtDescending(?DateTimeImmutable $a, ?DateTimeImmutable $b): int
+    {
+        if ($a === null && $b === null) {
+            return 0;
+        }
+        if ($a === null) {
+            return 1;
+        }
+        if ($b === null) {
+            return -1;
+        }
+
+        return $b <=> $a;
     }
 
     /**
@@ -586,14 +811,16 @@ final readonly class ManagementReviewService
         $roles = [];
         foreach ($assignments as $assignment) {
             if ($assignment->active) {
-                $roles[] = $assignment->role;
+                // Keyed by the enum value: a user with several assignments for the same role holds
+                // one role, not one entry per assignment. Authorization only needs the set.
+                $roles[$assignment->role->value] = $assignment->role;
             }
         }
         // Every authenticated user is at least a purchaser
-        if (!in_array(\OCA\PettyCash\Domain\Shared\Enum\Role::Purchaser, $roles, true)) {
-            $roles[] = \OCA\PettyCash\Domain\Shared\Enum\Role::Purchaser;
+        if (!isset($roles[Role::Purchaser->value])) {
+            $roles[Role::Purchaser->value] = Role::Purchaser;
         }
-        return $roles;
+        return array_values($roles);
     }
 
     private function getUserRole(string $userUid, ?string $costCenterCode): string

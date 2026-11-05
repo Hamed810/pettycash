@@ -18,6 +18,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
+import { t } from '@nextcloud/l10n'
 
 const evidenceApi = vi.hoisted(() => ({
 	getEvidenceContent: vi.fn(),
@@ -235,5 +236,98 @@ describe('EvidencePreview (T068)', () => {
 		await nextTick()
 		await flushPromises()
 		expect(wrapper.find('[data-test="evidence-preview-layer"]').exists()).toBe(true)
+	})
+
+	it('restores focus to the control that opened it when closed (T036)', async () => {
+		evidenceApi.getEvidenceContent.mockResolvedValue(new Blob(['png']))
+		const trigger = document.createElement('button')
+		trigger.type = 'button'
+		trigger.textContent = 'Open preview'
+		document.body.appendChild(trigger)
+		trigger.focus()
+
+		const wrapper = mountPreview()
+		await nextTick()
+		await flushPromises()
+		expect(document.activeElement).toBe(wrapper.find('[data-test="evidence-preview"]').element)
+
+		await wrapper.setProps({ open: false })
+		await nextTick()
+		expect(document.activeElement).toBe(trigger)
+
+		trigger.remove()
+	})
+})
+
+// T034 — multi-document navigation. The overlay stays a pure function of its props: the parent
+// owns the index and the set, so these tests pin the contract the quick-review queue relies on —
+// a visible position, Previous/Next that stop at the ends, and a `navigate` event instead of
+// internal mutation.
+describe('EvidencePreview navigation (T034)', () => {
+	const originalCreate = URL.createObjectURL
+	const originalRevoke = URL.revokeObjectURL
+
+	beforeEach(() => {
+		evidenceApi.getEvidenceContent.mockReset()
+		evidenceApi.deleteEvidence.mockReset()
+		evidenceApi.getEvidenceContent.mockResolvedValue(new Blob(['png']))
+		URL.createObjectURL = vi.fn(() => 'blob:evidence-preview') as unknown as typeof URL.createObjectURL
+		URL.revokeObjectURL = vi.fn() as unknown as typeof URL.revokeObjectURL
+	})
+
+	afterEach(() => {
+		URL.createObjectURL = originalCreate
+		URL.revokeObjectURL = originalRevoke
+		vi.restoreAllMocks()
+	})
+
+	function documents(): PreviewEvidence[] {
+		return [
+			evidence({ id: 'ev-1', name: 'receipt.png' }),
+			evidence({ id: 'ev-2', name: 'invoice.png' }),
+			evidence({ id: 'ev-3', name: 'total.png' })
+		]
+	}
+
+	function mountWithSet(index: number) {
+		return mount(EvidencePreview, {
+			props: { evidence: documents()[index] as never, open: true, documents: documents() as never, index },
+			attachTo: document.body
+		})
+	}
+
+	it('shows the position counter and offers navigation over the provided set', async () => {
+		const wrapper = mountWithSet(0)
+
+		const nav = wrapper.find('[data-test="preview-navigation"]')
+		expect(nav.exists()).toBe(true)
+		expect(nav.attributes('aria-label')).toBe('evidence.previewNavigationLabel')
+		// The t stub returns the key; the locale-correct digits travel through the params instead.
+		expect(wrapper.find('[data-test="preview-counter"]').text()).toBe('evidence.previewCounter')
+		expect(vi.mocked(t)).toHaveBeenCalledWith('pettycash', 'evidence.previewCounter', { index: '1', total: '3' })
+	})
+
+	it('emits navigate with the neighbouring index and stops at the ends', async () => {
+		const wrapper = mountWithSet(1)
+
+		await wrapper.find('[data-test="preview-nav-prev"]').trigger('click')
+		expect(wrapper.emitted('navigate')).toEqual([[0]])
+
+		const atEnd = mountWithSet(2)
+		expect((atEnd.find('[data-test="preview-nav-next"]').element as HTMLButtonElement).disabled).toBe(true)
+		await atEnd.find('[data-test="preview-nav-prev"]').trigger('click')
+		expect(atEnd.emitted('navigate')).toEqual([[1]])
+
+		const atStart = mountWithSet(0)
+		expect((atStart.find('[data-test="preview-nav-prev"]').element as HTMLButtonElement).disabled).toBe(true)
+		await atStart.find('[data-test="preview-nav-next"]').trigger('click')
+		expect(atStart.emitted('navigate')).toEqual([[1]])
+	})
+
+	it('renders no navigation for the single-document usage', async () => {
+		const wrapper = mountPreview()
+
+		expect(wrapper.find('[data-test="preview-navigation"]').exists()).toBe(false)
+		expect(wrapper.find('[data-test="preview-counter"]').exists()).toBe(false)
 	})
 })

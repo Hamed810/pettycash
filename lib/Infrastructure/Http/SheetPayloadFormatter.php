@@ -177,7 +177,45 @@ final readonly class SheetPayloadFormatter
         ));
     }
 
-/**
+    /**
+     * The manager-scoped sheet header for `GET /queues/cost-center/sheets/{sheetId}` — B001.
+     *
+     * Deliberately narrower than `summary()`: this surface exists to answer one manager about one
+     * sheet, so it carries the identity and submission snapshot the quick-review panel needs and
+     * omits list-only aggregates (counts, expense-date range, revision number) that would describe
+     * the whole sheet rather than the manager's scoped view.
+     *
+     * `submittedTotalMinor` is the sheet's **submission snapshot**, held on the aggregate and set
+     * once by `ExpenseSheet::submit()`. It is not derived from the transactions currently in scope,
+     * which is what keeps it a submitted total rather than a pending-only total. `submittedTotal`
+     * carries the same amount in the contract's currency-safe `Money` shape, with `minorUnit` from
+     * configured currency data exactly as `totals()` does. `submittedAt` is
+     * `firstSubmittedAt`, the genuine first-submission instant — never `createdAt`, and never a
+     * value derived from a later correction.
+     *
+     * @return array<string, mixed>
+     */
+    public function managerSummary(ExpenseSheet $sheet): array
+    {
+        $currency = (string) $sheet->currency;
+
+        return [
+            'id' => $sheet->publicId ?? $sheet->id,
+            'title' => $sheet->title,
+            'ownerId' => $sheet->ownerUid,
+            'ownerDisplayName' => $this->displayNameOf($sheet->ownerUid),
+            'currency' => $currency,
+            'status' => $sheet->status->value,
+            'submittedTotalMinor' => $sheet->submittedTotalMinor,
+            'submittedTotal' => $sheet->submittedTotalMinor === null
+                ? null
+                : $this->money($sheet->submittedTotalMinor, $currency),
+            'submittedAt' => $sheet->firstSubmittedAt?->format(\DateTimeInterface::ATOM),
+            'version' => $sheet->lockVersion,
+        ];
+    }
+
+    /**
      * `SheetDetail` — `SheetSummary` plus the two members `contracts/ocs-api.yaml:1125` adds.
      *
      * The contract defines `SheetDetail` as `allOf: [SheetSummary, {allowedActions, transactions}]`,

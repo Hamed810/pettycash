@@ -333,7 +333,8 @@ function removeFile() {
 	border: 0;
 	background: transparent;
 	color: inherit;
-	font: inherit;
+	font-family: inherit;
+	font-size: var(--font-size-floor);
 	font-weight: 500;
 	text-align: start;
 	cursor: pointer;
@@ -353,10 +354,11 @@ function removeFile() {
 	padding: 0.25rem 0.5rem;
 	border-radius: var(--border-radius, 4px);
 	background: var(--color-background-dark, #f0f0f0);
+	font-family: inherit;
 	font-size: var(--font-size-floor);
 	text-align: start;
-	white-space: nowrap;
-	overflow-x: auto;
+	white-space: normal;
+	overflow-wrap: anywhere;
 	overscroll-behavior-inline: contain;
 }
 

@@ -957,6 +957,7 @@ if ($state === 'usd') {
 // center can tell a real check from a vacuous one.
 
 $otherCostCenterId = null;
+$otherSheetId = null;
 $otherTransactionId = null;
 $otherTransactionVersion = null;
 $otherCostCenterDbId = null;
@@ -1048,6 +1049,7 @@ if ($state === 'scope') {
     deleteWhere($db, 'pettycash_transaction_audit', 'sheet_id', $otherSheetDbId);
 
     $otherCostCenterId = FIXTURE_IDS['otherCostCenter'];
+    $otherSheetId = FIXTURE_IDS['otherSheet'];
     $otherTransactionId = FIXTURE_IDS['otherTransaction'];
     $otherTransactionVersion = columnValue($db, 'pettycash_transactions', FIXTURE_IDS['otherTransaction'], 'lock_version');
 }
@@ -1325,6 +1327,7 @@ echo json_encode([
         : columnValue($db, 'pettycash_transactions', FIXTURE_IDS['usdTransaction'], 'lock_version'),
     // Present only in the `scope` state.
     'otherCostCenterId'   => $otherCostCenterId,
+    'otherSheetId'        => $otherSheetId,
     'otherTransactionId'  => $otherTransactionId,
     'otherTransactionVersion' => $otherTransactionVersion,
     // Present only in the `finance` state. The primary trio's ids above are already

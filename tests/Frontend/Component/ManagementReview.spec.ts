@@ -14,6 +14,7 @@ import { ALLOWED_ACTION_KEYS } from '@/types/api'
 import { useReviewsStore } from '@/stores/reviews'
 import { expectCardAgreesWithTable } from '../../Support/cardAgreement'
 import { useAuthStore } from '@/stores/auth'
+import { formatSheetDate } from '@/utils/date'
 import { routes } from '@/router'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -57,11 +58,75 @@ vi.mock('@nextcloud/router', () => ({
   appVersion: '1.0.0'
 }))
 
+function ocsEnvelope(data: unknown) {
+  return { status: 200, data: { ocs: { meta: { status: 'ok', statuscode: 200 }, data } } }
+}
+
 /** A well-formed but empty OCS envelope, so a mount-time load resolves instead of rejecting. */
 function emptyOcsResponse(config: { url?: string }) {
   const url = config?.url ?? ''
+  const sheetMatch = url.match(/\/queues\/cost-center\/sheets\/([^/?]+)/)
+  if (sheetMatch) {
+    const sheetId = decodeURIComponent(sheetMatch[1] ?? '')
+    return ocsEnvelope({
+      sheet: {
+        id: sheetId,
+        title: '',
+        ownerId: '',
+        ownerDisplayName: '',
+        currency: 'IRR',
+        status: 'COST_CENTER',
+        submittedTotalMinor: null,
+        submittedTotal: null,
+        submittedAt: null,
+        version: 1
+      },
+      progress: {
+        awaitingManager: 0,
+        decidedByManager: 0,
+        returnedForCorrection: 0,
+        total: 0,
+        managerComplete: true
+      },
+      transactions: []
+    })
+  }
   const data = /\/revisions(\?|$)/.test(url) ? [] : { items: [], page: 1, pageSize: 25, total: 0 }
-  return { status: 200, data: { ocs: { meta: { status: 'ok', statuscode: 200 }, data } } }
+  return ocsEnvelope(data)
+}
+
+/** A manager-scoped sheet read with real title/purchaser/submitted values and the seeded rows. */
+function managerSheetReview(sheetId: string, transactions: unknown[], overrides: Record<string, unknown> = {}) {
+  return {
+    sheet: {
+      id: sheetId,
+      title: `Sheet ${sheetId}`,
+      ownerId: 'user1',
+      ownerDisplayName: 'User One',
+      currency: 'IRR',
+      status: 'COST_CENTER',
+      submittedTotalMinor: 50000 * transactions.length,
+      submittedTotal: { amountMinor: 50000 * transactions.length, currency: 'IRR', minorUnit: 0 },
+      submittedAt: '2026-09-20T10:00:00Z',
+      version: 1
+    },
+    progress: {
+      awaitingManager: transactions.length,
+      decidedByManager: 0,
+      returnedForCorrection: 0,
+      total: transactions.length,
+      managerComplete: false
+    },
+    transactions: transactions.map((transaction) => {
+      const row = transaction as Record<string, unknown>
+      return {
+        ...row,
+        managerState: row.managerState ?? 'AWAITING_MANAGER_DECISION',
+        managerDecision: row.managerDecision ?? null
+      }
+    }),
+    ...overrides
+  }
 }
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -138,10 +203,25 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
       }
     }
 
-    async function mountQueue(items: unknown[], overrides: Record<string, unknown> = {}) {
+    async function mountQueue(
+      items: unknown[],
+      overrides: Record<string, unknown> = {},
+      detailMode: 'ok' | 'fail' = 'ok',
+      detailOverride?: (sheetId: string, sheetItems: unknown[]) => Record<string, unknown>
+    ) {
       const reviewsStore = useReviewsStore()
       reviewsStore.costCenterQueue = { items, total: items.length, page: 1, pageSize: 25, ...overrides } as never
       reviewsStore.fetchCostCenterQueue = vi.fn().mockResolvedValue(undefined)
+      ocsRequest.mockImplementation((config: { url?: string }) => {
+        const url = config?.url ?? ''
+        const match = url.match(/\/queues\/cost-center\/sheets\/([^/?]+)/)
+        if (!match) return Promise.resolve(emptyOcsResponse(config))
+        if (detailMode === 'fail') return Promise.reject(new Error('sheet details unavailable'))
+        const sheetId = decodeURIComponent(match[1] ?? '')
+        const sheetItems = items.filter((item) => (item as { sheetId?: string }).sheetId === sheetId)
+        const detail = managerSheetReview(sheetId, sheetItems)
+        return Promise.resolve(ocsEnvelope(detailOverride ? { ...detail, ...detailOverride(sheetId, sheetItems) } : detail))
+      })
       return mountView(CostCenterQueueView, '/reviews/cost-center')
     }
 
@@ -236,9 +316,9 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
       const first = wrapper.find('[data-testid="sheet-row-sheet-1"]')
       expect(first.exists()).toBe(true)
       expect(first.find('[data-testid="sheet-transaction-count"]').text()).toContain('۲')
-      expect(first.find('[data-testid="sheet-title"]').text()).toContain('reviews.sheetQueue.sheetTitleUnavailable')
-      expect(first.find('[data-testid="sheet-purchaser"]').text()).toContain('reviews.sheetQueue.purchaserUnavailable')
-      expect(first.find('[data-testid="sheet-submitted"]').text()).toContain('reviews.sheetQueue.submittedUnavailable')
+      expect(first.find('[data-testid="sheet-title"]').text()).toContain('Sheet sheet-1')
+      expect(first.find('[data-testid="sheet-purchaser-name"]').text()).toContain('User One')
+      expect(first.find('[data-testid="sheet-submitted"]').text()).toContain(formatSheetDate('2026-09-20T10:00:00Z'))
       expect(first.find('[data-testid="sheet-status"]').text()).toContain('reviews.sheetQueue.needsAttention')
       expect(first.find('[data-testid="status-badge-cost_center"]').exists()).toBe(true)
       expect(first.find('[data-testid="sheet-latest-activity"]').exists()).toBe(false)
@@ -247,17 +327,82 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
       expect(wrapper.findAll('[data-testid^="queue-row-"]'), 'the flat table is not the primary surface').toHaveLength(0)
     })
 
-    it('should keep unsupported history visibly disabled with a reason', async () => {
+    it('should count manager progress and show decided transactions inside the expanded sheet', async () => {
+      const approvedDecision = {
+        id: 'd-approved',
+        stage: 'COST_CENTER',
+        decision: 'APPROVE',
+        explanation: 'Looks right',
+        actor: { userId: 'manager1', displayName: 'Manager One', role: 'COST_CENTER_MANAGER' },
+        decidedAt: '2026-09-21T10:00:00Z'
+      }
+      const returnedDecision = {
+        id: 'd-returned',
+        stage: 'COST_CENTER',
+        decision: 'RETURN',
+        explanation: 'Receipt is missing',
+        actor: { userId: 'manager1', displayName: 'Manager One', role: 'COST_CENTER_MANAGER' },
+        decidedAt: '2026-09-22T10:00:00Z'
+      }
+
+      const wrapper = await mountQueue(
+        [queueItem('tx-1'), queueItem('tx-2')],
+        { total: 2, page: 1, pageSize: 500 },
+        'ok',
+        () => ({
+          progress: {
+            awaitingManager: 0,
+            decidedByManager: 2,
+            returnedForCorrection: 1,
+            total: 2,
+            managerComplete: true
+          },
+          transactions: [
+            { ...queueItem('tx-1'), managerState: 'DECIDED_BY_MANAGER', managerDecision: approvedDecision },
+            { ...queueItem('tx-2'), managerState: 'RETURNED_FOR_CORRECTION', managerDecision: returnedDecision }
+          ]
+        })
+      )
+
+      // "In progress" means this manager already decided something in the sheet. It must not be
+      // presented as sheet-wide completion or Senior eligibility.
+      expect(wrapper.find('[data-testid="sheet-status"]').text()).toContain('reviews.sheetQueue.statusInProgress')
+      const inProgressTab = wrapper.find('[data-testid="tab-inProgress"]')
+      expect(inProgressTab.text()).toContain('۱')
+      await inProgressTab.trigger('click')
+      expect(wrapper.findAll('[data-testid^="sheet-row-"]')).toHaveLength(1)
+
+      await wrapper.find('[data-testid="sheet-row-sheet-1"] .sheet-row__summary').trigger('click')
+      const detail = wrapper.find('[data-testid="sheet-detail-sheet-1"]')
+      expect(detail.find('[data-testid="quick-review-progress"]').text()).toContain('reviews.quickReview.progress')
+      expect(detail.find('[data-testid="quick-review-progress"]').text()).toContain('reviews.quickReview.returnedCount')
+      expect(detail.findAll('[data-testid^="quick-review-card-"]')).toHaveLength(2)
+
+      const approved = detail.find('[data-testid="quick-review-card-tx-1"]')
+      expect(approved.find('[data-testid="quick-review-status"]').text()).toContain('reviews.quickReview.card.approvedByYou')
+      expect(approved.find('[data-testid="quick-review-decision-explanation"]').text()).toContain('Looks right')
+
+      const returned = detail.find('[data-testid="quick-review-card-tx-2"]')
+      expect(returned.find('[data-testid="quick-review-status"]').text()).toContain('reviews.quickReview.card.returned')
+      expect(returned.find('[data-testid="quick-review-decision-explanation"]').text()).toContain('Receipt is missing')
+    })
+
+    it('should expose only the supported summary stats and queue tabs', async () => {
       const wrapper = await mountQueue([queueItem('tx-1')], { total: 1, page: 1, pageSize: 500 })
 
-      const reviewedTab = wrapper.find('[data-testid="tab-reviewed"]')
-      expect(reviewedTab.exists()).toBe(true)
-      expect(reviewedTab.attributes('disabled')).toBeDefined()
-      expect(wrapper.find('[data-testid="reviewed-unavailable"]').text().trim()).not.toBe('')
+      expect(wrapper.findAll('[data-testid^="stat-"]')).toHaveLength(2)
+      expect(wrapper.find('[data-testid="stat-sheets"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="stat-transactions"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="stat-reviewed"]').exists()).toBe(false)
 
-      const reviewedCard = wrapper.find('[data-testid="stat-reviewed"]')
-      expect(reviewedCard.text()).toContain('reviews.sheetQueue.stats.reviewedUnavailable')
-      expect(reviewedCard.text()).toContain('reviews.sheetQueue.stats.reviewedReason')
+      expect(wrapper.find('[data-testid="tab-all"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="tab-awaiting"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="tab-inProgress"]').exists()).toBe(true)
+      // The reviewed-history surface is not implemented and is no longer advertised as disabled.
+      expect(wrapper.find('[data-testid="tab-reviewed"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="reviewed-unavailable"]').exists()).toBe(false)
+      expect(wrapper.text()).not.toContain('reviews.sheetQueue.stats.reviewedUnavailable')
+      expect(wrapper.text()).not.toContain('reviews.sheetQueue.stats.reviewedReason')
     })
 
     it('should hand off to a transaction-level review path when a sheet is expanded', async () => {
@@ -267,14 +412,22 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
 
       const detail = wrapper.find('[data-testid="sheet-detail-sheet-1"]')
       expect(detail.exists()).toBe(true)
+      // Batch 4: the card still hands off to the full transaction review route, and additionally
+      // carries the transaction-level decision bar (the decide buttons open the shared
+      // single-transaction confirmation).
       expect(detail.find('[data-testid="review-transaction-tx-1"]').exists()).toBe(true)
       expect(detail.find('[data-testid="review-transaction-tx-2"]').exists()).toBe(true)
+      expect(detail.find('[data-testid="quick-review-decide-approve"]').exists()).toBe(true)
+      expect(detail.find('[data-testid="quick-review-decide-reject"]').exists()).toBe(true)
+      expect(detail.find('[data-testid="quick-review-decide-return"]').exists()).toBe(true)
+      expect(detail.find('[data-testid="quick-review-full-details"]').exists()).toBe(true)
 
-      // There is no sheet-level decision unit in the DOM.
+      // There is no sheet-level decision unit in the DOM: the decision gate stays
+      // transaction-by-transaction, so nothing may decide for the sheet as a whole.
       const labels = wrapper.findAll('button').map((button) => button.text().trim())
-      expect(labels).not.toContain('Approve')
-      expect(labels).not.toContain('Reject')
-      expect(labels).not.toContain('Return')
+      expect(labels).not.toContain('reviews.quickReview.approveSheet')
+      expect(labels).not.toContain('reviews.quickReview.rejectSheet')
+      expect(wrapper.find('[data-testid="sheet-decision-bar"]').exists()).toBe(false)
     })
 
     it('should refuse to group a partial pending set and offer the transaction list', async () => {

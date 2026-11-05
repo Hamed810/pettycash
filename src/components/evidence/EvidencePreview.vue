@@ -3,17 +3,31 @@ import { computed, nextTick, onBeforeUnmount, ref, useAttrs, useTemplateRef, wat
 import { t } from '@nextcloud/l10n'
 import NcButton from '@nextcloud/vue/components/NcButton'
 import NcIconSvgWrapper from '@nextcloud/vue/components/NcIconSvgWrapper'
-import { mdiClose, mdiDownload } from '@mdi/js'
+import { mdiChevronLeft, mdiChevronRight, mdiClose, mdiDownload } from '@mdi/js'
 import { getEvidenceContent } from '@/services/evidenceApi'
 import { isInlineSafeMediaType, normalizedMediaType } from '@/utils/evidencePreview'
+import { formatNumber } from '@/utils/number'
 import type { Evidence } from '@/types/api'
 
 const props = defineProps<{
 	evidence: Pick<Evidence, 'id' | 'name' | 'mediaType' | 'active'> | null
 	open: boolean
+	/**
+	 * T034: the transaction's returned evidence set, for Previous/Next navigation.
+	 *
+	 * Optional, so the purchaser surfaces that pass a single document render exactly as before.
+	 * The overlay never walks the list on its own: the parent owns the index, passes the active
+	 * document through `evidence`, and receives `navigate` events for it.
+	 */
+	documents?: ReadonlyArray<Pick<Evidence, 'id' | 'name' | 'mediaType' | 'active'>>
+	/** The active document's position in `documents`; rendered as `1 / N` when a set is given. */
+	index?: number
 }>()
 
-const emit = defineEmits<{ close: [] }>()
+const emit = defineEmits<{
+	close: []
+	navigate: [index: number]
+}>()
 
 const TITLE_ID = 'evidence-preview-title'
 const FOCUSABLE = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
@@ -30,6 +44,24 @@ let requestToken = 0
 
 const mediaType = computed(() => normalizedMediaType(props.evidence?.mediaType))
 const inlineSafe = computed(() => isInlineSafeMediaType(mediaType.value))
+
+/**
+ * T034: navigation is offered only over a provided set with a valid position. The counter is `1 / N`
+ * in the human sense — rendered through `formatNumber` so the digits follow the active locale.
+ */
+const hasNavigation = computed(() => (props.documents?.length ?? 0) > 0 && typeof props.index === 'number')
+const documentCount = computed(() => props.documents?.length ?? 0)
+const activeIndex = computed(() => (typeof props.index === 'number' ? props.index : -1))
+const canGoPrevious = computed(() => hasNavigation.value && activeIndex.value > 0)
+const canGoNext = computed(() => hasNavigation.value && activeIndex.value < documentCount.value - 1)
+
+function navigateBy(step: -1 | 1): void {
+	if (!hasNavigation.value) return
+	const target = activeIndex.value + step
+	// The buttons already disable at the ends; this guard keeps a stale event from emitting -1 or N.
+	if (target < 0 || target >= documentCount.value) return
+	emit('navigate', target)
+}
 const kind = computed<'' | 'image' | 'pdf' | 'text'>(() => {
 	if (!inlineSafe.value) return ''
 	if (mediaType.value === 'application/pdf') return 'pdf'
@@ -126,8 +158,26 @@ function onKeydown(event: KeyboardEvent): void {
 
 watch(() => [props.open, props.evidence?.id, props.evidence?.mediaType] as const, () => {
 	void load()
-	if (props.open) {
+}, { immediate: true })
+
+/**
+ * T036: focus handling lives apart from content loading. Opening captures the trigger control (a
+ * card tile, a drawer attachment row, a form thumbnail) so it can be restored on close; navigating
+ * between documents while open leaves focus alone.
+ */
+let previouslyFocused: HTMLElement | null = null
+function restoreFocus(): void {
+	if (previouslyFocused !== null && document.contains(previouslyFocused)) {
+		previouslyFocused.focus()
+	}
+	previouslyFocused = null
+}
+watch(() => props.open, (open) => {
+	if (open) {
+		previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null
 		void nextTick(() => rootRef.value?.focus())
+	} else {
+		restoreFocus()
 	}
 }, { immediate: true })
 
@@ -135,6 +185,7 @@ onBeforeUnmount(() => {
 	// Late responses are ignored, and the blob is released even when the layer unmounts mid-flight.
 	requestToken += 1
 	releaseObjectUrl()
+	restoreFocus()
 })
 </script>
 
@@ -205,27 +256,60 @@ onBeforeUnmount(() => {
 			</template>
 
 			<footer class="evidence-preview-layer__footer">
-				<NcButton
-					v-if="active"
-					variant="secondary"
-					:aria-label="t('pettycash', 'evidence.downloadNamed', { name: evidence.name })"
-					data-test="preview-download-btn"
-					@click="download">
-					<NcIconSvgWrapper :path="mdiDownload" :size="16" class="mr-2" />
-					{{ t('pettycash', 'evidence.download') }}
-				</NcButton>
-				<NcButton variant="tertiary" data-test="close-evidence-preview-footer" @click="close">
-					{{ t('pettycash', 'common.close') }}
-				</NcButton>
+				<nav
+					v-if="hasNavigation"
+					class="evidence-preview-layer__nav"
+					:aria-label="t('pettycash', 'evidence.previewNavigationLabel')"
+					data-test="preview-navigation"
+				>
+					<NcButton
+						variant="secondary"
+						:disabled="!canGoPrevious"
+						:aria-label="t('pettycash', 'evidence.previewPrevious')"
+						data-test="preview-nav-prev"
+						@click="navigateBy(-1)">
+						<NcIconSvgWrapper :path="mdiChevronLeft" :size="16" />
+						{{ t('pettycash', 'common.previous') }}
+					</NcButton>
+					<span class="evidence-preview-layer__counter" data-test="preview-counter">
+						{{ t('pettycash', 'evidence.previewCounter', { index: formatNumber(activeIndex + 1), total: formatNumber(documentCount) }) }}
+					</span>
+					<NcButton
+						variant="secondary"
+						:disabled="!canGoNext"
+						:aria-label="t('pettycash', 'evidence.previewNext')"
+						data-test="preview-nav-next"
+						@click="navigateBy(1)">
+						{{ t('pettycash', 'common.next') }}
+						<NcIconSvgWrapper :path="mdiChevronRight" :size="16" />
+					</NcButton>
+				</nav>
+				<div class="evidence-preview-layer__footer-group">
+					<NcButton
+						v-if="active"
+						variant="secondary"
+						:aria-label="t('pettycash', 'evidence.downloadNamed', { name: evidence.name })"
+						data-test="preview-download-btn"
+						@click="download">
+						<NcIconSvgWrapper :path="mdiDownload" :size="16" class="mr-2" />
+						{{ t('pettycash', 'evidence.download') }}
+					</NcButton>
+					<NcButton variant="tertiary" data-test="close-evidence-preview-footer" @click="close">
+						{{ t('pettycash', 'common.close') }}
+					</NcButton>
+				</div>
 			</footer>
 		</section>
 	</div>
 </template>
 
 <style scoped>
+
+/* Below the global `#header` (see `.transaction-surface`): the header owns the top strip. */
 .evidence-preview-layer {
 	position: fixed;
-	inset: 0;
+	inset-block: var(--header-height, 50px) 0;
+	inset-inline: 0;
 	z-index: 1700;
 	display: flex;
 	align-items: center;
@@ -307,8 +391,30 @@ onBeforeUnmount(() => {
 .evidence-preview-layer__footer {
 	display: flex;
 	flex-wrap: wrap;
+	align-items: center;
 	gap: 0.5rem;
-	justify-content: flex-end;
+	justify-content: space-between;
+}
+
+.evidence-preview-layer__footer-group {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+	margin-inline-start: auto;
+}
+
+.evidence-preview-layer__nav {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	flex-wrap: wrap;
+}
+
+.evidence-preview-layer__counter {
+	padding: 0 0.25rem;
+	color: var(--color-text-maxcontrast);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
 }
 
 @media (width <= 640px) {

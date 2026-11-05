@@ -215,6 +215,17 @@ final class ContractFixtures
         return self::id('otherTransactionId');
     }
 
+    /**
+     * The sheet the out-of-scope transaction belongs to — seeded only in the `scope` state.
+     *
+     * Needed to prove the manager-scoped read answers one indistinguishable `404` for a sheet the
+     * caller does not manage, rather than exposing its title or submission metadata.
+     */
+    public static function outOfScopeSheetId(): string
+    {
+        return self::id('otherSheetId');
+    }
+
     /** The out-of-scope transaction's current optimistic-lock value. */
     public static function outOfScopeTransactionVersion(): int
     {

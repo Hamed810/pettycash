@@ -1,108 +1,156 @@
-# AGENTS.md
+# Pettycash — Agent Operating Rules
 
-## Purpose
+Repository-wide rules for **all AI coding agents**, including read-only investigation. Follow the user's scope. These rules govern evidence selection, execution boundaries, safety, and verification; they do not replace approved Spec Kit artifacts.
 
-Repository-specific operating rules for AI coding agents working in `pettycash`.
+## 1. Authority and task routing
 
-These rules do not replace Spec Kit, its commands, or its artifacts.
+**Intended behavior authority:** `constitution.md` → active `spec.md` → `plan.md` → `tasks.md` → approved contracts. **Implemented behavior:** current source. **Observed behavior:** correctly executed tests/runtime. If they disagree, report the conflict; never silently redefine requirements from code.
 
-Source-of-truth order:
+Classify work before invoking a workflow:
 
-1. `constitution.md`
-2. active `spec.md`
-3. active `plan.md`
-4. active `tasks.md`
-5. approved contracts
-6. verified implementation
-7. runtime and test evidence
+- **New capability / functional change:** `/speckit-specify` → `/speckit-plan` → `/speckit-tasks` → bounded `/speckit-implement` → `/speckit-converge`; add `/speckit-clarify`, `/speckit-checklist`, `/speckit-analyze` when needed.
+- **Bug / broken existing behavior:** `/speckit-bug-assess` → `/speckit-bug-fix` → `/speckit-bug-test`; complete only when `verified`. Do not create a feature spec unless intended behavior changes.
+- **Approved `spec.md` + `plan.md` + `tasks.md`:** implement existing tasks only; use bounded batches for large ledgers.
+- **Requirement/scope change:** update specification and dependent artifacts before code.
+- **Investigation:** read-only; do not invoke implementation.
+- **Human-only/external blocker:** surface it; do not silently substitute scope or claim completion.
 
-When approved requirements and existing implementation disagree, do not silently redefine the requirement from the code.
-
----
-
-# Non-Negotiable Execution Rules
-
-These rules are binding for every non-trivial coding task. They apply to every coding agent and model, regardless of provider, capability tier, or role. Select a tool because the task needs its evidence, not to satisfy a tool-usage quota.
-
-1. **Discover before broad search.** For an unknown implementation area or behavior, use relevant, operational OCI semantic discovery before broad repository exploration. For a known symbol or a structural dependency question, use the appropriately scoped CGC, Serena, or exact-source lookup instead. An exact, fully known local edit does not require artificial discovery.
-2. **Route by evidence type.** OCI provides semantic/conceptual discovery; CodeGraphContext (CGC) provides indexed structural relationships and impact candidates; Serena provides precise symbol navigation; source and contracts establish implementation facts; tests/runtime establish observed behavior. Do not describe one tool as a complete substitute for another.
-3. **Readiness is not discovery.** OCI `index_status`, CGC `get_repository_stats` or `list_indexed_repositories`, and Serena `initial_instructions` are readiness/initialization checks. None counts as inspecting implementation.
-4. **Inspect before editing PHP.** Inspect the actual symbol definition/signature with Serena when available. Inspect callers, references, implementations, and inheritance when material to the edit. If Serena is unavailable after a re-check, inspect the exact defining source. Never infer a PHP signature from call sites or failing tests.
-5. **Do not replace available semantic evidence with blind scans.** Repeated `grep`, `rg`, `sed`, or unrelated test failures are not substitutes for applicable, healthy semantic or structural tools. Narrow, exact-source inspection is always appropriate for authoritative verification.
-6. **Treat OCI failures accurately.** OCI is an OpenCode plugin, not an MCP server. An OCI plugin/bridge error, empty response, or structurally invalid result does not establish that the index is empty. Check index status and use the verified OCI CLI when available before making a bridge-failure diagnosis. If the CLI is absent or also fails, use CGC, Serena, and focused source inspection and report the limitation.
-7. **Treat incomplete OCI embeddings accurately.** A completed indexing process with failed embedding batches is a *partially covered* semantic index, not a fully covered one. Do not assume an absent OCI search result proves absence in source. Check the current indexing report and `failed-batches.*.json` when coverage matters. Never silently initiate an expensive full re-embedding to fix a missed result.
-8. **Treat CGC failures accurately.** A connected MCP server does not guarantee the graph is current or comprehensive. An empty, ambiguous, or failed CGC query is not proof of no dependency. Validate repository/context selection, graph freshness, and source. Do not rebuild the graph merely because the MCP bridge or a query failed.
-9. **Protect indexing state.** Reuse existing OCI and CGC data. No force-reindex, index deletion, embedding-provider/model change, CGC backend switch, graph reset, or unapproved long-running watcher as an incidental step. Use supported incremental reconciliation only when needed, and avoid concurrent writers to the embedded CGC database.
-10. **Use bounded investigation.** Query only what the task requires. Prefer direct callers/callees, scoped modules, and short paths before recursive traversal or repository-wide graph output. Avoid redundant fan-out across tools.
-11. **Targeted verification by default.** Run affected tests and appropriate checks; reserve full suites, broad builds, and E2E gates for meaningful integration or milestone boundaries. See [Testing](#testing).
-12. **Tests are not API discovery.** Inspect existing routes, symbols, constructors, and contracts before using tests to verify their behavior. Do not repeatedly run failing tests to guess signatures.
-13. **Report actual evidence.** Completion reports for non-trivial coding work must name the code-intelligence path actually used and any unavailable tools; never claim unused tools. Example: `Code intelligence: OCI=<semantic discovery or unavailable>; CGC=<relationship analysis or not needed>; Serena=<symbol inspection or unavailable>; source=<verified files>`.
-
-The sections below elaborate this contract; they do not override it.
+Unimplemented Spec Kit features are not automatically in scope for frontend redesign or other bounded work.
 
 ---
 
-# Project Context
+## 2. Mandatory evidence-selection gate
 
-- Nextcloud 34 application.
-- Repository: `/home/ubuntu/projects/pettycash`
-- Canonical container mount: `/var/www/html/custom_apps/pettycash`
-- App id: `pettycash`
-- Nextcloud container: `pettycash-lab-nextcloud-1`
-- Database container: `pettycash-lab-db-1`
-- Docker lab: `/home/ubuntu/projects/nextcloud-lab`
-- Lab interface: `/home/ubuntu/projects/nextcloud-lab/bin/lab pettycash <command>`
-- Compose project name: `pettycash-lab`
-- Lab URL: `http://localhost:8081`
+Before broad exploration, classify the evidence required. These triggers apply to investigation, debugging, planning, and edits. When the target is not already known and a matching capability is healthy and exposed, use one bounded query from the route selected by this table before broad manual exploration. Known paths, identifiers, literals, and already-located authoritative source do not require an artificial discovery call. This is not a tool quota.
 
-This repository has its OWN Nextcloud lab. PTS has a separate one (`pts-lab`, port 8082),
-with its own database, volumes, network, users and test data. Nothing is shared. A runtime
-that carries both apps is the retired shared lab; see
-`/home/ubuntu/projects/nextcloud-lab/legacy/README.md`.
+| Need | Route | Verification |
+| --- | --- | --- |
+| Unknown behavior/concept/location | **OCI** semantic discovery | Verify consequential hits in source/contracts |
+| Cross-file callers/callees/dependency chains/module relationships/change impact | **CGC** structural graph | Verify material edges in source; account for dynamic/framework wiring |
+| Exact PHP definition/signature/implementation/inheritance or symbol-level references | **Serena** symbol navigation | Verify current defining source |
+| Known path/route/ID/literal text | Targeted read or exact text search | Do not force semantic/graph discovery |
+| Version-specific external API/library behavior | **Context7** if local evidence is insufficient | Match pinned dependency/version where possible |
+| Whether behavior actually works | Targeted tests/runtime when authorized | Search/graph/source is not runtime proof |
+
+Repository evidence routing determines which capability is appropriate for a task. Generic tool/server usage descriptions describe capability, not repository routing. Do not select a tool merely because its server description calls it “primary”, “preferred”, or “critical”, or recommends eager use.
+
+Rules:
+
+1. **Unknown area → OCI first.** One focused semantic query before broad scans; skip when path/symbol is already known.
+2. **Structural question → CGC first.** Cross-file callers/callees, dependency chains, module relationships, or blast radius require a bounded graph query when CGC is available.
+3. **Exact PHP symbol → Serena first.** Material definition/signature/implementation/inheritance or symbol-level reference questions require Serena when available, including read-only work.
+4. **Known exact text → direct lookup.** Requirement IDs, task IDs, routes, filenames, literals: use exact search/read.
+5. **Source/contracts remain authoritative for implementation facts.** Discovery tools identify candidates; they do not prove runtime behavior.
+6. **Bound queries.** Start with direct relationships, narrow paths/context, and small result sets; expand only when needed.
+
+If a question spans multiple evidence types, start with the most specific evidence required. Use another route only for a distinct unresolved sub-question or when the selected route is insufficient or unavailable.
+
+Examples:
+
+- “Where is receipt enforcement implemented?” → OCI discovery → verify use case/domain source and relevant tests.
+- “What changes if `ResubmitCorrection` changes?” → CGC callers/module deps → verify routes/source/contracts/tests.
+- “What is `ExpenseTransaction::recordDecision`'s exact signature?” → Serena symbol lookup → defining source; never infer from tests.
+- “Find `FR-085`.” → exact text search only.
+
+### Failure handling
+
+Distinguish **not exposed**, **invocation failed**, **empty/ambiguous**, **possibly stale/partial**, and **not needed**.
+
+If a required tool call fails because of invalid arguments or schema usage, inspect the exposed schema and retry once with corrected arguments. For other failures, re-check availability once. If the tool still cannot provide the required evidence, use the documented fallback and report the limitation accurately.
+
+**Never rebuild, delete, reset, or reconfigure an index as an incidental response to a failed query.**
 
 ---
 
-# Execution Boundaries — MANDATORY
+## 3. Tool rules
 
-Separate host development, Nextcloud runtime, and CGC tooling environments. Know which one is appropriate before running anything.
+Tool selection is defined only by the evidence-routing table in §2. The sections below define how to use a selected tool safely and efficiently; they do not redefine when that tool should be selected.
 
-## Host Development Environment
+### OCI — semantic discovery
 
-Run directly on the Ubuntu host from the repository:
+OCI is an **OpenCode plugin**, not an MCP server.
 
-- OpenCode
-- Spec Kit
-- Git
-- Node.js
-- npm / npx
-- Vite
-- Vitest
-- TypeScript / `vue-tsc`
-- ESLint
-- Stylelint
-- Playwright
+- When selected by §2, use OCI for one focused semantic discovery pass over unfamiliar implementation areas, concepts, analogous code, or supported architecture context.
+- Check readiness only when uncertain; readiness checks are not code investigation.
+- Prefer one compact `codebase_context`-style pass for unfamiliar code; once scoped, use exposed definition/call-graph operations or exact source instead of repeated semantic searches.
+- If the bridge fails, verify the installed OCI CLI and its actual syntax before using it; do not assume executable names/paths.
+- Missing semantic hits do not prove source absence, especially with partial embedding coverage.
+- Do not force reindex or change embedding model/provider to repair lookup failures.
+- During active edits, current source and Serena outrank a stale semantic index; refresh only at a justified stable checkpoint using supported incremental reconciliation.
 
-Prefer existing `package.json` scripts:
+### CodeGraphContext — structural graph
+
+Current project deployment:
+
+- MCP server: `codegraphcontext`
+- image: `pettycash-cgc:current`
+- repository in CGC: `/workspace`
+- persistent config/graph in container: `/home/cgc/.codegraphcontext`
+- host persistence: `/home/ubuntu/projects/pettycash/.cgc-data`
+- backend: embedded FalkorDB Lite unless verified otherwise
+
+When selected by §2, use the existing graph and prefer bounded `find_code` or `analyze_code_relationships` queries for the required structural evidence, such as direct callers/callees, importers, `class_hierarchy`, `call_chain`, or `module_deps`. Use repository stats/listing only as readiness checks. Resolve ambiguous symbols by file/class/namespace. Missing edges do not prove absence; verify dynamic dispatch, dependency injection, framework wiring, and cross-language paths in source.
+
+Prefer high-level tools over raw Cypher; if Cypher is necessary, keep it **read-only**. Never perform ordinary-investigation writes: no repository deletion, package ingestion, bundle loading, schema mutation, watcher startup, graph reset, or second writer/container against the same embedded store. “Already indexed” is not a freshness guarantee; use only the verified incremental update path when freshness materially matters.
+
+### Serena — exact symbols
+
+When §2 selects Serena, use the actual symbol operations required for the exact PHP definition, signature, implementation, inheritance/type relationship, or symbol-level references.
+
+Direct source reading verifies the result; it does not replace the symbol query.
+Use the **actual tool surface exposed by the active Serena configuration**; effective names may vary by backend/configuration. Initialize as required by the integration (for example `initial_instructions` once when applicable); initialization does not count as symbol inspection.
+
+Use symbol-level operations for definitions, references, implementations, inheritance/type relationships, and diagnostics. Before modifying PHP, inspect the actual defining symbol/signature plus material callers/references/implementations. Never discover PHP APIs by repeatedly failing tests.
+
+### Context7 — external docs
+
+When §2 selects Context7, resolve the library ID first, then query docs, unless the exact Context7 ID is already known. Keep each query to one concept and prefer the pinned version. If unavailable, use pinned local dependency information and official docs when permitted; state uncertainty. Do not call it merely to satisfy a checklist.
+
+---
+
+## 4. Index/tooling-state safety
+
+- Reuse existing OCI and CGC state.
+- Graph/index maintenance is never an ordinary investigation step. Do not start watchers, index/reindex repositories, rebuild/reset/delete graph or index state, change backends or embedding providers/models, install indexing dependencies, or introduce another writer unless the user explicitly requests that maintenance operation.
+- Connected MCP does not prove graph freshness/completeness. OCI `complete` may still have failed embedding batches; inspect coverage only when a missing result affects a decision.
+- Keep `.opencode/`, `.cgc-data/`, `.serena/`, `.tools/`, dependencies/generated assets, and sensitive env files out of graph/index scope where configured.
+- Coordinate any CGC maintenance with the running MCP server; avoid concurrent writers.
+
+---
+
+## 5. Execution boundaries
+
+Project identity:
+
+- Nextcloud app/version: `pettycash`, `34`
+- repository: `/home/ubuntu/projects/pettycash`
+- runtime mount: `/var/www/html/custom_apps/pettycash`
+- lab root: `/home/ubuntu/projects/nextcloud-lab`
+- lab command: `/home/ubuntu/projects/nextcloud-lab/bin/lab pettycash <command>`
+- runtime containers: `pettycash-lab-nextcloud-1`, `pettycash-lab-db-1`
+- lab URL: `http://localhost:8081`
+
+Pettycash and PTS are separate labs. `pts-lab-*` resources and port `8082` belong to the sibling project.
+
+### Host development
+
+Run OpenCode, Spec Kit, Git, Node/npm, Vite, Vitest, TypeScript/`vue-tsc`, ESLint, Stylelint, and Playwright on Ubuntu host. Prefer existing scripts:
 
 ```bash
-npm test              # vitest run
-npm run typecheck     # vue-tsc --noEmit
-npm run lint          # eslint src tests/Frontend
+npm test
+npm run typecheck
+npm run lint
 npm run stylelint
 npm run build
 npm run test:e2e
-npm run check         # portability + typecheck + lint + stylelint + test + build
+npm run check
 ```
 
-`npm run check` covers the frontend gates only. It does not run PHP tests.
+`npm run check` covers frontend gates only; it does not run PHP tests.
 
-Do not move frontend tooling into the Nextcloud container unless explicitly required.
+### PHP / Nextcloud runtime
 
-## PHP / Nextcloud Runtime
-
-PHP and Nextcloud tooling are container-only.
-
-Never run on the host:
+Never run host PHP/Composer/PHPUnit/OCC, including version probes:
 
 ```bash
 php ...
@@ -113,351 +161,143 @@ vendor/bin/*
 occ ...
 ```
 
-Do not probe host PHP or Composer (`php -v`, `which php`, `command -v php`, `composer --version`, `which composer`).
+Use wrappers only:
 
-Use repository wrappers:
+```bash
+scripts/dev/phpunit <test>
+scripts/dev/phpunit --list-tests
+scripts/dev/occ <args>
+scripts/dev/composer <args>
+scripts/dev/in-container <cmd>
+scripts/dev/opcache-settle
+scripts/dev/route-settle
+scripts/dev/route-cache-clear
+```
 
-| Need | Command |
-|---|---|
-| Run all PHP tests | `scripts/dev/phpunit` |
-| Run one PHP test | `scripts/dev/phpunit <test>` |
-| List PHP tests | `scripts/dev/phpunit --list-tests` |
-| OCC | `scripts/dev/occ <args>` |
-| Composer | `scripts/dev/composer <args>` |
-| Arbitrary runtime command | `scripts/dev/in-container <cmd>` |
-| Opcode settle | `scripts/dev/opcache-settle` |
-| Route settle | `scripts/dev/route-settle` |
-| Route cache clear | `scripts/dev/route-cache-clear` |
+If a required wrapper is missing/non-executable, stop that operation and report it. Do not fall back to host PHP or ad-hoc `docker exec` when a wrapper exists.
 
-Do not manually construct `docker exec` commands when a wrapper exists. Do not guess container paths.
+### Composer boundary
 
-If a required wrapper is missing or not executable: stop that operation, report the missing wrapper, and do not fall back to host PHP, invent a replacement runtime, or silently construct an ad-hoc Docker command.
-
-A `php: not found` result is an execution-boundary violation, not an environment fact. Use the wrapper.
-
-## CodeGraphContext Tooling Container
-
-CGC is a separate development-tooling container, **not** the Nextcloud application/runtime container. Its Python dependencies belong in the CGC Docker image, not on the host or inside Nextcloud. Do not move PHP/Composer execution into the CGC container.
-
-Current local deployment (verify before relying on it):
-
-- MCP server name: `codegraphcontext` (registered through the MCP client).
-- Docker image: `pettycash-cgc:current`.
-- Source inside CGC: `/workspace`, mapped read-only from `/home/ubuntu/projects/pettycash`.
-- Persistent CGC configuration and graph: `/home/cgc/.codegraphcontext`, bind-mounted from `/home/ubuntu/projects/pettycash/.cgc-data`.
-- Embedded database backend: FalkorDB Lite, unless its verified configuration says otherwise.
-- CGC ignore rules: `.cgcignore`, combined with applicable Git ignore rules.
-
-Use the configured MCP integration for routine graph queries. Do not install Python packages on the host, replace the Docker image, modify global MCP settings, or launch a second database-writing process as part of normal code investigation. For any CLI fallback, confirm the container uses the **same** repository and persistent-data mounts as the MCP server, and coordinate access to the embedded database. A CLI that starts with a fresh, empty home directory is not checking the indexed project.
-
-## Composer Boundary
-
-Composer is external development tooling and does not run inside the shared Nextcloud runtime container. Use only `scripts/dev/composer ...`.
-
-Do not:
-
-- run Composer directly on the host
-- install Composer into the shared runtime container
-- change Composer-managed file ownership back to `www-data` or root
-- bypass required platform extensions merely to force dependency resolution
+Use only `scripts/dev/composer <args>`. Do not install Composer into the shared runtime, change Composer-managed ownership to `www-data`/root, or bypass required platform extensions merely to force dependency resolution.
 
 ---
 
-# Runtime Caches — MANDATORY
+## 6. Runtime caches
 
-Stale caches produce false results. A result affected by a stale cache is not evidence.
+A stale-cache result is not evidence.
 
-## Opcode Cache
-
-PHP HTTP behavior may be stale after edits under `lib/` or `appinfo/`.
-
-- `scripts/dev/phpunit` settles the opcode cache before PHP verification. Do not substitute direct PHPUnit execution.
-- For direct live-HTTP probing after edits under `lib/` or `appinfo/`, settle first with `scripts/dev/opcache-settle`.
-- Settle before measuring; do not wait for a stale HTTP result to reveal the problem.
-- If `scripts/dev/opcache-settle` reports an outstanding wait or failure, the affected HTTP or contract-test result is invalid until resolved.
-
-Editing frontend code, tests, documentation, or development scripts does not require opcode settling unless runtime PHP source also changed.
-
-## Route Cache
-
-Changes to `appinfo/routes.php` require route-cache handling:
+- After `lib/` or `appinfo/` PHP edits, `scripts/dev/phpunit` handles its own opcode settling; before direct live-HTTP checks run `scripts/dev/opcache-settle`.
+- If opcode settling reports a wait/failure, affected HTTP/contract evidence is invalid until resolved.
+- After `appinfo/routes.php` changes, use:
 
 ```bash
 scripts/dev/route-settle
 scripts/dev/route-cache-clear
 ```
 
-Opcode settling does not refresh Nextcloud's route collection. Do not substitute ad-hoc APCu clearing or guessed Apache signals.
+Opcode settling does not replace route-cache handling.
 
 ---
 
-# Docker Safety — MANDATORY
+## 7. Docker safety
 
-The Docker environment is shared by pettycash and other applications. This repository does not own Docker lifecycle.
+The Docker host is shared; this repository does not own global Docker lifecycle.
 
-Never:
+Pettycash runtime resources include:
 
-- delete Docker volumes or run `docker compose down -v`
-- remove Nextcloud or database volumes
-- create a replacement Docker environment
-- recreate unrelated containers
-- change the Compose project name
-- modify lab Docker configuration without explicit instruction
+- `pettycash-lab-nextcloud-1`
+- `pettycash-lab-db-1`
+- `pettycash-lab-volume-init`
+- `pettycash-lab_default`
+- `pettycash-lab_nc-data`
+- `pettycash-lab_nc-db`
 
-Lab resources owned by this project: `pettycash-lab-nextcloud-1`, `pettycash-lab-db-1`,
-`pettycash-lab-volume-init` container, `pettycash-lab_default`, `pettycash-lab_nc-data`,
-`pettycash-lab_nc-db`.
+Never delete volumes, run `docker compose down -v`, replace the lab because it is stopped, recreate unrelated containers, change the Compose project name, modify lab Docker configuration without approval, or stop/start/reconfigure PTS resources. Do not inspect/manipulate PTS volumes except through an explicitly approved read-only isolation check.
 
-The PTS lab (`pts-lab-*`) belongs to the sibling repository. Never stop, start, reconfigure
-or inspect its volumes as part of work here — except with `bin/lab isolation`, which only
-reads. A change that makes this app appear in the PTS lab, or vice versa, is a defect, not a
-configuration choice.
-
-For runtime recovery, use the lab at `/home/ubuntu/projects/nextcloud-lab`. Do not run
-Docker Compose from this repository:
+For recovery, inspect first and use:
 
 ```bash
 /home/ubuntu/projects/nextcloud-lab/bin/lab pettycash up
 ```
 
-Inspect first with `docker ps -a`. Do not create a new environment because the existing one
-is stopped.
+Do not run Docker Compose from the Pettycash repository. CGC is tooling, not runtime: do not move PHP/Composer work into CGC or install CGC Python dependencies on host/Nextcloud.
 
 ---
 
-# Code Investigation and Tool Routing
+## 8. Architecture and frontend
 
-The binding rules are in [Non-Negotiable Execution Rules](#non-negotiable-execution-rules). This section provides specific routing and lifecycle guidance; it is model- and agent-independent.
+Preserve DDD boundaries:
 
-## Evidence Hierarchy
+- **Domain:** entities/value objects/invariants; no Nextcloud-service dependencies.
+- **Application:** use cases and workflow orchestration.
+- **Infrastructure:** persistence, Nextcloud services, external integrations.
+- **Presentation:** OCS controllers and Vue UI.
 
-Choose the narrowest source that can answer the question reliably:
+- For frontend redesign work, respect the approved scope, design decisions, and acceptance gates in `docs/frontend-redesign/` when those documents exist in the current Git state.
 
-| Question | Preferred evidence |
-|---|---|
-| Unknown behavior, concepts, implementation precedent, related specs | OCI semantic discovery, when usable |
-| Known indexed symbol or keyword | CGC `find_code`, OCI lookup, or Serena as appropriate |
-| Callers, callees, module dependencies, inheritance, change-impact candidates | CGC graph relationships |
-| Exact PHP definition, signature, references, implementations | Serena + actual source |
-| Nextcloud routes and dynamic registration | `appinfo/routes.php`, controllers, consumers, and actual source |
-| Exact text, task/requirement IDs, or known location | Targeted source/text search |
-| Actual control flow and approved behavior | Source, specs, and contracts |
-| Observed behavior | Appropriate tests and runtime evidence |
-| Actual changes | `git status` and `git diff` |
+- Do not expand business logic, API, or persistence scope without explicit approval.
 
-OCI and CGC are discovery evidence, not runtime proof. A graph edge, a search hit, an inferred community, and an exact source definition have different evidentiary strengths. Verify consequential claims against real source; tests/runtime verify behavior.
+Do not move business rules into controllers or views.
 
-## Task-Driven Investigation
+Frontend:
 
-1. **Classify the question.** Determine whether conceptual discovery, precise symbol inspection, structural relationship analysis, or a known-source lookup is required. Do not invoke all tools routinely.
-2. **Find the entry point.** When the area is unknown, prefer targeted OCI semantic discovery. If the target is already known, use CGC/Serena or the defining file directly rather than repeating conceptual search.
-3. **Trace dependencies when justified.** Use CGC for scoped callers, callees, importers, module dependencies, class hierarchy, and likely blast radius. Begin with direct relationships; expand depth only when a change crosses boundaries or initial results are insufficient.
-4. **Verify exact definitions.** Use Serena for PHP symbols and source inspection for cross-language, dynamic, generated, or framework-mediated behavior. Trace Nextcloud routes in source; do not infer routes from graph edges.
-5. **Inspect contracts before edits.** Check approved specs and API contracts, affected interfaces, concrete callers, and tests. Preserve existing architecture and scope.
-6. **Avoid unsupported claims.** No tool's missing edge, zero callers, dead-code label, high-complexity score, or ambiguous match alone justifies removal or refactoring. Reconcile conflicting results with source and runtime evidence.
-7. **Check freshness when it matters.** For architectural or pre-edit graph claims, verify the correct repository/branch/context and whether the index reflects relevant recent edits. Do not silently index or rebuild merely to satisfy a readiness ritual.
-8. **Constrain output.** Prefer path-scoped searches, unique symbol identifiers, short call chains, and concise tool output. Do not dump whole graphs or run broad tests to discover unrelated code.
-9. **Handle outage by evidence type.** Use the supported local fallback for the failed tool if safe, then an alternate relevant tool and exact-source verification. State limitations rather than inventing missing capabilities.
-
-## OCI — Semantic Discovery (OpenCode Plugin)
-
-OCI remains installed and is **not** superseded or disabled by this policy. It is an OpenCode plugin, not part of the MCP server list. Use it for unknown implementation areas, conceptual/behavior discovery, related code and artifacts, analogous implementations, semantic search, and supported architecture or branch/PR context.
-
-OCI capabilities, **when actually exposed by the installed plugin**, may include `codebase_context`, `codebase_peek`, `codebase_search`, `implementation_lookup`, `call_graph`, `architecture_context`, `code_communities`, and `pr_impact`. Discover the usable tool surface in the active session; do not assume every capability or branch comparison is supported.
-
-`index_status` is a readiness/coverage diagnostic, not discovery. OCI rankings, embeddings, chunk boundaries, inferred relationships, and community labels are not authoritative. Missing semantic hits require source or other-tool verification, especially after indexing reports partial embedding failures.
-
-### OCI Bridge Failure and CLI Fallback
-
-- Distinguish plugin registration from a working invocation, and an invocation failure from an empty/partial index.
-- If the OCI tool bridge fails, check `index_status` if callable. For a usable index, try the OCI CLI **only if its executable and command syntax are verified in the current installation**; known commands include `ocbi search`, `ocbi definition`, `ocbi graph callers`, and `ocbi graph callees`.
-- The previously documented executable candidate is `~/.config/opencode/node_modules/.bin/ocbi`; check that it exists rather than assuming it does.
-- If the CLI is missing, incompatible, or fails, use CGC for structural questions, Serena for exact symbols, and focused source inspection. Report which path succeeded.
-- Never run a full or forced OCI reindex as a bridge repair. Do not alter embedding models/providers to workaround a failed lookup.
-
-### OCI Index Lifecycle
-
-- Check `index_status` before proposing an OCI refresh and reuse a recent status until indexing or repository/branch state changes.
-- Indexing `complete` does **not** imply 100% embedding coverage when the run reports failed chunks. Inspect the relevant failure report when a decision depends on missing coverage.
-- Keep existing index files, failure reports, branch metadata, and provider configuration intact unless the owner explicitly approves maintenance.
-- Do not treat catalog entries, semantic vectors, or branch mappings as interchangeable evidence.
-- Avoid expensive re-embedding for routine tasks; use a supported incremental operation only with a concrete freshness need and an understood cost.
-- `.opencode/index/` is tooling state, not application source. Do not infer that locally deployed embedding infrastructure implies zero network traffic; verify the configured endpoint when privacy or networking is relevant.
-
-### OCI Freshness During Active Work
-
-During an active implementation slice, the OCI index may temporarily lag behind the current working tree.
-
-For files that have been edited since the last OCI refresh, current source and Serena are the authoritative evidence for the latest implementation state.
-
-Do not trigger OCI reindexing after every intermediate edit, save, test run, or transient work-in-progress change.
-
-Refresh OCI incrementally only when the current implementation slice has reached a stable checkpoint, such as after a coherent edit set is complete, targeted verification has passed, or before a new investigation depends on up-to-date semantic discovery.
-
-Do not use forced reindexing for normal freshness updates.
-
-If OCI results conflict with current source during an active slice, treat the source as current and the OCI result as potentially stale until the next successful incremental refresh.
-
-## CodeGraphContext (CGC) — Structural Graph Analysis (MCP)
-
-CGC complements OCI and Serena. Use the **already indexed** graph for cross-file structure, function calls, module dependencies, inheritance, and candidate change impact; it is not a semantic-embedding replacement or proof of runtime call paths.
-
-### Primary Graph Workflow
-
-1. Select the indexed repository and, when relevant, confirm registration with `list_indexed_repositories` and summary with `get_repository_stats`. These are readiness checks, not analysis.
-2. Locate a relevant symbol or file with `find_code` or an exact known path. Narrow by repository and path/context when supported.
-3. Use `analyze_code_relationships` for relevant direct callers/callees, importers, inheritance, module dependencies, or a bounded call chain. Avoid unbounded traversal unless explicitly needed.
-4. Resolve ambiguous names with their defining file, class/namespace, and source. If a graph relationship is missing, also examine dynamic dispatch, framework conventions, dependency injection, and cross-language integration.
-5. Verify implementation-significant results with Serena and exact source. Cite the real file/symbol in the task report rather than presenting raw graph results as authoritative.
-
-Tool names and parameters may differ across installed CGC versions. Prefer the tools actually exposed by the connected server. The MCP capabilities documented for CGC include `find_code`, `analyze_code_relationships`, `get_repository_stats`, `list_indexed_repositories`, and `execute_cypher_query`. Never fabricate unsupported tool names, query types, or relationships.
-
-### Cypher and Destructive Tools
-
-- Prefer high-level, narrowly scoped graph tools over free-form `execute_cypher_query`.
-- Use **read-only** Cypher when standard tools cannot answer a justified structural question. Do not run write, delete, create, merge, reset, or schema-altering statements as ordinary discovery.
-- Graph ingestion, repository deletion, package downloads, watcher startup, export/import, backend switches, and DB maintenance are state-changing operations requiring a separate justified maintenance task and appropriate authorization.
-- Complexity and dead-code analysis are investigation leads only, not grounds for deletion or automatic refactoring.
-
-### CGC Graph Freshness and Safety
-
-- The current CGC repository is persisted under `.cgc-data/` and governed by `.cgcignore`. Reuse it; do not create an alternate DB inadvertently.
-- **An already-indexed skip is not a freshness check.** The CLI may report the repository is already indexed even when files have changed. Do not assume that rerunning `cgc index .` reconciles every edit.
-- For stale graphs, follow the verified incremental refresh procedure supported by the installed version (for example, the documented update operation or a correctly configured watcher with startup reconciliation). Inspect CLI help and coordinate any write with the running MCP server first.
-- Watching is opt-in; do not assume it is running merely because MCP is connected. A watcher started without startup reconciliation may miss changes made while it was stopped.
-- Avoid concurrent CGC indexing/watch/maintenance against the same embedded FalkorDB Lite store. Do not start background processes, force-index with `--force`, delete graph data, or switch databases without explicit authorization.
-- Check ignore behavior before any new or expanded indexing; keep `.tools/`, `.cgc-data/`, `.opencode/`, `.serena/`, dependencies, generated assets, and sensitive environment files out of the graph.
-- Some dynamic or ambiguous call relationships may be unresolved. Their absence does not imply the calls are absent in the program. Verify source when they matter.
-- If MCP queries fail, confirm server/repository/context selection first. A standalone CLI fallback must target the same mounted data; avoid concurrent embedded DB access. Treat failure as integration or access trouble, not as a reason to rebuild.
-
-## Serena — Precise Symbol Navigation
-
-Serena is the authoritative symbol-navigation layer for PHP source work. Call `initial_instructions` once per relevant session before first Serena-oriented code investigation. This initializes the tool; it does not count as inspecting a symbol. Do not reinitialize unless the integration restarts or active project changes.
-
-Use Serena for definitions, exact symbol boundaries, references, implementations, inheritance and interface relationships, diagnostics, and refactoring targets. Verify concrete PHP symbols before modifying them. A known file path does not make a text occurrence semantically equivalent to a symbol reference.
-
-### Fallback Order
-
-`Serena available → inspect actual symbols`
-
-`Serena unavailable after re-check → inspect the exact defining source`
-
-Never infer API signatures from call sites or use repeated failing tests to discover them.
-
-## Context7 — External Documentation
-
-Use Context7 for external framework/library/version-specific documentation when local contracts and source are insufficient and the MCP service is reachable. A DNS or connectivity error (for example, `EAI_AGAIN`) is an integration failure, not evidence that the external API lacks documentation.
-
-When Context7 is unavailable, consult pinned local dependency versions, vendored types/docs, and official documentation if network access is permitted and available. State any uncertainty. Do not call Context7 merely to satisfy a checklist.
+- approved UI library: `@nextcloud/vue` **9.x**;
+- **Vuetify is not approved**: do not install/configure it or introduce `v-*` components to make tests pass;
+- treat existing Vuetify-style drift as an issue to resolve through the approved workflow, not as precedent;
+- preserve approved financial rules, roles, permissions, APIs, and persistence unless scope explicitly changes;
+- for approved UI work, verify relevant FA/EN, RTL/LTR, light/dark, responsiveness, accessibility, and loading/error/empty states.
 
 ---
 
-# Testing
+## 9. Verification
 
-Use the correct execution environment for every test (see [Execution Boundaries](#execution-boundaries--mandatory)). Scale verification to change scope and meaningful milestone boundaries — not to a fixed "every N tasks" rule.
+During implementation prefer affected-area checks: targeted `scripts/dev/phpunit <test>`, targeted Vitest, scoped lint, and typecheck when type relationships change. Do not run broad suites for reassurance or use failing tests as API discovery.
 
-## During Implementation
-
-- Targeted PHP test file/class/filter via `scripts/dev/phpunit <test>`
-- Targeted Vitest spec(s)
-- File-scoped lint where appropriate
-- No full-suite reruns merely for reassurance
-
-## Before Completing One Task
-
-- Affected-area verification
-- Typecheck when type relationships changed
-- Relevant lint/style checks
-- Expand scope only when the change is cross-cutting
-
-## Feature / Phase / Milestone Boundary
+At feature/phase/milestone boundaries, broader gates may include:
 
 ```bash
 npm run check
 scripts/dev/phpunit
 ```
 
-Run E2E or compatibility suites only when the task or environment requires it.
-
-## Rules
-
-- Do not duplicate checks already included in `npm run check` on an unchanged tree.
-- Do not rerun an unchanged full-project check just to obtain the same evidence again.
-- A broad regex filter is not automatically "targeted". Prefer explicit affected tests where practical.
-- A passing test from the wrong runtime is not evidence.
+Run E2E/compatibility only when required by scope, acceptance criteria, or an integration boundary. Do not duplicate unchanged checks already covered by `npm run check`; prefer explicit affected tests over broad regex filters. A passing test from the wrong runtime is not evidence, and an unexecuted test must never be reported as passed.
 
 ---
 
-# Spec Kit
+## 10. Git safety
 
-Spec Kit owns task sequencing, the implementation workflow, artifact workflow, and requested scope. This file owns repository safety, environment/runtime rules, investigation/tool-routing rules, and verification policy.
-
-Choose the Spec Kit workflow by request type: new functionality uses the feature/specification flow; an existing-behavior bug uses the bug-assess/fix/test flow; already-approved `spec.md`, `plan.md`, and `tasks.md` go directly to bounded implementation; investigation alone does not trigger implementation. Do not recreate existing artifacts or silently change accepted requirements.
-
-When running a Spec Kit workflow:
-
-- Follow the active Spec Kit command and artifacts.
-- Treat approved specifications and contracts as intended-behavior authority.
-- Do not let existing implementation silently redefine approved requirements.
-- Do not silently reinterpret a requested scope. If it contains human-only, externally blocked, or non-agent-executable work, surface that constraint before changing scope rather than substituting a self-selected critical path.
-
-For Spec Kit artifacts:
-
-- Use exact text search/read for known task IDs, requirement IDs, headings, checkbox state, or exact wording.
-- Use OCI for semantic or cross-artifact discovery when that improves the task; use CGC for relevant structural relationships. Neither substitutes for exact known task-ID searches or the authoritative Spec Kit artifacts.
+Before significant changes inspect `git status` and relevant `git diff`. Never discard unrelated changes, reset/clean unrelated state, stage unrelated files, use broad `git add .`/`git add -A` in a dirty tree, or push automatically.
 
 ---
 
-# Architecture
+## 11. Reports and ADRs
 
-Preserve the existing layer boundaries. Do not move business logic into controllers or UI components.
-
-- **Domain** — business rules, entities, value objects, invariants. Must not depend on Nextcloud services.
-- **Application** — use cases, orchestration, workflows.
-- **Infrastructure** — persistence, Nextcloud services, external integrations.
-- **Presentation** — OCS API, Vue frontend.
-
-## Frontend Framework
-
-Approved UI library: `@nextcloud/vue` 9.x. Vuetify is not part of the approved stack.
-
-Do not install Vuetify, introduce `v-*` Vuetify components, or configure Vuetify merely to make tests pass.
-
-Treat Vuetify-style components found in existing source as implementation drift and resolve them through the approved project workflow.
+Use `docs/reports/` for significant durable work reports when the workflow requires them. Put durable architectural decisions under `docs/decisions/` as ADRs. Do not create ADRs for routine bug fixes, ordinary refactors, temporary implementation details, or agent workflow rules; do not create process-heavy reports for trivial work.
 
 ---
 
-# Git Safety
+## 12. Completion-report contract
 
-Before significant changes, inspect `git status` and `git diff`. These are authoritative for what changed.
+For non-trivial work report only evidence actually obtained: scope completed/investigated, concrete files/symbols/contracts, tests/checks actually executed and results, unresolved gaps, and the actual code-intelligence path.
 
-Never:
+Use a concise evidence line such as:
 
-- discard unrelated changes
-- reset repository state
-- clean unrelated working-tree content
-- stage unrelated files
-- use broad `git add .` or `git add -A` in a dirty tree
-- push automatically
+```text
+Code intelligence: OCI=<used | unavailable | not needed>; CGC=<used | unavailable | not needed>; Serena=<used | unavailable | not needed>; source=<verified paths>; tests=<executed checks | not run>.
+```
 
-Preserve unrelated working-tree changes.
+Distinguish **not needed** from **unavailable/failed**. If an applicable healthy tool was skipped, give a task-relevant reason; “source was easier” is not sufficient for a structural/symbol question covered by the mandatory gate. Never claim unexecuted tools, tests, runtime probes, or completed tasks.
 
----
-
-# Reports and Architecture Decisions
-
-Significant completed work follows the repository's existing reporting conventions under `docs/reports/`. Do not create process-heavy reports for trivial changes unless the active workflow requires them.
-
-Durable architectural decisions belong under `docs/decisions/`. Create ADRs for those, not for routine bug fixes, ordinary refactoring, temporary implementation details, or agent workflow rules.
+**Final principle:** discovery is not proof; text occurrence is not a semantic reference; stale-cache output is not evidence.
 
 ---
 
-# Final Principles
+## Official references
 
-Keep repository work bounded, evidence-based, and safe.
-
-- OCI discovers conceptual/semantic context; CGC maps structural relationships and candidate impact; Serena verifies exact PHP symbols; source and contracts establish implementation; tests/runtime verify behavior; git verifies the change set.
-- Discovery is not proof. Text occurrence is not a semantic reference.
-- A passing test from the wrong runtime is not evidence.
-- A result affected by stale runtime caches is not evidence.
-- If a preferred tool was unavailable, say so instead of presenting a weaker method as equivalent.
+- OpenCode instructions: `https://opencode.ai/v2/docs/instructions`
+- OpenCode rules: `https://docs.opencode.ai/docs/rules/`
+- OCI: `https://github.com/Helweg/open-codebase-index`
+- CodeGraphContext MCP: `https://codegraphcontext.github.io/reference/mcp/`
+- Serena tools: `https://oraios.github.io/serena/01-about/035_tools.html`
+- Context7 MCP: `https://context7.com/docs/resources/all-clients`
+- Spec Kit: `https://github.github.com/spec-kit/quickstart`

@@ -75,6 +75,9 @@ final class FaultIdentifierCoverageTest extends TestCase
         ],
         'ReviewController.php' => [
             'decide' => 'transactionId',
+            // B004: the additive manager-scoped sheet read addresses one sheet, so a fault on it
+            // carries that sheet's public id in the third `map()` slot.
+            'costCenterSheet' => 'sheetId',
         ],
     ];
 

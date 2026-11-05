@@ -49,6 +49,9 @@ return [
         ['name' => 'publicEvidence#show', 'url' => '/api/v1/public/evidence/{token}', 'verb' => 'GET'],
 
         // Workflow queue routes
+        // B001–B004: additive manager-scoped sheet read. Declared before the generic `{stage}`
+        // route so the more specific path is matched first even if router ordering changes.
+        ['name' => 'review#costCenterSheet', 'url' => '/api/v1/queues/cost-center/sheets/{sheetId}', 'verb' => 'GET'],
         ['name' => 'review#index', 'url' => '/api/v1/queues/{stage}', 'verb' => 'GET'],
         ['name' => 'review#returns', 'url' => '/api/v1/returns', 'verb' => 'GET'],
         ['name' => 'review#decide', 'url' => '/api/v1/transactions/{transactionId}/decisions', 'verb' => 'POST'],
