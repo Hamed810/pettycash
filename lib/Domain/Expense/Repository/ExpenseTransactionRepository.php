@@ -41,6 +41,33 @@ interface ExpenseTransactionRepository
      * @return list<ExpenseTransaction>
      */
     public function findByCostCenterIds(array $costCenterIds, ?WorkflowStage $stage = null, ?TransactionStatus $status = null): array;
+
+    /**
+     * Compact, database-side projection for `ManagementReviewService::getSeniorSheetsForManager()`.
+     *
+     * Answers one scalar row per candidate sheet — a sheet that has at least one transaction whose
+     * **active** revision sits in a managed cost centre — so the list path never hydrates historical
+     * transactions as full aggregates before pagination and never issues per-sheet or per-transaction
+     * reads. The row carries the senior-scoped counts, the Return flag, the whole-sheet Cost Center
+     * completion-gate result (evaluated over **every** transaction of the sheet, including those
+     * outside the given scope) and the activity components the caller folds into `latestActivityAt`.
+     *
+     * @param string $actorUid the acting senior manager's uid, whose own decisions are disclosed
+     * @param list<int> $costCenterIds managed cost-centre scope (matched on the active revision)
+     * @return array<int, array{
+     *   awaitingSenior: int,
+     *   decidedBySenior: int,
+     *   returnedByThisSenior: bool,
+     *   ccGateUnresolved: int,
+     *   activityCreated: ?\DateTimeImmutable,
+     *   activityUpdated: ?\DateTimeImmutable,
+     *   activityDecided: ?\DateTimeImmutable,
+     *   sheetCreated: ?\DateTimeImmutable,
+     *   sheetFirstSubmitted: ?\DateTimeImmutable,
+     *   sheetCompleted: ?\DateTimeImmutable,
+     * }> keyed by the sheet's database id
+     */
+    public function seniorSheetListRows(string $actorUid, array $costCenterIds): array;
     /** @return list<ExpenseTransaction> */
     public function findByStageAndStatus(WorkflowStage $stage, ?TransactionStatus $status = null, int $offset = 0, int $limit = 100): array;
     /** @return list<ExpenseTransaction> */

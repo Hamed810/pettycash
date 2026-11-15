@@ -81,8 +81,13 @@ describe('QuickReviewCard', () => {
 		}))
 		expect(wrapper.find('[data-testid="quick-review-amount"] bdi').exists()).toBe(true)
 		expect(wrapper.find('[data-testid="quick-review-id"]').element.tagName).toBe('BDI')
-		expect(wrapper.find('[data-testid="quick-review-meta-unavailable"]').text())
-			.toContain('reviews.quickReview.card.metaUnavailable')
+		// T036: the id is a Latin token inside a Persian sentence — the bdi is pinned to LTR so a
+		// digit-leading identifier cannot fall back to the RTL embedding direction.
+		expect(wrapper.find('[data-testid="quick-review-id"]').attributes('dir')).toBe('ltr')
+		// The old unconditional "further detail fields unavailable" note is intentionally gone: the
+		// card is now paired with the guarded detail read, so the note no longer describes the data.
+		// Honest unavailable states live on the surfaces that actually lack a field.
+		expect(wrapper.find('[data-testid="quick-review-meta-unavailable"]').exists()).toBe(false)
 	})
 
 	it('shows the awaiting state without inventing a decision note', () => {

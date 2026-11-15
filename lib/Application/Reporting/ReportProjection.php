@@ -79,6 +79,31 @@ final class ReportProjection
     ];
 
     /**
+     * The columns of the Feature 007 `senior-queue` export row (T028).
+     *
+     * Combined Cost Sheet + Transaction shape with **separate** Cost Center and Senior decision
+     * fields, per the additive contract notes (`contracts/senior-review-api.md`) and owner D4.
+     * The two decision fields are never merged, and neither is ever rolled up to a sheet verdict
+     * (FR-007-004/051).
+     *
+     * @var list<string>
+     */
+    public const SENIOR_QUEUE_COLUMNS = [
+        'sheetId', 'sheetTitle', 'sheetCurrency', 'submittedTotalMinor',
+        'transactionId', 'description', 'expenseType', 'amountMinor', 'currency', 'expenseDate',
+        'stage', 'status', 'costCenterDecision', 'seniorDecision',
+    ];
+
+    /**
+     * The `SENIOR_QUEUE_COLUMNS` entries that must be numeric cells in XLSX, not text.
+     *
+     * @var list<string>
+     */
+    public const SENIOR_QUEUE_NUMERIC_COLUMNS = [
+        'submittedTotalMinor', 'amountMinor',
+    ];
+
+    /**
      * Build a base sheet row from a sheet aggregate.
      *
      * @param object $sheet ExpenseSheet aggregate (publicId, title, ownerUid, status, currency, submittedTotalMinor, createdAt)
@@ -146,6 +171,48 @@ final class ReportProjection
             'expenseTypeTitle' => $revision->expenseTypeTitle(),
             'amountMinor' => $revision->amount()->minorUnits(),
             'currency' => (string) $revision->amount()->currency(),
+        ];
+    }
+
+    /**
+     * Build a Feature 007 `senior-queue` export row (T028).
+     *
+     * One row per transaction: the owning sheet's identity snapshots plus the transaction's current
+     * active revision facts, plus the **separate** current-revision Cost Center and Senior decision
+     * values (an `APPROVE`/`REJECT`/`RETURN` string, or null when the current revision has none at
+     * that stage). The decisions are emitted as their enum values, never merged and never rendered as
+     * a sheet verdict.
+     *
+     * @param object|null $sheet ExpenseSheet aggregate (publicId, title, currency, submittedTotalMinor)
+     * @param object $transaction ExpenseTransaction aggregate
+     * @param \OCA\PettyCash\Domain\Workflow\WorkflowDecision|null $costCenterDecision current-revision CC decision
+     * @param \OCA\PettyCash\Domain\Workflow\WorkflowDecision|null $seniorDecision current-revision Senior decision
+     * @return array<string, mixed>
+     */
+    public static function seniorQueueRow(
+        ?object $sheet,
+        object $transaction,
+        ?\OCA\PettyCash\Domain\Workflow\WorkflowDecision $costCenterDecision,
+        ?\OCA\PettyCash\Domain\Workflow\WorkflowDecision $seniorDecision
+    ): array {
+        $revision = $transaction->revision();
+        $amount = $revision->amount();
+
+        return [
+            'sheetId' => $sheet?->publicId ?? $transaction->sheetId,
+            'sheetTitle' => $sheet?->title ?? '',
+            'sheetCurrency' => $sheet !== null ? (string) $sheet->currency : '',
+            'submittedTotalMinor' => $sheet?->submittedTotalMinor,
+            'transactionId' => $transaction->publicId ?? $transaction->id,
+            'description' => $revision->description() ?? '',
+            'expenseType' => $revision->expenseTypeTitle() ?? '',
+            'amountMinor' => $amount->minorUnits(),
+            'currency' => (string) $amount->currency(),
+            'expenseDate' => $revision->expenseDate()->format(DATE_ATOM),
+            'stage' => $transaction->stage->value,
+            'status' => $transaction->status->value,
+            'costCenterDecision' => $costCenterDecision?->decision->value,
+            'seniorDecision' => $seniorDecision?->decision->value,
         ];
     }
 }

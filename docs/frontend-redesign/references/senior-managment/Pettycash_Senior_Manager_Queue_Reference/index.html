@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PettyCash — Senior Manager Queue Reference</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div id="app" class="app-shell" data-modal-open="true" data-preview-open="false">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark">₿</span><span><strong>PettyCash</strong><small>مدیریت تنخواه</small></span></div>
+      <nav class="nav" aria-label="ناوبری اصلی">
+        <a class="nav-item">⌂ <span>داشبورد</span></a>
+        <a class="nav-item">▤ <span>برگه‌های هزینه</span></a>
+        <a class="nav-item">＋ <span>ثبت تراکنش</span></a>
+        <a class="nav-item active">✓ <span>صف‌های بررسی</span></a>
+        <a class="nav-item">◫ <span>گزارش‌ها</span></a>
+        <a class="nav-item">⚙ <span>تنظیمات</span></a>
+      </nav>
+      <div class="sidebar-spacer"></div>
+      <div class="scope-box"><small>نقش فعال</small><strong>مدیر ارشد مالی</strong></div>
+      <div class="user"><span class="avatar">م‌ک</span><span><strong>مریم کریمی</strong><small>Senior Manager</small></span></div>
+    </aside>
+
+    <main class="main-content">
+      <header class="topbar"><span>☰　PettyCash</span><span><i class="sync-dot"></i> همگام‌سازی فعال　 راهنما　 مریم کریمی ▾</span></header>
+      <div class="content">
+        <div class="breadcrumbs">داشبورد <b>/</b> صف‌های بررسی <b>/</b> <strong>مدیر ارشد</strong></div>
+        <header class="page-header"><div><p>صف بررسی مرحله دوم</p><h1>صف بررسی مدیر ارشد</h1><span>برگه‌های هزینه‌ای را که برای تصمیم نهایی مدیریتی منتظر هستند بررسی و پردازش کنید.</span></div><div class="header-actions"><span class="role-badge"><i></i> مدیر ارشد</span><button class="outline-btn" data-action="refresh">↻ تازه‌سازی</button></div></header>
+        <section class="responsibility-banner"><span class="banner-check">✓</span><div><strong>مسئولیت شما در این مرحله</strong><p>هر برگه را باز کنید، تراکنش‌های آن را بررسی کنید و تصمیم مستقل خود را بر اساس اسناد و سابقه تأیید ثبت کنید.</p></div><em>● تصمیمات مرحله قبل در سطح تراکنش‌ها نمایش داده می‌شود</em></section>
+        <section class="stats"><article><span>برگه‌های منتظر اقدام شما <b>▤</b></span><strong>۴</strong><small>۹ تراکنش نیازمند تصمیم</small></article><article><span>تراکنش‌های در صف <b>✓</b></span><strong>۹</strong><small>در ۴ برگه هزینه</small></article></section>
+        <section class="sheet-card">
+          <div class="card-heading"><div><h2>برگه‌های شما</h2><p>برگه‌ای را انتخاب کنید تا تراکنش‌های آن و سابقه تصمیم هر تراکنش برای بررسی نمایش داده شود.</p></div><span class="count-badge">۴ برگه</span></div>
+          <div class="sheet-toolbar"><input placeholder="⌕  جست‌وجوی برگه یا ثبت‌کننده" /><div class="tabs"><button class="selected">همه <b>۴</b></button><button>منتظر تصمیم <b>۴</b></button><button>در حال بررسی <b>۰</b></button></div><button class="sort-sheet">مرتب‌سازی: جدیدترین ▾</button></div>
+          <p class="availability">نمایش برگه‌هایی که حداقل یک تراکنش آن‌ها نیازمند تصمیم مدیر ارشد است.</p>
+          <div class="sheet-grid sheet-grid-head"><span>برگه هزینه</span><span>ثبت‌کننده</span><span>تراکنش‌های نیازمند تصمیم</span><span>مبلغ مرتبط</span><span>وضعیت آمادگی</span><span></span></div>
+          <div class="sheet-list" id="sheet-list"></div>
+          <footer class="sheet-footer"><span>نمایش ۱ تا ۴ از ۴ برگه</span><span>برای مشاهده تراکنش‌ها، روی یک برگه کلیک کنید.</span></footer>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <div id="sheet-modal" class="overlay" hidden>
+    <section class="sheet-modal" role="dialog" aria-modal="true" aria-labelledby="sheet-modal-title">
+      <header class="modal-header"><div><small>جزئیات برگه و تراکنش‌ها</small><h2 id="sheet-modal-title">خرید تجهیزات شبکه</h2><p><b>SH-2024-091</b> · مرکز هزینه: فناوری اطلاعات · ثبت‌کننده: امیرحسین احمدی</p></div><button class="icon-close" data-action="close-modal">×</button></header>
+      <div class="modal-banner"><span>✓</span><div><strong>آماده بررسی مدیر ارشد</strong><p>همه تراکنش‌های این برگه در مرحله قبلی تعیین تکلیف شده‌اند. تصمیم قبلی در سطح هر تراکنش نمایش داده می‌شود.</p></div></div>
+      <div class="modal-summary"><div><small>تراکنش‌های برگه</small><strong>۳ تراکنش</strong></div><div><small>مبلغ کل برگه</small><strong>۱۸۶٬۷۵۰٬۰۰۰ ریال</strong></div><div><small>وضعیت فعلی</small><strong class="purple">منتظر تصمیم شما</strong></div></div>
+      <section class="transaction-section"><header><div><h3>تراکنش‌های برگه</h3><small>تصمیم سریع یا ورود به جزئیات هر تراکنش</small></div><b class="count-badge">۳ مورد</b></header>
+        <div class="advanced-filters"><div class="filter-line"><label>جست‌وجوی تراکنش<input placeholder="شناسه، شرح یا فروشنده" /></label><label>نوع هزینه<select><option>همه انواع هزینه</option><option>تجهیزات فناوری</option><option>لوازم مصرفی</option><option>خدمات</option></select></label><label>بازه مبلغ<div class="amount-fields"><input placeholder="از مبلغ" /><input placeholder="تا مبلغ" /></div></label><button class="primary-btn">اعمال فیلتر</button><button class="secondary-btn">پاک کردن</button></div><div class="quick-categories"><span>دسته‌بندی سریع:</span><button class="chip selected">همه <b>۳</b></button><button class="chip">تجهیزات فناوری <b>۱</b></button><button class="chip">لوازم مصرفی <b>۱</b></button><button class="chip">خدمات <b>۱</b></button><button class="chip">دارای مستندات <b>۳</b></button></div><div class="results-toolbar"><label>مرتب‌سازی بر اساس<select><option>مبلغ · بیشترین به کمترین</option><option>تاریخ · جدیدترین</option><option>نوع هزینه · الفبا</option></select></label><button class="sort-chip selected">مبلغ</button><button class="sort-chip">تاریخ</button><button class="sort-chip">نوع هزینه</button><button class="sort-direction">↓</button><span class="toolbar-spacer"></span><button class="report-btn">▣ گزارش‌گیری</button><button class="excel-btn">× خروجی Excel</button><small>فقط نتایج فیلترشده</small></div></div>
+        <div id="transaction-list"></div>
+      </section>
+      <footer class="modal-footer"><span>تصمیم سریع از همین پنجره قابل ثبت است؛ برای بررسی کامل‌تر وارد جزئیات شوید.</span><button class="primary-btn" data-action="close-modal">بستن پنجره</button></footer>
+    </section>
+  </div>
+
+  <div id="document-preview" class="overlay preview-overlay" hidden>
+    <section class="document-preview" role="dialog" aria-modal="true"><header class="modal-header"><div><small>پیش‌نمایش مستند</small><h2 id="preview-title">رسید-خرید.jpg</h2><p>تصویر · ۴۸۲ کیلوبایت · تراکنش TX-1403-0187</p></div><button class="icon-close" data-action="close-preview">×</button></header><div class="large-document"><div class="receipt"><strong>رسید خرید تجهیزات شبکه</strong><small>فروشگاه فناوری نوین · ۱۴۰۳/۰۸/۱۵</small><hr /><p><span>روتر و تجهیزات شبکه</span><b>۷۸٬۵۰۰٬۰۰۰ ریال</b></p><p><span>مالیات و خدمات</span><b>—</b></p><hr /><strong>مبلغ قابل پرداخت: ۷۸٬۵۰۰٬۰۰۰ ریال</strong><i>تأیید فروشگاه</i></div></div><footer class="modal-footer"><span>با کلیک روی thumbnailهای دیگر، مدرک انتخاب‌شده تغییر می‌کند.</span><button class="secondary-btn" data-action="close-preview">بستن پیش‌نمایش</button></footer></section>
+  </div>
+  <script src="./app.js"></script>
+</body>
+</html>

@@ -50,7 +50,7 @@ const props = defineProps<{
 	 * client-side sort) -- so it is a non-element `<span>`, hidden from assistive technology and
 	 * explained by its `title` instead of acting like a control.
 	 */
-	columns: ReadonlyArray<{ key: string; label: string; sortTitle?: string }>
+	columns: ReadonlyArray<{ key: string; label: string; sortTitle?: string; sortable?: boolean }>
 	rows: readonly T[]
 	/** Renders one cell. Called for both layouts, so the two cannot disagree. The row's index travels with it so a `#` column renders without a second data pass; existing two-argument call sites type-validate unchanged. */
 	cell: (row: T, column: { key: string; label: string }, index: number) => VNode | string | number
@@ -58,6 +58,15 @@ const props = defineProps<{
 	rowKey: (row: T, index: number) => string
 	/** Accessible name for both layouts. */
 	caption: string
+	/**
+	 * Active column-sort state for a caller that opts in to **local** header sorting with `onSort`.
+	 * Columns carrying `sortable: true` then render real, keyboard-accessible header buttons with a
+	 * visible direction glyph (and `aria-sort` on the host `th`). Columns without `sortable` keep the
+	 * approved disabled `sortTitle` affordance exactly as before — this never reorders silently.
+	 */
+	sort?: { key?: string; direction?: 'asc' | 'desc' } | null
+	/** Receives the activated column's `key`; the caller owns direction toggling and the reordering. */
+	onSort?: (key: string) => void
 	loading?: boolean
 	testId?: string
 	/** Prefix for the per-field hooks, so two tables on one page do not collide. */
@@ -133,6 +142,32 @@ function cardRowHook(index: number): string | undefined {
 
 	return row === undefined ? undefined : `${row}-card`
 }
+
+/**
+ * `true` when a column is a live, sortable header. The local (client-side) sort is an explicit
+ * opt-in via `sortable: true` plus `onSort`; a column that only carries `sortTitle` keeps the
+ * approved *disabled* arrows, and a plain column renders neither affordance.
+ */
+function isSortColumn(column: { key: string; sortable?: boolean }): boolean {
+	return column.sortable === true && typeof props.onSort === 'function'
+}
+
+function isSortActive(column: { key: string }): boolean {
+	return props.sort?.key === column.key
+}
+
+/** The `aria-sort` value for a header: only on live sort columns, reflecting the active key + direction. */
+function sortAria(column: { key: string }): 'ascending' | 'descending' | 'none' | undefined {
+	if (!isSortColumn(column)) return undefined
+	if (!isSortActive(column)) return 'none'
+	return props.sort?.direction === 'desc' ? 'descending' : 'ascending'
+}
+
+/** The visible direction glyph for a header: `↑`/`↓` when that column is active, `↕` when a sort is pending. */
+function sortGlyph(column: { key: string }): string {
+	if (!isSortActive(column)) return '↕'
+	return props.sort?.direction === 'desc' ? '↓' : '↑'
+}
 </script>
 
 <template>
@@ -142,13 +177,25 @@ function cardRowHook(index: number): string | undefined {
 				<caption class="responsive-table__caption">{{ caption }}</caption>
 				<thead>
 					<tr>
-						<th v-for="column in columns" :key="column.key" scope="col">
-							{{ column.label }}
+						<th v-for="column in columns" :key="column.key" scope="col" :aria-sort="sortAria(column)">
+							<button
+								v-if="isSortColumn(column)"
+								type="button"
+								class="responsive-table__sort-button"
+								:class="{ 'responsive-table__sort-button--active': isSortActive(column) }"
+								:data-test="testIdPrefix ? `${testIdPrefix}-sort-${column.key}` : `responsive-table-sort-${column.key}`"
+								:data-testid="testIdPrefix ? `${testIdPrefix}-sort-${column.key}` : `responsive-table-sort-${column.key}`"
+								@click="onSort?.(column.key)"
+							>
+								{{ column.label }}
+								<span class="responsive-table__sort-glyph" aria-hidden="true">{{ sortGlyph(column) }}</span>
+							</button>
+							<span v-else class="responsive-table__header-label">{{ column.label }}</span>
 							<!-- The approved headers carry the paired arrows; sorting itself is server-owned
 							     and unavailable, so the glyphs are drawn disabled: non-interactive, hidden
 							     from AT, explained by the title. -->
 							<span
-								v-if="column.sortTitle"
+								v-if="!isSortColumn(column) && column.sortTitle"
 								class="responsive-table__sort"
 								:title="column.sortTitle"
 								data-test="responsive-table-sort-unavailable"
@@ -267,6 +314,49 @@ function cardRowHook(index: number): string | undefined {
 .responsive-table__sort-arrow {
 	display: inline-flex;
 	line-height: 1;
+}
+
+/*
+ * The live sortable header: a real button (focusable, keyboard-activatable) for columns that opt in
+ * via `sortable: true`. The label keeps the header's own size (never below the FR-071 floor); only
+ * the direction glyph marks state, and it is `aria-hidden` because the definitive state travels in
+ * the host `th`'s `aria-sort`.
+ *
+ * The `font:` shorthand is not used (`inherit` would read as an unknown unit to the FR-071 gate that
+ * scans every `font`/`font-size` declaration), so the family and line-height inherit explicitly and
+ * the size is the shell's 16px floor token — a native `<button>` never falls back to a browser UA
+ * font below the floor.
+ */
+.responsive-table__sort-button {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.35rem;
+	padding: 0;
+	border: 0;
+	background: none;
+	color: inherit;
+	font-family: inherit;
+	font-size: var(--font-size-floor);
+	line-height: inherit;
+	text-align: start;
+	cursor: pointer;
+}
+
+.responsive-table__sort-glyph {
+	display: inline-flex;
+	line-height: 1;
+	color: var(--color-text-maxcontrast);
+	opacity: 0.75;
+}
+
+.responsive-table__sort-button--active {
+	color: var(--color-primary-element);
+	font-weight: 700;
+}
+
+.responsive-table__sort-button--active .responsive-table__sort-glyph {
+	opacity: 1;
+	color: var(--color-primary-element);
 }
 
 .responsive-table__cards {

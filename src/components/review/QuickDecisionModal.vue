@@ -19,7 +19,7 @@
 			<header class="decision-modal__header">
 				<div class="decision-modal__titles">
 					<p class="decision-modal__eyebrow">
-						{{ t('pettycash', 'reviews.quickReview.eyebrow') }} · <bdi>{{ transaction.sheetReference }}</bdi>
+						{{ t('pettycash', 'reviews.quickReview.eyebrow') }} · <bdi dir="ltr">{{ transaction.sheetReference }}</bdi>
 					</p>
 					<h2 :id="TITLE_ID" class="decision-modal__title" data-testid="decision-modal-title">
 						{{ copy.title }}
@@ -45,13 +45,13 @@
 					<div class="decision-modal__summary-text">
 						<p class="decision-modal__summary-title">{{ transaction.title }}</p>
 						<p class="decision-modal__summary-meta">
-							<bdi>{{ transaction.sheetReference }}</bdi>
+							<bdi dir="ltr">{{ transaction.sheetReference }}</bdi>
 							<span class="decision-modal__summary-sep" aria-hidden="true">·</span>
 							<span>{{ expenseDateLabel }}</span>
 						</p>
 					</div>
 					<strong class="decision-modal__summary-amount" data-testid="decision-modal-amount">
-						<bdi>{{ amountLabel }}</bdi>
+						<bdi dir="ltr">{{ amountLabel }}</bdi>
 					</strong>
 				</div>
 
@@ -620,6 +620,9 @@ function describeDecisionError(e: unknown): string {
 
 	.decision-modal__footer-group :deep(.button-vue) {
 		inline-size: 100%;
+
+		/* T036: the approved 390px floor — decisions are the highest-stakes taps in the surface. */
+		min-block-size: 44px;
 		justify-content: center;
 	}
 }

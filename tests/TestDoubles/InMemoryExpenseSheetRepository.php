@@ -13,13 +13,40 @@ use OCA\PettyCash\Domain\Workflow\SheetStatus;
 final class InMemoryExpenseSheetRepository implements ExpenseSheetRepository
 {
     /**
+     * How often the page-hydration entry point ran, for the senior-list bounded-load regression.
+     *
+     * @var array{findById: int}
+     */
+    public array $readProbes = ['findById' => 0];
+
+    public function resetReadProbes(): void
+    {
+        $this->readProbes = ['findById' => 0];
+    }
+
+    /**
      * @var array<int, ExpenseSheet>
      */
     private array $sheets = [];
 
     public function findById(int $id): ?ExpenseSheet
     {
+        $this->readProbes['findById']++;
         return $this->sheets[$id] ?? null;
+    }
+
+    /**
+     * The sheet instants the senior-list projection folds, deliberately not routed through
+     * {@see findById()} so the bounded-load regression can separate the projection's own
+     * per-candidate reads (uncounted) from the service's page hydration (which does call
+     * `findById()` and must stay page-bound).
+     *
+     * @return array{0: ?\DateTimeImmutable, 1: ?\DateTimeImmutable, 2: ?\DateTimeImmutable} created, first submitted, completed
+     */
+    public function sheetInstantsForProjection(int $id): array
+    {
+        $sheet = $this->sheets[$id] ?? null;
+        return [$sheet?->createdAt, $sheet?->firstSubmittedAt, $sheet?->completedAt];
     }
 
     public function findByPublicId(string $publicId): ?ExpenseSheet

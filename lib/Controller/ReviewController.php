@@ -131,6 +131,84 @@ class ReviewController extends OCSController
     }
 
     /**
+     * Feature 007, T024/T025: one sheet as the acting senior manager may see it.
+     *
+     * Mirrors `costCenterSheet()` (B001–B004) for the Senior stage: additive, scoped by the
+     * service's active-`SENIOR_MANAGER` assignments, and answering the same `404` for an unknown or
+     * out-of-scope sheet so the path cannot confirm a sheet exists outside the caller's scope
+     * (FR-007-056). The body carries the backend-computed sheet-wide gate
+     * (`allTransactionsCostCenterDecided`) and the presentation `reviewStatus`.
+     *
+     * @param string $sheetId
+     * @return DataResponse
+     */
+    #[NoAdminRequired]
+    public function seniorSheet(string $sheetId): DataResponse
+    {
+        try {
+            $review = $this->managementReviewService->getSeniorSheetForManager($sheetId);
+            if ($review === null) {
+                return $this->ocsErrorMapper->notFound('Sheet not found');
+            }
+
+            return new DataResponse([
+                'sheet' => $this->sheetPayloadFormatter->seniorSummary(
+                    $review['sheet'],
+                    $review['allTransactionsCostCenterDecided'],
+                    $review['reviewStatus']
+                ),
+                'progress' => $review['progress'],
+                'transactions' => array_map(
+                    fn (array $item): array => $this->formatSeniorTransaction($item),
+                    $review['transactions']
+                ),
+            ]);
+        } catch (\Throwable $e) {
+            return $this->ocsErrorMapper->map($e, null, ['publicId' => $sheetId]);
+        }
+    }
+
+    /**
+     * Feature 007 (UX-007-07): the senior-scoped Cost Sheet list, including completed sheets.
+     *
+     * Additive senior-manager list endpoint. Authorization and the per-sheet projection are the
+     * service's (`getSeniorSheetsForManager()`), identical to `seniorSheet()` on membership, so a
+     * sheet the acting manager may read in the list is the same sheet the detail read would answer.
+     * Completed sheets stay listed, read-only and non-actionable after their final Senior decision
+     * advanced the transactions to Finance (FR-007-017). Pagination mirrors the transaction queues
+     * (`items`/`total`/`page`/`pageSize`); `total` counts the sheets in scope, not the page.
+     *
+     * @param int $page
+     * @param int $pageSize
+     * @return DataResponse
+     */
+    #[NoAdminRequired]
+    public function seniorSheets(int $page = 1, int $pageSize = 25): DataResponse
+    {
+        try {
+            $result = $this->managementReviewService->getSeniorSheetsForManager($page, $pageSize);
+
+            return new DataResponse([
+                'items' => array_map(
+                    fn (array $item): array => $this->sheetPayloadFormatter->seniorQueueSummary(
+                        $item['sheet'],
+                        $item['allTransactionsCostCenterDecided'],
+                        $item['reviewStatus'],
+                        $item['progress'],
+                        $item['latestActivityAt']
+                    ),
+                    $result['items']
+                ),
+                'total' => $result['total'],
+                'page' => $page,
+                'pageSize' => $pageSize,
+            ]);
+        } catch (\Throwable $e) {
+            return $this->ocsErrorMapper->map($e);
+        }
+    }
+
+    /**
      * @param int $page
      * @param int $pageSize
      * @return DataResponse
@@ -430,6 +508,36 @@ class ReviewController extends OCSController
         $summary = $this->payloadFormatter->summary($item['transaction']);
         $summary['managerState'] = $item['state']->value;
         $summary['managerDecision'] = $item['decision'] === null
+            ? null
+            : $this->payloadFormatter->decision($item['decision']);
+
+        return $summary;
+    }
+
+    /**
+     * Feature 007 senior variant of the manager-scoped transaction row.
+     *
+     * `SeniorTransactionSummary` is the existing `TransactionSummary` plus this senior's own state
+     * (`seniorState`) and current-revision Senior decision (`seniorDecision`). The Cost Center
+     * decision stays visible through the shared `summary()`/decisions surface and is never rolled up
+     * or overwritten by this read (FR-007-051).
+     *
+     * The two-state `SeniorManagerTransactionState` has no "returned" token (`SeniorManagerTransactionState`
+     * in `src/types/api.ts`): a return recorded by this senior moves the transaction to correction, and its
+     * current revision still carries that senior decision, so it is reported as `DECIDED_BY_SENIOR`.
+     *
+     * @param array{
+     *   transaction: \OCA\PettyCash\Domain\Expense\ExpenseTransaction,
+     *   state: string,
+     *   decision: ?\OCA\PettyCash\Domain\Workflow\WorkflowDecision
+     * } $item
+     * @return array<string, mixed>
+     */
+    private function formatSeniorTransaction(array $item): array
+    {
+        $summary = $this->payloadFormatter->summary($item['transaction']);
+        $summary['seniorState'] = $item['state'];
+        $summary['seniorDecision'] = $item['decision'] === null
             ? null
             : $this->payloadFormatter->decision($item['decision']);
 

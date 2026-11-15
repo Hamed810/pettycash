@@ -4,13 +4,62 @@ declare(strict_types=1);
 
 namespace OCA\PettyCash\Tests\TestDoubles;
 
+use DateTimeImmutable;
 use OCA\PettyCash\Domain\Expense\ExpenseTransaction;
+use OCA\PettyCash\Domain\Expense\Repository\ExpenseSheetRepository;
+use OCA\PettyCash\Domain\Workflow\Decision;
 use OCA\PettyCash\Domain\Workflow\TransactionStatus;
+use OCA\PettyCash\Domain\Workflow\WorkflowDecision;
 use OCA\PettyCash\Domain\Workflow\WorkflowStage;
 use OCA\PettyCash\Domain\Expense\Repository\ExpenseTransactionRepository;
+use OCA\PettyCash\Domain\Workflow\Repository\WorkflowDecisionRepository;
 
 final class InMemoryExpenseTransactionRepository implements \OCA\PettyCash\Domain\Expense\Repository\ExpenseTransactionRepository
 {
+    /**
+     * Read probes for the scalability regression: how many times the list path reached the old
+     * bulk/N+1 entry points and how often the bounded projection ran. Reset via
+     * {@see resetReadProbes()} immediately before the call under test.
+     *
+     * @var array{findByCostCenterIds: int, findBySheetId: int, findById: int, seniorSheetListRows: int}
+     */
+    public array $readProbes = [
+        'findByCostCenterIds' => 0,
+        'findBySheetId' => 0,
+        'findById' => 0,
+        'seniorSheetListRows' => 0,
+    ];
+
+    /**
+     * Optional collaborators that mirror {@see seniorSheetListRows()}'s database aggregation. They
+     * are attached by `tests/bootstrap.php` once all doubles exist — the decision double itself
+     * depends on this one, so the two cannot be wired at construction. A double built without them
+     * answers "no decisions / no sheets", which only matters if the list projection is called on a
+     * standalone double (the suite registers them before use).
+     */
+    public function __construct(
+        private ?WorkflowDecisionRepository $decisions = null,
+        private ?InMemoryExpenseSheetRepository $sheets = null
+    ) {}
+
+    public function attachProjectionRepositories(
+        WorkflowDecisionRepository $decisions,
+        InMemoryExpenseSheetRepository $sheets
+    ): void {
+        $this->decisions = $decisions;
+        $this->sheets = $sheets;
+    }
+
+    public function resetReadProbes(): void
+    {
+        $this->readProbes = [
+            'findByCostCenterIds' => 0,
+            'findBySheetId' => 0,
+            'findById' => 0,
+            'seniorSheetListRows' => 0,
+        ];
+    }
+
     /**
      * @var array<int, ExpenseTransaction>
      */
@@ -18,6 +67,7 @@ final class InMemoryExpenseTransactionRepository implements \OCA\PettyCash\Domai
 
     public function findById(int $id): ?ExpenseTransaction
     {
+        $this->readProbes['findById']++;
         return $this->transactions[$id] ?? null;
     }
 
@@ -36,6 +86,7 @@ final class InMemoryExpenseTransactionRepository implements \OCA\PettyCash\Domai
      */
     public function findBySheetId(int $sheetId): array
     {
+        $this->readProbes['findBySheetId']++;
         return $this->transactionsForSheet($sheetId);
     }
 
@@ -85,6 +136,7 @@ final class InMemoryExpenseTransactionRepository implements \OCA\PettyCash\Domai
      */
     public function findByCostCenterIds(array $costCenterIds, ?WorkflowStage $stage = null, ?TransactionStatus $status = null): array
     {
+        $this->readProbes['findByCostCenterIds']++;
         return $this->transactionsInCostCenters($costCenterIds, $stage, $status);
     }
 
@@ -140,6 +192,176 @@ final class InMemoryExpenseTransactionRepository implements \OCA\PettyCash\Domai
         });
 
         return $result;
+    }
+
+    /**
+     * Mirror of `DbExpenseTransactionRepository::seniorSheetListRows()`: one compact row per
+     * candidate sheet, computed from the same predicates, so the in-memory suite asks the same
+     * question the database adapter answers.
+     *
+     * The scope and the current-revision decision rules are reproduced here, not delegated to the
+     * service's own helpers, because a double that called back into the service would turn the
+     * service's read path into a cycle. The counters the service uses during the list are what the
+     * bounded-load regression asserts against.
+     *
+     * @param string $actorUid
+     * @param list<int> $costCenterIds
+     * @return array<int, array{
+     *   awaitingSenior: int,
+     *   decidedBySenior: int,
+     *   returnedByThisSenior: bool,
+     *   ccGateUnresolved: int,
+     *   activityCreated: ?DateTimeImmutable,
+     *   activityUpdated: ?DateTimeImmutable,
+     *   activityDecided: ?DateTimeImmutable,
+     *   sheetCreated: ?DateTimeImmutable,
+     *   sheetFirstSubmitted: ?DateTimeImmutable,
+     *   sheetCompleted: ?DateTimeImmutable,
+     * }>
+     */
+    public function seniorSheetListRows(string $actorUid, array $costCenterIds): array
+    {
+        $this->readProbes['seniorSheetListRows']++;
+
+        $ids = [];
+        foreach ($costCenterIds as $costCenterId) {
+            $ids[(int) $costCenterId] = true;
+        }
+
+        // Same scope predicate as the production query: the active revision's numeric cost-centre
+        // join key, never the code (see transactionsInCostCenters()).
+        $bySheet = [];
+        foreach ($this->transactions as $transaction) {
+            if ($transaction->sheetId === null) {
+                continue;
+            }
+            $costCenterId = $transaction->revision()->costCenterDbId;
+            if ($costCenterId === null || !isset($ids[$costCenterId])) {
+                continue;
+            }
+            $bySheet[$transaction->sheetId][] = $transaction;
+        }
+
+        $rows = [];
+        foreach ($bySheet as $sheetDbId => $sheetTransactions) {
+            $awaitingSenior = 0;
+            $decidedBySenior = 0;
+            $returnedByThisSenior = false;
+            $activityCreated = null;
+            $activityUpdated = null;
+            $activityDecided = null;
+
+            foreach ($sheetTransactions as $transaction) {
+                $decision = $this->currentRevisionDecision($transaction, WorkflowStage::Senior);
+
+                if ($decision === null) {
+                    // Awaiting only while actually at the Senior stage.
+                    if ($transaction->stage !== WorkflowStage::Senior) {
+                        continue;
+                    }
+                    $awaitingSenior++;
+                    $activityCreated = $this->maxInstant($activityCreated, $transaction->createdAt);
+                    $activityUpdated = $this->maxInstant($activityUpdated, $transaction->updatedAt);
+                } else {
+                    if ($decision->actorUid !== $actorUid) {
+                        // Another senior's decision is never disclosed and never counted.
+                        continue;
+                    }
+                    $decidedBySenior++;
+                    if ($decision->decision === Decision::Return) {
+                        $returnedByThisSenior = true;
+                    }
+                    $activityCreated = $this->maxInstant($activityCreated, $transaction->createdAt);
+                    $activityUpdated = $this->maxInstant($activityUpdated, $transaction->updatedAt);
+                    $activityDecided = $this->maxInstant($activityDecided, $decision->decidedAt);
+                }
+            }
+
+            // Whole-sheet gate, computed over every transaction of the sheet, scoped or not.
+            $ccGateUnresolved = 0;
+            foreach ($this->transactionsForSheet($sheetDbId) as $sheetTransaction) {
+                if (!$this->hasFinalCostCenterDecision($sheetTransaction)) {
+                    $ccGateUnresolved++;
+                }
+            }
+
+            [$sheetCreated, $sheetFirstSubmitted, $sheetCompleted] = $this->sheets?->sheetInstantsForProjection($sheetDbId)
+                ?? [null, null, null];
+
+            $rows[$sheetDbId] = [
+                'awaitingSenior' => $awaitingSenior,
+                'decidedBySenior' => $decidedBySenior,
+                'returnedByThisSenior' => $returnedByThisSenior,
+                'ccGateUnresolved' => $ccGateUnresolved,
+                'activityCreated' => $activityCreated,
+                'activityUpdated' => $activityUpdated,
+                'activityDecided' => $activityDecided,
+                'sheetCreated' => $sheetCreated,
+                'sheetFirstSubmitted' => $sheetFirstSubmitted,
+                'sheetCompleted' => $sheetCompleted,
+            ];
+        }
+
+        return $rows;
+    }
+
+    /**
+     * The decision recorded against this transaction's **current** revision for one stage.
+     *
+     * Mirrors `ManagementReviewService`'s revision-scoped rule: only the decision whose revision is
+     * the transaction's active one counts, and with the (revision_id, stage) unique index there is
+     * at most one per stage, so the last match is the one in force.
+     */
+    private function currentRevisionDecision(ExpenseTransaction $transaction, WorkflowStage $stage): ?WorkflowDecision
+    {
+        if ($transaction->dbId === null || $this->decisions === null) {
+            return null;
+        }
+
+        $currentRevisionId = $transaction->revision()->id();
+        $current = null;
+        foreach ($this->decisions->findByTransactionId($transaction->dbId) as $decision) {
+            if ($decision->stage !== $stage) {
+                continue;
+            }
+            if ($decision->revisionId !== $currentRevisionId) {
+                continue;
+            }
+            $current = $decision;
+        }
+
+        return $current;
+    }
+
+    /**
+     * Whether the transaction's current revision carries a final Cost Center decision, mirroring
+     * `ManagementReviewService::hasFinalCostCenterDecision()` for the whole-sheet gate.
+     */
+    private function hasFinalCostCenterDecision(ExpenseTransaction $transaction): bool
+    {
+        $decision = $this->currentRevisionDecision($transaction, WorkflowStage::CostCenter);
+
+        if ($decision === null) {
+            return false;
+        }
+        if ($decision->decision === Decision::Return) {
+            return false;
+        }
+        if ($transaction->stage === WorkflowStage::Correction
+            && $transaction->status === TransactionStatus::AwaitingPurchaserCorrection
+        ) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private function maxInstant(?DateTimeImmutable $current, ?DateTimeImmutable $candidate): ?DateTimeImmutable
+    {
+        if ($candidate !== null && ($current === null || $candidate > $current)) {
+            return $candidate;
+        }
+        return $current;
     }
 
     /**

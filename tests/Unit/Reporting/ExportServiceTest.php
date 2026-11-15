@@ -137,8 +137,11 @@ final class ExportServiceTest extends TestCase
 
     public function testTheResourceEnumIsTheContractsSet(): void
     {
+        // `senior-queue` is the additive Feature 007 Senior-scoped export (T028), declared in
+        // `ocs-api.yaml` `ExportRequest.resource`; its XLSX-only rule is asserted separately so this
+        // continues to pin the set-and-the-contract agreement rather than one resource's behaviour.
         self::assertSame(
-            ['sheet', 'sheets', 'transactions', 'report', 'audit', 'evidence'],
+            ['sheet', 'sheets', 'transactions', 'report', 'audit', 'evidence', 'senior-queue'],
             ExportService::SUPPORTED_RESOURCES
         );
     }

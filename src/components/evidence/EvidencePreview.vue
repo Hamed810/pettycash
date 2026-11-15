@@ -428,5 +428,12 @@ onBeforeUnmount(() => {
 		max-block-size: 100%;
 		border-radius: 0;
 	}
+
+	/* T036: the approved 390px floor — the preview is full-screen, so its dismissal and
+	   navigation controls are primary finger targets and must not shave the 44px floor. */
+	.evidence-preview-layer__header :deep(.button-vue),
+	.evidence-preview-layer__footer :deep(.button-vue) {
+		min-block-size: 44px;
+	}
 }
 </style>

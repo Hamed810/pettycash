@@ -15,8 +15,8 @@ Petty Cash is licensed under the GNU Affero General Public License v3.0 or later
 below, each under its own licence. Nothing here changes the terms of the application's own
 licence; the bundled licences apply to the bundled code.
 
-This notice covers the **76 packages that ship with the application**: 29 PHP
-packages installed into `vendor/`, and 47 npm packages compiled into `js/`.
+This notice covers the **79 packages that ship with the application**: 29 PHP
+packages installed into `vendor/`, and 50 npm packages compiled into `js/`.
 
 **Development dependencies are excluded**, because they are not shipped: `composer.lock`'s
 `packages-dev` (PHPUnit, Psalm, the Nextcloud coding standard, Guzzle, the OCP stubs) is build
@@ -25,15 +25,15 @@ lock file. The npm lock file cannot make this distinction: it marks `vite`, `esb
 `sass` and `typescript` as non-dev, so a notice built from it would attribute the build
 toolchain as shipped software.
 
-<!-- @dependencyFingerprint f809f79b4a0ea51e -->
+<!-- @dependencyFingerprint 7f95fcb42cede85c -->
 
 ## Licence summary
 
 | Licence | Packages |
 | --- | ---: |
-| `MIT` | 43 |
+| `MIT` | 45 |
 | `LGPL-3.0-or-later` | 14 |
-| `GPL-3.0-or-later` | 10 |
+| `GPL-3.0-or-later` | 11 |
 | `AGPL-3.0-or-later` | 3 |
 | `Apache-2.0` | 2 |
 | `(MPL-2.0 OR Apache-2.0)` | 1 |
@@ -47,6 +47,8 @@ Copyleft and file-level-copyleft licences are present (`LGPL-3.0-or-later`, `GPL
 
 | Package | Version |
 | --- | --- |
+| `@ckpack/vue-color` | 1.6.0 |
+| `@ctrl/tinycolor` | 3.6.1 |
 | `@floating-ui/core` | 1.8.0 |
 | `@floating-ui/dom` | 1.8.0 |
 | `@floating-ui/utils` | 0.2.12 |
@@ -122,6 +124,7 @@ Copyleft and file-level-copyleft licences are present (`LGPL-3.0-or-later`, `GPL
 | `@nextcloud/initial-state` | 3.0.0 |
 | `@nextcloud/l10n` | 3.4.1 |
 | `@nextcloud/logger` | 3.0.3 |
+| `@nextcloud/paths` | 3.1.0 |
 | `@nextcloud/router` | 3.2.0 |
 | `@nextcloud/sharing` | 0.4.0 |
 

@@ -52,6 +52,12 @@ return [
         // B001–B004: additive manager-scoped sheet read. Declared before the generic `{stage}`
         // route so the more specific path is matched first even if router ordering changes.
         ['name' => 'review#costCenterSheet', 'url' => '/api/v1/queues/cost-center/sheets/{sheetId}', 'verb' => 'GET'],
+        // Feature 007 T024: additive senior-scoped sheet read, declared before the generic
+        // `{stage}` route for the same specificity reason as the cost-center sheet path above.
+        ['name' => 'review#seniorSheet', 'url' => '/api/v1/queues/senior/sheets/{sheetId}', 'verb' => 'GET'],
+        // Feature 007 (UX-007-07): additive senior-scoped sheet list, including completed sheets.
+        // Declared before the generic `{stage}` route like the two sheet reads above.
+        ['name' => 'review#seniorSheets', 'url' => '/api/v1/queues/senior/sheets', 'verb' => 'GET'],
         ['name' => 'review#index', 'url' => '/api/v1/queues/{stage}', 'verb' => 'GET'],
         ['name' => 'review#returns', 'url' => '/api/v1/returns', 'verb' => 'GET'],
         ['name' => 'review#decide', 'url' => '/api/v1/transactions/{transactionId}/decisions', 'verb' => 'POST'],

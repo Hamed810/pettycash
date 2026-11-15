@@ -111,7 +111,7 @@
 							</div>
 							<div class="details-drawer__hero-side">
 								<span data-testid="details-drawer-manager-state">
-									<StatusBadge :status="transaction.status" :label="managerStateLabel" />
+									<StatusBadge :status="transaction.status" :label="managerStateLabel" :variant="awaitingTone" />
 								</span>
 								<span class="details-drawer__caption" data-testid="details-drawer-cost-center-scope">
 									{{ costCenterLabel }}
@@ -301,6 +301,8 @@ import type {
 	ManagerSheetSummary,
 	ManagerTransactionReadState,
 	ManagerTransactionState,
+	SeniorManagerTransactionState,
+	SeniorSheetSummary,
 	TransactionDetail,
 } from '@/types/api'
 
@@ -319,9 +321,27 @@ interface Props {
 	/** This manager's own state for the transaction; never inferred from the global status. */
 	managerState: ManagerTransactionState
 	managerDecision: Decision | null
-	/** The manager-scoped sheet header (B001); `null` renders its fields unavailable. */
-	sheet: ManagerSheetSummary | null
+	/**
+	 * Feature 007 (T013): the Senior Manager's own state/decision, additive. When present they drive
+	 * the awaiting/label presentation; when absent the `managerState`/`managerDecision` path is used
+	 * unchanged so the Cost Center drawer behaves exactly as before.
+	 */
+	seniorState?: SeniorManagerTransactionState | null
+	seniorDecision?: Decision | null
+	/**
+	 * The sheet header under review (B001). The drawer is shared between the Cost Center queue
+	 * (`ManagerSheetSummary`) and the Senior sheet review (`SeniorSheetSummary`, Feature 007); it
+	 * only ever reads `title` and `ownerDisplayName`, which both shapes carry, so the union is safe.
+	 * `null` renders those fields' unavailable states.
+	 */
+	sheet: ManagerSheetSummary | SeniorSheetSummary | null
 	readState: ManagerTransactionReadState
+	/**
+	 * Feature 007: sheet-level read-only (a completed sheet). Withholds every footer decision action
+	 * even when a transaction still reports awaiting — the modal gate must not depend on each row's
+	 * `seniorState` alone.
+	 */
+	readOnly?: boolean
 }
 
 const props = defineProps<Props>()
@@ -339,7 +359,25 @@ const rootRef = useTemplateRef<HTMLElement>('rootRef')
 const activeTab = ref<'description' | 'history'>('description')
 let previouslyFocused: HTMLElement | null = null
 
-const isAwaiting = computed(() => props.managerState === 'AWAITING_MANAGER_DECISION')
+/**
+ * Feature 007 (T013): the drawer presents one actor's state. When `seniorState`/`seniorDecision`
+ * are supplied they drive the presentation; otherwise the manager path is unchanged.
+ */
+const selfState = computed(() => props.seniorState ?? props.managerState)
+const selfDecision = computed(() => props.seniorDecision ?? props.managerDecision)
+
+const isAwaiting = computed(() => {
+	if (props.readOnly) return false
+	if (selfState.value == null) return false
+	return selfState.value === 'AWAITING_MANAGER_DECISION' || selfState.value === 'AWAITING_SENIOR_DECISION'
+})
+
+/**
+ * The awaiting label describes the actor's own state while the raw `transaction.status` may still
+ * carry an earlier approved stage. The approved awaiting pill is amber, so the drawer overrides the
+ * tone exactly on the awaiting (undecided, not returned) state.
+ */
+const awaitingTone = computed<'warning' | undefined>(() => (isAwaiting.value ? 'warning' : undefined))
 
 /**
  * T026: a footer decision is offered only when the server explicitly granted it. Absence (the key
@@ -373,11 +411,11 @@ const costCenterLabel = computed(() => {
 })
 
 const managerStateLabel = computed(() => {
-	if (props.managerState === 'RETURNED_FOR_CORRECTION') {
+	if (selfState.value === 'RETURNED_FOR_CORRECTION') {
 		return t('pettycash', 'reviews.quickReview.card.returned')
 	}
 	if (!isAwaiting.value) {
-		switch (props.managerDecision?.decision) {
+		switch (selfDecision.value?.decision) {
 		case 'APPROVE':
 			return t('pettycash', 'reviews.quickReview.card.approvedByYou')
 		case 'REJECT':
@@ -834,7 +872,10 @@ onBeforeUnmount(() => {
 	}
 
 	.details-drawer__footer {
-		flex-direction: column;
+		/* The desktop rule leaves flex-wrap: wrap set; a height-constrained column that still wraps
+		   divides the actions into overflow columns past the 390px viewport (BUG-02). Force the
+		   mobile column to a single line so every control stretches inside the drawer. */
+		flex-flow: column nowrap;
 		align-items: stretch;
 		padding: 12px 14px;
 	}
@@ -846,7 +887,16 @@ onBeforeUnmount(() => {
 
 	.details-drawer__footer :deep(.button-vue) {
 		inline-size: 100%;
+
+		/* T036: the approved 390px floor — the footer decisions are primary finger targets. */
+		min-block-size: 44px;
 		justify-content: center;
+	}
+
+	/* T036: the header's icon-only close control is the drawer's dismissal path — keep it ≥44px. */
+	.details-drawer__header :deep(.button-vue) {
+		min-block-size: 44px;
+		min-inline-size: 44px;
 	}
 
 	.details-drawer__hero-side {

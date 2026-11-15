@@ -158,6 +158,19 @@ $container->register(WorkflowDecisionRepository::class, fn($c) => new InMemoryWo
     $c->query(ExpenseTransactionRepository::class)
 ));
 
+// The senior-list projection on the expense-transaction double mirrors the database aggregation and
+// therefore needs the decision and sheet doubles. Attached after all three are registered — the
+// decision double itself holds a reference to this one, so constructor wiring would cycle. The eager
+// queries here only materialise the container's cached singletons (the doubles the suite reads), and
+// no test replaces these doubles via setInstance, so the attachment cannot go stale.
+$transactionDouble = $container->query(ExpenseTransactionRepository::class);
+if ($transactionDouble instanceof InMemoryExpenseTransactionRepository) {
+    $transactionDouble->attachProjectionRepositories(
+        $container->query(WorkflowDecisionRepository::class),
+        $container->query(ExpenseSheetRepository::class)
+    );
+}
+
 // Register IdempotencyService
 $container->register(IdempotencyService::class, fn($c) => new IdempotencyService($c->query(CommandResultRepository::class)));
 

@@ -13,6 +13,7 @@ import type {
 	ManagerSheetSummary,
 	ManagerTransactionReadState,
 	ManagerTransactionState,
+	SeniorSheetSummary,
 	TransactionDetail,
 } from '@/types/api'
 
@@ -127,11 +128,29 @@ function sheet(overrides: Partial<ManagerSheetSummary> = {}): ManagerSheetSummar
 	}
 }
 
+/** Feature 007: the Senior sheet read's header — no `status`, extra review fields (BUG-05). */
+function seniorSheet(overrides: Partial<SeniorSheetSummary> = {}): SeniorSheetSummary {
+	return {
+		id: 'sheet-1',
+		title: 'Senior travel review',
+		ownerId: 'user1',
+		ownerDisplayName: 'User One',
+		currency: 'IRR',
+		submittedTotalMinor: 50000,
+		submittedTotal: { amountMinor: 50000, currency: 'IRR', minorUnit: 0 },
+		submittedAt: '2026-09-20T10:00:00Z',
+		version: 1,
+		allTransactionsCostCenterDecided: true,
+		reviewStatus: 'PENDING_REVIEW',
+		...overrides
+	}
+}
+
 interface MountOptions {
 	transaction?: TransactionDetail | null
 	managerState?: ManagerTransactionState
 	readState?: ManagerTransactionReadState
-	sheet?: ManagerSheetSummary | null
+	sheet?: ManagerSheetSummary | SeniorSheetSummary | null
 }
 
 function mountDrawer(options: MountOptions = {}) {
@@ -195,6 +214,19 @@ describe('TransactionDetailsDrawer (T030/T031/T032)', () => {
 
 		expect(drawer.find('[data-testid="drawer-field-sheet"]').text()).toContain('reviews.sheetQueue.sheetTitleUnavailable')
 		expect(drawer.find('[data-testid="drawer-field-purchaser"]').text()).toContain('reviews.sheetQueue.purchaserUnavailable')
+	})
+
+	it('renders the sheet header from the Senior review shape, not the unavailable fallbacks (BUG-05)', async () => {
+		// The drawer is shared with the Senior sheet review, whose header is `SeniorSheetSummary`
+		// (no `status`, extra review fields). Only title/ownerDisplayName are consumed, so the union
+		// prop must render them — this pins the BUG-05 fix after the modal stopped passing null.
+		const wrapper = mountDrawer({ sheet: seniorSheet({ title: 'Senior travel review' }) })
+		const drawer = await open(wrapper)
+
+		expect(drawer.find('[data-testid="details-drawer-sheet-title"]').text()).toContain('Senior travel review')
+		expect(drawer.find('[data-testid="drawer-field-sheet"]').text()).toContain('Senior travel review')
+		expect(drawer.find('[data-testid="drawer-field-purchaser"]').text()).toContain('User One')
+		expect(drawer.find('[data-testid="drawer-field-purchaser"]').text()).not.toContain('reviews.sheetQueue.purchaserUnavailable')
 	})
 
 	it('switches between the description and history tabs by click and arrow keys', async () => {

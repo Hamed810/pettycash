@@ -1107,6 +1107,43 @@ of all primary workflow actions.
   `AWAITING_SENIOR_REVIEW`, `AWAITING_FINANCE_REVIEW` — that are `TransactionStatus` values and not
   `SheetStatus` values at all, and omitting `CORRECTION`, so the data model and the running code
   disagreed about what a returned transaction does to the sheet. `data-model.md` is corrected.)
+  **Independent transaction progression and Senior Manager Cost Sheet queue visibility (Amended
+  2026-11-08, owner-approved).** Each transaction MUST continue to progress through its workflow
+  **independently**, according to its own state, decisions, revision, and applicable authorization
+  rules; a transaction's workflow decisions and valid stage transitions MUST NOT be blocked solely
+  because other transactions in the same Cost Sheet have not completed their respective workflow
+  stages. As a **narrow, presentation-only exception scoped to Senior Manager Cost Sheet queue
+  visibility**, a Cost Sheet MUST become visible in the Senior Manager Cost Sheet review queue only
+  after **every** transaction belonging to that Cost Sheet has completed its Cost Center review with
+  a **final** decision. A **Return for Correction MUST NOT count as final** completion of Cost Center
+  review: a returned transaction MUST complete the applicable correction process and receive a
+  subsequent final Cost Center decision before the Cost Sheet satisfies the queue-visibility
+  condition. A final Cost Center **rejection MAY satisfy** the Cost Center completion condition but
+  MUST NOT independently establish eligibility for a Senior Manager decision; individual Senior
+  Manager action eligibility MUST continue to follow the applicable transaction-level workflow and
+  authorization requirements. The sheet-wide eligibility condition MUST be **determined and enforced
+  by the backend** using authoritative workflow data; incomplete or unverified transaction sets MUST
+  NOT establish Cost Sheet eligibility. This condition MUST NOT modify transaction-level transition
+  rules, decision immutability, revision handling, financial calculations, authorization boundaries,
+  or audit requirements, and MUST NOT be read as a sheet-wide lock on transaction decisions, as a
+  requirement that all transactions transition simultaneously, as a change to Cost Center
+  authorization, or as automatic authorization for Senior Manager action on a rejected or otherwise
+  ineligible transaction. (Amended 2026-11-08: Feature 007
+  (`specs/007-senior-manager-cost-sheet-review/`) specifies a Cost-Sheet-based Senior Manager queue
+  in which a Cost Sheet becomes visible only after every transaction has a **final** Cost Center
+  decision. The product owner approved that rule on 2026-11-08, recorded as decision D1 in that
+  feature's Workflow Reconciliation, with a Return for Correction not counting as final. This
+  amendment therefore scopes the "no transaction blocks another" sentence above: it continues to
+  guarantee independent transaction progression, decisions, revision, and stage transitions, while
+  **Senior Manager Cost Sheet queue visibility** becomes a sheet-wide gate that the backend computes.
+  The exception is confined to Senior Manager Cost Sheet queue visibility and MUST NOT be extended to
+  other queues, to transaction-level transitions, or to any other workflow stage; rejection
+  semantics, decision immutability, revision handling, financial calculations, authorization
+  boundaries, and audit requirements are unchanged. The affected Feature 007 references are
+  `specs/007-senior-manager-cost-sheet-review/` `spec.md` (Workflow Reconciliation), `plan.md`, and
+  `contracts/senior-review-api.md`. This requirements change is documentation-only, changes no
+  application code, and precedes any separately authorized backend batch. No unresolved requirements
+  conflict remains on this point.)
 - **FR-038**: Finance MUST be able to approve, reject, or return a senior-approved transaction.
 - **FR-039**: Finance MUST NOT approve a senior-rejected transaction but MAY reject it or return it
   for correction.

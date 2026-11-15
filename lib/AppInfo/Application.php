@@ -768,6 +768,10 @@ final class Application extends App implements IBootstrap
                 $c->query(EvidenceSelectionQuery::class),
                 $c->query(AuditSelectionQuery::class),
                 $c->query(CompleteSheetExport::class),
+                // Feature 007 T028: the senior-queue row source is built by hand like the rest of
+                // this controller. Inserted *before* ExpenseSheetRepository because this list is
+                // positional — the same mid-list insertion hazard T365's note below records.
+                $c->query(\OCA\PettyCash\Application\Reporting\SeniorQueueSelection::class),
                 $c->query(ExpenseSheetRepository::class),
                 $c->query(ExpenseTransactionRepository::class),
                 $c->query(OcsErrorMapper::class),

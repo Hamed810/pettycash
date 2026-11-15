@@ -9,13 +9,25 @@ Repository-wide rules for **all AI coding agents**, including read-only investig
 Classify work before invoking a workflow:
 
 - **New capability / functional change:** `/speckit-specify` → `/speckit-plan` → `/speckit-tasks` → bounded `/speckit-implement` → `/speckit-converge`; add `/speckit-clarify`, `/speckit-checklist`, `/speckit-analyze` when needed.
+
 - **Bug / broken existing behavior:** `/speckit-bug-assess` → `/speckit-bug-fix` → `/speckit-bug-test`; complete only when `verified`. Do not create a feature spec unless intended behavior changes.
+
 - **Approved `spec.md` + `plan.md` + `tasks.md`:** implement existing tasks only; use bounded batches for large ledgers.
+
 - **Requirement/scope change:** update specification and dependent artifacts before code.
+
 - **Investigation:** read-only; do not invoke implementation.
+
 - **Human-only/external blocker:** surface it; do not silently substitute scope or claim completion.
 
 Unimplemented Spec Kit features are not automatically in scope for frontend redesign or other bounded work.
+
+### Authorization boundaries and settled facts
+
+- Classify each capability as **authorized now**, **pending separate authorization**, or **out of scope**. Do not infer authorization from feature membership, prior implementation, or a dependent task.
+- If work depends on a separately authorized capability, state the dependency and the permitted interim behavior (for example, placeholder, explicit refusal, or deferred integration) in the mission brief. Do not search for or implement the withheld capability before authorization.
+- Reuse approved decisions and verified findings already recorded in the active spec, plan, contracts, decision register, and task ledger. Do not re-derive a settled fact unless source drift, a contradiction, or a concrete unresolved question gives a reason to revalidate it.
+- For additive work, the mission brief should identify the existing implementation to mirror, with exact paths and symbols where known. A defect description alone is not a sufficient technical starting point.
 
 ---
 
@@ -37,10 +49,15 @@ Repository evidence routing determines which capability is appropriate for a tas
 Rules:
 
 1. **Unknown area → OCI first.** One focused semantic query before broad scans; skip when path/symbol is already known.
+
 2. **Structural question → CGC first.** Cross-file callers/callees, dependency chains, module relationships, or blast radius require a bounded graph query when CGC is available.
+
 3. **Exact PHP symbol → Serena first.** Material definition/signature/implementation/inheritance or symbol-level reference questions require Serena when available, including read-only work.
+
 4. **Known exact text → direct lookup.** Requirement IDs, task IDs, routes, filenames, literals: use exact search/read.
+
 5. **Source/contracts remain authoritative for implementation facts.** Discovery tools identify candidates; they do not prove runtime behavior.
+
 6. **Bound queries.** Start with direct relationships, narrow paths/context, and small result sets; expand only when needed.
 
 If a question spans multiple evidence types, start with the most specific evidence required. Use another route only for a distinct unresolved sub-question or when the selected route is insufficient or unavailable.
@@ -48,8 +65,11 @@ If a question spans multiple evidence types, start with the most specific eviden
 Examples:
 
 - “Where is receipt enforcement implemented?” → OCI discovery → verify use case/domain source and relevant tests.
+
 - “What changes if `ResubmitCorrection` changes?” → CGC callers/module deps → verify routes/source/contracts/tests.
+
 - “What is `ExpenseTransaction::recordDecision`'s exact signature?” → Serena symbol lookup → defining source; never infer from tests.
+
 - “Find `FR-085`.” → exact text search only.
 
 ### Failure handling
@@ -71,11 +91,17 @@ Tool selection is defined only by the evidence-routing table in §2. The section
 OCI is an **OpenCode plugin**, not an MCP server.
 
 - When selected by §2, use OCI for one focused semantic discovery pass over unfamiliar implementation areas, concepts, analogous code, or supported architecture context.
+
 - Check readiness only when uncertain; readiness checks are not code investigation.
+
 - Prefer one compact `codebase_context`-style pass for unfamiliar code; once scoped, use exposed definition/call-graph operations or exact source instead of repeated semantic searches.
+
 - If the bridge fails, verify the installed OCI CLI and its actual syntax before using it; do not assume executable names/paths.
+
 - Missing semantic hits do not prove source absence, especially with partial embedding coverage.
+
 - Do not force reindex or change embedding model/provider to repair lookup failures.
+
 - During active edits, current source and Serena outrank a stale semantic index; refresh only at a justified stable checkpoint using supported incremental reconciliation.
 
 ### CodeGraphContext — structural graph
@@ -83,10 +109,15 @@ OCI is an **OpenCode plugin**, not an MCP server.
 Current project deployment:
 
 - MCP server: `codegraphcontext`
+
 - image: `pettycash-cgc:current`
+
 - repository in CGC: `/workspace`
+
 - persistent config/graph in container: `/home/cgc/.codegraphcontext`
+
 - host persistence: `/home/ubuntu/projects/pettycash/.cgc-data`
+
 - backend: embedded FalkorDB Lite unless verified otherwise
 
 When selected by §2, use the existing graph and prefer bounded `find_code` or `analyze_code_relationships` queries for the required structural evidence, such as direct callers/callees, importers, `class_hierarchy`, `call_chain`, or `module_deps`. Use repository stats/listing only as readiness checks. Resolve ambiguous symbols by file/class/namespace. Missing edges do not prove absence; verify dynamic dispatch, dependency injection, framework wiring, and cross-language paths in source.
@@ -98,6 +129,7 @@ Prefer high-level tools over raw Cypher; if Cypher is necessary, keep it **read-
 When §2 selects Serena, use the actual symbol operations required for the exact PHP definition, signature, implementation, inheritance/type relationship, or symbol-level references.
 
 Direct source reading verifies the result; it does not replace the symbol query.
+
 Use the **actual tool surface exposed by the active Serena configuration**; effective names may vary by backend/configuration. Initialize as required by the integration (for example `initial_instructions` once when applicable); initialization does not count as symbol inspection.
 
 Use symbol-level operations for definitions, references, implementations, inheritance/type relationships, and diagnostics. Before modifying PHP, inspect the actual defining symbol/signature plus material callers/references/implementations. Never discover PHP APIs by repeatedly failing tests.
@@ -111,9 +143,13 @@ When §2 selects Context7, resolve the library ID first, then query docs, unless
 ## 4. Index/tooling-state safety
 
 - Reuse existing OCI and CGC state.
+
 - Graph/index maintenance is never an ordinary investigation step. Do not start watchers, index/reindex repositories, rebuild/reset/delete graph or index state, change backends or embedding providers/models, install indexing dependencies, or introduce another writer unless the user explicitly requests that maintenance operation.
+
 - Connected MCP does not prove graph freshness/completeness. OCI `complete` may still have failed embedding batches; inspect coverage only when a missing result affects a decision.
+
 - Keep `.opencode/`, `.cgc-data/`, `.serena/`, `.tools/`, dependencies/generated assets, and sensitive env files out of graph/index scope where configured.
+
 - Coordinate any CGC maintenance with the running MCP server; avoid concurrent writers.
 
 ---
@@ -123,11 +159,17 @@ When §2 selects Context7, resolve the library ID first, then query docs, unless
 Project identity:
 
 - Nextcloud app/version: `pettycash`, `34`
+
 - repository: `/home/ubuntu/projects/pettycash`
+
 - runtime mount: `/var/www/html/custom_apps/pettycash`
+
 - lab root: `/home/ubuntu/projects/nextcloud-lab`
+
 - lab command: `/home/ubuntu/projects/nextcloud-lab/bin/lab pettycash <command>`
+
 - runtime containers: `pettycash-lab-nextcloud-1`, `pettycash-lab-db-1`
+
 - lab URL: `http://localhost:8081`
 
 Pettycash and PTS are separate labs. `pts-lab-*` resources and port `8082` belong to the sibling project.
@@ -187,7 +229,9 @@ Use only `scripts/dev/composer <args>`. Do not install Composer into the shared 
 A stale-cache result is not evidence.
 
 - After `lib/` or `appinfo/` PHP edits, `scripts/dev/phpunit` handles its own opcode settling; before direct live-HTTP checks run `scripts/dev/opcache-settle`.
+
 - If opcode settling reports a wait/failure, affected HTTP/contract evidence is invalid until resolved.
+
 - After `appinfo/routes.php` changes, use:
 
 ```bash
@@ -206,10 +250,15 @@ The Docker host is shared; this repository does not own global Docker lifecycle.
 Pettycash runtime resources include:
 
 - `pettycash-lab-nextcloud-1`
+
 - `pettycash-lab-db-1`
+
 - `pettycash-lab-volume-init`
+
 - `pettycash-lab_default`
+
 - `pettycash-lab_nc-data`
+
 - `pettycash-lab_nc-db`
 
 Never delete volumes, run `docker compose down -v`, replace the lab because it is stopped, recreate unrelated containers, change the Compose project name, modify lab Docker configuration without approval, or stop/start/reconfigure PTS resources. Do not inspect/manipulate PTS volumes except through an explicitly approved read-only isolation check.
@@ -229,8 +278,11 @@ Do not run Docker Compose from the Pettycash repository. CGC is tooling, not run
 Preserve DDD boundaries:
 
 - **Domain:** entities/value objects/invariants; no Nextcloud-service dependencies.
+
 - **Application:** use cases and workflow orchestration.
+
 - **Infrastructure:** persistence, Nextcloud services, external integrations.
+
 - **Presentation:** OCS controllers and Vue UI.
 
 - For frontend redesign work, respect the approved scope, design decisions, and acceptance gates in `docs/frontend-redesign/` when those documents exist in the current Git state.
@@ -242,10 +294,16 @@ Do not move business rules into controllers or views.
 Frontend:
 
 - approved UI library: `@nextcloud/vue` **9.x**;
+
 - **Vuetify is not approved**: do not install/configure it or introduce `v-*` components to make tests pass;
+
 - treat existing Vuetify-style drift as an issue to resolve through the approved workflow, not as precedent;
+
 - preserve approved financial rules, roles, permissions, APIs, and persistence unless scope explicitly changes;
+
 - for approved UI work, verify relevant FA/EN, RTL/LTR, light/dark, responsiveness, accessibility, and loading/error/empty states.
+- Include the relevant responsive, localization, RTL/LTR, keyboard, focus, and accessibility checks in each user story or implementation batch's definition of done; do not defer all UI quality checks to a final polish phase.
+- Before promising visual acceptance, confirm that the active agent/session can inspect the required screenshots or browser state. If visual comparison is unavailable, record the exact evidence gap and route it to the owner-controlled visual gate defined in the feature contract's acceptance criteria and the approved docs/frontend-redesign acceptance process. Never claim or simulate pixel-level verification that was not performed.
 
 ---
 
@@ -261,6 +319,8 @@ scripts/dev/phpunit
 ```
 
 Run E2E/compatibility only when required by scope, acceptance criteria, or an integration boundary. Do not duplicate unchanged checks already covered by `npm run check`; prefer explicit affected tests over broad regex filters. A passing test from the wrong runtime is not evidence, and an unexecuted test must never be reported as passed.
+
+For multi-story or multi-phase work, run focused checks at the smallest useful boundary (component, story, backend batch), then run the agreed milestone gates. Avoid both extremes: do not postpone all verification until the end, and do not rerun unchanged broad suites after every small task. Record which checks were actually executed and which remain deferred.
 
 ---
 
@@ -287,17 +347,81 @@ Code intelligence: OCI=<used | unavailable | not needed>; CGC=<used | unavailabl
 ```
 
 Distinguish **not needed** from **unavailable/failed**. If an applicable healthy tool was skipped, give a task-relevant reason; “source was easier” is not sufficient for a structural/symbol question covered by the mandatory gate. Never claim unexecuted tools, tests, runtime probes, or completed tasks.
+For long-running work, keep handoffs compact and state-based: completed items, current exact state, changed paths, tests actually run, unresolved blockers, next authorized step, and stop condition. A new session must start from that handoff and the authoritative project artifacts; it must not replay the entire investigation or assume unavailable conversation history.
 
 **Final principle:** discovery is not proof; text occurrence is not a semantic reference; stale-cache output is not evidence.
+
+---
+
+## 13. Mission preparation and pre-edit gate
+
+For each implementation batch (any change that touches more than one file or crosses a module/contract boundary), the mission brief or execution handoff must provide the applicable items below:
+
+- **Objective and exact task IDs:** the intended outcome and bounded batch.
+- **Starting state:** completed work, known root cause, current blockers, and relevant pre-existing dirty/untracked state when known.
+- **Settled decisions and authorization:** approved product decisions, dependencies, and capabilities that are not yet authorized.
+- **Technical map:** exact relevant paths, symbols, contracts, reusable components, and existing tests. Include line anchors when already verified; do not invent them.
+- **Write boundary:** the complete list of files permitted to change, including generated files. If a complete list cannot be known safely in advance, define the permitted directories and require the agent to report any proposed expansion before writing.
+- **Acceptance and verification:** observable acceptance criteria and the targeted commands/tests expected to prove them.
+- **Stop condition:** the exact point at which the agent must stop and report.
+
+Before the first edit, provide a short **plan of record** containing:
+1. files to change;
+2. implementation sequence and dependencies;
+3. tests/checks to run;
+4. known risks or unresolved feasibility questions.
+
+For non-trivial changes, perform a bounded feasibility check before implementation. Check the relevant data source, authorization boundary, query boundedness/pagination, existing reusable behavior, and compatibility with established architecture. Do not implement a known-unbounded or knowingly unsafe workaround merely to complete the batch. If a mandatory condition cannot be met within scope, stop and report the blocker with evidence.
+
+The plan of record is a checkpoint, not a request for repeated approval. Continue within the user's existing authorization unless a genuine scope change, product decision, safety issue, or newly discovered blocker requires owner input.
+
+The write boundary limits writes; it does not prohibit necessary read-only inspection of directly relevant dependencies. Preserve all pre-existing changes. Never broaden the write boundary silently.
+
+---
+
+---
+
+## 14. Mission clarity, bounded context, and agent output
+
+These rules apply to all coding agents and are especially useful in tool-using, long-context sessions.
+
+- Put the **mission and scope first**. Follow with the minimum verified context, technical map, acceptance criteria, and output format; use the authorization rules in §1 and the write-boundary/stop-condition rules in §13.
+- Prefer direct, numbered instructions and explicit file/symbol names over long narrative explanations. Define technical terms once. When a restriction is already stated elsewhere, cite that section rather than restating it.
+- Separate **facts**, **owner decisions**, **assumptions**, and **open questions**. Never turn an assumption into a requirement without approval.
+- Use the smallest read or query that answers the current question. Do not print full-tree status, diffs, logs, or generated files when a scoped summary or targeted excerpt is sufficient.
+- Keep tool output and reports bounded. Summarize large results and retain exact paths, identifiers, counts, and relevant evidence. Split a long report at predefined section boundaries rather than allowing one oversized response to be truncated.
+- Do not expose private chain-of-thought or lengthy internal deliberation. Report the conclusion, concise rationale, evidence, uncertainty, and next action.
+- Long context capacity is not permission for unbounded exploration or oversized output. Prefer a compact handoff over replaying a long conversation.
+- If a task is blocked, report the blocker and the smallest decision or authorization needed. Do not fill the gap with unrelated investigation or speculative implementation.
+
+Recommended handoff format:
+
+```text
+Mission / task IDs:
+Authorization and write boundary:
+Completed:
+Current state:
+Files changed:
+Checks actually run and results:
+Open risks / blockers:
+Next authorized step:
+Stop condition:
+```
 
 ---
 
 ## Official references
 
 - OpenCode instructions: `https://opencode.ai/v2/docs/instructions`
+
 - OpenCode rules: `https://docs.opencode.ai/docs/rules/`
+
 - OCI: `https://github.com/Helweg/open-codebase-index`
+
 - CodeGraphContext MCP: `https://codegraphcontext.github.io/reference/mcp/`
+
 - Serena tools: `https://oraios.github.io/serena/01-about/035_tools.html`
+
 - Context7 MCP: `https://context7.com/docs/resources/all-clients`
+
 - Spec Kit: `https://github.github.com/spec-kit/quickstart`

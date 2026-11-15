@@ -66,6 +66,10 @@ final readonly class ExportService
     public const RESOURCE_REPORT = 'report';
     public const RESOURCE_AUDIT = 'audit';
     public const RESOURCE_EVIDENCE = 'evidence';
+    // Feature 007 T028: the additive Senior-scoped XLSX export. Distinct from every resource above
+    // because its row source is scoped by the caller's active SENIOR_MANAGER assignments, not by
+    // ownership, and because it answers XLSX only.
+    public const RESOURCE_SENIOR_QUEUE = 'senior-queue';
 
     public const SUPPORTED_RESOURCES = [
         self::RESOURCE_SHEET,
@@ -74,6 +78,7 @@ final readonly class ExportService
         self::RESOURCE_REPORT,
         self::RESOURCE_AUDIT,
         self::RESOURCE_EVIDENCE,
+        self::RESOURCE_SENIOR_QUEUE,
     ];
 
     public function __construct(
@@ -162,6 +167,27 @@ final readonly class ExportService
                         . 'no scope for it',
                 ];
             }
+        }
+
+        // Feature 007 T028: the `senior-queue` resource is XLSX only (owner D3) and is scoped by the
+        // caller's active SENIOR_MANAGER assignments rather than by ownership. The format rule is
+        // checked here — before any row is resolved — while the assignment scope is validated
+        // per-id in the row source (`SeniorQueueSelection`), which runs before any file is generated.
+        if ($resource === self::RESOURCE_SENIOR_QUEUE) {
+            if ($format !== self::FORMAT_XLSX) {
+                return [
+                    'allowed' => false,
+                    'reason' => "The 'senior-queue' export is XLSX only (`fileFormat: 'xlsx'`); "
+                        . "'{$format}' is refused. Existing CSV/PDF capabilities for the other "
+                        . 'resources are unchanged (owner D3).',
+                ];
+            }
+
+            return [
+                'allowed' => true,
+                'reason' => 'FR-007-056: senior-queue export is scoped by the caller\'s active '
+                    . 'SENIOR_MANAGER assignments, validated per selected id before generation',
+            ];
         }
 
         return ['allowed' => true, 'reason' => 'FR-009: export authorization matches view authorization'];

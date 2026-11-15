@@ -12,6 +12,7 @@ use OCA\PettyCash\Application\Port\CurrentUser;
 use OCA\PettyCash\Application\Port\UserDirectory;
 use OCA\PettyCash\Domain\Expense\ExpenseTransaction;
 use OCA\PettyCash\Domain\Expense\Repository\ExpenseTransactionRepository;
+use OCA\PettyCash\Domain\Workflow\Decision;
 use OCA\PettyCash\Domain\Workflow\TransactionStatus;
 use OCA\PettyCash\Domain\Workflow\WorkflowStage;
 use OCP\DB\QueryBuilder\IQueryBuilder;
@@ -147,6 +148,172 @@ final class DbExpenseTransactionRepository implements ExpenseTransactionReposito
 
         $rows = $qb->executeQuery()->fetchAllAssociative();
         return array_map([$this, 'mapRow'], $rows);
+    }
+
+    /**
+     * Compact per-sheet projection for the Senior Manager Cost Sheet list.
+     *
+     * Replaces for the list path the previous `findByCostCenterIds()` bulk load (every historical
+     * scoped transaction, hydrated as a full aggregate) plus a `findBySheetId()` read per sheet and
+     * a `findByTransactionId()` reads per transaction. That path's per-row counts and the sheet-wide
+     * gate are now computed entirely in the database, and the rows returned are one compact scalar
+     * row **per candidate sheet** — bounded by the number of sheets in scope, while historical
+     * transaction volume only ever widens the in-database GROUP BY, never PHP memory.
+     *
+     * Two grouped queries, both index-served (`r.cost_center_id` through the revision join, and
+     * `t.sheet_id`/`t.active_revision_id` through the existing transaction indexes):
+     *
+     * 1. **Scoped counts**: one row per sheet holding at least one transaction whose active revision
+     *    is in a managed cost centre; awaiting/decided-by-this-senior counts, the returned-by-this-
+     *    senior flag, and the activity maxima, joined to the decision table only on the active
+     *    revision (`ds.stage = 'SENIOR'`) — the `(revision_id, stage)` unique index admits at most
+     *    one such decision per transaction. Sheet instants come from the same query so `latestActivityAt`
+     *    can be folded before sorting with no further reads.
+     * 2. **Whole-sheet gate**: over **every** transaction of the candidate sheets (including those in
+     *    cost centres outside this senior's scope, exactly like the previous per-sheet
+     *    `findBySheetId()` read), the number that fail the Cost Center completion rule — no final CC
+     *    decision, or a pending Return, or an awaiting-purchaser-correction state.
+     *
+     * `SUM(CASE WHEN …)` / `MAX(CASE WHEN …)` are used because conditional aggregation is the one
+     * portable way to count subsets of a group on MySQL/MariaDB, PostgreSQL and SQLite; they are
+     * standard SQL in the declared-backend catalogue. The values compared are the same enum backing
+     * strings the domain persists, and the only user-derived value (the actor uid) is a bound
+     * parameter.
+     *
+     * @param string $actorUid the acting senior manager's uid
+     * @param list<int> $costCenterIds the managed cost-centre ids (active-revision membership)
+     * @return array<int, array{
+     *   awaitingSenior: int,
+     *   decidedBySenior: int,
+     *   returnedByThisSenior: bool,
+     *   ccGateUnresolved: int,
+     *   activityCreated: ?DateTimeImmutable,
+     *   activityUpdated: ?DateTimeImmutable,
+     *   activityDecided: ?DateTimeImmutable,
+     *   sheetCreated: ?DateTimeImmutable,
+     *   sheetFirstSubmitted: ?DateTimeImmutable,
+     *   sheetCompleted: ?DateTimeImmutable,
+     * }> keyed by the sheet's database id
+     */
+    public function seniorSheetListRows(string $actorUid, array $costCenterIds): array
+    {
+        $costCenterIds = array_values(array_unique(array_map('intval', $costCenterIds)));
+        if ($costCenterIds === []) {
+            return [];
+        }
+
+        $seniorStage = WorkflowStage::Senior->value;
+        $returnValue = Decision::Return->value;
+
+        // Candidate rows: one compact row per sheet with at least one scoped transaction.
+        $qb = $this->connection->getQueryBuilder();
+        $actor = (string) $qb->createNamedParameter($actorUid);
+        $seniorParam = (string) $qb->createNamedParameter($seniorStage);
+        $returnParam = (string) $qb->createNamedParameter($returnValue);
+
+        // A scoped transaction contributes to the lists' activity only when it is what makes the
+        // sheet eligible: awaiting any senior at the Senior stage, or carrying a current-revision
+        // decision by *this* actor. Another senior's decision is neither counted nor disclosed.
+        $included = '(t.current_stage = ' . $seniorParam . ' AND ds.id IS NULL)'
+            . ' OR (ds.id IS NOT NULL AND ds.actor_uid = ' . $actor . ')';
+
+        $qb->select('t.sheet_id')
+            ->selectAlias($qb->createFunction('SUM(CASE WHEN t.current_stage = ' . $seniorParam . ' AND ds.id IS NULL THEN 1 ELSE 0 END)'), 'awaiting_senior')
+            ->selectAlias($qb->createFunction('SUM(CASE WHEN ds.id IS NOT NULL AND ds.actor_uid = ' . $actor . ' THEN 1 ELSE 0 END)'), 'decided_by_senior')
+            ->selectAlias($qb->createFunction('SUM(CASE WHEN ds.id IS NOT NULL AND ds.actor_uid = ' . $actor . ' AND ds.decision = ' . $returnParam . ' THEN 1 ELSE 0 END)'), 'returned_by_senior')
+            ->selectAlias($qb->createFunction('MAX(CASE WHEN ' . $included . ' THEN t.created_at END)'), 'activity_created')
+            ->selectAlias($qb->createFunction('MAX(CASE WHEN ' . $included . ' THEN t.updated_at END)'), 'activity_updated')
+            ->selectAlias($qb->createFunction('MAX(CASE WHEN ' . $included . ' THEN ds.decided_at END)'), 'activity_decided')
+            ->selectAlias($qb->createFunction('MAX(s.created_at)'), 'sheet_created')
+            ->selectAlias($qb->createFunction('MAX(s.first_submitted_at)'), 'sheet_first_submitted')
+            ->selectAlias($qb->createFunction('MAX(s.completed_at)'), 'sheet_completed')
+            ->from('pettycash_transactions', 't')
+            ->join('t', 'pettycash_transaction_revisions', 'r', $qb->expr()->eq('r.id', 't.active_revision_id'))
+            ->join('t', 'pettycash_sheets', 's', $qb->expr()->eq('s.id', 't.sheet_id'))
+            ->leftJoin('t', 'pettycash_workflow_decisions', 'ds', $qb->expr()->andX(
+                $qb->expr()->eq('ds.revision_id', 'r.id'),
+                $qb->expr()->eq('ds.stage', $qb->createNamedParameter($seniorStage))
+            ))
+            ->where($qb->expr()->in(
+                'r.cost_center_id',
+                $qb->createNamedParameter($costCenterIds, IQueryBuilder::PARAM_INT_ARRAY)
+            ))
+            ->groupBy('t.sheet_id');
+
+        $rows = [];
+        foreach ($qb->executeQuery()->fetchAllAssociative() as $row) {
+            $sheetDbId = (int) $row['sheet_id'];
+            $rows[$sheetDbId] = [
+                'awaitingSenior' => (int) ($row['awaiting_senior'] ?? 0),
+                'decidedBySenior' => (int) ($row['decided_by_senior'] ?? 0),
+                'returnedByThisSenior' => ((int) ($row['returned_by_senior'] ?? 0)) > 0,
+                // Filled from the gate query below; defaults to "decided" only if the sheet somehow
+                // misses that query, which the candidate join makes impossible.
+                'ccGateUnresolved' => 0,
+                'activityCreated' => $this->toDateTime($row['activity_created'] ?? null),
+                'activityUpdated' => $this->toDateTime($row['activity_updated'] ?? null),
+                'activityDecided' => $this->toDateTime($row['activity_decided'] ?? null),
+                'sheetCreated' => $this->toDateTime($row['sheet_created'] ?? null),
+                'sheetFirstSubmitted' => $this->toDateTime($row['sheet_first_submitted'] ?? null),
+                'sheetCompleted' => $this->toDateTime($row['sheet_completed'] ?? null),
+            ];
+        }
+
+        if ($rows === []) {
+            return [];
+        }
+
+        // Whole-sheet gate: every transaction of the candidate sheets, scoped or not, matching the
+        // previous `findBySheetId()` + `hasFinalCostCenterDecision()` verdict exactly.
+        $gateQb = $this->connection->getQueryBuilder();
+        $gateReturnParam = (string) $gateQb->createNamedParameter($returnValue);
+        $correctionParam = (string) $gateQb->createNamedParameter(WorkflowStage::Correction->value);
+        $awaitingCorrectionParam = (string) $gateQb->createNamedParameter(TransactionStatus::AwaitingPurchaserCorrection->value);
+
+        $gateQb->select('t.sheet_id')
+            ->selectAlias(
+                $gateQb->createFunction('SUM(CASE WHEN dc.id IS NULL OR dc.decision = ' . $gateReturnParam
+                    . ' OR (t.current_stage = ' . $correctionParam . ' AND t.current_status = ' . $awaitingCorrectionParam . ')'
+                    . ' THEN 1 ELSE 0 END)'),
+                'cc_gate_unresolved'
+            )
+            ->from('pettycash_transactions', 't')
+            ->join('t', 'pettycash_transaction_revisions', 'r', $gateQb->expr()->eq('r.id', 't.active_revision_id'))
+            ->leftJoin('t', 'pettycash_workflow_decisions', 'dc', $gateQb->expr()->andX(
+                $gateQb->expr()->eq('dc.revision_id', 'r.id'),
+                $gateQb->expr()->eq('dc.stage', $gateQb->createNamedParameter(WorkflowStage::CostCenter->value))
+            ))
+            ->where($gateQb->expr()->in(
+                't.sheet_id',
+                $gateQb->createNamedParameter(array_keys($rows), IQueryBuilder::PARAM_INT_ARRAY)
+            ))
+            ->groupBy('t.sheet_id');
+
+        foreach ($gateQb->executeQuery()->fetchAllAssociative() as $row) {
+            $sheetDbId = (int) $row['sheet_id'];
+            if (isset($rows[$sheetDbId])) {
+                $rows[$sheetDbId]['ccGateUnresolved'] = (int) ($row['cc_gate_unresolved'] ?? 0);
+            }
+        }
+
+        return $rows;
+    }
+
+    /**
+     * A stored datetime column as a `DateTimeImmutable`, exactly as `mapRow()` reads them.
+     */
+    private function toDateTime(mixed $value): ?DateTimeImmutable
+    {
+        if ($value instanceof DateTimeImmutable) {
+            return $value;
+        }
+        if ($value instanceof \DateTimeInterface) {
+            return DateTimeImmutable::createFromInterface($value);
+        }
+        if (!is_string($value) || trim($value) === '') {
+            return null;
+        }
+        return new DateTimeImmutable($value);
     }
 
     /** @return list<ExpenseTransaction> */

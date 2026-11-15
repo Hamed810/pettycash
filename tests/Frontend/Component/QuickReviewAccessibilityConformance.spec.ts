@@ -9,9 +9,14 @@
 // | Requirement | Checked here |
 // |---|---|---|
 // | full-screen mobile overlays that cannot shave a hit target | each overlay declares a `width <= 640px` (or `max-width: 600px`) rule covering 390px |
-// | `≥44px` touch targets | drawer tabs/attachments declare `min-block-size: 44px`; card thumbnails declare ≥44px on both axes; card/modal buttons stretch full width on mobile so they never fall below the design system's 44px default |
+// | `≥44px` touch targets | the interactive controls draw this from their own declared floor — drawer tabs/attachments `min-block-size: 44px`; card/modal/drawer/preview button rows and the queue tabs/search declare `min-block-size: 44px` inside their mobile block; card thumbnails declare ≥44px on both axes |
 // | reduced motion | the animated surfaces (drawer, modal) declare `prefers-reduced-motion: reduce` suppression |
 // | RTL mirroring | the drawer mirrors in RTL via `[dir='rtl']` rather than physical `left/right` |
+// | Latin isolation | the card and drawer wrap their Latin transaction/sheet ids in `bdi`, with the card also pinned to `dir="ltr"` like the drawer |
+//
+// The `44px` floors are *declared on the control itself* rather than assumed from a design-system
+// default: the live 390px capture measured the theme's base button at 34px tall, so the full-width
+// rule alone is not evidence of the floor.
 //
 // The runtime behaviours (focus return, single overlay, scroll-to-panel, honesty) live in the
 // component/workflow specs and the browser captures; this file intentionally does not re-assert them.
@@ -59,9 +64,32 @@ describe('Quick-review accessibility conformance (T036)', () => {
 		expect(sizes).toContain(54)
 	})
 
-	it('stretches card and modal buttons full width on mobile so they cannot shrink below the 44px default', () => {
+	it('stretches card and modal buttons full width on mobile', () => {
 		expect(card).toMatch(/quick-review-card__actions\s*:deep\(\.button-vue\)\s*\{\s*inline-size:\s*100%;/)
 		expect(modal).toMatch(/decision-modal__footer-group\s*:deep\(\.button-vue\)\s*\{\s*inline-size:\s*100%;/)
+	})
+
+	it('declares a 44px mobile floor on the card, modal and drawer primary action rows — the theme measures 34px otherwise', () => {
+		expect(card).toMatch(/quick-review-card__actions\s*:deep\(\.button-vue\)[\s\S]*?min-block-size:\s*44px/)
+		expect(modal).toMatch(/decision-modal__footer-group\s*:deep\(\.button-vue\)[\s\S]*?min-block-size:\s*44px/)
+		expect(drawer).toMatch(/details-drawer__footer\s*:deep\(\.button-vue\)[\s\S]*?min-block-size:\s*44px/)
+	})
+
+	it('keeps the drawer and preview dismiss controls on a 44px floor on mobile', () => {
+		expect(drawer).toMatch(/details-drawer__header\s*:deep\(\.button-vue\)[\s\S]*?min-block-size:\s*44px/)
+		expect(preview).toMatch(/evidence-preview-layer__header\s*:deep\(\.button-vue\)[\s\S]*?min-block-size:\s*44px/)
+		expect(preview).toMatch(/evidence-preview-layer__footer\s*:deep\(\.button-vue\)[\s\S]*?min-block-size:\s*44px/)
+	})
+
+	it('keeps the queue tabs and search on a 44px floor in the queue mobile block (B5 host surface)', () => {
+		const queue = source('src/views/reviews/CostCenterQueueView.vue')
+		const mobile = queue.split('@media (width <= 640px)')[1] ?? ''
+		expect(mobile).toMatch(/\.tab\s*\{[\s\S]*?min-block-size:\s*44px/)
+		expect(mobile).toMatch(/\.search__input\s*\{[\s\S]*?min-block-size:\s*44px/)
+	})
+
+	it('isolates the card transaction id in a Latin-run bdi, like the drawer does (T036)', () => {
+		expect(card).toMatch(/<bdi\s+dir="ltr"\s+class="quick-review-card__id"/)
 	})
 
 	it('suppresses animation under reduced motion on the animated surfaces', () => {

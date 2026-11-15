@@ -731,6 +731,65 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  /queues/senior/sheets:
+    get:
+      tags: [Workflow]
+      summary: List Cost Sheets the acting senior manager may read, including completed ones
+      description: >
+        Additive senior-scoped list introduced to retain completed Cost Sheets in the Senior
+        Manager review surface (Feature 007, UX-007-07). Authorization is the acting user's active
+        `SENIOR_MANAGER` assignments, identical to the per-sheet read below: a sheet is listed
+        when at least one current-revision transaction is in a managed cost centre and is either
+        awaiting any senior of that cost centre or carries a current-revision decision by this
+        senior. A transaction another senior decided is never disclosed and a sheet whose only
+        scoped transactions carry such a decision is not listed (FR-007-056). The list is
+        transaction-derived but never reconstructed from the currently-pending Senior set alone: a
+        sheet whose final decision already advanced its transactions to Finance stays listed.
+        Each row reuses `SeniorSheetSummary` (identity, title, owner, currency-safe submission
+        money, the backend-computed sheet-wide `allTransactionsCostCenterDecided` gate, and the
+        presentation `reviewStatus`) plus the senior-scoped `progress` counts and `latestActivityAt`
+        where authoritative data exists. `reviewStatus` is `REVIEW_COMPLETED` only when nothing
+        awaits this senior's decision and no scoped transaction carries an unresolved `Return` by
+        this senior; a Return sends the sheet back to correction instead of completing the review
+        (FR-007-017). The list is read-only and never exposes a decision capability or an
+        unrestricted historical read. `total` counts the sheets in scope, not the page, and no
+        completed sheet is silently truncated by pagination.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          $ref: '#/components/responses/SeniorSheetQueue'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /queues/senior/sheets/{sheetId}:
+    get:
+      tags: [Workflow]
+      summary: Return one sheet as the acting senior manager may see it
+      description: >
+        Additive senior-scoped read introduced for Feature 007 backend batch (T024/T025). Authorization
+        is the acting user's active `SENIOR_MANAGER` assignments; an unknown sheet and a sheet outside
+        those cost centres both answer `404`, so the endpoint cannot confirm a sheet exists outside
+        the caller's scope (FR-007-056). The transaction list contains only current-revision
+        transactions awaiting any senior of the assigned cost centre or decided by this senior;
+        another senior's decision is never disclosed. `sheet.allTransactionsCostCenterDecided` is the
+        backend-computed, sheet-wide Cost Center completion gate (owner D1, FR-007-013, 001 FR-037):
+        true only when every transaction on the sheet has a final Cost Center decision (Approve,
+        Reject, or a Return corrected and then re-decided); a pending Return does not satisfy it.
+        `sheet.reviewStatus` is a presentation-only `PENDING_REVIEW`/`REVIEW_COMPLETED` value (owner
+        D5, FR-007-017) — never the domain `SheetStatus` and never derived client-side.
+      parameters:
+        - $ref: '#/components/parameters/SheetId'
+      responses:
+        '200':
+          description: Senior-scoped sheet review projection
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SeniorManagerSheetReview' }
+        '404':
+          $ref: '#/components/responses/NotFound'
+
   /returns:
     get:
       tags: [Workflow]
@@ -1190,6 +1249,16 @@ components:
               - type: object
                 properties:
                   items: { type: array, items: { $ref: '#/components/schemas/TransactionSummary' } }
+    SeniorSheetQueue:
+      description: Paged senior-scoped Cost Sheet summaries, including completed sheets
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/PageMeta'
+              - type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/SeniorSheetQueueItem' } }
     AuditPage:
       description: Paged audit events
       content:
@@ -1669,6 +1738,120 @@ components:
         transactions:
           type: array
           items: { $ref: '#/components/schemas/ManagerTransactionSummary' }
+    # Feature 007 backend batch (T026): the additive Senior review schemas, mirroring the
+    # Manager* shapes above. Nothing here edits an existing schema; the CC decision surface and the
+    # existing public contracts are unchanged (FR-007-051/052).
+    SeniorSheetSummary:
+      type: object
+      required: [id, title, ownerId, ownerDisplayName, currency, status, submittedTotalMinor, submittedTotal, submittedAt, version, allTransactionsCostCenterDecided, reviewStatus]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        ownerId: { type: string }
+        ownerDisplayName: { type: string }
+        currency: { type: string }
+        status: { $ref: '#/components/schemas/SheetStatus' }
+        submittedTotalMinor:
+          type: integer
+          format: int64
+          nullable: true
+          description: >
+            The sheet's submission snapshot from `submitted_total_minor`, set once by the domain's
+            submit transition. It is the sheet total, not a sum of the senior-scoped transactions
+            in this response.
+        submittedTotal:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/Money'
+          description: >
+            `submittedTotalMinor` in the contract's currency-safe Money shape; `minorUnit` comes
+            from configured currency data, so a client never infers the scale.
+        submittedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: The genuine first-submission instant (`ExpenseSheet::firstSubmittedAt`).
+        version: { type: integer }
+        allTransactionsCostCenterDecided:
+          type: boolean
+          nullable: true
+          description: >
+            The backend-computed, sheet-wide Cost Center completion gate (owner D1, FR-007-013,
+            001 FR-037 amendment): `true` only when every transaction on the sheet has a final Cost
+            Center decision on its current revision (Approve, Reject, or a Return corrected and
+            then re-decided). A pending Return does not satisfy it. `null` when the backend cannot
+            prove the gate; a client must never derive eligibility itself.
+        reviewStatus:
+          type: string
+          enum: [PENDING_REVIEW, REVIEW_COMPLETED]
+          description: >
+            Presentation-only Senior-queue status (owner D5, FR-007-017): `REVIEW_COMPLETED` only
+            when the senior-pending set is empty. Completed sheets stay listed, read-only and
+            non-actionable. Never the domain `SheetStatus` and never derived client-side.
+    SeniorSheetProgress:
+      type: object
+      required: [awaitingSenior, decidedBySenior, total]
+      properties:
+        awaitingSenior:
+          type: integer
+          minimum: 0
+          description: Current-revision transactions in the senior's scope awaiting any senior decision.
+        decidedBySenior:
+          type: integer
+          minimum: 0
+          description: Current-revision transactions this senior decided (approved, rejected or returned).
+        total:
+          type: integer
+          minimum: 0
+          description: Sum of the two senior-scoped counts; not the sheet's transaction count.
+    SeniorTransactionState:
+      type: string
+      enum: [AWAITING_SENIOR_DECISION, DECIDED_BY_SENIOR]
+    SeniorTransactionSummary:
+      allOf:
+        - $ref: '#/components/schemas/TransactionSummary'
+        - type: object
+          required: [seniorState, seniorDecision]
+          properties:
+            seniorState: { $ref: '#/components/schemas/SeniorTransactionState' }
+            seniorDecision:
+              nullable: true
+              allOf:
+                - $ref: '#/components/schemas/Decision'
+              description: >
+                This senior's decision on the transaction's current revision, present only for
+                `DECIDED_BY_SENIOR`. A return by this senior is reported as `DECIDED_BY_SENIOR`
+                because it moves the transaction to correction; the two-state vocabulary has no
+                separate returned token. The Cost Center decision stays visible through
+                `TransactionSummary`/`TransactionDetail` and is never rolled up here.
+    SeniorManagerSheetReview:
+      type: object
+      required: [sheet, progress, transactions]
+      properties:
+        sheet: { $ref: '#/components/schemas/SeniorSheetSummary' }
+        progress: { $ref: '#/components/schemas/SeniorSheetProgress' }
+        transactions:
+          type: array
+          items: { $ref: '#/components/schemas/SeniorTransactionSummary' }
+    # Feature 007 (UX-007-07): one row of the additive `GET /queues/senior/sheets` list. Reuses
+    # SeniorSheetSummary so a list row and the per-sheet read cannot disagree, and adds the two
+    # members only a list row carries.
+    SeniorSheetQueueItem:
+      allOf:
+        - $ref: '#/components/schemas/SeniorSheetSummary'
+        - type: object
+          required: [progress, latestActivityAt]
+          properties:
+            progress: { $ref: '#/components/schemas/SeniorSheetProgress' }
+            latestActivityAt:
+              type: string
+              format: date-time
+              nullable: true
+              description: >
+                The newest authoritative timestamp the acting senior manager may read for this
+                sheet: its created/first-submitted/completed instants and the transaction or
+                decision instants of this manager's scoped projection. `null` only when the
+                backend holds none of those; it is never fabricated from client input.
     Revision:
       type: object
       required: [id, number, expenseDate, amount, createdBy, createdAt]
@@ -1948,7 +2131,11 @@ components:
       properties:
         resource:
           type: string
-          enum: [sheet, sheets, transactions, report, audit, evidence]
+          enum: [sheet, sheets, transactions, report, audit, evidence, senior-queue]
+          description: >
+            `senior-queue` is the additive Feature 007 Senior-scoped export (T028): XLSX only, rows
+            resolved in `ids` order and scope-validated against the caller's active SENIOR_MANAGER
+            assignments before generation; existing owner-scoped resources are unchanged.
         # Named `fileFormat`, not `format`. Nextcloud's OCS layer reserves the request
         # parameter `format` for choosing the response envelope: `Request::getFormat()`
         # (lib/private/AppFramework/Http/Request.php:903) reads `getParam('format')` *before*

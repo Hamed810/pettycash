@@ -1,6 +1,6 @@
 // Management Review - Vue Component Tests (RED: behavior not implemented)
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia, type Pinia } from 'pinia'
 import { createRouter, createWebHashHistory, type Router } from 'vue-router'
@@ -531,10 +531,22 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
   describe('SeniorQueueView', () => {
     async function mountSeniorQueue(items: unknown[]) {
       const reviewsStore = useReviewsStore()
-      reviewsStore.seniorQueue = { items, total: items.length, page: 1, pageSize: 25 } as never
+      reviewsStore.seniorQueue = { items, total: items.length, page: 1, pageSize: 100 } as never
       reviewsStore.fetchSeniorQueue = vi.fn().mockResolvedValue(undefined)
+      // The per-sheet read supplies the acting senior's transactions when a test opens the modal.
+      // Tests that do not stub it render the modal's honest unavailable state (FR-007-014).
+      ocsRequest.mockImplementation((config: { url?: string }) =>
+        /\/queues\/senior\/sheets\//.test(config?.url ?? '')
+          ? Promise.reject(new Error('senior sheet read unavailable'))
+          : Promise.resolve(emptyOcsResponse(config))
+      )
       return mountView(SeniorQueueView, '/reviews/senior')
     }
+
+    afterEach(() => {
+      // The sheet modal is a teleported overlay; clear the body so it cannot leak into the next test.
+      document.body.innerHTML = ''
+    })
 
     const COST_CENTER_APPROVAL = {
       id: 'd-1', stage: 'COST_CENTER', decision: 'APPROVE',
@@ -542,11 +554,27 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
       decidedAt: '2026-09-20T10:00:00Z'
     }
 
-    it('should render senior queue with advisory cost center decisions visible', async () => {
-      const wrapper = await mountSeniorQueue([{
+    /** One `GET /queues/senior/sheets` row (UX-007-07), including completed sheets. */
+    function seniorSheetRow(id: string, overrides: Record<string, unknown> = {}) {
+      return {
+        id, title: `Sheet ${id}`, ownerId: 'user1', ownerDisplayName: 'User One',
+        currency: 'IRR', submittedTotalMinor: 50000,
+        submittedTotal: { amountMinor: 50000, currency: 'IRR', minorUnit: 0 },
+        submittedAt: '2026-09-20T10:00:00Z', version: 1,
+        allTransactionsCostCenterDecided: true, reviewStatus: 'PENDING_REVIEW',
+        latestActivityAt: '2026-09-20T10:00:00Z',
+        progress: { awaitingSenior: 2, decidedBySenior: 0, total: 2 },
+        ...overrides
+      }
+    }
+
+    /** One transaction row as the per-sheet Senior read returns it. */
+    function seniorTransaction(overrides: Record<string, unknown> = {}) {
+      return {
         id: 'tx-1', sheetId: 'sheet-1', stage: 'SENIOR', status: 'AWAITING_SENIOR_REVIEW',
         finalOutcome: null, evidenceRequired: false, evidenceCount: 1, version: 0,
         latestDecision: COST_CENTER_APPROVAL,
+        seniorState: 'AWAITING_SENIOR_DECISION', seniorDecision: null,
         activeRevision: {
           id: 'rev-1', number: 1, expenseDate: '2026-09-20',
           amount: { amountMinor: 50000, currency: 'IRR', minorUnit: 0 },
@@ -554,76 +582,80 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
           costCenter: { id: 'cc-1', code: 'CC001', name: 'Cost Center' },
           expenseType: { id: 'et-1', name: 'Travel' },
           createdBy: 'user1', createdAt: '2026-09-20T10:00:00Z', active: true
+        },
+        ...overrides
+      }
+    }
+
+    /** Serves the per-sheet read for `sheet-1` with the given transaction set. */
+    function mockSeniorSheetRead(transactions: unknown[]) {
+      ocsRequest.mockImplementation((config: { url?: string }) => {
+        const url = config?.url ?? ''
+        if (url.includes('/queues/senior/sheets/sheet-1')) {
+          return Promise.resolve(ocsEnvelope({
+            sheet: seniorSheetRow('sheet-1'),
+            progress: { awaitingSenior: transactions.length, decidedBySenior: 0, total: transactions.length },
+            transactions
+          }))
         }
-      }])
+        return Promise.resolve(emptyOcsResponse(config))
+      })
+    }
+
+    it('should render senior queue grouped into one sheet row with advisory cost center decisions visible in the sheet modal', async () => {
+      const wrapper = await mountSeniorQueue([seniorSheetRow('sheet-1')])
 
       expect(wrapper.find('[data-testid="senior-queue"]').exists()).toBe(true)
-      // FR-034: the cost-centre decision is visible to the senior *in full*, not withheld.
-      const advisory = wrapper.find('[data-testid="advisory-decision"]')
-      expect(advisory.exists()).toBe(true)
-      expect(advisory.text().trim()).not.toBe('')
+      // FR-007-001: one sheet row per sheet — no flat transaction rows on the queue surface.
+      expect(wrapper.findAll('[data-testid^="senior-sheet-row-"]')).toHaveLength(1)
+      expect(wrapper.find('[data-testid="sheet-pending-count"]').text().trim()).not.toBe('')
+
+      // Opening the sheet shows the modal over the still-mounted queue (FR-007-002), and the Cost
+      // Center decision is visible to the senior *in full* at transaction level only (FR-034 /
+      // FR-007-004) — never rolled up into a sheet verdict. The list row carries no transactions,
+      // so the modal reads them from the per-sheet endpoint.
+      mockSeniorSheetRead([seniorTransaction(), seniorTransaction({ id: 'tx-2' })])
+      await wrapper.find('[data-testid="sheet-title"]').trigger('click')
+      await flushPromises()
+      const dialog = document.body.querySelector('[data-testid="senior-sheet-modal"]')
+      expect(dialog).not.toBeNull()
+      const advisories = dialog?.querySelectorAll('[data-testid="senior-transaction-advisory"]')
+      expect(advisories?.length).toBe(2)
+      expect(advisories?.[0]?.textContent?.trim() ?? '').not.toBe('')
     })
 
     // FR-034 / FR-035: the senior may decide independently, without being forced to acknowledge or
     // respond to the cost-centre decision.
     //
-    // The original mounted `SeniorQueueView` and looked for a `DecisionForm` in it with
-    // `allowIndependentDecision: true`. There is no such form in this view — a decision is recorded on
-    // the transaction's own page — and `allowIndependentDecision` is a prop no view passes and no code
-    // reads. So the assertion could not have held, and the requirement it names is better checked where
-    // the decision is actually taken: the senior's own three choices are offered immediately, with no
-    // acknowledgment control standing between the senior and them.
-    /**
-     * T394: the narrow card carries this queue's **own** column too.
-     *
-     * Worth its own case rather than being folded into the cost-centre one, because the senior queue's
-     * distinguishing column (`advisoryDecision`) is rendered by a branch the shared cell renderer does
-     * not own -- it is the one column each queue supplies for itself. A queue that adopted the reflow and
-     * silently lost that column would still pass every test that only reads the table.
-     */
-    it('should carry the advisory decision in the narrow card as in the table', async () => {
+    // This block's former flat-table/narrow-card assertion (`expectCardAgreesWithTable` over the
+    // `advisoryDecision` column) described a responsive transaction table the sheet-first queue no
+    // longer renders (FR-007-001). It is updated in place to the sheet presentation's own invariants:
+    // one row per server sheet-list row, the pending badge (never "Review Completed" unless the
+    // server supplies it), and identity from the list row itself (UX-007-07).
+    it('keeps the queue sheet-first: one server sheet row with its list-row identity and pending badge', async () => {
       const wrapper = await mountSeniorQueue([
-        {
-          id: 'tx-1', sheetId: 'sheet-1', stage: 'SENIOR', status: 'AWAITING_SENIOR_REVIEW',
-          finalOutcome: null, evidenceRequired: false, evidenceCount: 0, version: 0,
-          latestDecision: COST_CENTER_APPROVAL,
-          activeRevision: {
-            id: 'rev-1', number: 1, expenseDate: '2026-09-20',
-            amount: { amountMinor: 50000, currency: 'IRR', minorUnit: 0 },
-            costCenter: { id: 'cc-1', code: 'CC001', name: 'Cost Center' },
-            expenseType: { id: 'et-1', name: 'Travel' },
-            createdBy: 'u1', createdAt: '2026-09-20T10:00:00Z', active: true
-          }
-        }
+        seniorSheetRow('sheet-1', { title: 'Travel sheet' })
       ])
 
-      expectCardAgreesWithTable(wrapper, {
-        rows: 1,
-        hooks: [
-          'data-testid="amount"',
-          'data-testid="advisory-decision"',
-          'data-testid="view-details-btn"'
-        ]
-      })
+      expect(wrapper.findAll('[data-testid^="senior-sheet-row-"]')).toHaveLength(1)
+      expect(wrapper.find('[data-testid="review-pending-badge"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="review-completed-badge"]').exists()).toBe(false)
+
+      // Identity comes from the list row itself, so the modal can render it even when the
+      // per-sheet transaction read is unavailable.
+      await wrapper.find('[data-testid="sheet-title"]').trigger('click')
+      await flushPromises()
+      const dialog = document.body.querySelector('[data-testid="senior-sheet-modal"]')
+      expect(dialog?.querySelector('[data-testid="senior-modal-title"]')?.textContent)
+        .toBe('Travel sheet')
     })
 
     it('should allow senior to decide independently without forced acknowledgment', async () => {
-      const wrapper = await mountSeniorQueue([{
-        id: 'tx-1', sheetId: 'sheet-1', stage: 'SENIOR', status: 'AWAITING_SENIOR_REVIEW',
-        finalOutcome: null, evidenceRequired: false, evidenceCount: 1, version: 0,
-        latestDecision: COST_CENTER_APPROVAL,
-        activeRevision: {
-          id: 'rev-1', number: 1, expenseDate: '2026-09-20',
-          amount: { amountMinor: 50000, currency: 'IRR', minorUnit: 0 },
-          description: 'Expense',
-          costCenter: { id: 'cc-1', code: 'CC001', name: 'Cost Center' },
-          expenseType: { id: 'et-1', name: 'Travel' },
-          createdBy: 'user1', createdAt: '2026-09-20T10:00:00Z', active: true
-        }
-      }])
+      const wrapper = await mountSeniorQueue([seniorSheetRow('sheet-1')])
 
-      // The queue offers the senior a way in, and it is not gated on the cost-centre decision.
-      expect(wrapper.find('[data-testid="view-details-btn"]').exists()).toBe(true)
+      // The queue offers the senior a way in — the sheet opens over the mounted queue — and it is
+      // not gated on the cost-centre decision.
+      expect(wrapper.find('[data-testid="sheet-title"]').exists()).toBe(true)
       // Nothing in the view asks the senior to acknowledge anything.
       expect(wrapper.find('[data-testid="advisory-acknowledge"]').exists()).toBe(false)
       expect(wrapper.find('[data-testid="acknowledge-advisory"]').exists()).toBe(false)

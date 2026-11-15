@@ -272,6 +272,159 @@ export interface ManagerSheetReview {
  */
 export type ManagerTransactionReadState = 'loading' | 'loaded' | 'forbidden' | 'notFound' | 'unavailable'
 
+// Senior manager review types (Feature 007 — additive).
+//
+// These mirror the Cost Center manager shapes (`ManagerSheetSummary`/`ManagerSheetReview` at 006,
+// B001–B004) for the Senior stage. They are additive: nothing here edits an existing type, and the
+// narrower `ExportRequest.resource` vocabulary stays closed until the additive `senior-queue` value
+// is ratified (see the note at `ExportRequest` below).
+
+/**
+ * The acting Senior manager's own state for one transaction, as the Senior-scoped read returns it.
+ *
+ * Deliberately not the transaction's global `status`: `DECIDED_BY_SENIOR` means *this* manager
+ * decided the current revision at Senior. It is never a sheet-wide verdict (FR-007-004).
+ */
+export type SeniorManagerTransactionState =
+	| 'AWAITING_SENIOR_DECISION'
+	| 'DECIDED_BY_SENIOR'
+
+/** `GET /queues/senior/sheets/{sheetId}`'s sheet header (additive Senior read, backend-required). */
+export interface SeniorSheetSummary {
+	id: string
+	title: string
+	ownerId: string
+	ownerDisplayName: string
+	currency: string
+	submittedTotalMinor: number | null
+	submittedTotal: Money | null
+	/** The genuine first-submission instant, not the sheet's creation time. */
+	submittedAt: string | null
+	version: number
+	/**
+	 * The backend-computed, sheet-wide Cost Center completion gate (owner D1, FR-007-013).
+	 *
+	 * This is the **only** source of Senior-queue eligibility: `true` only when the backend proves
+	 * every transaction in the sheet has a final CC decision (Approve, Reject, or a Return corrected
+	 * and then re-decided). **Authoritative only when the backend proves the sheet gate;
+	 * `null` = cannot prove (this phase)** — a `null` sheet must not be shown, and never labelled
+	 * "Waiting for Cost Center Review".
+	 */
+	allTransactionsCostCenterDecided: boolean | null
+	/**
+	 * Senior-queue presentation status (owner D5, FR-007-017).
+	 *
+	 * `REVIEW_COMPLETED` is supplied only when the senior-pending set is empty; the string is a
+	 * Senior-queue presentation value, distinct from the domain `SheetStatus` (unchanged), and is
+	 * never derived client-side. Completed sheets stay listed, read-only and non-actionable.
+	 */
+	reviewStatus: 'PENDING_REVIEW' | 'REVIEW_COMPLETED'
+}
+
+/** Senior-scoped progress; `total` is the sheet's senior-pending set from the loaded response only. */
+export interface SeniorSheetProgress {
+	awaitingSenior: number
+	decidedBySenior: number
+	total: number
+}
+
+/**
+ * One row of `GET /queues/senior/sheets` (Feature 007, UX-007-07): the Senior-scoped sheet list
+ * that retains completed sheets. Reuses `SeniorSheetSummary` so a list row and the per-sheet read
+ * cannot disagree, and adds the two members only a list row carries. **The row carries no
+ * transactions**: the acting senior's transaction list arrives only through the per-sheet read
+ * (`SeniorManagerSheetReview`), never reconstructed from this row.
+ */
+export interface SeniorSheetListRow extends SeniorSheetSummary {
+	/**
+	 * The newest authoritative timestamp the acting senior manager may read for this sheet; `null`
+	 * only when the backend holds none of those. Never fabricated from client input.
+	 */
+	latestActivityAt: string | null
+	/** This senior's scoped progress; `total` is the sum of `awaitingSenior` + `decidedBySenior`. */
+	progress: SeniorSheetProgress
+}
+
+export interface SeniorManagerSheetReview {
+	sheet: SeniorSheetSummary
+	progress: SeniorSheetProgress
+	transactions: Array<TransactionSummary & {
+		seniorState: SeniorManagerTransactionState
+		/** This manager's current-revision Senior decision; absent while awaiting. */
+		seniorDecision: Decision | null
+	}>
+}
+
+/**
+ * Client-side filter state for the Senior sheet modal (owner D2, D7).
+ *
+ * Filters run over the proven-complete loaded set — never per-action requests. The toolbar is
+ * limited to transaction search (id/description) and an expense-type multi-select; there is no
+ * currency, amount-bound, attachment, or vendor filter (owner D7, FR-007-015).
+ */
+export interface SeniorFilterState {
+	/** Free-text search by transaction id or description. */
+	query?: string
+	description?: string
+	expenseTypeIds?: string[]
+}
+
+export type SeniorSortKey = 'amount' | 'expenseDate' | 'expenseType'
+export type SeniorSortDirection = 'asc' | 'desc'
+
+/** One active modal sort; a stable secondary tiebreak by transaction id keeps order deterministic. */
+export interface SeniorSort {
+	key: SeniorSortKey
+	direction: SeniorSortDirection
+}
+
+/** Presentation Senior sheet row (derived from the proven-complete set, never persisted). */
+export interface SeniorSheetQueueItem {
+	/** The owning sheet's public uuid, or `''` when the summary carried none. */
+	sheetId: string
+	/**
+	 * The server's sheet summary when this row came from `GET /queues/senior/sheets`.
+	 *
+	 * The list row already carries the complete `SeniorSheetSummary`; keeping it on the presentation
+	 * row lets the modal/drawer render real identity even when the per-sheet transaction read is
+	 * unavailable. Absent on legacy transaction-derived rows.
+	 */
+	sheet?: SeniorSheetSummary
+	/**
+	 * Senior-pending transactions. Empty for a row adapted from the sheet list: that endpoint
+	 * carries counts and submission money only, never transactions. The modal loads the acting
+	 * senior's transaction list through the per-sheet read.
+	 */
+	transactions: TransactionSummary[]
+	/**
+	 * The server's senior-scoped pending count (`progress.awaitingSenior`) for a list row, or the
+	 * de-duplicated pending transaction count for a legacy transaction-derived row.
+	 */
+	transactionCount: number
+	/**
+	 * Per-currency totals (amounts group by `currency` + `minorUnit`; never a cross-currency total).
+	 * A list row contributes the server's submission snapshot (`submittedTotal`), not a client sum
+	 * of the senior-scoped transactions.
+	 */
+	totals: Array<{ currency: string; minorUnit: number; amountMinor: number }>
+	/** The server's latest authoritative activity instant; `null` when none exists. */
+	latestActivityAt: string | null
+	costCenters: Array<{ id: string; name: string }>
+	// Additive, server-supplied identity (Feature 007 UX-007-07): the queue rows now come from
+	// `GET /queues/senior/sheets`, which carries these directly, so the queue surface no longer
+	// needs a per-sheet detail read to render a title, owner, status or submitted instant. Absent
+	// on a row the server did not supply them for, in which case the view keeps its unavailable
+	// placeholders (FR-007-014).
+	/** Human-readable sheet title, or `''`/absent when the list row supplied none. */
+	title?: string
+	/** The owner's display name from the list row, or `''`/absent when none was supplied. */
+	purchaser?: string
+	/** The server-computed Senior-queue presentation status (owner D5, FR-007-017), never derived. */
+	reviewStatus?: 'PENDING_REVIEW' | 'REVIEW_COMPLETED'
+	/** The genuine first-submission instant the list row supplied, or absent. */
+	submittedAt?: string | null
+}
+
 export interface Revision {
 	id: string
 	number: number

@@ -1,5 +1,15 @@
 import { ocs, mutate } from './http'
-import type { Page, TransactionSummary, TransactionDetail, DecisionWrite, DecisionResult, CommandOptions, ManagerSheetReview } from '@/types/api'
+import type {
+	Page,
+	TransactionSummary,
+	TransactionDetail,
+	DecisionWrite,
+	DecisionResult,
+	CommandOptions,
+	ManagerSheetReview,
+	SeniorManagerSheetReview,
+	SeniorSheetListRow,
+} from '@/types/api'
 
 export interface QueueParams {
   stage: 'cost-center' | 'senior' | 'finance'
@@ -23,6 +33,66 @@ export async function fetchQueue(params: QueueParams): Promise<TransactionPage> 
   })
 }
 
+export interface SeniorSheetsParams {
+  page?: number
+  pageSize?: number
+}
+
+export type SeniorSheetListPage = Page<SeniorSheetListRow>
+
+/**
+ * The largest page the contract allows (`PageSize` maximum 100). The all-pages loop uses it so the
+ * number of round trips stays bounded while still covering every sheet in the senior's scope.
+ */
+export const SENIOR_SHEET_PAGE_SIZE = 100
+
+/**
+ * One page of `GET /queues/senior/sheets` — the senior-scoped Cost Sheet list (UX-007-07).
+ *
+ * This is the additive, transaction-derived sheet list that *retains completed sheets*, replacing
+ * the old transaction-based `/queues/senior` as the Senior queue's data source. It is paginated
+ * like the transaction queues (`items`/`total`/`page`/`pageSize`); `total` counts the sheets in
+ * scope, not the page.
+ */
+export async function fetchSeniorSheets(params: SeniorSheetsParams = {}): Promise<SeniorSheetListPage> {
+  return ocs<SeniorSheetListPage>('/queues/senior/sheets', {
+    params: {
+      page: params.page ?? 1,
+      pageSize: params.pageSize ?? 25
+    }
+  })
+}
+
+/**
+ * Bounded cap on the all-pages loop: at `pageSize = 100` this covers 10 000 sheets, far beyond any
+ * real senior scope. The accumulated rows are still returned so the completeness guard can render
+ * its honest unavailable state instead of the loop running forever against a misbehaving server.
+ */
+const MAX_SENIOR_SHEET_PAGES = 100
+
+/**
+ * Fetch every page of the senior sheet list so completed sheets on later pages are never silently
+ * truncated (UX-007-07; the backend orders deterministically so pages are disjoint). The loop stops
+ * once the accumulated rows cover the server's `total`, or when the server returns a short page;
+ * the returned page always carries the server's own `total` so the completeness guard can tell an
+ * honest "we got everything" from a truncated fetch.
+ */
+export async function fetchAllSeniorSheets(pageSize = SENIOR_SHEET_PAGE_SIZE): Promise<SeniorSheetListPage> {
+  const items: SeniorSheetListRow[] = []
+  let page = 1
+  let total = 0
+  for (;;) {
+    const res = await fetchSeniorSheets({ page, pageSize })
+    items.push(...res.items)
+    total = res.total
+    if (items.length >= total) break
+    if (res.items.length < pageSize) break
+    if (page >= MAX_SENIOR_SHEET_PAGES) break
+    page += 1
+  }
+  return { items, page: 1, pageSize, total }
+}
+
 /**
  * One sheet as the acting Cost Center manager may see it (Batch 1, B001–B004).
  *
@@ -33,6 +103,20 @@ export async function fetchQueue(params: QueueParams): Promise<TransactionPage> 
  */
 export async function fetchCostCenterSheet(sheetId: string): Promise<ManagerSheetReview> {
   return ocs<ManagerSheetReview>(`/queues/cost-center/sheets/${encodeURIComponent(sheetId)}`)
+}
+
+/**
+ * One sheet as the acting Senior manager may see it (Feature 007, additive, `[BD←BE1]`).
+ *
+ * Mirrors `fetchCostCenterSheet` for the Senior stage. The endpoint is additive and backend-required:
+ * until it lands, the route answers a `404`, which the reviews store classifies as an *unavailable*
+ * senior sheet read — the modal then renders unavailable identity fields (FR-007-014) rather than a
+ * fabricated sheet, and never a "Waiting for Cost Center Review" state. The id is a public uuid;
+ * encoding it keeps a malformed value from changing the path shape before the server's scope check
+ * can answer one `404` for unknown and out-of-scope sheets (FR-007-056).
+ */
+export async function fetchSeniorSheet(sheetId: string): Promise<SeniorManagerSheetReview> {
+  return ocs<SeniorManagerSheetReview>(`/queues/senior/sheets/${encodeURIComponent(sheetId)}`)
 }
 
 export async function fetchReturnsQueue(params: ReturnsParams = {}): Promise<TransactionPage> {

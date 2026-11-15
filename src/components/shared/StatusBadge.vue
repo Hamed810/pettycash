@@ -22,6 +22,13 @@ interface Props {
 	 * stays single-line; the shared surfaces keep the full vocabulary by omitting the prop.
 	 */
 	label?: string
+	/**
+	 * Optional tone override for a surface whose visible label describes a different stage than the
+	 * raw transaction status. The quick-review card shows "Awaiting review" from the actor's own
+	 * state while the transaction status is still `COST_CENTER_APPROVED`; without an override that
+	 * label would inherit the approved-stage green. Omitting the prop keeps every existing mapping.
+	 */
+	variant?: 'primary' | 'success' | 'warning' | 'error' | 'secondary'
 }
 
 const props = defineProps<Props>()
@@ -44,6 +51,7 @@ const props = defineProps<Props>()
 const REVIEW_STATUSES = new Set(['SENIOR', 'FINANCE', 'CORRECTION', 'AWAITING_PURCHASER_CORRECTION'])
 
 const statusVariant = computed(() => {
+	if (props.variant !== undefined) return props.variant
 	switch (props.status) {
 	case 'DRAFT':
 	case 'AWAITING_COST_CENTER_REVIEW':

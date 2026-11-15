@@ -1,0 +1,272 @@
+# Feature Specification: Senior Manager Cost Sheet Review
+
+**Feature Branch**: `007-senior-manager-cost-sheet-review` (logical feature directory; the current worktree branch is `main`, and no branch operation is authorized by this specification)
+
+**Created**: 2026-11-07 | **Planning decisions incorporated**: 2026-11-08 (owner-confirmed D1–D9) | **Toolbar reconciliation**: 2026-11-15 (owner-approved)
+
+**Status**: Requirements reconciled 2026-11-15 for the owner-approved Senior modal toolbar: transaction search and expense-type filtering only; transaction-date ascending as the default sort; clicking the active sort criterion toggles direction with no separate direction control; XLSX export beside the modal close button. The 001 `FR-037` visibility amendment remains **recorded in Feature 001 on 2026-11-08** (see 001 `FR-037`). Implementation evidence is recorded in `tasks.md`; mobile UX corrections remain deferred technical debt, and owner visual acceptance (T037) remains pending. Nothing under this directory authorizes code, contract, or backend changes beyond the separately recorded approvals.
+
+**Input**: Owner requirements (verbatim intent): replace the Senior Manager's flat transaction queue with a **Cost-Sheet-based queue**; a sheet only enters the Senior queue after **all** of its transactions have received a **final** decision from the Cost Center Manager; Cost Center decisions are shown at **transaction level only**; the Senior Manager sees a sheet list and opening a sheet shows a **modal** (no route navigation; the original queue stays visible behind it); the modal lists the sheet's transactions with quick decision and full detail, an **attachment thumbnail strip** per transaction, and a separate **preview layer** for a clicked thumbnail (images: large preview; PDFs: the project's existing viewer; unknown types: metadata + open/download); **approve comment optional, reject & return comments mandatory**; a **two-level filter surface** (main queue: Cost Sheet search and filtering; modal: transaction search, filtering, and sorting — owner D2); **sorting** (amount, transaction date, expense type, asc/desc, in the modal); **XLSX-only export** containing **only** the filtered + sorted transactions in the on-screen order, including **both Cost Sheet identification/metadata and Transaction data with separate Cost Center and Senior decision fields** (owners D3/D4); completed sheets remain visible, read-only, and non-actionable as **"Review Completed"** (owner D5); **no vendor** filter/column/search/disabled control in the Feature 007 interface (owner D7); the Cost Center Manager workflow must **not change**; a Senior decision must **not overwrite** the Cost Center decision; decisions stay **auditable and stage-specific**; visual language consistent with `CostCenterQueueView.vue`, preserving the approved modal-based, Cost-Sheet-first structure (owner D9).
+
+---
+
+## Source of Truth and Scope
+
+This feature governs the **Senior Manager review presentation and the additive backend capabilities it requires**. It does not restate or redefine domain rules.
+
+1. `.specify/memory/constitution.md` governs delivery, verification, and visual evidence.
+2. `specs/001-pettycash-v1-core/spec.md` and its approved contracts (`contracts/ocs-api.yaml`, `contracts/exports.md`, `contracts/workflow.md`) govern domain, authorization, financial, lifecycle, evidence, currency, revision, and workflow behavior.
+3. `specs/006-management-review/spec.md` governs the Cost Center Manager sheet-first surface. Feature 006 explicitly excludes Senior screens (`FR-006-027`); this feature is the separate authorization that begins them.
+4. This specification governs the Senior Manager information architecture, presentation, interaction, capability classification, and gates.
+5. `specs/007-senior-manager-cost-sheet-review/plan.md` governs the technical approach.
+6. The visual baseline is the existing `CostCenterQueueView.vue` surface and the Pettycash/Purchaser visual language (Nextcloud shell, `@nextcloud/vue` 9.x, Pettycash tokens). The approved Feature 006 quick-review design reference under `docs/frontend-redesign/proposals/006-management-review-quick-review/` supplies the modal/review interaction patterns this feature preserves (owner D9): a Cost-Sheet-first queue, modal review with the queue mounted behind it, transaction cards, independent CC and Senior decision displays, evidence thumbnails with a separate preview overlay, and focus-restoring accessible modal behavior, in Persian RTL and English LTR. There is **no** Senior-specific design reference under `docs/frontend-redesign/`; owner-supplied screenshots are design references, not evidence of implementation acceptance.
+
+Existing requirements, canonical task IDs, and working functionality MUST be preserved. This feature MUST NOT be folded into `006-management-review` or `005-purchaser-ui-redesign`, and MUST NOT change the Cost Center Manager workflow in any way.
+
+### Phase Boundary
+
+**Phase A (planning, completed):** Research, data model, contracts/design notes, and the implementation plan. The task ledger now exists in `tasks.md`.
+
+**Phase B (implementation, in progress):** Detailed in `plan.md` as bounded batches with an explicit owner approval gate. Backend batches are separately authorized; owner visual acceptance (T037) remains pending.
+
+**Out of scope:** any change to Cost Center Manager behavior; Finance screens; changes to the domain decision semantics (`Decision`, `WorkflowStage`, FR-033/035/036) or to FR-037's per-transaction **stage-transition** semantics (the narrow Senior-queue **visibility** amendment this feature requires was **recorded in Feature 001 on 2026-11-08** and is not authored in code); changes to existing public contracts; new dependencies; new workflow states; buyer/vendor master data; any vendor filter, vendor column, vendor search placeholder, or disabled vendor control in the Feature 007 interface (owner D7).
+
+**Deferred technical debt (2026-11-15):** mobile-specific UX corrections for the reconciled modal toolbar remain deferred. Existing mobile requirements (`FR-007-008`, `SC-007-005`) and their recorded T030/T035 evidence are preserved; no mobile correction or owner visual acceptance is claimed by this reconciliation.
+
+---
+
+## Workflow Reconciliation
+
+The owner-approved rules below are explicit. They conflict with parts of the current implementation and with the current reading of 001 `FR-037` and `WorkflowStateMachine`. Conflicts are recorded here so they are not silently preserved or silently redefined.
+
+| Owner-approved rule | Current behavior / artifact | Disposition in this feature |
+|---|---|---|
+| A sheet MUST NOT enter the Senior Manager queue until **every** transaction in that sheet has a **final** Cost Center decision (owner D1). The eligibility gate is sheet-wide and MUST be enforced by the backend. | `WorkflowStateMachine::next` maps Cost Center → Senior on Approve and Reject, so each decided transaction advances individually; `ManagementReviewService::getSeniorQueue` returns senior-stage **transactions**, not sheets, with no sheet-wide gate. 001 `FR-037` states each transaction enters and leaves its queue on its own decision and no transaction blocks another. | **Owner-confirmed (D1).** The current per-transaction advancement stays for **stage transitions** (a CC-decided transaction is at the Senior stage); what changes is **Senior queue visibility**, which becomes sheet-gated. The narrow amendment to 001 `FR-037` — scoped to the sentence "each transaction enters and leaves its queue on its own decision and no transaction blocks another", adding that a sheet's transactions do not appear in the Senior queue until every sheet transaction has a final CC decision — was **recorded in Feature 001 on 2026-11-08** (see 001 `FR-037`, "Independent transaction progression and Senior Manager Cost Sheet queue visibility"); implementing the gate requires only a separate authorization plus a bounded backend batch. The interface MUST NOT claim sheet-level Senior eligibility from partial/pending data. |
+| Distinguish final Cost Center stage completion, individual transaction Senior eligibility, and sheet-wide Senior queue eligibility (owner D1). | All three are conflated today because the queue is transaction-scoped. | **Required precision:** (a) **final CC-stage completion** = every transaction has a final CC decision (Approve, Reject, or a Return corrected then re-decided); (b) **individual eligibility** = a transaction at the Senior stage per the existing state machine (unchanged); (c) **sheet-wide eligibility** = the backend gate flag `allTransactionsCostCenterDecided`, the only source for queue inclusion. Never conflated; never derived client-side. |
+| A **Return for Correction is NOT a final Cost Center decision**; the transaction must complete correction and receive a subsequent final CC decision before it satisfies the sheet-wide gate (owner D1). | Return routes the transaction to Correction; the transaction is not at the Senior stage until re-decided. | **Recorded.** A returned transaction does not satisfy the gate; no "Waiting for Cost Center Review" state is introduced in the Senior interface. |
+| A final CC **rejection** closes that transaction's Cost Center review; whether rejected transactions advance to Senior decision-making follows the existing authoritative workflow rules (001 `FR-036/037`, `WorkflowStateMachine::next`). | A CC rejection advances the transaction to Senior today. | **Consistent — unchanged.** Rejection semantics are preserved; a rejected transaction is CC-final for the gate and advances per the existing rules. This feature MUST NOT silently redefine rejection. |
+| Cost Center decisions are visible to the Senior Manager at **transaction level only**. | 001 `FR-034` requires the CC manager decision to be an advisory decision "visible to the senior manager **with full details**" and gives the senior manager independent authority; `TransactionDetail.decisions[]` carries stage-tagged decisions (the CC decision is present and labeled `COST_CENTER`). The current senior queue view renders the advisory decision via `TransactionSummary.latestDecision`. | **Consistent** with FR-034 at transaction level; the new surface MUST render CC decisions per transaction and never roll them up to a sheet-level verdict. |
+| The Senior decision MUST NOT overwrite the Cost Center decision. | `ManagementReviewService::recordDecision`/`WorkflowDecisionRepository` persists decisions as immutable, append-only, stage-scoped rows; `GET /transactions/{id}` returns the full decision history with stage tags. | **Supported** (reuse). Recorded as an invariant; verified in the review workflow and test strategy. |
+| Decisions are auditable and stage-specific. | `TransactionPayloadFormatter::decision` emits `stage`, actor snapshot, `decidedAt`, explanation; per-transaction audit begins at submission (001 FR-051); FR-085 first-write-wins. | **Supported** (reuse). |
+| Approve comment optional; reject & return comments mandatory. | `DecisionForm.vue`/`DecisionOutcome`/`ReviewController::decide` enforce `requiresExplanation` = REJECT ‖ RETURN (001 FR-033; 006 `FR-006-043`). The same rule applies to Senior via `recordDecision`. | **Supported** (reuse the existing decision semantic unchanged). |
+
+**No backend behavior is changed without separate authorization.** The sheet-wide Senior queue-visibility gate is owner-confirmed (D1); the narrow 001 `FR-037` visibility amendment it required was **recorded in Feature 001 on 2026-11-08**, and the bounded backend batch remains separately governed. The interface MUST render honest unavailable/error states for anything the backend cannot yet prove (`FR-007-xxx` honesty rules) and MUST NOT present a potentially incomplete flat transaction table as a fallback (owner D8).
+
+---
+
+## Capability Classification
+
+Every required capability is classified as **supported**, **frontend adaptation**, or **backend change required** (verified against current source and `contracts/ocs-api.yaml`). This table records the planning-time classification; implementation status and landed backend evidence are recorded in `tasks.md` (T024–T029).
+
+| Capability | Classification | Evidence | Phase B rendering |
+|---|---|---|---|
+| Senior transaction queue (`GET /queues/senior`) | Supported | `ReviewController::index` → `ManagementReviewService::getSeniorQueue` (`lib/Application/Workflow/ManagementReviewService.php`); route `review#index` (`appinfo/routes.php:55`); server de-duplicates via `paginateUniqueQueue` | Source of truth for the senior-pending transaction set; the sheet queue is derived over the gated, proven-complete set — not a table fallback |
+| Transaction detail + role-scoped read | Supported | `GET /transactions/{id}` → `TransactionDetail` (`allowedActions`, `decisions[]`, `evidence[]`); reused by the modal's full-detail and decision surfaces | Reuse unchanged |
+| Senior decisions (Approve/Reject/Return), single-transaction, FR-085 idempotent | Supported | `POST /transactions/{id}/decisions` (`ReviewController::decide`, route `:57`), stage-scoped routing, append-only audit | Reuse unchanged |
+| CC decision visible at transaction level | Supported | `TransactionDetail.decisions[]` carries `COST_CENTER`-tagged decision; `latestDecision` in summary | Render per transaction only |
+| Mandatory comment for reject/return, optional for approve | Supported | `DecisionForm.vue` `requiresExplanation`, `ReviewController::fieldErrorsFor` (explanation branch) | Reuse unchanged |
+| Cost-Sheet-based Senior queue (sheet list + sheet detail) | **Backend change required** | Only `GET /queues/cost-center/sheets/{sheetId}` exists (`ReviewController::costCenterSheet`, manager-scoped for CC Manager only); no `GET /queues/senior/sheets` or `GET /queues/senior/sheets/{sheetId}` | Phase B: additive senior-scoped sheet-summary read (incl. `reviewStatus`) + senior sheet-detail read |
+| Sheet enters Senior only when **every** transaction has a **final** CC decision (gate) | **Backend change required (owner D1; narrow 001 FR-037 visibility amendment, recorded 2026-11-08)** | No sheet-wide gate; `getSeniorQueue` returns senior-stage transactions per-transaction; server-side de-dup exists (`paginateUniqueQueue`) | Queue shows only gate-satisfying sheets; otherwise an honest unavailable/error state — **never** a "Waiting for Cost Center Review" state, never a partial flat fallback table (D8) |
+| Completed-sheet lifecycle ("Review Completed", read-only, non-actionable) | **Backend change required (D5)** | No Senior sheet-queue projection exists to carry a presentation status | Additive read returns `reviewStatus: REVIEW_COMPLETED` when no senior-pending transaction remains; completed sheets stay listed, cannot be re-decided |
+| Sheet modal with sheet identity + per-sheet transaction set | **Backend change required** (sheet header) + **frontend adaptation** (transaction rows from the per-sheet read or the complete queue) | `SheetService::getSheet` is owner-only; `ManagerSheetSummary` is CC-manager-shaped | Phase B backend batch provides a senior-scoped sheet header; else unavailable fields |
+| Attachment thumbnail strip per transaction | **Supported** (metadata) + **frontend adaptation** (strip) | `TransactionDetail.evidence[]` metadata; `EvidenceCard.vue`/`QuickReviewCard` thumbnail patterns | Reuse thumbnail presentation |
+| Preview layer (images / PDFs / unknown) | **Supported** | `EvidencePreview.vue` with inline-safe media policy (`FR-060`/`FR-005-042`), Previous/Next + `1 / N` (006 `FR-006-041`) | Reuse unchanged |
+| Filtering: two-level (owner D2) — queue: Cost Sheet search/filter; modal: transaction search (ID/description) and expense-type filtering with derived counts; no currency, amount-range, or attachment filters; no vendor (D7) | **Frontend adaptation** over the loaded complete set | `TransactionSummary.activeRevision` carries `id`, `description`, `expenseType`, `amount`, `expenseDate`, `evidenceCount`; the toolbar uses only `id`/`description`/`expenseType`; search placeholder says "search by transaction ID or description" (D7) | Search by ID/description and expense-type multi-select over the loaded set; **no vendor filter, column, or placeholder anywhere**; retired currency/amount/attachment controls are absent |
+| Sorting: amount, transaction date, expense type; transaction-date ascending default; clicking the active criterion toggles direction with no separate direction control (owner D2) | **Frontend adaptation** over the loaded complete set | `TransactionSummary.activeRevision` carries amount, `expenseDate`, `expenseType` | Local sort over the proven-complete set; explicit and tested; drives the export order |
+| XLSX-only Senior export of the filtered + sorted transactions (selection + order as in the UI) with Cost Sheet metadata and separate CC/Senior decision fields | **Backend change required (D3/D4)** | `POST /exports` row sources are owner-scoped (`ExportController::transactionRows`/`sheetRows` via `ReportScope::coversOwned`); a Senior Manager is **not** the owner and is refused; `ExportRequest` already carries an ordered `ids` selection (`ocs-api.yaml:1962`) | Additive senior-scoped **XLSX-only** row source: one row per submitted id in `ids` order, scope-validated, combined sheet+transaction columns, separate CC and Senior decision fields; measured-zero preserved; existing owner-scoped export resources unchanged |
+| CC Manager workflow unchanged | Supported invariant | 006 `FR-006-030/031`; this feature touches only Senior surfaces and additive backend reads | No change to `getCostCenterQueue`, `costCenterSheet`, or CC decisions |
+| Visual language consistent with `CostCenterQueueView.vue` | Supported | `CostCenterQueueView.vue`, `useSheetQueue`, Pettycash tokens, `@nextcloud/vue` 9.x | Reuse the same tokens/components/shell as 006 |
+
+The implementation MUST connect only the supported and safely adaptable capabilities. Unsupported capabilities MUST be replaced by an honest unavailable/error state with a reason — and, because vendor is out of scope (owner D7), no disabled vendor control is offered at all. A set that cannot be proven complete renders an honest unavailable/error state with a retry (owner D8), never a partial flat transaction table.
+
+---
+
+## User Scenarios & Testing *(mandatory)*
+
+### User Story 1 — A Cost-Sheet-based Senior queue (Priority: P1)
+
+A Senior Manager opens the Review Queue and sees **sheets**, grouped from the senior-pending transaction set, rather than a flat transaction table. A sheet appears only when the backend proves every transaction in it has a final Cost Center decision (owner D1). Each sheet row summarizes the transactions awaiting Senior decision in that sheet. Opening a sheet shows the sheet's transactions in a modal; the queue stays mounted behind it.
+
+**Why this priority**: This is the entry point to the Senior journey and the first visible milestone. The entire rest of the feature hangs off it.
+
+**Independent Test**: With a Senior Manager holding at least one assigned cost center and a senior-pending set that is provably complete in one response, the queue renders one row per sheet with the pending transaction count and amount per currency, and no transaction row is shown outside the manager's cost-center scope; no sheet whose Cost Center review is not final appears. With a set that cannot be proven complete, it renders an honest unavailable/error state with a retry — never a partial flat transaction table (owner D8).
+
+**Acceptance Scenarios**:
+
+1. **Given** a Senior Manager with senior-stage transactions in gate-satisfying sheets, **When** the queue loads, **Then** the page renders sheet rows grouped from the complete senior set, with counts derived only from that set.
+2. **Given** a sheet with any transaction not yet finally decided at Cost Center (including a returned-for-correction transaction), **When** the queue loads, **Then** that sheet is NOT shown (the backend gate excludes it, owner D1); it is never labelled "Waiting for Cost Center Review"; if the backend cannot prove the gate, the queue shows an honest unavailable/error state with the reason and a retry.
+3. **Given** a final CC rejection on a transaction, **When** the sheet satisfies the gate, **Then** the transaction is present per the existing workflow rules (rejection semantics unchanged) and does not, by itself, keep or remove the sheet.
+4. **Given** multiple currencies in the set, **When** totals render, **Then** each currency is shown separately and no cross-currency total is presented.
+5. **Given** a truncated or unprovable response, **When** the view renders, **Then** it shows an honest unavailable/error state with a retry and does not invent counts or render a partial flat table.
+6. **Given** a Senior Manager with no pending transactions, **When** the queue loads, **Then** an honest empty state is shown.
+7. **Given** a sheet row, **When** the Senior Manager activates it, **Then** a modal opens with the sheet's transactions and the original queue remains rendered behind it (no route navigation).
+8. **Given** a sheet whose transactions all carry a Senior decision, **When** it renders in the queue, **Then** it shows "Review Completed", stays visible and read-only, and offers no actionable transactions (owner D5).
+9. **Given** a 390px viewport in Persian RTL, **When** the queue and modal render, **Then** there is no horizontal scroll and the mobile layout matches the approved hierarchy.
+
+### User Story 2 — Sheet modal with quick decision and full detail (Priority: P1)
+
+From a sheet row, the Senior Manager opens the sheet modal and sees the sheet's transactions with quick-decision controls and full detail. Cost Center decisions appear at transaction level only. A decision records exactly one transaction, with the existing mandatory-comment rule for reject/return.
+
+**Why this priority**: This is the core decision surface; without it the sheet list has no purpose.
+
+**Independent Test**: From a sheet, open its modal, open a transaction's full detail, and record each decision type; verify exactly one transaction decision request is issued, the CC decision remains visible and unmodified, and the card re-renders in its decided state.
+
+**Acceptance Scenarios**:
+
+1. **Given** a transaction in the modal, **When** the Senior Manager records Approve, **Then** exactly one transaction decision is issued, the comment is optional, and the card re-renders from the server's response.
+2. **Given** a transaction in the modal, **When** the Senior Manager records Reject or Return without a comment, **Then** the confirmation refuses with a field error and no decision is issued.
+3. **Given** a transaction with a Cost Center decision, **When** the full detail renders, **Then** the Cost Center decision is shown at transaction level with its actor, stage label, and date, and is not rolled up to a sheet verdict.
+4. **Given** a decision refused or superseded, **When** the error renders, **Then** the existing FR-085/FR-084 error behavior is preserved and no local status is fabricated.
+5. **Given** a modal open, **When** it closes, **Then** focus returns to the originating sheet row and the queue is unchanged.
+
+### User Story 3 — Attachment thumbnails and the preview layer (Priority: P1)
+
+Each transaction in the modal shows a thumbnail strip of its attachments. Clicking a thumbnail opens a separate preview layer: images render large, PDFs open in the project's existing viewer, and unknown types show metadata with open/download only.
+
+**Why this priority**: Winners and risk decisions routinely hinge on receipts; this is the review tool the role actually needs.
+
+**Independent Test**: From a transaction with several attachments (image, PDF, and an unknown type), open each thumbnail and verify the correct preview or fallback and the `1 / N` navigation.
+
+**Acceptance Scenarios**:
+
+1. **Given** an image attachment, **When** its thumbnail is clicked, **Then** a large preview renders in the preview layer.
+2. **Given** a PDF attachment, **When** its thumbnail is clicked, **Then** the PDF opens in the project's existing viewer.
+3. **Given** an unknown media type, **When** its thumbnail is clicked, **Then** metadata is shown with open/download controls and no inline render.
+4. **Given** multiple documents, **When** the user navigates, **Then** Previous/Next and a `1 / N` counter are shown and disable at the ends, reusing 006 `FR-006-041`.
+
+### User Story 4 — Two-level filter/sort and XLSX export of the filtered + sorted selection (Priority: P2)
+
+Filtering is **two-level** (owner D2): the main queue carries Cost Sheet search and filtering; the sheet modal carries transaction search (transaction ID or description) and expense-type filtering, plus sorting. Currency, amount-range, and attachment filters are retired. The modal opens with transaction-date ascending (oldest first); clicking the active sort criterion toggles ascending/descending, and there is no separate direction control. The Senior Manager exports an **XLSX-only** report (owner D3) containing **only** the filtered + sorted transactions in the on-screen order, including Cost Sheet identification/metadata and one row per transaction with **separate Cost Center and Senior decision fields** (owner D4). The XLSX export control sits beside the modal close button. **No vendor filter, column, or placeholder** appears (owner D7).
+
+**Why this priority**: Reporting was a distinct milestone behind the decision surface because it required a Senior-scoped XLSX export capability; that additive row source is recorded as landed in T028/T029, while the owner visual gate remains open.
+
+**Independent Test**: Apply a filter and a sort in the modal, then export; verify the artifact contains exactly the filtered + sorted rows in the on-screen order, with sheet identification, one row per transaction, and both CC and Senior decision fields — or an explicit refusal naming the missing Senior-scoped capability if it is unavailable.
+
+**Acceptance Scenarios**:
+
+1. **Given** the main queue, **When** the Senior Manager searches/filters, **Then** only Cost Sheet-level fields (sheet title/search) are surfaced; no transaction-level controls duplicate the modal here (owner D2).
+2. **Given** a modal open, **When** the user searches by transaction ID or description or filters by expense type, and sorts by amount, date, or expense type, **Then** the filtered set is sorted locally over the proven-complete set (no network request per action) and the counts are derived from that set (owner D2).
+3. **Given** a filtered + sorted selection in the modal, **When** the user exports, **Then** an XLSX artifact contains exactly that selection in the on-screen order, with Cost Sheet identification/metadata, one row per transaction, and separate Cost Center and Senior decision columns, or a refusal naming the missing Senior-scoped capability (owners D3/D4).
+4. **Given** the modal is open, **When** the sort controls render, **Then** transaction-date ascending is active by default; clicking the active criterion toggles ascending/descending, selecting a different criterion starts ascending, and no separate direction control is shown.
+5. **Given** a selection the server refuses (out-of-scope id or unsupported resource/format), **When** the export is requested, **Then** the refusal is explained and no empty/partial artifact is presented as measured (measured-zero semantics preserved for a legitimate empty selection).
+
+---
+
+### Edge Cases
+
+- The senior-pending set is larger than one safe completeness threshold, or the response is truncated — **honest unavailable/error state with retry; never a partial flat fallback table (owner D8)**.
+- A sheet has some transactions already at Finance (senior-decided) and others still at Senior — the sheet's senior-pending count and the completed-sheet classification derive only from the loaded response.
+- A sheet with **no transactions satisfying the CC-completion gate** — excluded by the backend gate (owner D1); never labelled "Waiting for Cost Center Review".
+- A sheet whose every transaction has a **final Senior decision** — renders "Review Completed", read-only, non-actionable, cannot be re-decided, and remains listed (owner D5).
+- A **Return for Correction** pending at CC — does not satisfy the gate (owner D1); no correction-notice surface is added to the queue.
+- A sheet has transactions from more than one cost center, and the manager is assigned to only some.
+- A sheet reference is empty or unresolvable in a summary.
+- The sheet disappears between queue load and modal open (another manager decided the last pending transaction).
+- A transaction's detail read is refused (`403`), absent (`404`), or a network fault — rendered distinctly.
+- Multi-currency pending set; a transaction with a missing currency code — no cross-currency total or comparison; currency remains a display concern only, since currency filtering is retired.
+- Attachment set is empty, has one item, is all unknown types, contains inactive evidence.
+- Reject/Return without a comment; Approve with an optional comment; network failure mid-submit; simultaneous double submit (FR-085).
+- Search with no matches (by transaction ID or description); expense-type filters that narrow to nothing; sort with a filter active.
+- Export with an empty legitimate selection → measured-zero XLSX (`rowCount: 0`), not a refusal; export with out-of-scope ids or unsupported resource/format → refusal, no artifact (owners D3/D4).
+- English LTR and Persian RTL; Gregorian and Jalali calendar; 390px viewport; dark theme and forced-colours.
+
+---
+
+## Requirements *(mandatory)*
+
+### Presentation and Information Architecture
+
+- **FR-007-001**: The Senior Manager review entry point MUST be Cost-Sheet-based: the Senior Manager initially sees sheets containing senior-pending transactions, not a flat transaction table as the primary surface. Only gate-satisfying sheets appear (owner D1).
+- **FR-007-002**: Opening a sheet MUST open a **modal**; there MUST be no route navigation, and the original queue MUST remain mounted and visible behind the modal (owner D9).
+- **FR-007-003**: The modal MUST list the sheet's transactions and provide **quick decision** and **full detail** per transaction, reusing the existing transaction review components.
+- **FR-007-004**: Cost Center decisions MUST be shown at **transaction level only** and MUST NOT be rolled up into a sheet-level verdict or status (001 `FR-034`).
+- **FR-007-005**: There MUST be no sheet-level Approve/Reject/Return or "decide all" action; every decision applies to exactly one transaction (001 `FR-033`).
+- **FR-007-006**: The Senior Manager MUST be able to approve, reject, or return a transaction, deciding independently of the Cost Center manager's opinion (001 `FR-035`).
+- **FR-007-007**: The interface MUST use the established Pettycash/Purchaser visual language (Nextcloud shell, `@nextcloud/vue` 9.x, tokens, status badges, cards, overlays) consistent with `CostCenterQueueView.vue`, with no new design system.
+- **FR-007-008**: The interface MUST remain usable in English LTR and Persian RTL at the 390px floor with no horizontal scroll, honoring the independent Gregorian/Jalali calendar preference.
+- **FR-007-009**: The review layer MUST use a single-overlay stack with focus restore: modal close returns focus to the originating sheet row; every overlay preserves the active element and restores it on close (owner D9).
+
+### Data Honesty and Capability Boundaries
+
+- **FR-007-011**: The interface MUST NOT fabricate financial amounts, sheet identities, review outcomes, submission dates, completion states, or eligibility states for any response.
+- **FR-007-012**: Sheet grouping in the Senior queue is permitted only when the complete Senior-scoped pending set is proven in one response (completeness guard, as in 006 `FR-006-012/013`).
+- **FR-007-013**: The interface MUST NOT state that a sheet has completed Cost Center review or is Senior-eligible unless the authoritative backend gate flag (`allTransactionsCostCenterDecided`) says so. The gate is **sheet-wide and backend-enforced** (owner D1): a sheet enters the Senior queue only when every transaction has a **final** Cost Center decision (Approve, Reject, or a Return corrected then re-decided); a pending Return does not satisfy it; no "Waiting for Cost Center Review" state exists.
+- **FR-007-014**: Sheet title, purchaser identity, genuine submission date, and sheet-wide CC completion MUST be shown as unavailable when the backend does not provide them.
+- **FR-007-015**: **Vendor is out of scope for Feature 007** (owner D7): no vendor filter, vendor column, vendor search placeholder, or disabled vendor control appears anywhere in the queue or modal; search is by **transaction ID or description** only.
+- **FR-007-016**: A senior-pending set that cannot be proven complete in one response MUST render an honest unavailable/error state with a retry; the interface MUST NOT fall back to a partial flat transaction table or infer eligibility from incomplete data (owner D8).
+- **FR-007-017**: A completed sheet (every transaction in it Senior-decided) MUST remain visible as **"Review Completed"**, read-only and non-actionable; it MUST NOT offer re-decision (owner D5).
+- **FR-007-018 (retired 2026-11-15)**: The former one-currency amount-filter rule (owner D6) is withdrawn by the owner-approved toolbar reconciliation. Currency, amount-range, and attachment filters are not part of the Senior modal; the active filter surface is defined by `FR-007-041`.
+
+### Decision Workflow
+
+- **FR-007-021**: The Senior decision MUST apply to exactly one transaction and MUST use the existing `POST /transactions/{id}/decisions` path with first-write-wins (FR-085) and replay safety (FR-084).
+- **FR-007-022**: Approve comment MUST be optional; Reject and Return comments MUST be mandatory, using the existing explanation rule (001 `FR-033`, 006 `FR-006-043`, `DecisionForm.vue`).
+- **FR-007-023**: Recording a Senior decision MUST NOT modify or overwrite the Cost Center decision; both remain in the immutable, stage-scoped decision history.
+- **FR-007-024**: Decisions MUST remain auditable and stage-specific, rendered from the server's own decision history.
+
+### Attachment Preview
+
+- **FR-007-031**: Each transaction in the modal MUST show an attachment thumbnail strip; every thumbnail opens the preview layer at exactly that document.
+- **FR-007-032**: The preview layer MUST reuse `FR-060`/`FR-005-042` inline-safe policy and the existing `EvidencePreview.vue` (previous/next, `1 / N`, Escape/scrim close, focus restore) verbatim.
+
+### Filtering, Sorting, and Reporting
+
+- **FR-007-041**: Filtering is **two-level** (owner D2): the main queue exposes Cost Sheet search and filtering only; the sheet modal exposes transaction search by transaction ID or description and expense-type multi-select (with counts derived from the loaded set) over the proven-complete loaded set. The modal MUST NOT expose currency, amount-range, or attachment filters. No transaction-level controls are duplicated in the main queue.
+- **FR-007-042**: The sheet modal MUST support sorting over the proven-complete loaded set: amount, transaction date, and expense type, with no network request per sort. The modal MUST open with transaction-date ascending (oldest first) as the default. One criterion is active at a time; clicking the active criterion toggles ascending/descending, while selecting a different criterion starts ascending. There is no separate sort-direction control. The sort order drives both the UI presentation and the export ordering (owner D2/D4).
+- **FR-007-043**: The Senior export is **XLSX only** (owner D3) and MUST contain **only** the filtered + sorted transactions in the on-screen order, plus Cost Sheet identification/metadata and **one row per transaction with separate Cost Center and Senior decision fields** (owner D4). The XLSX export control MUST sit beside the modal close control in the header. The selection and order are submitted as the exact filtered + sorted transaction `ids` (the existing `ExportRequest.ids` mechanism preserves order by resolving each id in client-supplied order); the additive Senior row source MUST reproduce that order and scope-validate every id.
+- **FR-007-044**: A Senior-scoped XLSX row source MUST NOT exist until a backend capability is implemented under separate authorization; until then the export control MUST refuse with a reason naming the missing capability rather than produce an empty or owner-scoped artifact. Measured-zero behavior is preserved: a legitimate empty selection returns a header-only XLSX (`rowCount: 0`), while out-of-scope ids or unsupported resource/format are refused.
+
+### Change Control
+
+- **FR-007-051**: This feature MUST NOT change the Cost Center Manager workflow, the CC queue, or the CC decision surface.
+- **FR-007-052**: This feature MUST NOT modify existing public contracts except as explicitly added (additive Senior scoped reads/export) under a separate authorization with an 001 contract amendment when one is required.
+- **FR-007-053**: This feature MUST be implemented under `specs/007-senior-manager-cost-sheet-review/` and MUST NOT modify `specs/006-management-review/` canonical files.
+- **FR-007-054**: Existing working-tree changes, including unrelated user changes, MUST be preserved; no Git writes are authorized by this plan.
+- **FR-007-055**: Visual results MUST be captured from the running application with official Google Chrome and stored under `artifacts/visual-review/<task-id>/<iteration>/`; a result without a recorded owner approval MUST NOT be reported as accepted.
+
+### Authorization and Scope
+
+- **FR-007-056**: All additive Senior surfaces in this feature — the Senior-scoped sheet-summary/sheet-detail reads and the Senior-scoped XLSX export — MUST be authorized **server-side** using only the acting user's **active `SENIOR_MANAGER` assignments** (the same scope source as `getSeniorQueue` and `TransactionPayloadFormatter::canDecide` via `RoleAssignmentRepository::findActiveByUserAndRole`, per `Senior Manager Review Scope` below). No new permission or role is introduced and no existing scope is widened. Scope enforcement MUST be server-side and MUST NOT rely on client-side checks. Any sheet or transaction outside the caller's Senior scope MUST be **denied** and MUST be **indistinguishable from absence**: sheet reads answer the same `404` as an unknown sheet (no cross-scope existence disclosure), and any export id outside scope is refused via the existing `UnsupportedSelection` path with no artifact produced. Authorization MUST be applied **before** any XLSX generation (scope before rows, per `contracts/exports.md`). This feature MUST NOT disclose information across scopes: no out-of-scope sheet, transaction, or decision data is ever returned, and the existing owner-scoped export row sources are not widened.
+
+### Key Entities
+
+- **Senior Sheet Queue Item**: a sheet reference with the Senior-pending transaction count and amount by currency, and the presentation status (`PENDING_REVIEW` / `REVIEW_COMPLETED`, owner D5), derived only from a proven-complete Senior-scoped pending set. Presentation projection, not a persisted entity.
+- **Senior Manager Review Scope**: the cost centers for which the current user holds an active `SENIOR_MANAGER` assignment (`RoleAssignmentRepository::findActiveByUserAndRole`, the same source `TransactionPayloadFormatter::canDecide` uses for the Senior stage). This is the boundary the additive Senior reads/export MUST enforce server-side (`FR-007-056`).
+- **Senior Sheet Review (backend required)**: a per-sheet projection carrying the sheet identity and the transactions at the Senior stage within the manager's scope, plus the manager's own decision states and the backend gate flag `allTransactionsCostCenterDecided` (owner D1) — a new capability modeled on `ManagerSheetReview` (`types/api.ts:258`) but stage-senior.
+- **Cost Center Decision (transaction-level)**: the existing `COST_CENTER`-tagged `Decision` in `TransactionDetail.decisions[]`, rendered per transaction and never rolled up.
+
+## Success Criteria *(mandatory)*
+
+### Measurable Outcomes
+
+- **SC-007-001**: A Senior Manager can identify the sheets requiring their attention and the number of pending transactions per sheet from the queue, without a flat transaction table as the primary surface.
+- **SC-007-002**: 100% of amounts, counts, and statuses rendered in the Senior queue and modal are traceable to the current API response or explicitly marked unavailable; no invented value is rendered in any tested state.
+- **SC-007-003**: In 100% of tested truncation/eligibility cases, the interface never claims sheet-wide CC completion or Senior eligibility without the authoritative backend gate flag.
+- **SC-007-004**: Every decision issued records exactly one transaction; reject/return without a comment is refused in 100% of tested cases; the Cost Center decision is unchanged after a Senior decision.
+- **SC-007-005**: The desktop and 390px mobile queue/modal render with no horizontal scroll in English LTR and Persian RTL, in official Google Chrome, and match the `CostCenterQueueView.vue` visual language.
+- **SC-007-006**: A filtered + sorted selection exports only that selection, in **XLSX**, with Cost Sheet identification/metadata and separate Cost Center and Senior decision fields, or a refusal naming the missing Senior-scoped capability — never an empty artifact that looks measured.
+- **SC-007-007**: No sheet with any transaction lacking a final Cost Center decision appears in the Senior queue (gate enforced by the backend, owner D1); a returned-for-correction transaction does not satisfy the gate.
+- **SC-007-008**: Completed sheets remain listed as non-actionable "Review Completed" and cannot be re-decided (owner D5).
+- **SC-007-009**: The 006 Cost Center Manager queue and decision surface are unchanged in behavior (owner D9).
+
+### Explicit Acceptance Criteria (owner-decided acceptance for this feature)
+
+1. **Sheet entry gate (D1)**: A Senior Manager never sees a sheet until the backend proves every transaction has a final CC decision; no "Waiting for Cost Center Review" surface exists, and rejection semantics are unchanged.
+2. **Two-level filters (D2)**: The main queue exposes sheet search/filter only; transaction search, expense-type filtering, and sorting live in the modal; no duplicate transaction controls in the queue. Currency, amount-range, and attachment filters are retired.
+3. **XLSX only (D3)**: Senior export offers XLSX only; existing CSV/PDF capabilities for other resources are untouched.
+4. **Export = visible selection (D4)**: the exported artifact contains exactly the filtered + sorted transactions in on-screen order, with separate CC and Senior decision fields and sheet metadata; the backend validates the submitted `ids`.
+5. **Completed sheets (D5)**: stay visible, read-only, non-actionable, cannot be re-decided.
+6. **Modal filter scope (D2; D6 amount filter retired 2026-11-15)**: the modal exposes transaction search and expense-type filtering only; currency, amount-range, and attachment filters are retired. Transaction-date ascending is the default sort; clicking the active criterion toggles direction with no separate direction control.
+7. **No vendor (D7)**: no vendor filter, column, search placeholder, or disabled control anywhere in the Feature 007 interface.
+8. **Honest grouping (D8)**: incomplete grouping renders an unavailable/error state with a retry; never a partial flat fallback table.
+9. **Approved structure preserved (D9)**: modal-based, Cost-Sheet-first queue, transaction cards, separate CC/SM decisions, evidence thumbnails + preview overlay, focus restore, RTL/LTR — all as approved.
+
+## Assumptions
+
+- The existing `GET /queues/senior` response remains the authoritative Senior transaction source while the sheet capability is absent, and the server de-duplicates it (`paginateUniqueQueue`); residual risk is pagination/completeness only.
+- The existing `GET /transactions/{id}` and `POST /transactions/{id}/decisions` endpoints remain authoritative and are reused unchanged.
+- Sheet-wide CC completion / Senior queue eligibility is an owner-confirmed backend gate (D1) whose narrow 001 `FR-037` visibility amendment was **recorded in Feature 001 on 2026-11-08**; the queue renders honest unavailable/error states until the backend gate exists and never derives eligibility client-side.
+- Vendor is out of scope for Feature 007 (owner D7); no filter, column, search placeholder, or disabled control is specified, and no domain field is required by this feature.
+- The Senior export is **XLSX only** (owner D3) and requires an additive Senior-scoped row source plus an additive contract change under separate authorization; it is not replaceable by the owner-scoped export pipeline (a Senior Manager is not the owner and the existing row sources refuse them). Selection/order are carried by the ordered `ids` mechanism (D4); measured-zero is preserved.
+- Completed sheets remain visible as read-only, non-actionable "Review Completed" (owner D5) via `reviewStatus` from the additive Senior sheet read.
+- No Git writes are authorized; the working tree is preserved as found.

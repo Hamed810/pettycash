@@ -216,6 +216,67 @@ final readonly class SheetPayloadFormatter
     }
 
     /**
+     * The senior-scoped sheet header for `GET /queues/senior/sheets/{sheetId}` — Feature 007, T024/T025.
+     *
+     * Reuses `managerSummary()` (the identity/submission snapshot both surfaces share) and adds the
+     * two fields that are exclusive to the Senior read:
+     *
+     * - `allTransactionsCostCenterDecided`: the backend-computed, sheet-wide Cost Center completion
+     *   gate (owner D1, FR-007-013, 001 FR-037). `true` only when every transaction on the sheet has
+     *   a final CC decision; a pending Return does not satisfy it. Always emitted as a definite
+     *   boolean here — the read computes it from authoritative workflow data, so "cannot prove" never
+     *   occurs (the `null` case the frontend type allows is for a phase without this capability).
+     * - `reviewStatus`: presentation-only `PENDING_REVIEW`/`REVIEW_COMPLETED` (owner D5, FR-007-017).
+     *   `REVIEW_COMPLETED` is supplied only when the senior-pending set is empty; it is never derived
+     *   client-side and never the domain `SheetStatus`.
+     *
+     * @return array<string, mixed>
+     */
+    public function seniorSummary(
+        ExpenseSheet $sheet,
+        bool $allTransactionsCostCenterDecided,
+        string $reviewStatus
+    ): array {
+        $summary = $this->managerSummary($sheet);
+        $summary['allTransactionsCostCenterDecided'] = $allTransactionsCostCenterDecided;
+        $summary['reviewStatus'] = $reviewStatus;
+
+        return $summary;
+    }
+
+    /**
+     * One row of `GET /queues/senior/sheets` — the senior-scoped sheet list (UX-007-07).
+     *
+     * Reuses the detail read's `seniorSummary()` header so a list row and the per-sheet read can
+     * never disagree about identity, currency, money, the sheet-wide Cost Center gate, or the review
+     * status derived from the same backend computation, then appends the two members only a list row
+     * carries:
+     *
+     * - `progress`: the acting senior's scoped counts (`SeniorSheetProgress`), authoritative
+     *   transaction counts and never whole-sheet fabricated totals.
+     * - `latestActivityAt`: the newest authoritative timestamp the acting manager may read for the
+     *   sheet — its created/first-submitted/completed instants and the transaction or decision
+     *   instants of this manager's scoped projection. `null` only when the backend holds none of
+     *   those.
+     *
+     * @param array{awaitingSenior: int, decidedBySenior: int, total: int} $progress
+     * @return array<string, mixed>
+     */
+    public function seniorQueueSummary(
+        ExpenseSheet $sheet,
+        bool $allTransactionsCostCenterDecided,
+        string $reviewStatus,
+        array $progress,
+        ?string $latestActivityAt
+    ): array {
+        $row = $this->seniorSummary($sheet, $allTransactionsCostCenterDecided, $reviewStatus);
+        $row['progress'] = $progress;
+        $row['latestActivityAt'] = $latestActivityAt;
+
+        return $row;
+    }
+
+    /**
      * `SheetDetail` — `SheetSummary` plus the two members `contracts/ocs-api.yaml:1125` adds.
      *
      * The contract defines `SheetDetail` as `allOf: [SheetSummary, {allowedActions, transactions}]`,

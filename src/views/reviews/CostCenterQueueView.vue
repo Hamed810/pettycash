@@ -1999,8 +1999,15 @@ function queueCell(item: TransactionSummary, column: QueueColumn): VNode | strin
 	}
 
 	.tab {
+		/* T036: the approved 390px floor — fan the tabs wide AND keep each tap area ≥44px tall. */
 		flex: 1 1 auto;
 		justify-content: center;
+		min-block-size: 44px;
+	}
+
+	/* T036: keep the queue search a comfortable tap target on the 390px floor. */
+	.search__input {
+		min-block-size: 44px;
 	}
 
 	.sort {

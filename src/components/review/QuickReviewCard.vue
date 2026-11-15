@@ -15,15 +15,12 @@
 				<p class="quick-review-card__meta">
 					<span class="quick-review-card__meta-item">
 						<span class="quick-review-card__meta-label">{{ t('pettycash', 'reviews.quickReview.card.transactionId') }}</span>
-						<bdi class="quick-review-card__id" data-testid="quick-review-id">{{ transaction.id }}</bdi>
+						<bdi dir="ltr" class="quick-review-card__id" data-testid="quick-review-id">{{ transaction.id }}</bdi>
 					</span>
 					<span class="quick-review-card__meta-item">
 						<span class="quick-review-card__meta-label">{{ t('pettycash', 'reviews.quickReview.card.costCenter') }}</span>
 						<span data-testid="quick-review-cost-center">{{ costCenter }}</span>
 					</span>
-				</p>
-				<p class="quick-review-card__unavailable" data-testid="quick-review-meta-unavailable">
-					{{ t('pettycash', 'reviews.quickReview.card.metaUnavailable') }}
 				</p>
 			</div>
 		</div>
@@ -33,7 +30,7 @@
 				<bdi>{{ formattedAmount }}</bdi>
 			</strong>
 			<span class="quick-review-card__status" data-testid="quick-review-status">
-				<StatusBadge :status="transaction.status" :label="stateLabel" />
+				<StatusBadge :status="transaction.status" :label="stateLabel" :variant="statusTone" />
 			</span>
 		</div>
 
@@ -107,7 +104,7 @@
 			only on an explicit server-granted capability (T026); `busy` blocks a second submission
 			while one is in flight. A decided card keeps its note block and no decision actions.
 		-->
-		<div v-if="!isDecided" class="quick-review-card__actions">
+		<div v-if="showActions" class="quick-review-card__actions">
 			<NcButton
 				variant="error"
 				:disabled="busy || !canDecide('REJECT')"
@@ -179,6 +176,7 @@ import type {
 	DecisionValue,
 	Evidence,
 	ManagerTransactionState,
+	SeniorManagerTransactionState,
 	TransactionSummary,
 } from '@/types/api'
 
@@ -188,6 +186,14 @@ interface Props {
 	managerState: ManagerTransactionState
 	/** Present only when the server returned a manager decision for the current revision. */
 	managerDecision: Decision | null
+	/**
+	 * Feature 007 (T011): the same two fields for the Senior Manager's own state. Optional and purely
+	 * additive — when present they drive the card's decision presentation; when absent the raw
+	 * `managerState`/`managerDecision` path is used unchanged, so the Cost Center card is untouched.
+	 */
+	seniorState?: SeniorManagerTransactionState | null
+	/** Feature 007 (T011): the Senior Manager's own decision, when the read supplies it. */
+	seniorDecision?: Decision | null
 	/**
 	 * T033: the transaction's returned evidence set (metadata only), from the guarded per-transaction
 	 * detail read. Absent or empty renders no attachments row — never a fabricated tile.
@@ -200,12 +206,21 @@ interface Props {
 	allowedActions?: AllowedActions | null
 	/** True while a decision for this panel is being submitted, so a second cannot start. */
 	busy?: boolean
+	/**
+	 * Feature 007: sheet-level read-only (a completed sheet). Suppresses every decision action even
+	 * when a transaction still reports awaiting — the modal gate must not depend on each row's
+	 * `seniorState` alone.
+	 */
+	readOnly?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
 	evidence: () => [],
 	allowedActions: null,
 	busy: false,
+	seniorState: null,
+	seniorDecision: null,
+	readOnly: false,
 })
 
 const emit = defineEmits<{
@@ -217,8 +232,29 @@ const emit = defineEmits<{
 
 const MAX_CARD_THUMBNAILS = 2
 
-const isReturned = computed(() => props.managerState === 'RETURNED_FOR_CORRECTION')
-const isDecided = computed(() => props.managerState !== 'AWAITING_MANAGER_DECISION')
+/**
+ * Feature 007 (T011): the card presents one actor's state. When a `seniorState`/`seniorDecision` is
+ * supplied the senior's own decision drives the card; otherwise the manager's path is unchanged and
+ * the Cost Center card renders as before.
+ */
+const selfState = computed(() => props.seniorState ?? props.managerState)
+const selfDecision = computed(() => props.seniorDecision ?? props.managerDecision)
+
+const isReturned = computed(() => selfState.value === 'RETURNED_FOR_CORRECTION')
+const isDecided = computed(() => {
+	if (selfState.value == null) return false
+	return selfState.value !== 'AWAITING_MANAGER_DECISION' && selfState.value !== 'AWAITING_SENIOR_DECISION'
+})
+
+/**
+ * The awaiting label describes the actor's own state while the raw `transaction.status` may still
+ * carry an earlier approved stage (a Cost Center approval awaiting the senior). The approved awaiting
+ * pill is amber, so the card overrides the tone on the awaiting (undecided, not returned) card.
+ */
+const statusTone = computed<'warning' | undefined>(() => (isDecided.value ? undefined : 'warning'))
+
+/** Decision actions render only while awaiting review and the panel is not force-read-only. */
+const showActions = computed(() => !isDecided.value && !props.readOnly)
 
 /** Only ever the transaction's own returned evidence; the list order is the server's. */
 const attachments = computed(() => props.evidence ?? [])
@@ -270,7 +306,7 @@ const stateLabel = computed(() => {
 	if (!isDecided.value) {
 		return t('pettycash', 'reviews.quickReview.card.awaiting')
 	}
-	switch (props.managerDecision?.decision) {
+	switch (selfDecision.value?.decision) {
 	case 'APPROVE':
 		return t('pettycash', 'reviews.quickReview.card.approvedByYou')
 	case 'REJECT':
@@ -283,17 +319,17 @@ const stateLabel = computed(() => {
 const cardClasses = computed(() => ({
 	'quick-review-card--decided': isDecided.value,
 	'quick-review-card--returned': isReturned.value,
-	'quick-review-card--rejected': isDecided.value && !isReturned.value && props.managerDecision?.decision === 'REJECT',
+	'quick-review-card--rejected': isDecided.value && !isReturned.value && selfDecision.value?.decision === 'REJECT',
 }))
 
 const noteClass = computed(() => ({
 	'quick-review-card__note--returned': isReturned.value,
-	'quick-review-card__note--rejected': isDecided.value && !isReturned.value && props.managerDecision?.decision === 'REJECT',
+	'quick-review-card__note--rejected': isDecided.value && !isReturned.value && selfDecision.value?.decision === 'REJECT',
 }))
 
 const noteIcon = computed(() => {
 	if (isReturned.value) return mdiRestore
-	return props.managerDecision?.decision === 'REJECT' ? mdiAlertCircleOutline : mdiCheckCircleOutline
+	return selfDecision.value?.decision === 'REJECT' ? mdiAlertCircleOutline : mdiCheckCircleOutline
 })
 
 /**
@@ -301,16 +337,16 @@ const noteIcon = computed(() => {
  * decided card is an unavailable fact, not an invitation to print a guessed date or actor.
  */
 const decisionMeta = computed(() => {
-	if (!props.managerDecision) {
+	if (!selfDecision.value) {
 		return t('pettycash', 'reviews.quickReview.card.decisionUnavailable')
 	}
 	return t('pettycash', 'reviews.quickReview.card.decidedMeta', {
-		date: formatSheetDateTime(props.managerDecision.decidedAt),
-		actor: props.managerDecision.actor.displayName,
+		date: formatSheetDateTime(selfDecision.value.decidedAt),
+		actor: selfDecision.value.actor.displayName,
 	})
 })
 
-const explanation = computed(() => props.managerDecision?.explanation?.trim() ?? '')
+const explanation = computed(() => selfDecision.value?.explanation?.trim() ?? '')
 </script>
 
 <style scoped>
@@ -410,13 +446,6 @@ const explanation = computed(() => props.managerDecision?.explanation?.trim() ??
 	font-family: monospace;
 	unicode-bidi: isolate;
 	overflow-wrap: anywhere;
-}
-
-.quick-review-card__unavailable {
-	margin: 5px 0 0;
-	color: var(--color-text-maxcontrast);
-	font-size: var(--font-size-floor);
-	line-height: 1.4;
 }
 
 .quick-review-card__side {
@@ -626,6 +655,9 @@ const explanation = computed(() => props.managerDecision?.explanation?.trim() ??
 
 	.quick-review-card__actions :deep(.button-vue) {
 		inline-size: 100%;
+
+		/* T036: the approved 390px floor — the card actions are primary finger targets. */
+		min-block-size: 44px;
 		justify-content: center;
 	}
 }

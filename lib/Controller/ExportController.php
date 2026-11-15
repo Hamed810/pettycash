@@ -17,6 +17,7 @@ use OCA\PettyCash\Application\Reporting\EvidenceSelectionQuery;
 use OCA\PettyCash\Application\Reporting\ReportQuery;
 use OCA\PettyCash\Application\Reporting\ReportProjection;
 use OCA\PettyCash\Application\Reporting\ReportScope;
+use OCA\PettyCash\Application\Reporting\SeniorQueueSelection;
 use OCA\PettyCash\Infrastructure\Http\CommandId;
 use OCA\PettyCash\Infrastructure\Http\OcsErrorMapper;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
@@ -98,6 +99,7 @@ class ExportController extends OCSController
         private EvidenceSelectionQuery $evidenceSelection,
         private AuditSelectionQuery $auditSelection,
         private CompleteSheetExport $completeSheet,
+        private SeniorQueueSelection $seniorQueue,
         private \OCA\PettyCash\Domain\Expense\Repository\ExpenseSheetRepository $sheets,
         private \OCA\PettyCash\Domain\Expense\Repository\ExpenseTransactionRepository $transactions,
         private OcsErrorMapper $ocsErrorMapper,
@@ -258,7 +260,9 @@ class ExportController extends OCSController
                     // Scoped to sheet resources: other resources' columns keep their historical typing.
                     ($resource === ExportService::RESOURCE_SHEET || $resource === ExportService::RESOURCE_SHEETS)
                         ? self::SHEET_NUMERIC_COLUMNS
-                        : []
+                        : ($resource === ExportService::RESOURCE_SENIOR_QUEUE
+                            ? ReportProjection::SENIOR_QUEUE_NUMERIC_COLUMNS
+                            : [])
                 );
 
 
@@ -443,6 +447,21 @@ class ExportController extends OCSController
                     $this->transactionRows($ids, $scope, $fileFormat, $selectsSomething)
                 ),
                 self::TRANSACTION_COLUMNS,
+            ];
+        }
+
+        // Feature 007 T028: the Senior-scoped XLSX row source. Each id is resolved — and
+        // scope-validated — in the submitted order (`ids` order, owner D4), so the artifact rows
+        // equal what the caller saw on screen. xlsx-only is enforced in `ExportService::authorization()`.
+        // An empty `ids` is a legitimate measured zero (the modal's filter left no rows to export)
+        // and still answers a header-only artifact; an out-of-scope or unresolvable id is refused by
+        // the row source before anything is generated.
+        if ($resource === ExportService::RESOURCE_SENIOR_QUEUE) {
+            $rows = $this->seniorQueue->rowsInOrder($uid, $ids);
+
+            return [
+                $this->reports->narrow($filter, $rows),
+                ReportProjection::SENIOR_QUEUE_COLUMNS,
             ];
         }
 

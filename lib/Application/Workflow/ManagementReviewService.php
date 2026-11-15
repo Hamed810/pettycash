@@ -437,7 +437,7 @@ final readonly class ManagementReviewService
     public function getCostCenterSheetForManager(string $sheetPublicId): ?array
     {
         $actorUid = $this->currentUser->uid();
-        ['ids' => $managedCostCenterIds, 'codes' => $managedCostCenterCodes] = $this->managedCostCenterScope($actorUid);
+        ['ids' => $managedCostCenterIds, 'codes' => $managedCostCenterCodes] = $this->managedCostCenterScope($actorUid, Role::CostCenterManager);
 
         if ($managedCostCenterIds === [] && $managedCostCenterCodes === []) {
             return null;
@@ -521,7 +521,391 @@ final readonly class ManagementReviewService
     }
 
     /**
-     * The active cost centres this user manages, by surrogate key and by code.
+     * One sheet as the acting senior manager may see it — Feature 007, T024/T025.
+     *
+     * Mirrors {@see getCostCenterSheetForManager()} for the Senior stage, with two additions that
+     * only the Senior surface carries:
+     *
+     * **Authorization is the actor's active `SENIOR_MANAGER` assignments.** A sheet is answered only
+     * when at least one of its current-revision transactions is in a cost centre this senior actively
+     * manages. An unknown sheet and an out-of-scope sheet produce the same `null`, so the controller
+     * can answer one `404` for both and the endpoint cannot be used to confirm that a sheet exists
+     * outside the caller's scope (FR-007-056).
+     *
+     * **The transaction set is this senior's, not the sheet's.** A transaction is included only when
+     * it is awaiting any senior of the cost centre (no senior decision on its current revision), or
+     * was decided by *this* senior. Another senior's decision is never disclosed here, and a sheet
+     * holding only such a decision is indistinguishable from an absent sheet to this caller. Because a
+     * senior may only Approve, Reject or Return, and both Approve/Reject advance the transaction out
+     * of Senior while Return routes it to correction, a transaction this senior returned is reported
+     * as `DECIDED_BY_SENIOR` carrying the return decision — the two-state Senior vocabulary has no
+     * separate "returned" token (the CC surface's `RETURNED_FOR_CORRECTION` is a Cost Center read
+     * state).
+     *
+     * The sheet-wide gate and the presentation status are backend-computed (T025):
+     *
+     * - `allTransactionsCostCenterDecided` is `true` only when **every** transaction belonging to the
+     *   sheet has a final Cost Center decision on its **current** revision (Approve, Reject, or a
+     *   Return corrected and then re-decided); a pending Return does not satisfy it. Computed from
+     *   authoritative workflow decisions over the sheet's whole transaction set — never the senior's
+     *   scoped subset, never client-side (owner D1, FR-007-013, 001 FR-037 amendment).
+     * - `reviewStatus` is `REVIEW_COMPLETED` only when the senior-pending set (this manager's
+     *   `awaitingSenior`) is empty; otherwise `PENDING_REVIEW`. Presentation only, never the domain
+     *   `SheetStatus`, and never derived client-side (owner D5, FR-007-017).
+     *
+     * @return array{
+     *   sheet: \OCA\PettyCash\Domain\Expense\ExpenseSheet,
+     *   transactions: list<array{
+     *     transaction: ExpenseTransaction,
+     *     state: string,
+     *     decision: ?WorkflowDecision
+     *   }>,
+     *   progress: array{
+     *     awaitingSenior: int,
+     *     decidedBySenior: int,
+     *     total: int
+     *   },
+     *   allTransactionsCostCenterDecided: bool,
+     *   reviewStatus: 'PENDING_REVIEW'|'REVIEW_COMPLETED'
+     * }|null
+     */
+    public function getSeniorSheetForManager(string $sheetPublicId): ?array
+    {
+        $actorUid = $this->currentUser->uid();
+        ['ids' => $managedCostCenterIds, 'codes' => $managedCostCenterCodes] = $this->managedCostCenterScope($actorUid, Role::SeniorManager);
+
+        if ($managedCostCenterIds === [] && $managedCostCenterCodes === []) {
+            return null;
+        }
+
+        $sheet = $this->sheetRepository->findByPublicId($sheetPublicId);
+        if ($sheet === null || $sheet->dbId === null) {
+            return null;
+        }
+
+        $sheetTransactions = $this->transactionRepository->findBySheetId($sheet->dbId);
+
+        // Sheet-wide CC-completion gate (T025). Every transaction belongs to the sheet's verdict;
+        // the transaction set below is only the senior's scoped projection. A single transaction
+        // without a final CC decision fails the whole sheet.
+        $allTransactionsCostCenterDecided = true;
+        foreach ($sheetTransactions as $sheetTransaction) {
+            if (!$this->hasFinalCostCenterDecision($sheetTransaction)) {
+                $allTransactionsCostCenterDecided = false;
+                break;
+            }
+        }
+
+        $transactions = [];
+        $progress = [
+            'awaitingSenior' => 0,
+            'decidedBySenior' => 0,
+            'total' => 0,
+        ];
+
+        foreach ($sheetTransactions as $transaction) {
+            $revision = $transaction->revision();
+            $costCenterDbId = $revision->costCenterDbId;
+
+            if ($costCenterDbId === null || !isset($managedCostCenterIds[$costCenterDbId])) {
+                $code = $revision->costCenterCode;
+                if (($code === null || $code === '') && $costCenterDbId !== null) {
+                    $code = $this->costCenterRepository->findById($costCenterDbId)?->code();
+                }
+                if ($code === null || $code === '' || !isset($managedCostCenterCodes[$code])) {
+                    continue;
+                }
+            }
+
+            $decision = $this->currentSeniorDecision($transaction);
+
+            if ($decision === null) {
+                // Awaiting: only when the transaction is currently at the Senior stage. A decision
+                // on a superseded revision does not count; historical revisions are not this
+                // senior's state (same rule as the CC read).
+                if ($transaction->stage !== WorkflowStage::Senior) {
+                    continue;
+                }
+                $state = 'AWAITING_SENIOR_DECISION';
+            } elseif ($decision->actorUid !== $actorUid) {
+                // Another senior's decision is outside this senior's scoped read. It is skipped,
+                // not reported as pending, so a sheet they decided cannot be made to look unfinished.
+                continue;
+            } else {
+                $state = 'DECIDED_BY_SENIOR';
+            }
+
+            $transactions[] = [
+                'transaction' => $transaction,
+                'state' => $state,
+                'decision' => $state === 'AWAITING_SENIOR_DECISION' ? null : $decision,
+            ];
+
+            $progress['total']++;
+            if ($state === 'AWAITING_SENIOR_DECISION') {
+                $progress['awaitingSenior']++;
+            } else {
+                $progress['decidedBySenior']++;
+            }
+        }
+
+        if ($transactions === []) {
+            return null;
+        }
+
+        // Presentation status only (FR-007-017): REVIEW_COMPLETED only when nothing awaits this
+        // senior in scope AND every transaction in the sheet has a final Cost Center decision. A
+        // sheet whose whole-sheet gate is unresolved is never a completed Senior review, even when
+        // its scoped projection shows nothing awaiting (FR-007-013).
+        $reviewStatus = ($progress['awaitingSenior'] === 0 && $allTransactionsCostCenterDecided)
+            ? 'REVIEW_COMPLETED'
+            : 'PENDING_REVIEW';
+
+        return [
+            'sheet' => $sheet,
+            'transactions' => $transactions,
+            'progress' => $progress,
+            'allTransactionsCostCenterDecided' => $allTransactionsCostCenterDecided,
+            'reviewStatus' => $reviewStatus,
+        ];
+    }
+
+    /**
+     * The senior-scoped Cost Sheet list — Feature 007 completed-sheet retention (UX-007-07).
+     *
+     * Enumerates exactly the sheets {@see getSeniorSheetForManager()} authorizes, so the list and
+     * the per-sheet read cannot disagree about what this senior may see: a sheet is included when at
+     * least one current-revision transaction is in a cost centre this senior actively manages and is
+     * either awaiting any senior of that cost centre or carries a current-revision decision by
+     * *this* senior. A transaction another senior decided is never disclosed, and a sheet whose only
+     * scoped transactions carry such a decision is not listed (cross-manager isolation, FR-007-056).
+     *
+     * The candidate sheets are aggregated in the database (one compact scalar row per sheet, via
+     * `ExpenseTransactionRepository::seniorSheetListRows()`), so the list never hydrates historical
+     * transactions as aggregates before pagination and full sheet objects are hydrated only for the
+     * requested page.
+     *
+     * The list is transaction-derived but **not** reconstructed from the currently-pending Senior
+     * set alone: a sheet whose final decision already advanced its transactions to Finance stays
+     * listed through that decision, which is the retention the per-transaction queue could not
+     * provide (UX-007-07). `reviewStatus` is backend-computed on the same strict rule the queue
+     * describes: `REVIEW_COMPLETED` only when nothing awaits this manager's decision **and** no
+     * scoped transaction carries a `Return` decision by this manager that has not yet been seen
+     * resolved **and** every transaction in the sheet carries a final Cost Center decision — a
+     * Return sends the sheet back to correction instead of completing the review (FR-007-017), and
+     * an unresolved whole-sheet gate never earns a completed Senior review (FR-007-013). Counts are
+     * this manager's senior-scoped projection, never whole-sheet fabricated totals, and money is the
+     * sheet's submission snapshot, never a cross-currency aggregation.
+     *
+     * @param int $page
+     * @param int $pageSize
+     * @return array{
+     *   items: list<array{
+     *     sheet: \OCA\PettyCash\Domain\Expense\ExpenseSheet,
+     *     progress: array{awaitingSenior: int, decidedBySenior: int, total: int},
+     *     allTransactionsCostCenterDecided: bool,
+     *     reviewStatus: 'PENDING_REVIEW'|'REVIEW_COMPLETED',
+     *     latestActivityAt: ?string
+     *   }>,
+     *   total: int
+     * }
+     */
+    public function getSeniorSheetsForManager(int $page = 1, int $pageSize = 25): array
+    {
+        $actorUid = $this->currentUser->uid();
+        $scope = $this->managedCostCenterScope($actorUid, Role::SeniorManager);
+        $managedCostCenterIds = array_keys($scope['ids']);
+
+        if ($managedCostCenterIds === []) {
+            return ['items' => [], 'total' => 0];
+        }
+
+        // Candidate sheets arrive as one compact scalar row each, aggregated entirely in the
+        // database: the senior-scoped counts, the Return flag, the whole-sheet Cost Center gate and
+        // the activity components. No historical transaction is hydrated as an aggregate here and no
+        // per-sheet or per-transaction read follows, so the cost is bounded by the number of sheets
+        // in scope rather than by historical transaction volume. Completed sheets stay enumerated the
+        // same way as before: the projection starts from every transaction whose active revision sits
+        // in a managed cost centre, at whatever stage it holds, which is what a decision that already
+        // advanced the transaction to Finance still counts.
+        $rows = $this->transactionRepository->seniorSheetListRows($actorUid, $managedCostCenterIds);
+
+        $aggregates = [];
+        foreach ($rows as $sheetDbId => $row) {
+            $awaitingSenior = $row['awaitingSenior'];
+            $decidedBySenior = $row['decidedBySenior'];
+
+            // A sheet is eligible when at least one current-revision scoped transaction is awaiting
+            // any senior, or carries a decision by *this* senior. A sheet whose only scoped
+            // transactions carry another senior's decision is never disclosed (FR-007-056).
+            if ($awaitingSenior === 0 && $decidedBySenior === 0) {
+                continue;
+            }
+
+            // Strict completion (FR-007-017): a sheet wears `REVIEW_COMPLETED` only when nothing
+            // awaits this manager's decision, no scoped transaction carries an unresolved `Return`
+            // by this manager (a Return sends the sheet back to correction instead of completing the
+            // review), AND every transaction in the sheet has a final Cost Center decision. A sheet
+            // whose whole-sheet gate is unresolved — a sibling still awaiting Cost Center, a pending
+            // Return, or an awaiting-purchaser-correction state — is not eligible for a completed
+            // Senior review and must not be labelled completed (FR-007-013), even when its scoped
+            // projection currently shows nothing awaiting (UX-007-07).
+            $reviewStatus = ($awaitingSenior === 0 && !$row['returnedByThisSenior'] && $row['ccGateUnresolved'] === 0)
+                ? 'REVIEW_COMPLETED'
+                : 'PENDING_REVIEW';
+
+            $aggregates[] = [
+                'sheetDbId' => $sheetDbId,
+                'awaitingSenior' => $awaitingSenior,
+                'decidedBySenior' => $decidedBySenior,
+                'allTransactionsCostCenterDecided' => $row['ccGateUnresolved'] === 0,
+                'reviewStatus' => $reviewStatus,
+                'latestActivityAt' => $this->foldLatestActivity($row),
+            ];
+        }
+
+        // Latest activity descending, with the sheet surrogate key as the deterministic
+        // tiebreaker — the same ordering contract as the transaction queues, so page N and page
+        // N+1 are disjoint and a completed sheet on a later page is never silently dropped.
+        usort($aggregates, function (array $a, array $b): int {
+            $comparison = ($b['latestActivityAt'] ?? '') <=> ($a['latestActivityAt'] ?? '');
+            if ($comparison !== 0) {
+                return $comparison;
+            }
+            return $b['sheetDbId'] <=> $a['sheetDbId'];
+        });
+
+        $total = count($aggregates);
+        $offset = max(0, ($page - 1) * $pageSize);
+
+        // Full sheet objects are hydrated only for the requested page — never for every candidate.
+        $items = [];
+        foreach (array_slice($aggregates, $offset, $pageSize) as $aggregate) {
+            $sheet = $this->sheetRepository->findById($aggregate['sheetDbId']);
+            if ($sheet === null) {
+                // The projection joined the sheet row, so this only races a concurrent deletion and
+                // the previous per-sheet findById() guarded against the same edge by skipping it.
+                continue;
+            }
+            $items[] = [
+                'sheet' => $sheet,
+                'progress' => [
+                    'awaitingSenior' => $aggregate['awaitingSenior'],
+                    'decidedBySenior' => $aggregate['decidedBySenior'],
+                    'total' => $aggregate['awaitingSenior'] + $aggregate['decidedBySenior'],
+                ],
+                'allTransactionsCostCenterDecided' => $aggregate['allTransactionsCostCenterDecided'],
+                'reviewStatus' => $aggregate['reviewStatus'],
+                'latestActivityAt' => $aggregate['latestActivityAt'],
+            ];
+        }
+
+        return [
+            'items' => $items,
+            'total' => $total,
+        ];
+    }
+
+    /**
+     * The authoritative latest-activity instant for a candidate sheet, folded from the projection's
+     * per-sheet maxima exactly as the previous per-transaction fold did: the latest of the included
+     * transactions' `created_at`/`updated_at` and their senior decision's `decided_at`, then the
+     * sheet-level instants. `null` sorts last via the caller's `?? ''` and is never produced in
+     * practice because `pettycash_sheets.created_at` is NOT NULL.
+     *
+     * @param array{
+     *   activityCreated: ?\DateTimeImmutable,
+     *   activityUpdated: ?\DateTimeImmutable,
+     *   activityDecided: ?\DateTimeImmutable,
+     *   sheetCreated: ?\DateTimeImmutable,
+     *   sheetFirstSubmitted: ?\DateTimeImmutable,
+     *   sheetCompleted: ?\DateTimeImmutable,
+     * } $row
+     */
+    private function foldLatestActivity(array $row): ?string
+    {
+        $latest = null;
+        foreach ([
+            $row['activityCreated'],
+            $row['activityUpdated'],
+            $row['activityDecided'],
+            $row['sheetCreated'],
+            $row['sheetFirstSubmitted'],
+            $row['sheetCompleted'],
+        ] as $maybe) {
+            if ($maybe !== null && ($latest === null || $maybe > $latest)) {
+                $latest = $maybe;
+            }
+        }
+
+        return $latest?->format(\DateTimeInterface::ATOM);
+    }
+
+    /**
+     * Whether a transaction's **current** revision carries a final Cost Center decision.
+     *
+     * The gate's per-transaction rule (T025 / 001 FR-037 amendment, owner-approved 2026-11-08):
+     *
+     * - No Cost Center decision on the current revision → not final (the transaction is still
+     *   awaiting Cost Center review, whether from first submission or a correction not yet
+     *   re-decided).
+     * - A `Return` on the current revision → not final (pending Return: the purchaser has not yet
+     *   completed the correction and been re-decided).
+     * - A transaction currently awaiting purchaser correction → not final even when its current
+     *   revision carries an older Cost Center approval, because the return (whether from Cost
+     *   Center, Senior or Finance) means it must complete a correction and receive a **subsequent**
+     *   final Cost Center decision before the sheet's queue-visibility condition is satisfied.
+     * - Otherwise the current revision's Cost Center decision is `Approve` or `Reject`, which is
+     *   final for the gate. A Cost Center rejection MAY satisfy the gate but never independently
+     *   establishes eligibility for a Senior decision (001 FR-037 amendment).
+     */
+    private function hasFinalCostCenterDecision(ExpenseTransaction $transaction): bool
+    {
+        $decision = $this->currentCostCenterDecision($transaction);
+        if ($decision === null) {
+            return false;
+        }
+        if ($decision->decision === Decision::Return) {
+            return false;
+        }
+        if ($transaction->stage === WorkflowStage::Correction
+            && $transaction->status === TransactionStatus::AwaitingPurchaserCorrection
+        ) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * The Senior decision recorded against this transaction's **current** revision.
+     *
+     * The same revision-scoped rule as {@see currentCostCenterDecision()}, for the Senior stage.
+     */
+    private function currentSeniorDecision(ExpenseTransaction $transaction): ?WorkflowDecision
+    {
+        if ($transaction->dbId === null) {
+            return null;
+        }
+
+        $currentRevisionId = $transaction->revision()->id();
+        $current = null;
+
+        foreach ($this->decisionRepository->findByTransactionId($transaction->dbId) as $decision) {
+            if ($decision->stage !== WorkflowStage::Senior) {
+                continue;
+            }
+            if ($decision->revisionId !== $currentRevisionId) {
+                continue;
+            }
+            $current = $decision;
+        }
+
+        return $current;
+    }
+
+    /**
+     * The active cost centres this user manages for one review role, by surrogate key and by code.
      *
      * Assignments are read through the same repository/date rule as `getCostCenterQueue()`, but the
      * result is de-duplicated here. The queue's own duplicate/pagination defect is a separate bug
@@ -529,13 +913,13 @@ final readonly class ManagementReviewService
      *
      * @return array{ids: array<int, true>, codes: array<string, true>}
      */
-    private function managedCostCenterScope(string $actorUid): array
+    private function managedCostCenterScope(string $actorUid, Role $role): array
     {
         $ids = [];
         $codes = [];
         $now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
 
-        foreach ($this->roleAssignmentRepository->findActiveByUserAndRole($actorUid, Role::CostCenterManager, $now) as $assignment) {
+        foreach ($this->roleAssignmentRepository->findActiveByUserAndRole($actorUid, $role, $now) as $assignment) {
             if ($assignment->costCenterId === null) {
                 continue;
             }
