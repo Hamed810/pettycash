@@ -7,7 +7,7 @@
 // double, so a recorded decision actually changes what the next read answers.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount, flushPromises, type VueWrapper, type DOMWrapper } from '@vue/test-utils'
+import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia, type Pinia } from 'pinia'
 import { createRouter, createWebHashHistory, type Router } from 'vue-router'
 import CostCenterQueueView from '@/views/reviews/CostCenterQueueView.vue'
@@ -212,30 +212,34 @@ describe('Quick review workflow (T028)', () => {
 		return wrapper
 	}
 
-	async function expandFirstSheet(wrapper: VueWrapper): Promise<DOMWrapper<Element>> {
-		await wrapper.find('[data-testid="sheet-row-sheet-1"] .sheet-row__summary').trigger('click')
+	/**
+	 * UXC-6-01: selecting a sheet opens the shared Sheet Details Modal over the still-mounted
+	 * queue. The modal teleports to `body`, so its content is asserted through `document.body`
+	 * rather than the wrapper's own subtree.
+	 */
+	async function openSheetModal(wrapper: VueWrapper): Promise<void> {
+		await wrapper.find('[data-testid="sheet-row-sheet-1"] [data-testid="sheet-title"]').trigger('click')
 		await flushPromises()
-		return wrapper.find('[data-testid="sheet-detail-sheet-1"]')
+		expect(document.body.querySelector('[data-testid="sheet-details-modal-dialog"]')).not.toBeNull()
 	}
 
 	it('records an approval from the card: one POST with a command id, refreshed panel, toast', async () => {
 		const state = installServer(transactionDetail())
 		const wrapper = await mountView([queueItem('tx-1')])
-		const detail = await expandFirstSheet(wrapper)
+		await openSheetModal(wrapper)
 
 		// The card reads its evidence tiles from the guarded per-transaction detail read.
-		expect(detail.find('[data-testid="quick-review-attachments"]').exists()).toBe(true)
-		expect(detail.find('[data-testid="quick-review-thumb-ev-1"]').exists()).toBe(true)
+		expect(document.body.querySelector('[data-testid="transaction-card-attachments"]')).not.toBeNull()
+		expect(document.body.querySelector('[data-testid="transaction-card-thumb-ev-1"]')).not.toBeNull()
 
-		await wrapper.find('[data-testid="quick-review-decide-approve"]').trigger('click')
+		await (document.body.querySelector('[data-testid="transaction-card-decide-approve"]') as HTMLElement).click()
 		await flushPromises()
 
 		// The confirmation is the only overlay open.
-		expect(wrapper.find('[data-testid="decision-modal"]').exists()).toBe(true)
-		expect(wrapper.find('[data-testid="details-drawer-layer"]').exists()).toBe(false)
-		expect(wrapper.find('[data-test="evidence-preview-layer"]').exists()).toBe(false)
+		expect(document.body.querySelector('[data-testid="decision-modal"]')).not.toBeNull()
+		expect(document.body.querySelector('[data-test="evidence-preview-layer"]')).toBeNull()
 
-		await wrapper.find('[data-testid="decision-confirm-btn"]').trigger('click')
+		await (document.body.querySelector('[data-testid="decision-confirm-btn"]') as HTMLElement).click()
 		await flushPromises()
 
 		const calls = ocsRequest.mock.calls.filter((call: unknown[]) => {
@@ -250,13 +254,20 @@ describe('Quick review workflow (T028)', () => {
 
 		// The modal closed, the sheet read was refreshed (the card shows the server's decided
 		// state), the detail read was refreshed, and the completion toast was shown.
-		expect(wrapper.find('[data-testid="decision-modal"]').exists()).toBe(false)
-		expect(wrapper.find('[data-testid="quick-review-card-tx-1"]').text())
-			.toContain('reviews.quickReview.card.approvedByYou')
-		expect(wrapper.find('[data-testid="quick-review-progress"]').text())
+		expect(document.body.querySelector('[data-testid="decision-modal"]')).toBeNull()
+		const card = document.body.querySelector('[data-testid="sheet-transaction-tx-1"]')
+		expect(card?.querySelector('[data-testid="transaction-card-decision-costCenter"]')?.textContent)
+			.toContain('reviews.outcome.approved')
+		expect(card?.querySelector('[data-testid="transaction-card-decide-approve"]')).toBeNull()
+		expect(document.body.querySelector('[data-testid="cc-review-progress"]')?.textContent)
 			.toContain('reviews.quickReview.progress')
 		expect(dialogs.showSuccess).toHaveBeenCalledTimes(1)
 		expect(state.detail.version).toBe(5)
+
+		// Close the sheet so this test's teleported overlay cannot leak into later tests' queries.
+		await (document.body.querySelector('[data-testid="sheet-details-modal-close"]') as HTMLElement).click()
+		await flushPromises()
+		expect(document.body.querySelector('[data-testid="sheet-details-modal-dialog"]')).toBeNull()
 	})
 
 	it('keeps the confirmation open with its own words on a version conflict and posts nothing further', async () => {
@@ -277,24 +288,36 @@ describe('Quick review workflow (T028)', () => {
 		})
 
 		const wrapper = await mountView([queueItem('tx-1')])
-		await expandFirstSheet(wrapper)
-		await wrapper.find('[data-testid="quick-review-decide-reject"]').trigger('click')
+		await openSheetModal(wrapper)
+		await (document.body.querySelector('[data-testid="transaction-card-decide-reject"]') as HTMLElement).click()
 		await flushPromises()
-		await wrapper.find('[data-testid="decision-note-input"]').setValue('Amount does not match.')
-		await wrapper.find('[data-testid="decision-confirm-btn"]').trigger('click')
+		const noteInput = document.body.querySelector<HTMLTextAreaElement>('[data-testid="decision-note-input"]')
+		noteInput!.value = 'Amount does not match.'
+		noteInput!.dispatchEvent(new Event('input'))
+		await flushPromises()
+		await (document.body.querySelector('[data-testid="decision-confirm-btn"]') as HTMLElement).click()
 		await flushPromises()
 
-		expect(wrapper.find('[data-testid="decision-modal"]').exists()).toBe(true)
-		expect(wrapper.find('[data-testid="decision-submit-error"]').text())
+		expect(document.body.querySelector('[data-testid="decision-modal"]')).not.toBeNull()
+		expect(document.body.querySelector('[data-testid="decision-submit-error"]')?.textContent)
 			.toContain('reviews.quickReview.decision.versionConflict')
-		expect((wrapper.find('[data-testid="decision-note-input"]').element as HTMLTextAreaElement).value)
+		expect((document.body.querySelector('[data-testid="decision-note-input"]') as HTMLTextAreaElement).value)
 			.toBe('Amount does not match.')
-		// The loaded panel behind the modal is untouched: no refresh was forced by the failure.
-		expect(wrapper.find('[data-testid="quick-review-card-tx-1"]').text())
-			.toContain('reviews.quickReview.card.awaiting')
+		// The loaded panel behind the modal is untouched: no refresh was forced by the failure, and
+		// the Cost Center stage still reads as undecided.
+		expect(document.body.querySelector('[data-testid="transaction-card-decision-costCenter"]')?.textContent)
+			.toContain('reviews.decisionStage.noDecision')
+		expect(document.body.querySelector('[data-testid="transaction-card-decide-reject"]')).not.toBeNull()
+
+		// Close the sheet so this test's teleported overlay cannot leak into later tests' queries.
+		await (document.body.querySelector('[data-testid="decision-cancel-btn"]') as HTMLElement).click()
+		await flushPromises()
+		await (document.body.querySelector('[data-testid="sheet-details-modal-close"]') as HTMLElement).click()
+		await flushPromises()
+		expect(document.body.querySelector('[data-testid="sheet-details-modal-dialog"]')).toBeNull()
 	})
 
-	it('renders a refusal of the detail read as a refusal in the drawer', async () => {
+	it('renders a refusal of the detail read as a refusal in the inline expansion (UXC-V2-09)', async () => {
 		ocsRequest.mockImplementation((config: { url?: string; method?: string }) => {
 			const url = config?.url ?? ''
 			if (/\/transactions\/[^/?]+$/.test(url) && (!config.method || config.method === 'GET')) {
@@ -307,40 +330,74 @@ describe('Quick review workflow (T028)', () => {
 		})
 
 		const wrapper = await mountView([queueItem('tx-1')])
-		await expandFirstSheet(wrapper)
+		await openSheetModal(wrapper)
 
-		await wrapper.find('[data-testid="quick-review-full-details"]').trigger('click')
+		await (document.body.querySelector('[data-testid="transaction-card-title"]') as HTMLElement).click()
 		await flushPromises()
 
-		expect(wrapper.find('[data-testid="details-drawer-forbidden"]').exists()).toBe(true)
-		expect(wrapper.find('[data-testid="details-drawer-loading"]').exists()).toBe(false)
-		expect(wrapper.find('[data-testid="drawer-field-sheet"]').exists()).toBe(false)
+		expect(document.body.querySelector('[data-testid="inline-forbidden"]')).not.toBeNull()
+		expect(document.body.querySelector('[data-testid="inline-loading"]')).toBeNull()
+		expect(document.body.querySelector('[data-testid="inline-field-sheet"]')).toBeNull()
+		// The refusal is the expansion's own honest state, rendered in place.
+
+		// Collapse the expansion (the title toggles it), then close the sheet so this test's
+		// markup cannot leak into later tests' queries.
+		await (document.body.querySelector('[data-testid="transaction-card-title"]') as HTMLElement).click()
+		await flushPromises()
+		expect(document.body.querySelector('[data-testid="transaction-expanded-detail"]')).toBeNull()
+		await (document.body.querySelector('[data-testid="sheet-details-modal-close"]') as HTMLElement).click()
+		await flushPromises()
+		expect(document.body.querySelector('[data-testid="sheet-details-modal-dialog"]')).toBeNull()
 	})
 
-	it('keeps exactly one overlay open and hands the layer over on a transition', async () => {
+	it('keeps exactly one overlay open, keeps detail inline, and hands the layer over on a transition (UXC-V2-09)', async () => {
 		installServer(transactionDetail())
 		const wrapper = await mountView([queueItem('tx-1')])
-		await expandFirstSheet(wrapper)
+		await openSheetModal(wrapper)
 
-		await wrapper.find('[data-testid="quick-review-thumb-ev-1"]').trigger('click')
-		await flushPromises()
-		const previewLayer = () => wrapper.find('[data-test="evidence-preview-layer"]')
-		expect(previewLayer().exists()).toBe(true)
-		expect(wrapper.find('[data-testid="details-drawer-layer"]').exists()).toBe(false)
-		expect(wrapper.find('[data-testid="decision-modal-layer"]').exists()).toBe(false)
+		const previewLayer = () => document.body.querySelector('[data-test="evidence-preview-layer"]')
+		const confirmLayer = () => document.body.querySelector('[data-testid="decision-modal-layer"]')
+		const expansion = () => document.body.querySelector('[data-testid="transaction-expanded-detail"]')
 
-		// Opening the drawer replaces the preview layer; the single-overlay rule.
-		await wrapper.find('[data-testid="quick-review-full-details"]').trigger('click')
+		// The expansion is inline detail, not a layer: it opens in place under the still-mounted
+		// modal, and the sheet modal remains the only dialog frame in this view.
+		await (document.body.querySelector('[data-testid="transaction-card-title"]') as HTMLElement).click()
 		await flushPromises()
-		expect(wrapper.find('[data-testid="details-drawer-layer"]').exists()).toBe(true)
-		expect(previewLayer().exists()).toBe(false)
+		expect(expansion()).not.toBeNull()
+		expect(previewLayer()).toBeNull()
+		expect(confirmLayer()).toBeNull()
 
-		// Escape closes it; nothing is left open.
-		await wrapper.find('[data-testid="details-drawer"]').trigger('keydown', { key: 'Escape' })
+		await (document.body.querySelector('[data-testid="transaction-card-thumb-ev-1"]') as HTMLElement).click()
 		await flushPromises()
-		expect(wrapper.find('[data-testid="details-drawer-layer"]').exists()).toBe(false)
-		expect(previewLayer().exists()).toBe(false)
-		expect(wrapper.find('[data-testid="decision-modal-layer"]').exists()).toBe(false)
+		expect(previewLayer()).not.toBeNull()
+		expect(confirmLayer()).toBeNull()
+
+		// With the modal, the expansion and the preview stacked at once, the nesting must not
+		// introduce duplicate element ids (UXC-10-09): each surface owns a distinct labelled-title
+		// id and `aria-labelledby` stays resolvable.
+		const ids = [...document.body.querySelectorAll('[id]')].map((el) => el.id)
+		expect(new Set(ids).size).toBe(ids.length)
+
+		// Escape closes the preview; nothing is left open, and the Sheet modal stays beneath. The
+		// expansion survives the overlay cycle — the preview returned to the same transaction.
+		// The preview's dialog section owns the Escape handler; the layer wrapper does not.
+		document.body.querySelector('[data-test="evidence-preview"]')?.dispatchEvent(
+			new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })
+		)
+		await flushPromises()
+		expect(previewLayer()).toBeNull()
+		expect(confirmLayer()).toBeNull()
+		expect(expansion()).not.toBeNull()
+		expect(document.body.querySelector('[data-testid="sheet-details-modal-dialog"]')).not.toBeNull()
+
+		// Collapse the expansion via its own toggle, then close the sheet so this test's markup
+		// cannot leak into later tests' queries.
+		await (document.body.querySelector('[data-testid="transaction-card-title"]') as HTMLElement).click()
+		await flushPromises()
+		expect(expansion()).toBeNull()
+		await (document.body.querySelector('[data-testid="sheet-details-modal-close"]') as HTMLElement).click()
+		await flushPromises()
+		expect(document.body.querySelector('[data-testid="sheet-details-modal-dialog"]')).toBeNull()
 	})
 
 	it('preserves the queue state across an overlay cycle', async () => {
@@ -349,51 +406,31 @@ describe('Quick review workflow (T028)', () => {
 			queueItem('tx-1'),
 			queueItem('tx-2', 'sheet-2')
 		])
-		await expandFirstSheet(wrapper)
+		await openSheetModal(wrapper)
 
-		// Queue state before the overlay: sheet expanded, search narrowed.
+		// Queue state before the overlay: sheet modal open, search narrowed.
 		await wrapper.find('[data-testid="sheet-search"]').setValue('sheet-1')
 		expect(wrapper.findAll('[data-testid^="sheet-row-"]')).toHaveLength(1)
 
-		await wrapper.find('[data-testid="quick-review-full-details"]').trigger('click')
+		await (document.body.querySelector('[data-testid="transaction-card-title"]') as HTMLElement).click()
 		await flushPromises()
-		await wrapper.find('[data-testid="details-drawer-close"]').trigger('click')
+		await (document.body.querySelector('[data-testid="transaction-card-title"]') as HTMLElement).click()
 		await flushPromises()
 
-		expect(wrapper.find('[data-testid="sheet-detail-sheet-1"]').exists()).toBe(true)
+		// The Sheet review context survives the overlay cycle: the modal is still open over the
+		// still-mounted, still-filtered queue.
+		expect(document.body.querySelector('[data-testid="sheet-details-modal-dialog"]')).not.toBeNull()
 		expect((wrapper.find('[data-testid="sheet-search"]').element as HTMLInputElement).value).toBe('sheet-1')
 		expect(wrapper.findAll('[data-testid^="sheet-row-"]')).toHaveLength(1)
+
+		// Close the sheet so this test's teleported overlay cannot leak into later tests' queries.
+		await (document.body.querySelector('[data-testid="sheet-details-modal-close"]') as HTMLElement).click()
+		await flushPromises()
+		expect(document.body.querySelector('[data-testid="sheet-details-modal-dialog"]')).toBeNull()
 	})
 
-	it('scrolls the just-expanded panel into view on a mobile viewport, instant under reduced motion (T036)', async () => {
-		// jsdom has no layout engine, so the scroll itself (browser-time `scrollIntoView`) is pinned
-		// here at the wiring level: a ≤640px viewport makes the expansion scroll the panel into view,
-		// and a reduced-motion preference turns that scroll from smooth to instant.
-		const originalScrollIntoView = Element.prototype.scrollIntoView
-		const originalMatchMedia = window.matchMedia
-		const scrollIntoView = vi.fn()
-		Element.prototype.scrollIntoView = scrollIntoView
-		window.matchMedia = ((query: string) => ({
-			matches: query === '(width <= 640px)',
-			media: query,
-			onchange: null,
-			addListener: () => undefined,
-			removeListener: () => undefined,
-			addEventListener: () => undefined,
-			removeEventListener: () => undefined,
-			dispatchEvent: () => false
-		})) as unknown as typeof window.matchMedia
-
-		try {
-			installServer(transactionDetail())
-			const wrapper = await mountView([queueItem('tx-1')])
-			await expandFirstSheet(wrapper)
-
-			expect(scrollIntoView).toHaveBeenCalledTimes(1)
-			expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'start' })
-		} finally {
-			Element.prototype.scrollIntoView = originalScrollIntoView
-			window.matchMedia = originalMatchMedia
-		}
-	})
+	// T036's scroll-into-view wiring belonged to the inline sheet expansion, which UXC-6-01
+	// replaced with the shared Sheet Details Modal: opening a sheet now focuses the shell's dialog
+	// (UXC-1-05's tested contract) instead of scrolling an inline panel into view. No replacement
+	// assertion exists because the behaviour itself was removed with the interaction.
 })

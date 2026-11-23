@@ -219,8 +219,8 @@ describe('buildSeniorSheetQueue', () => {
 		])
 
 		expect(sheet?.costCenters).toEqual([
-			{ id: 'cc-1', name: 'Operations' },
-			{ id: 'cc-2', name: 'Travel' },
+			{ id: 'cc-1', name: 'Operations', code: '' },
+			{ id: 'cc-2', name: 'Travel', code: '' },
 		])
 	})
 
@@ -262,8 +262,8 @@ describe('buildSeniorSheetQueue', () => {
 
 describe('searchSeniorSheets', () => {
 	const sheets = buildSeniorSheetQueue([
-		transaction('a', { sheetId: 'e9c2f997-sheet', costCenter: { id: 'cc-1', name: 'Development' } }),
-		transaction('b', { sheetId: 'f2fd300-sheet', costCenter: { id: 'cc-2', name: 'Operations' } }),
+		transaction('a', { sheetId: 'e9c2f997-sheet', costCenter: { id: 'cc-1', name: 'Development', code: 'DEV-T060' } }),
+		transaction('b', { sheetId: 'f2fd300-sheet', costCenter: { id: 'cc-2', name: 'Operations', code: 'E2E-CC-1' } }),
 	])
 
 	it('searches the sheet reference case-insensitively', () => {
@@ -272,6 +272,27 @@ describe('searchSeniorSheets', () => {
 
 	it('searches the cost-centre name', () => {
 		expect(searchSeniorSheets(sheets, 'operations').map((sheet) => sheet.sheetId)).toEqual(['f2fd300-sheet'])
+	})
+
+	it('searches the cost-centre code exactly', () => {
+		expect(searchSeniorSheets(sheets, 'E2E-CC-1').map((sheet) => sheet.sheetId)).toEqual(['f2fd300-sheet'])
+	})
+
+	it('searches the cost-centre code partially', () => {
+		expect(searchSeniorSheets(sheets, 'E2E-CC').map((sheet) => sheet.sheetId)).toEqual(['f2fd300-sheet'])
+	})
+
+	it('searches the cost-centre code case-insensitively', () => {
+		expect(searchSeniorSheets(sheets, 'e2e-cc-1').map((sheet) => sheet.sheetId)).toEqual(['f2fd300-sheet'])
+		expect(searchSeniorSheets(sheets, 'dev-t060').map((sheet) => sheet.sheetId)).toEqual(['e9c2f997-sheet'])
+	})
+
+	it('clearing cost-centre code search restores all rows', () => {
+		expect(searchSeniorSheets(sheets, 'E2E-CC-1').map((sheet) => sheet.sheetId)).toEqual(['f2fd300-sheet'])
+		expect(searchSeniorSheets(sheets, '   ').map((sheet) => sheet.sheetId)).toEqual([
+			'e9c2f997-sheet',
+			'f2fd300-sheet',
+		])
 	})
 
 	it('returns everything for a blank query and nothing for a miss', () => {

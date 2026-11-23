@@ -56,6 +56,11 @@ final class FailingAccountMovementRepository implements AccountMovementRepositor
         return $this->inner->findByAccountIdPaged($accountId, $offset, $limit);
     }
 
+    public function countByAccountId(int $accountId): int
+    {
+        return $this->inner->countByAccountId($accountId);
+    }
+
     public function save(AccountMovement $movement): void
     {
         if ($this->failOnSave) {

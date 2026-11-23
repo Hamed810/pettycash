@@ -4,7 +4,11 @@ declare(strict_types=1);
 
 namespace OCA\PettyCash\Infrastructure\Persistence\Expense;
 
+use DateTimeImmutable;
+use OCA\PettyCash\Application\Port\SheetPostedAmountsReader;
 use OCA\PettyCash\Domain\Expense\SheetTotals;
+use OCA\PettyCash\Domain\Shared\CurrencyCode;
+use OCA\PettyCash\Domain\Shared\Money;
 use OCA\PettyCash\Domain\Workflow\Decision;
 use OCA\PettyCash\Domain\Workflow\WorkflowStage;
 use OCP\DB\QueryBuilder\IQueryBuilder;
@@ -32,7 +36,7 @@ use OCP\IDBConnection;
  * revision stays in the database as history — FR-050 requires it to — but it no longer describes
  * the transaction's current outcome.
  */
-final readonly class SheetSummaryQuery
+final readonly class SheetSummaryQuery implements SheetPostedAmountsReader
 {
     public function __construct(private IDBConnection $connection) {}
 
@@ -49,6 +53,109 @@ final readonly class SheetSummaryQuery
         }
 
         return SheetTotals::fromRows($this->rowsForSheet($sheetDbId));
+    }
+
+    /**
+     * The live per-stage approved totals for several sheets, in one batched read.
+     *
+     * The Finance queue projection stamps each of a page's items with its owning Cost Sheet's
+     * whole-sheet aggregate (owner decision, 2026-11-20). A page can hold transactions from many
+     * sheets, so the read is one `IN`-set query over the **distinct** sheet db ids — never one query
+     * per item — and each sheet's reduction is the same `SheetTotals::fromRows` rule
+     * `totalsForSheet()` uses, so a queue item and the per-sheet review reads cannot disagree.
+     *
+     * Only decisions on the **active** revision are read, exactly as `rowsForSheet()` reads them: an
+     * approval recorded against a superseded revision stays history and does not count. The sheet's
+     * currency row is joined here (`INNER`, the same choice `postedAmountsFor()` makes) so the
+     * caller gets the authoritative scale once per sheet instead of probing the currency
+     * repository per item; a sheet without a configured currency has no authoritative scale to
+     * report and yields no entry.
+     *
+     * @param list<int|null> $sheetDbIds
+     * @return array<int, array{totals: SheetTotals, currency: string, minorUnit: int}> keyed by sheet db id
+     */
+    public function stageApprovedTotalsForSheets(array $sheetDbIds): array
+    {
+        $ids = array_values(array_unique(array_filter(
+            $sheetDbIds,
+            static fn (?int $id): bool => $id !== null
+        )));
+        if ($ids === []) {
+            return [];
+        }
+
+        $qb = $this->connection->getQueryBuilder();
+        $qb->select('t.sheet_id', 'r.id', 'r.amount_minor', 'd.stage', 'd.decision', 'c.code', 'c.minor_unit')
+            ->from('pettycash_transactions', 't')
+            ->join('t', 'pettycash_transaction_revisions', 'r', $qb->expr()->eq('r.id', 't.active_revision_id'))
+            ->leftJoin('r', 'pettycash_workflow_decisions', 'd', $qb->expr()->eq('d.revision_id', 'r.id'))
+            ->join('t', 'pettycash_sheets', 's', $qb->expr()->eq('s.id', 't.sheet_id'))
+            ->join('s', 'pettycash_currencies', 'c', $qb->expr()->eq('s.currency_id', 'c.id'))
+            ->where($qb->expr()->in('t.sheet_id', $qb->createNamedParameter($ids, IQueryBuilder::PARAM_INT_ARRAY)))
+            ->orderBy('r.id');
+
+        /** @var array<int, array<int, array{amount: int, manager: ?Decision, senior: ?Decision, finance: ?Decision}>> $byRevision */
+        $byRevision = [];
+        /** @var array<int, array{currency: string, minorUnit: int}> $currencies */
+        $currencies = [];
+
+        foreach ($qb->executeQuery()->fetchAllAssociative() as $row) {
+            $sheetDbId = (int) $row['sheet_id'];
+            $revisionId = (int) $row['id'];
+
+            $currencies[$sheetDbId] ??= [
+                'currency' => (string) $row['code'],
+                'minorUnit' => (int) $row['minor_unit'],
+            ];
+
+            if (!isset($byRevision[$sheetDbId][$revisionId])) {
+                $byRevision[$sheetDbId][$revisionId] = [
+                    'amount' => (int) $row['amount_minor'],
+                    'manager' => null,
+                    'senior' => null,
+                    'finance' => null,
+                ];
+            }
+
+            $stage = $row['stage'] ?? null;
+            $decision = $this->toDecision($row['decision'] ?? null);
+            if ($stage === null || $decision === null) {
+                // No decision recorded for this revision at this row: the LEFT JOIN produced a null
+                // stage, the normal state of an undecided transaction.
+                continue;
+            }
+
+            // The (revision_id, stage) unique index means at most one decision per stage. Anything
+            // unrecognised is ignored rather than guessed at, so a new stage added to the enum cannot
+            // silently be read as an approval — the same rule `rowsForSheet()` applies.
+            match ($stage) {
+                WorkflowStage::CostCenter->value => $byRevision[$sheetDbId][$revisionId]['manager'] = $decision,
+                WorkflowStage::Senior->value => $byRevision[$sheetDbId][$revisionId]['senior'] = $decision,
+                WorkflowStage::Finance->value => $byRevision[$sheetDbId][$revisionId]['finance'] = $decision,
+                default => null,
+            };
+        }
+
+        $result = [];
+        foreach ($byRevision as $sheetDbId => $revisions) {
+            $rows = [];
+            foreach ($revisions as $revision) {
+                $rows[] = [
+                    'amount' => $revision['amount'],
+                    'latest' => SheetTotals::effectiveOutcome($revision['finance'], $revision['senior'], $revision['manager']),
+                    'manager' => $revision['manager'],
+                    'senior' => $revision['senior'],
+                    'finance' => $revision['finance'],
+                ];
+            }
+            $result[$sheetDbId] = [
+                'totals' => SheetTotals::fromRows($rows),
+                'currency' => $currencies[$sheetDbId]['currency'],
+                'minorUnit' => $currencies[$sheetDbId]['minorUnit'],
+            ];
+        }
+
+        return $result;
     }
 
     /**
@@ -224,6 +331,109 @@ final readonly class SheetSummaryQuery
         }
 
         return array_values($byRevision);
+    }
+
+    /**
+     * The actual financially posted amount and posting count for a set of completed sheets, in one
+     * batched read (T016/T017).
+     *
+     * `postedAmount` is the sum of the consumption movements actually linked to the sheet — never a
+     * projection assuming every approved transaction posted (FR-008-035). The chain is
+     * `movement.source_revision_id` → revision → transaction → sheet. The transaction, revision and
+     * movement links are `LEFT JOIN`s so every requested sheet keeps a row even when it has no
+     * linked consumption movement; an unlinked movement is still never attributed to a sheet
+     * because the join starts at the requested sheet. A sheet with no postings therefore returns
+     * `postedAmount = 0`, `postingCount = 0`, and its authoritative currency scale, while a sheet
+     * with postings keeps exactly the previous aggregate.
+     *
+     * The amount is summed from `pettycash_account_movements.amount_minor`, which is the posted
+     * figure, and the count from the same rows — so the two cannot disagree. The currency and
+     * minor unit are read from the sheet's own currency row, not from the movement, because a
+     * movement carries no currency of its own: the account's currency is the sheet's currency by
+     * the domain invariant, and reading it once per sheet keeps the sum honest. The currency join
+     * remains `INNER JOIN` because a sheet without a configured currency has no authoritative
+     * scale to report.
+     *
+     * @param list<int> $sheetDbIds
+     * @return array<int, array{postedAmount: int, postingCount: int, currency: string, minorUnit: int}>
+     */
+    public function postedAmountsFor(array $sheetDbIds): array
+    {
+        $sheetDbIds = array_values(array_unique(array_filter(
+            $sheetDbIds,
+            static fn (?int $id): bool => $id !== null
+        )));
+
+        if ($sheetDbIds === []) {
+            return [];
+        }
+
+        $qb = $this->connection->getQueryBuilder();
+        $qb->selectAlias('s.id', 'sheet_id')
+            ->selectAlias($qb->func()->sum('m.amount_minor'), 'posted_amount')
+            ->selectAlias($qb->func()->count('m.id'), 'posting_count')
+            ->selectAlias('c.code', 'currency_code')
+            ->selectAlias('c.minor_unit', 'minor_unit')
+            ->from('pettycash_sheets', 's')
+            ->leftJoin('s', 'pettycash_transactions', 't', $qb->expr()->eq('t.sheet_id', 's.id'))
+            ->leftJoin('t', 'pettycash_transaction_revisions', 'r', $qb->expr()->eq('r.id', 't.active_revision_id'))
+            ->leftJoin('r', 'pettycash_account_movements', 'm', $qb->expr()->eq('m.source_revision_id', 'r.id'))
+            ->join('s', 'pettycash_currencies', 'c', $qb->expr()->eq('s.currency_id', 'c.id'))
+            ->where($qb->expr()->in('s.id', $qb->createNamedParameter($sheetDbIds, IQueryBuilder::PARAM_INT_ARRAY)))
+            ->groupBy('s.id', 'c.code', 'c.minor_unit');
+
+        $posted = [];
+        foreach ($qb->executeQuery()->fetchAllAssociative() as $row) {
+            $posted[(int) $row['sheet_id']] = [
+                'postedAmount' => (int) ($row['posted_amount'] ?? 0),
+                'postingCount' => (int) ($row['posting_count'] ?? 0),
+                'currency' => (string) $row['currency_code'],
+                'minorUnit' => (int) $row['minor_unit'],
+            ];
+        }
+
+        return $posted;
+    }
+
+    /**
+     * All consumption postings for one sheet's transactions, keyed by transaction public id.
+     *
+     * One batched read joining movements → revisions → transactions for the given sheet.
+     * Returns `[]` when the sheet has no linked consumption movements.
+     *
+     * @param int $sheetDbId surrogate `pettycash_sheets.id`
+     * @param CurrencyCode $currencyCode the sheet's currency
+     * @return array<string, array{occurredAt: \DateTimeImmutable, amount: Money, balanceAfter: Money}>
+     */
+    public function postingsForSheet(int $sheetDbId, CurrencyCode $currencyCode): array
+    {
+        if ($sheetDbId === 0) {
+            return [];
+        }
+
+        $qb = $this->connection->getQueryBuilder();
+        $qb->selectAlias('t.public_id', 'transaction_public_id')
+            ->selectAlias('m.occurred_at', 'occurred_at')
+            ->selectAlias('m.amount_minor', 'amount_minor')
+            ->selectAlias('m.balance_after_minor', 'balance_after_minor')
+            ->from('pettycash_transaction_revisions', 'r')
+            ->join('r', 'pettycash_transactions', 't', $qb->expr()->eq('t.active_revision_id', 'r.id'))
+            ->join('t', 'pettycash_account_movements', 'm', $qb->expr()->eq('m.source_revision_id', 'r.id'))
+            ->where($qb->expr()->eq('t.sheet_id', $qb->createNamedParameter($sheetDbId)))
+            ->andWhere($qb->expr()->eq('m.movement_type', $qb->createNamedParameter('CONSUMPTION')));
+
+        $postings = [];
+        foreach ($qb->executeQuery()->fetchAllAssociative() as $row) {
+            $postings[(string) $row['transaction_public_id']] = [
+                'occurredAt' => $row['occurred_at'] instanceof \DateTimeInterface
+                    ? \DateTimeImmutable::createFromInterface($row['occurred_at'])
+                    : new DateTimeImmutable((string) $row['occurred_at']),
+                'amount' => Money::of((int) $row['amount_minor'], $currencyCode),
+                'balanceAfter' => Money::of((int) $row['balance_after_minor'], $currencyCode),
+            ];
+        }
+
+        return $postings;
     }
 
     private function toDecision(mixed $value): ?Decision

@@ -84,4 +84,5 @@ Thumbs.db
 # Local development tools and configuration
 /.specify/extensions/.registry
 /opencode.json
+/.zcode/
 /project-size-report.sh

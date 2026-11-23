@@ -53,6 +53,57 @@ final class InMemoryEvidenceRepository implements \OCA\PettyCash\Domain\Evidence
         return array_values(array_filter($this->evidence, fn($e) => $e->originRevisionId === $revisionId));
     }
 
+    /**
+     * Every evidence row attached to a set of transactions, in one batched read (T016/T018).
+     *
+     * Mirrors `DbEvidenceRepository::findByTransactionIds()`, including the transaction-id-then-
+     * uploaded_at ordering, so the in-memory suite asks the same question the database adapter
+     * answers.
+     *
+     * @param list<int> $transactionDbIds
+     * @return list<Evidence>
+     */
+    public function findByTransactionIds(array $transactionDbIds): array
+    {
+        $ids = [];
+        foreach ($transactionDbIds as $transactionDbId) {
+            if (is_int($transactionDbId)) {
+                $ids[$transactionDbId] = true;
+            }
+        }
+
+        if ($ids === []) {
+            return [];
+        }
+
+        $result = array_values(array_filter(
+            $this->evidence,
+            fn (Evidence $e): bool => isset($ids[$e->transactionId])
+        ));
+
+        usort($result, static function (Evidence $a, Evidence $b): int {
+            $byTransaction = $a->transactionId <=> $b->transactionId;
+            if ($byTransaction !== 0) {
+                return $byTransaction;
+            }
+            $aAt = $a->uploadedAt;
+            $bAt = $b->uploadedAt;
+            if ($aAt === null && $bAt === null) {
+                return 0;
+            }
+            if ($aAt === null) {
+                return 1;
+            }
+            if ($bAt === null) {
+                return -1;
+            }
+
+            return $bAt <=> $aAt;
+        });
+
+        return $result;
+    }
+
     public function save(Evidence $evidence): void
     {
         if ($evidence->dbId === null) {

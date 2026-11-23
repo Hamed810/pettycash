@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace OCA\PettyCash\Tests\TestDoubles;
 
+use DateTimeImmutable;
 use OCA\PettyCash\Domain\Workflow\WorkflowDecision;
 use OCA\PettyCash\Domain\Workflow\Repository\WorkflowDecisionRepository;
 use OCA\PettyCash\Domain\Workflow\WorkflowStage;
@@ -64,6 +65,46 @@ final class InMemoryWorkflowDecisionRepository implements \OCA\PettyCash\Domain\
             $this->decisions,
             fn (WorkflowDecision $d): bool => $this->surrogateTransactionIdOf($d) === $transactionId
         ));
+    }
+
+    /**
+     * Every decision attached to a set of transactions, in one batched read (T016/T018).
+     *
+     * Mirrors `DbWorkflowDecisionRepository::findByTransactionIds()`. Decisions are grouped by the
+     * transaction's public UUID (`WorkflowDecision::$transactionId`), since that is what the
+     * aggregate carries; the caller looks up by public id, not by surrogate key.
+     *
+     * @param list<int> $transactionDbIds surrogate `pettycash_transactions.id` values
+     * @return list<WorkflowDecision>
+     */
+    public function findByTransactionIds(array $transactionDbIds): array
+    {
+        $ids = [];
+        foreach ($transactionDbIds as $transactionDbId) {
+            if (is_int($transactionDbId)) {
+                $ids[$transactionDbId] = true;
+            }
+        }
+
+        if ($ids === []) {
+            return [];
+        }
+
+        $result = [];
+        foreach ($this->decisions as $decision) {
+            $surrogate = $this->surrogateTransactionIdOf($decision);
+            if ($surrogate !== null && isset($ids[$surrogate])) {
+                $result[] = $decision;
+            }
+        }
+
+        usort($result, static function (WorkflowDecision $a, WorkflowDecision $b): int {
+            $aAt = $a->decidedAt ?? new DateTimeImmutable('1970-01-01');
+            $bAt = $b->decidedAt ?? new DateTimeImmutable('1970-01-01');
+            return $aAt <=> $bAt;
+        });
+
+        return $result;
     }
 
     private function surrogateTransactionIdOf(WorkflowDecision $decision): ?int

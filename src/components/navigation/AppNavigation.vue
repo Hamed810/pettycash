@@ -11,6 +11,7 @@ import {
 	mdiViewDashboardOutline,
 	mdiWalletOutline,
 	mdiCashPlus,
+	mdiAccountGroupOutline,
 } from '@mdi/js'
 import { t } from '@nextcloud/l10n'
 import NcIconSvgWrapper from '@nextcloud/vue/components/NcIconSvgWrapper'
@@ -99,6 +100,7 @@ const ENTRY_ICONS: Record<string, string> = {
 	reports: mdiChartBar,
 	'admin-configuration': mdiCogOutline,
 	'admin-funding': mdiCashPlus,
+	'finance-holders': mdiAccountGroupOutline,
 }
 
 function iconFor(name: string): string {

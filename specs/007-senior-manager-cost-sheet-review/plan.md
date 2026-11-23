@@ -10,7 +10,7 @@
 
 ## Summary
 
-Replace the Senior Manager's flat, paginated transaction queue (`SeniorQueueView.vue` + `GET /queues/senior`) with a **Cost-Sheet-based queue**: the view groups the Senior-scoped pending transactions into one row per sheet, and opening a sheet shows its transactions in a **modal** with the original queue still mounted behind it — no route navigation. The modal reuses the existing transaction review surfaces (`QuickReviewCard`, `TransactionDetailsDrawer`, `QuickDecisionModal`, `EvidencePreview`) so quick decision, full detail, and the attachment preview layer come from the components Feature 006 already ships. Approve/Reject/Return reuse the existing single-transaction `POST /transactions/{id}/decisions` path, preserving FR-085 idempotency, stage-scoped audit, and the mandatory-comment rule, so the Cost Center decision is never overwritten.
+Replace the Senior Manager's flat, paginated transaction queue (`SeniorQueueView.vue` + `GET /queues/senior`) with a **Cost-Sheet-based queue**: the view groups the Senior-scoped pending transactions into one row per sheet, and opening a sheet shows its transactions in the shared **`SheetDetailsModal`** (Senior stage adapter) over the mounted queue — no route navigation. The modal reuses the shared transaction review surfaces (`TransactionReviewCard` generalized from `QuickReviewCard`, `TransactionDetailDrawer` generalized from `TransactionDetailsDrawer`, `DecisionConfirmation` generalized from `QuickDecisionModal`, `EvidencePreview`) so quick decision, full detail, and the attachment preview layer come from the shared components Feature 006 already ships. Approve/Reject/Return reuse the existing single-transaction `POST /transactions/{id}/decisions` path, preserving FR-085 idempotency, stage-scoped audit, and the mandatory-comment rule, so the Cost Center decision is never overwritten.
 
 The product owner has resolved the planning-phase open decisions (2026-11-08). The confirmed rules this plan implements in its requirements are:
 
@@ -86,8 +86,12 @@ No `tasks.md` is created by this plan.
 src/
 ├── views/reviews/SeniorQueueView.vue            # sheet-first queue replacing the flat table (or a new sheet view)
 ├── composables/useSeniorQueue.ts                # Senior grouping/completeness/search/sort (new, modeled on useSheetQueue)
-├── components/review/__SeniorSheetModal__.vue   # the sheet modal (new)
-├── components/review/__SeniorReviewCard__.vue   # quick-review card variant wired to Senior managerState (new or adapted)
+├── components/review/SheetDetailsModal.vue      # shared sheet modal shell; Senior stage via props/config/slots (replaces stage-specific SeniorSheetModal)
+├── components/review/TransactionReviewCard.vue   # shared compact card (generalized QuickReviewCard; Senior variant via seniorState/seniorDecision)
+├── components/review/TransactionDetailDrawer.vue # shared drawer (generalized TransactionDetailsDrawer; Senior via seniorState/seniorDecision)
+├── components/review/PriorDecisionHistory.vue    # shared transaction decision history (reuse)
+├── components/review/EvidencePreview.vue         # shared evidence overlay (reuse verbatim)
+├── components/review/DecisionConfirmation.vue    # shared decision confirmation (generalized QuickDecisionModal; reuse)
 ├── stores/reviews.ts                            # seniorSheetQueues + senior sheet-review reads + export state (extend)
 ├── services/reviewsApi.ts                       # fetchSeniorSheet / fetchSeniorSheetQueue (extend or add)
 ├── types/api.ts                                 # ManagerSheetReview is CC-shaped; add Senior variants (extend, additive)
@@ -96,7 +100,7 @@ src/
 l10n/{en,fa}.{json,js}                           # new catalogue keys
 tests/Frontend/Component/ManagementReview.spec.ts  # existing SeniorQueueView assertions are updated in place (the only existing senior surface coverage)
 tests/Frontend/Component/SeniorReview.spec.ts    # queue/modal behaviour (new)
-tests/Frontend/Component/SeniorSheetModal.spec.ts
+tests/Frontend/Component/SheetDetailsModal.spec.ts
 tests/Frontend/Composable/SeniorSheetQueue.spec.ts
 ```
 Note: no `SeniorQueue.spec.ts` exists anywhere; the real existing coverage is the `SeniorQueueView` describe block inside `tests/Frontend/Component/ManagementReview.spec.ts`.
@@ -197,9 +201,10 @@ Target (this feature): the same transaction-level workflow is preserved byte-for
 |---|---|---|
 | Sheet-first grouping + completeness + search + sort | `useSheetQueue.ts` (`SHEET_QUEUE_PAGE_SIZE=500`, `checkSheetQueueCompleteness`, `dedupeTransactions`, `buildSheetQueue`, `searchSheetQueue`/`sortSheetQueue` **sheet-row** search/sort) | Senior variant `useSeniorQueue.ts` **extending** the same guard/grouping with per-transaction search (ID/description) and expense-type filtering, plus transaction-level sort for the modal — extend, never copy, never parallel-implement the guard |
 | Queue shell/visual language | `CostCenterQueueView.vue`, `ResponsiveTable`, `queueColumns.ts`, `StatusBadge` | Replace the flat senior table with the sheet presentation; keep `SeniorQueueView.vue`'s route/breadcrumb shell |
-| Compact transaction card + action bar | `QuickReviewCard.vue` (props: `transaction`, `managerState`, `managerDecision`, `evidence`, `allowedActions`, `busy`; emits `openReview/openDetails/openPreview/decide`) | Senior `managerState`/`managerDecision` variant (stage-tagged `SENIOR`); card is already manager-state-agnostic |
-| Full details drawer | `TransactionDetailsDrawer.vue` (Description + History tabs, footer decide controls, read-only fields with unavailable states) | Wire with the Senior sheet header + stage-tagged decisions; field set unchanged |
-| Decision confirmation + mandatory comment | `QuickDecisionModal.vue` (per-kind copy, `requiresExplanation`=REJECT‖RETURN, `expectedVersion`, submitting/error/toast, single transaction via `reviewsStore.recordDecision`) | Reuse unchanged (stage is resolved server-side) |
+| Shared Sheet Details Modal shell | new shared `SheetDetailsModal.vue` (Senior stage adapter via props/config/slots: tabs Transactions/Approvals/Overview/History, sheet identity, status, currency, submitted, owner, transaction count, recorded amount, latest approved amount, focus trap, Escape, close, focus restoration, RTL/LTR, responsive) | Senior adapter config; no per-role modal |
+| Compact transaction card + action bar | `QuickReviewCard.vue` (props: `transaction`, `managerState`, `managerDecision`, `evidence`, `allowedActions`, `busy`; emits `openReview/openDetails/openPreview/decide`) → generalized `TransactionReviewCard`; Senior `seniorState`/`seniorDecision` variant (stage-tagged `SENIOR`); card is already manager-state-agnostic | Card generalization; Senior presentation via additive props |
+| Full details drawer | `TransactionDetailsDrawer.vue` (Description + History tabs, footer decide controls, read-only fields with unavailable states) → generalized `TransactionDetailDrawer`; wire with the Senior sheet header + stage-tagged decisions; field set unchanged | Drawer sections (Transaction Details / Evidence / Previous Decisions / Current Stage Actions); Senior stage adapter |
+| Decision confirmation + mandatory comment | `QuickDecisionModal.vue` → generalized `DecisionConfirmation` (per-kind copy, `requiresExplanation`=REJECT‖RETURN, `expectedVersion`, submitting/error/toast, single transaction via `reviewsStore.recordDecision`) | Reuse unchanged (stage is resolved server-side) |
 | Attachment thumbnails | `EvidenceCard.vue` / `QuickReviewCard` thumbnail strip (2 + `+N more`) | Reuse presentation; server evidence list unchanged |
 | Preview layer (images/PDF/unknown) + prev/next + `1/N` | `EvidencePreview.vue` (inline-safe policy from `utils/evidencePreview.ts`, focus trap/scrim, Escape close, object-URL revocation) | Reuse verbatim (006 `FR-006-041`) |
 | Per-transaction detail + capability gating | `reviewsStore.fetchManagerTransactionDetail` guarded channel (`ManagerTransactionReadState`: loading/loaded/forbidden/notFound/unavailable), `decisionAllowed`/`DECISION_CAPABILITY` | Reuse for the Senior modal cards |
@@ -367,8 +372,8 @@ The report/export receives the **same** filtered + sorted transaction set (as an
 | `reviews.ts` store | add `seniorSheetReviews` cache (keyed by sheet id), `seniorTransactionDetails`/read-state reuse, senior export state; Senior queue refetch after decisions | reuse `fetchManagerTransactionDetail` guarded-channel pattern |
 | `useSeniorQueue.ts` (new) | Senior grouping/completeness/search/filter/sort over the complete set | modeled on `useSheetQueue.ts`; add the per-transaction filter/sort model |
 | `SeniorQueueView.vue` | sheet-first presentation + modal host; keep breadcrumb shell and `review-detail` deep-link | route `review-queue-senior` (`router/index.ts`) unchanged |
-| `SeniorSheetModal.vue` (new) | modal shell, single-overlay stack, sheet header (unavailable placeholders until backend), transaction cards | 006 `FR-006-036/037` rules |
-| `QuickReviewCard` / `TransactionDetailsDrawer` | wire Senior variant (`seniorState`/`seniorDecision`, stage-tagged decisions); adapt prop types | additive, CC surface unchanged |
+| `SheetDetailsModal.vue` (shared) | modal shell, single-overlay stack, sheet header (unavailable placeholders until backend), transaction cards; Senior stage via props/config/slots | 006 `FR-006-036/037` rules |
+| `TransactionReviewCard` / `TransactionDetailDrawer` | wire Senior variant (`seniorState`/`seniorDecision`, stage-tagged decisions); adapt prop types | additive, CC surface unchanged |
 | `reportsApi.ts` / `stores/reports.ts` | Senior export helper + state (when backend lands) | additive |
 | Backend: `ReviewController` + `ManagementReviewService` | additive `GET /queues/senior/sheets/{sheetId}` and sheet-summary read; authorization = active `SENIOR_MANAGER` assignments only; unknown/out-of-scope → same `404` (`FR-007-056`) | Backend-required; mirrors `costCenterSheet` (B001–B004) |
 | Backend: sheet gate | `allTransactionsCostCenterDecided` projection or queue filter | Backend-required + 001 `FR-037` amendment (recorded 2026-11-08) |
@@ -428,7 +433,7 @@ Ordered so the core surface works on connected data first, with backend batches 
 
 - **Stage 1 — Foundation (frontend)**: catalogue keys, `useSeniorQueue` (grouping/completeness/search/filter/sort — extends `useSheetQueue`, no parallel guard), unit tests. Works on `GET /queues/senior` connected data.
 - **Stage 2 — Sheet queue UI (frontend)**: `SeniorQueueView` sheet presentation + honest empty/unavailable/error states with retry; no incomplete flat-table fallback (owner D8). Baseline visual gate against `CostCenterQueueView.vue`.
-- **Stage 3 — Sheet modal + review surfaces (frontend)**: modal shell (queue stays mounted behind it), single-overlay stack, cards, details drawer, decision modal, thumbnails + preview reuse. Proof of CC-decision-at-transaction-level and no-overwrite invariants; modal close restores focus to the originating sheet row.
+- **Stage 3 — Sheet modal + review surfaces (frontend)**: shared `SheetDetailsModal` shell (Senior stage adapter; queue stays mounted behind it), single-overlay stack, `TransactionReviewCard`s, shared `TransactionDetailDrawer`, shared `DecisionConfirmation`, thumbnails + preview reuse. Proof of CC-decision-at-transaction-level and no-overwrite invariants; modal close restores focus to the originating sheet row. The modal exposes the canonical tabs: Transactions, Approvals, Overview, History.
 - **Stage 4 — Mobile + RTL**: 390px, Persian RTL, focus/`44px` targets, no horizontal scroll.
 - **Stage 5 — Filter/sort/export surface (frontend)**: two-level placement (queue = sheet search/filter; modal = transaction search + expense-type filter + sort with transaction-date ascending default and click-to-toggle direction) + an XLSX export control beside the close button that renders the guarded refusal when the capability is unavailable.
 - **Stage 6 — Backend capability (separately authorized)**: additive Senior sheet-summary/sheet-detail read + sheet-wide CC-completion gate (the narrow 001 `FR-037` visibility amendment was recorded 2026-11-08) + completed-sheet presentation status + backend tests; reconnect identity/submitted/eligibility surfaces.
@@ -572,6 +577,8 @@ No constitution violations (compatibility baseline now states the registered PHP
 - ~~Min/max amount semantics...~~ **Retired (2026-11-15)** — the owner-approved toolbar reconciliation removes currency and amount-range filters; the former D6 rule no longer applies.
 - ~~CC RETURNED notice...~~ **Resolved (D1)** — no "Waiting for Cost Center Review" surface; returned transactions just do not satisfy the gate.
 
+- **UXC-V2-FU-FOLLOWUP (owner-approved addition)** — "All cost centers" control: always shown when the user has assigned cost centers; selected by default; clicking All cost centers clears `selectedCenterId` and restores all authorized sheets/counts/amounts without a page refresh; search, status filters, and sorting remain intact. Cost-center options are loaded independently in `SeniorQueueView.vue` via `configurationStore.loadCostCenters()` (`#[NoAdminRequired]`, caller-scoped), not dependent on visiting `/admin/configuration`.
+
 Remaining: only the **separate backend authorization** for the three additive backend capabilities (Senior sheet reads, the sheet gate, Senior XLSX export). The FR-037 amendment wording and its acceptance record were **recorded in Feature 001 on 2026-11-08** and are no longer outstanding.
 
 ## Information Still Required Before Task Generation
@@ -581,6 +588,15 @@ Remaining: only the **separate backend authorization** for the three additive ba
 - Consent to proceed from planning to **task generation** (`/speckit-tasks`) and to create `tasks.md` under this feature directory.
 - Any Senior-specific design reference, or confirmation that `CostCenterQueueView.vue` is the agreed visual baseline (owner D9 preserves the approved modal-based, Cost-Sheet-first structure).
 - Confirmation that the current working-tree user changes (modified review/evidence components) are to be preserved and reused as the baseline for the Senior surfaces.
+
+## Follow-up — server-authoritative whole-sheet stage totals (owner-authorized 2026-11-20, not yet implemented)
+
+**Owner authorization**: `spec.md` `FR-007-057` — aggregate whole-Cost-Sheet stage-approved monetary disclosure for Cost Sheets already legitimately visible through the Senior review surface. **Contract**: the per-sheet read `GET /queues/senior/sheets/{sheetId}` requires `sheet.stageApprovedTotals` via an allOf extension on `SeniorManagerSheetReview.sheet` (`specs/001-pettycash-v1-core/contracts/ocs-api.yaml`); the shared `SeniorSheetSummary` stays without the property so the queue list rows (`SeniorSheetQueueItem`) neither carry nor pay for a per-sheet aggregate on a list page. Contract alignment is done (`UXC-7F-01`); implementation is `UXC-7F-03` in `specs/009-finance-manager-expense-review/ux-convergence-tasks.md`.
+
+- **No new endpoint; existing gates unchanged.** `ReviewController::seniorSheet` adds one response member. `ManagementReviewService::getSeniorSheetForManager`'s scope gates, the `allTransactionsCostCenterDecided` gate (owner D1), and `reviewStatus` (owner D5) are untouched; out-of-scope transactions remain absent from `transactions` and other seniors' individual decisions remain undisclosed.
+- **Backend reuse, no second rule**: the aggregate is derived by `SheetSummaryQuery::totalsForSheet()` → `SheetTotals::fromRows` (`lib/Domain/Expense/SheetTotals.php`) over the sheet's complete transaction set — the same source the senior read already uses for the sheet-wide gate's whole-set iteration (`ManagementReviewService.php` T025 pattern). One Money per stage in the sheet's single currency; a transaction counts toward a stage total only when that stage's authoritative decision on the **current active revision** is Approved, so a Return corrected and re-decided contributes only through its current-revision decision (correction behavior is covered by `UXC-7F-03`'s tests).
+- **Frontend consumption (UXC-7F-05)**: `SeniorQueueView.vue` builds the Approvals tab's stage states from `sheet.stageApprovedTotals` when present; `SheetApprovalsSummary.vue` unchanged; honest unavailable/known-zero fallback preserved; no client-side whole-sheet derivation.
+- **Testing (UXC-7F-03/06)**: backend — aggregate correctness over approve/reject/return/undecided mixes and the correction/current-revision rule; scope unchanged (same 404 for unknown/out-of-scope sheets); frontend — authoritative source retargeted with the fallback preserved (EN/FA, RTL/LTR unchanged).
 
 ---
 

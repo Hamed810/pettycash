@@ -72,6 +72,41 @@ final class DbWorkflowDecisionRepository implements WorkflowDecisionRepository
         return array_map([$this, 'mapRow'], $rows);
     }
 
+    /**
+     * Every decision attached to a set of transactions, in one batched read (T016/T018).
+     *
+     * The completed Cost Sheet detail renders the full decision history per transaction; a
+     * per-transaction `findByTransactionId()` read would make the detail endpoint N+1 in the
+     * number of transactions on the sheet. The rows are returned in stored order so the caller can
+     * present them chronologically without a second sort, and an empty input returns an empty list
+     * without issuing a query.
+     *
+     * @param list<int> $transactionDbIds surrogate `pettycash_transactions.id` values
+     * @return list<WorkflowDecision>
+     */
+    public function findByTransactionIds(array $transactionDbIds): array
+    {
+        $transactionDbIds = array_values(array_unique(array_filter(
+            $transactionDbIds,
+            static fn (?int $id): bool => $id !== null
+        )));
+
+        if ($transactionDbIds === []) {
+            return [];
+        }
+
+        $qb = $this->connection->getQueryBuilder();
+        $qb->select('d.*')
+            ->from('pettycash_workflow_decisions', 'd')
+            ->join('d', 'pettycash_transaction_revisions', 'r', $qb->expr()->eq('d.revision_id', 'r.id'))
+            ->join('r', 'pettycash_transactions', 't', $qb->expr()->eq('r.transaction_id', 't.id'))
+            ->where($qb->expr()->in('t.id', $qb->createNamedParameter($transactionDbIds, IQueryBuilder::PARAM_INT_ARRAY)))
+            ->orderBy('t.id', 'ASC')
+            ->addOrderBy('d.decided_at', 'ASC');
+        $rows = $qb->executeQuery()->fetchAllAssociative();
+        return array_map([$this, 'mapRow'], $rows);
+    }
+
     /** @return list<WorkflowDecision> */
     public function findByRevisionAndStage(int $revisionId, WorkflowStage $stage): array
     {

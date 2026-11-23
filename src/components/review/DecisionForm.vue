@@ -84,6 +84,7 @@ const props = defineProps<Props>()
 const emit = defineEmits<{
 	(e: 'submit-decision', payload: { decision: string; explanation: string; commandId: string }): void
 	(e: 'cancel'): void
+	(e: 'decision-error', error: unknown): void
 }>()
 
 const reviewsStore = useReviewsStore()
@@ -154,7 +155,7 @@ async function submitDecision() {
 			commandId: decisionCommandId,
 		})
 	} catch (error) {
-		console.error('Failed to record decision:', error)
+		emit('decision-error', error)
 	} finally {
 		submitting.value = false
 	}

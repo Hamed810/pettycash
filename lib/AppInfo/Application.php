@@ -19,6 +19,7 @@ use OCA\PettyCash\Application\Expense\DeleteSheet;
 use OCA\PettyCash\Application\Expense\SheetService;
 use OCA\PettyCash\Application\Expense\TransactionService;
 use OCA\PettyCash\Application\Evidence\EvidenceService;
+use OCA\PettyCash\Application\Evidence\EvidenceContentAccess;
 use OCA\PettyCash\Application\Evidence\EvidenceVisibility;
 use OCA\PettyCash\Application\Port\AuditWriter;
 use OCA\PettyCash\Application\Port\CurrentUser;
@@ -28,6 +29,7 @@ use OCA\PettyCash\Application\Port\RequestRoute;
 use OCA\PettyCash\Application\Port\RetentionPolicyStore;
 use OCA\PettyCash\Application\Port\TransientExportStore;
 use OCA\PettyCash\Application\Port\TransactionManager;
+use OCA\PettyCash\Application\Port\SheetPostedAmountsReader;
 use OCA\PettyCash\Application\Port\UserDirectory;
 use OCA\PettyCash\Application\Audit\RetentionPolicyService;
 use OCA\PettyCash\Controller\ExportController;
@@ -39,6 +41,13 @@ use OCA\PettyCash\Application\Reporting\AuditSelectionQuery;
 use OCA\PettyCash\Application\Reporting\CompleteSheetExport;
 use OCA\PettyCash\Application\Reporting\EvidenceSelectionQuery;
 use OCA\PettyCash\Application\Security\AuthorizationService;
+use OCA\PettyCash\Application\Finance\CompletedSheetScope;
+use OCA\PettyCash\Application\Finance\CompletedSheetHistoryService;
+use OCA\PettyCash\Application\Finance\FinanceAccess;
+use OCA\PettyCash\Application\Finance\FinanceLedgerService;
+use OCA\PettyCash\Application\Finance\FinanceRead;
+use OCA\PettyCash\Application\Finance\HolderDirectoryService;
+use OCA\PettyCash\Infrastructure\Persistence\Finance\FinanceReadQuery;
 use OCA\PettyCash\Application\Workflow\FinanceQueue;
 use OCA\PettyCash\Application\Workflow\FinanceSettlementService;
 use OCA\PettyCash\Application\Workflow\ManagementReviewService;
@@ -338,12 +347,19 @@ final class Application extends App implements IBootstrap
             return new SheetSummaryQuery($c->query(IDBConnection::class));
         });
 
+        // `SheetPostedAmountsReader` is the read port the completed-history service depends on;
+        // it resolves to the same `SheetSummaryQuery` instance so the two cannot drift.
+        $context->registerService(SheetPostedAmountsReader::class, function ($c) {
+            return $c->query(SheetSummaryQuery::class);
+        });
+
         // The single source of truth for the sheet OCS payload, for the same reason the transaction
         // formatter exists: the contract requires `totals`, and a private copy of this mapping in
         // SheetController had already drifted away from it.
         $context->registerService(SheetPayloadFormatter::class, function ($c) {
             return new SheetPayloadFormatter(
                 $c->query(SheetSummaryQuery::class),
+                $c->query(ExpenseSheetRepository::class),
                 $c->query(ExpenseTransactionRepository::class),
                 $c->query(CurrencyRepository::class),
                 // `SheetSummary.ownerDisplayName` is resolved rather than emitted as a literal, through
@@ -407,6 +423,80 @@ final class Application extends App implements IBootstrap
         // Authorization service
         $context->registerService(AuthorizationService::class, function ($c) {
             return new AuthorizationService();
+        });
+
+        // Feature 008 (T004): the single reusable Finance authorization primitive. Registered
+        // explicitly (same pattern as every other application service here) so the Finance read
+        // surfaces and the completed-history evidence branch all resolve the one gate. Answering
+        // "does the authenticated actor hold an effective FINANCE assignment" reads the session user
+        // through `CurrentUser` and the active assignment lookup through `RoleAssignmentRepository`;
+        // platform-administrator status is deliberately not consulted.
+        $context->registerService(FinanceAccess::class, function ($c) {
+            return new FinanceAccess(
+                $c->query(RoleAssignmentRepository::class),
+                $c->query(CurrentUser::class),
+                $c->query(\OCA\PettyCash\Domain\Shared\Clock::class)
+            );
+        });
+
+        // Feature 008 (T005): the single shared completed-history scope predicate, reused by the
+        // completed-sheet detail read and the evidence-content branch so the two cannot drift.
+        $context->registerService(CompletedSheetScope::class, function ($c) {
+            return new CompletedSheetScope(
+                $c->query(ExpenseSheetRepository::class),
+                $c->query(ExpenseTransactionRepository::class)
+            );
+        });
+
+        // Feature 008 (T006/T007/T008): the set-based Finance read projections behind the holder
+        // directory and the holder-account read. Registered explicitly because it takes the
+        // connection, which the container cannot resolve on its own — the same reason
+        // `SheetSummaryQuery` is registered. Grouped holder reads and batched account activity live
+        // here rather than on the account repositories, which stay focused on the aggregate they own.
+        $context->registerService(FinanceReadQuery::class, function ($c) {
+            return new FinanceReadQuery($c->query(IDBConnection::class));
+        });
+
+        // The Application-layer Finance read services depend on the `FinanceRead` port, which resolves
+        // to the same `FinanceReadQuery` instance the explicit registration above builds.
+        $context->registerService(FinanceRead::class, function ($c) {
+            return $c->query(FinanceReadQuery::class);
+        });
+
+        // Feature 008 (T006/T007): the holder directory read — holder population from account
+        // ownership, not the Nextcloud directory; account-scoped display-name/uid search.
+        $context->registerService(HolderDirectoryService::class, function ($c) {
+            return new HolderDirectoryService(
+                $c->query(FinanceRead::class),
+                $c->query(UserDirectory::class)
+            );
+        });
+
+        // Feature 008 (T008/T012/T013): the holder-account and ledger finance reads. Internal at this
+        // stage; the public Finance gate is composed at T009 from the existing `FinanceAccess`. The
+        // movement repository is injected because the ledger page and its independent total are
+        // movement facts, not holder projections.
+        $context->registerService(FinanceLedgerService::class, function ($c) {
+            return new FinanceLedgerService(
+                $c->query(AccountRepository::class),
+                $c->query(AccountMovementRepository::class),
+                $c->query(FinanceRead::class)
+            );
+        });
+
+        // T017/T018 — completed Cost Sheet history page and detail. Composed over the existing
+        // expense/evidence/workflow repositories plus the sheet-summary posted-amount projection.
+        $context->registerService(CompletedSheetHistoryService::class, function ($c) {
+            return new CompletedSheetHistoryService(
+                $c->query(ExpenseSheetRepository::class),
+                $c->query(ExpenseTransactionRepository::class),
+                $c->query(WorkflowDecisionRepository::class),
+                $c->query(EvidenceRepository::class),
+                $c->query(SheetPostedAmountsReader::class),
+                $c->query(UserDirectory::class),
+                $c->query(CompletedSheetScope::class),
+                $c->query(CurrencyRepository::class)
+            );
         });
 
         // T093 / FR-051 / FR-055: role-scoped reads over one transaction's
@@ -593,6 +683,16 @@ final class Application extends App implements IBootstrap
                 $c->query(AuthorizationService::class),
                 $c->query(RoleAssignmentRepository::class),
                 $c->query(CostCenterRepository::class)
+            );
+        });
+
+        // T020 — content-only, completed-history-scoped evidence read authorization. Composed only
+        // at `EvidenceController::content()`; no mutation method, no new route, no shape change.
+        $context->registerService(EvidenceContentAccess::class, function ($c) {
+            return new EvidenceContentAccess(
+                $c->query(EvidenceVisibility::class),
+                $c->query(FinanceAccess::class),
+                $c->query(CompletedSheetScope::class)
             );
         });
 

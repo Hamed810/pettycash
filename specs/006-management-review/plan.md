@@ -10,7 +10,20 @@ Replace the Cost Center Manager's flat, paginated transaction queue with a **she
 
 Phase 1 covers the queue desktop + mobile and stops at an owner visual gate. No backend file, contract, migration, authorization rule, or 001 requirement is edited by Phase 1.
 
-Phase 2 covers the inline quick-review workspace (§2.3) in five bounded batches, including **Batch 1: the required manager-scoped backend capability** (no longer deferred) and **Batch 2: the queue duplicate/pagination defect moved to the dedicated bug workflow**. Manager-scoped reads reconnect the sheet title/purchaser/submitted-date and decided/returned surfaces once Batch 1 lands, without changing the information architecture.
+Phase 2 covers the **shared canonical Sheet Review Workspace** (§2) in bounded batches, including **Batch 1: the required manager-scoped backend capability** (no longer deferred) and **Batch 2: the queue duplicate/pagination defect moved to the dedicated bug workflow**. Manager-scoped reads reconnect the sheet title/purchaser/submitted-date and decided/returned surfaces once Batch 1 lands, without changing the information architecture. Phase 2 uses the shared frontend primitives `SheetDetailsModal`, `TransactionReviewCard`, `TransactionDetailDrawer`, `PriorDecisionHistory`, `EvidencePreview`, and `DecisionConfirmation` reused by Cost Center, Senior Manager, and Finance Manager — not stage-specific duplicate modal/card implementations.
+
+### Canonical shared component architecture (aligned across 006 / 007 / 009)
+
+One shared architecture is reused by all three review roles; no role builds an independent modal, card, or drawer:
+
+- **`SheetDetailsModal`** — canonical modal shell over the mounted queue: header, sheet identity, status, owner where available, currency, first submitted date where available, transaction count, recorded amount, latest approved amount, tab navigation (Transactions, Approvals, Overview, History), focus trap, Escape, close, focus restoration, RTL/LTR, responsive layout. Stage-specific information is supplied through props/configuration/slots — never through a duplicated modal implementation.
+- **`TransactionReviewCard`** (generalized `QuickReviewCard`) — compact transaction card: title/description, amount + currency, cost center where relevant, transaction state, evidence count/thumbnails, prior-decision status indicators (`✓ Approved`, `✕ Rejected`, `↩ Returned`, `• No decision yet`). Clicking the transaction title opens `TransactionDetailDrawer`.
+- **`TransactionDetailDrawer`** (generalized `TransactionDetailsDrawer`) — one shared drawer: Transaction Details, Evidence, Previous Decisions (Cost Center / Senior Manager / Finance Manager shown separately, each with decision, actor, date/time, comment/explanation), Current Stage Actions. No hardcoded stage business logic; a thin stage adapter controls permitted actions.
+- **`PriorDecisionHistory`** — transaction-level decision history, distinct from the sheet-level Approvals aggregate.
+- **`EvidencePreview`** — shared evidence overlay (image/PDF/unknown, Previous/Next + `1/N`, inline-safe policy, download fallback).
+- **`DecisionConfirmation`** (generalized `QuickDecisionModal`) — shared single-transaction decision confirmation with per-kind copy, mandatory comment for Reject/Return, submitting state, `FR-085` idempotency.
+
+Sheet-level **Approvals** (approved monetary totals per workflow stage) and transaction-level **Previous Decisions** are explicitly different concepts and are never collapsed into one another.
 
 ## Technical Context
 
@@ -104,11 +117,13 @@ Switching to the transaction view loads page 1 at 25 rows; switching back re-run
 | Reviewed filter | disabled tab with an accessible reason |
 | Sheet-wide completion / Senior eligibility | not claimed in Phase 1; explained in the focus banner and reserved for Phase 2 |
 
-### D4 — Row activation
+### D4 — Row activation (shared modal, replaces inline expansion)
 
-A sheet row expands inline (disclosure) to list **only that manager's pending transactions** in the sheet. Each transaction links to the existing `review-detail` route with `stage: 'cost-center'`. There is no sheet-level Approve/Reject/Return and no "decide all". The expanded panel states that a sheet review workspace is the next milestone.
+A sheet row opens the shared **`SheetDetailsModal`** over the mounted queue (no route navigation; the queue stays mounted behind). The modal renders the canonical tabs (Transactions, Approvals, Overview, History) and lists the sheet's pending transactions as `TransactionReviewCard`s. Clicking a transaction title opens the shared **`TransactionDetailDrawer`** one layer above the modal (single-overlay rule). There is no sheet-level Approve/Reject/Return and no "decide all".
 
-This satisfies US1 #8 without starting Phase 2: the manager reaches a real transaction-level review path in two activations.
+This supersedes the former inline sheet-expansion disclosure (the previous D4 described an inline panel linking to `review-detail`). The inline-expansion path is removed as the canonical surface; `review-detail` deep links remain reachable where they do not contradict the sheet presentation.
+
+The modal's Transactions tab shows only that manager's pending transactions in the sheet. Stage-specific information is provided through props/configuration/slots on `SheetDetailsModal` rather than a duplicated modal implementation.
 
 ### D5 — Visual language
 
@@ -184,9 +199,9 @@ No constitution violations. The only added complexity — a completeness guard a
 
 ---
 
-## Phase 2 — Inline Quick Review (technical)
+## Phase 2 — Shared Sheet Review Workspace (canonical UX)
 
-**Spec**: `spec.md` §"Phase 2 — Inline Quick Review". **Design authority**: `docs/frontend-redesign/proposals/006-management-review-quick-review/UX_SPEC.md` + `mockups/`. **Gate**: no implementation before `T022` and the Phase 2 visual gate. **Compatibility constraint**: the mockup is a static harness with invented data; its `mockup.js` renderers MUST NOT be copied into production. Production reuses the existing Vue components, `TransactionDetail` reads, the `DecisionForm` decision semantic, the evidence preview overlay, and the `@nextcloud/vue` 9.x + Pettycash tokens, and adapts the design's interactions to the real data model and the honesty rules (`FR-006-011/015`, `FR-006-036…046`).
+**Spec**: `spec.md` §"Phase 2 — Sheet Review Workspace (Canonical Sheet UX)". **Design authority**: `docs/frontend-redesign/proposals/006-management-review-quick-review/UX_SPEC.md` + `mockups/`. **Gate**: no implementation before `T022` and the Phase 2 visual gate. **Compatibility constraint**: the mockup is a static harness with invented data; its `mockup.js` renderers MUST NOT be copied into production. Production reuses the shared frontend primitives `SheetDetailsModal`, `TransactionReviewCard`, `TransactionDetailDrawer`, `PriorDecisionHistory`, `EvidencePreview`, and `DecisionConfirmation` (generalized from the existing `QuickReviewCard`, `TransactionDetailsDrawer`, `QuickDecisionModal`, `EvidencePreview`), the existing Vue components, `TransactionDetail` reads, the `DecisionForm` decision semantic, and the evidence preview overlay, adapting the design's interactions to the real data model and the honesty rules (`FR-006-011/015`, `FR-006-036…046`).
 
 ### 2.1 Data model and backend boundary (verified)
 
@@ -195,18 +210,20 @@ No constitution violations. The only added complexity — a completeness guard a
 - `GET /sheets/{id}` is owner-only (`SheetService::getSheet`), so a manager-scoped sheet read is a required backend capability (**Batch 1**, `B001`). The read reuses `ExpenseSheetRepository` (sheet aggregate fields) and the existing authorization source: only cost centers for which the user holds an active `CostCenterManager` assignment (`RoleAssignmentRepository::findActiveByUserAndRole`, same source as `getCostCenterQueue`). Real fields exist in the domain: `ExpenseSheet::title`, `ownerUid`, `firstSubmittedAt` (genuine submission date, set at submit in `ExpenseSheet::submit`, `ExpenseSheet.php:117`, persisted `first_submitted_at`, exposed by `SheetPayloadFormatter` `submittedAt`), `submittedTotalMinor`. Purchaser display name comes from the `UserDirectory` port. Until Batch 1 lands these render unavailable/absent.
 - Merchant, paid-on, payment method and category are absent from `TransactionPayloadFormatter::summary`/`revisionFrom`; they remain unavailable placeholders (NOT in the required-capability scope, `spec.md` §2.4).
 
-### 2.2 Reuse map (existing components → Phase 2 surface)
+### 2.2 Reuse map (existing components → shared canonical surface)
 
 | Approved surface | Reuse / adapt | Gap to build |
 |---|---|---|
-| Collapsed queue row, scope banner, toolbar, fallback table | `CostCenterQueueView.vue`, `useSheetQueue`, `StatusBadge.vue`, `ResponsiveTable.vue` + `queueColumns.ts` | Rework summary to 2 stats and tabs to All/Awaiting/In progress; remove disabled "reviewed" stat (final decision #2) |
-| Quick-review panel (expanded) | `CostCenterQueueView.vue` expansion branch | Replace pending-only rows with compact `tx-card`s + footer note + Collapse (FR-006-036/038) |
-| Compact tx card + action bar | new `QuickReviewCard.vue`-style component; decision semantic from `DecisionForm.vue` | Card renderer; backend-required fields as unavailable; per-tx detail fetch for `allowedActions`/`version` |
-| Decision confirmation modal | `DecisionForm` logic (`requiresExplanation` = REJECT‖RETURN, `expectedVersion`, `commandId`/FR-085 via `reviewsStore.recordDecision`) | Per-kind copy/warning, submitting/error toast flow (FR-006-043) |
-| Full details drawer | `TransactionDetail`, `PriorDecisionHistory.vue` (history), `RevisionInfo.vue`/`TransactionHeader.vue` (field set) | Drawer overlay + Description/History tabs + footer decide controls (FR-006-042) |
+| Sheet Details Modal shell | new shared `SheetDetailsModal` over the mounted queue (replaces inline sheet expansion); header, identity, status, owner, currency, submitted date, transaction count, recorded amount, latest approved amount, tabs (Transactions/Approvals/Overview/History), focus trap, Escape, close, focus restoration, RTL/LTR, responsive | Stage config/slots per role; no per-role modal |
+| Compact transaction card | existing `QuickReviewCard.vue` generalized → `TransactionReviewCard` (adds Finance stage via stage adapter; prior-decision indicators `✓/✕/↩/•`) | Card generalization + cost-center/evidence/prior-decision cells |
+| Quick-review panel (expanded) | replaced by `SheetDetailsModal` Transactions tab; inline expansion removed | none (inline expansion deleted) |
+| Compact tx card + action bar | `QuickReviewCard`-style renderer; decision semantic from `DecisionForm` | Card renderer; backend-required fields as unavailable; per-tx detail fetch for `allowedActions`/`version` |
+| Decision confirmation modal | existing `QuickDecisionModal.vue` generalized → `DecisionConfirmation` (per-kind copy, `requiresExplanation` = REJECT‖RETURN, `expectedVersion`, `commandId`/FR-085 via `reviewsStore.recordDecision`) | Per-kind copy/warning, submitting/error toast flow (FR-006-043) |
+| Full details drawer | existing `TransactionDetailsDrawer.vue` generalized → `TransactionDetailDrawer` (Transaction Details / Evidence / Previous Decisions / Current Stage Actions; stage adapter controls actions) | Drawer overlay + sections; stage adapter per role |
 | Document thumbnails | `Evidence` type + `getEvidenceContent` + `isInlineSafeMediaType` | Thumbnail row + `+N more` tile (FR-006-040) |
-| Preview overlay | `EvidencePreview.vue`, `EvidenceContentPolicy`, `FR-060`/`FR-005-042` | Add Previous/Next + `1 / N` counter + open-at-doc (FR-006-041) |
+| Preview overlay | existing `EvidencePreview.vue`, `EvidenceContentPolicy`, `FR-060`/`FR-005-042` | Add Previous/Next + `1 / N` counter + open-at-doc (FR-006-041) |
 | Single-layer overlays, focus, RTL, mobile | `direction`, `formatMoney`, `formatSheetDate`/`formatNumber`, `EvidencePreview` focus trap/scrim | Overlay stack rules, RTL drawer mirror, mobile full-screen + expand-to-panel scroll (FR-006-037/044) |
+| Sheet-level Approvals tab | new; approved monetary totals per workflow stage (CC / Senior / Finance) from authoritative stage totals; NOT per-transaction history | Approvals aggregate (sheet-level, distinct from Previous Decisions) |
 
 ### 2.3 Build sequence — five bounded batches
 
@@ -231,3 +248,13 @@ Phase 2 is organized into five bounded batches. **Backend batches are prerequisi
 | Preview without navigation looked complete | add navigation only over a transaction's returned evidence; never fabricate a page |
 | Honesty drift on summary/tabs | connect every stat to the complete set; remove invented/disabled placeholders (final decision #2) |
 | Phase 2 starting before gates | plan stops at `T022` and the Phase 2 visual gate; no implementation task is marked runnable |
+
+### 2.5 Follow-up technical approach — server-authoritative whole-sheet stage totals (authorized 2026-11-20, not yet implemented)
+
+**Owner authorization**: `spec.md` §2.5 (`FR-006` aggregate disclosure for Cost Sheets already visible through the Cost Center review surface). **Contract**: additive `StageApprovedTotals` schema on `ManagerSheetSummary` (`specs/001-pettycash-v1-core/contracts/ocs-api.yaml`), already applied and generated (`UXC-7F-01`). **Tasks**: `UXC-7F-01/02` in `specs/009-finance-manager-expense-review/ux-convergence-tasks.md`.
+
+- **No new endpoint.** `GET /queues/cost-center/sheets/{sheetId}` (`ReviewController::costCenterSheet`) gains one additive response member: `sheet.stageApprovedTotals`.
+- **Backend reuse, no second rule**: `SheetPayloadFormatter` gains a small method wrapping the already-injected `SheetSummaryQuery::totalsForSheet(sheetDbId)`, which derives `SheetTotals` (`lib/Domain/Expense/SheetTotals.php::fromRows`) from the sheet's **complete** transaction set — the same source the owner-facing `GET /sheets/{id}` payload and the reports/exports already use. One Money per stage, in the sheet's own single-currency; a transaction counts toward a stage total only when that stage's authoritative decision on the **current active revision** is Approved.
+- **Authorization unchanged**: the service's scope gates (`ManagementReviewService::getCostCenterSheetForManager`) are untouched; the aggregate rides a read the reviewer is already entitled to call, and discloses no out-of-scope transaction, evidence, actor, comment, or individual decision. Out-of-scope transactions remain absent from `transactions`.
+- **Frontend consumption (UXC-7F-05)**: `CostCenterQueueView.vue` builds the Approvals tab's Cost Center/Senior/Finance states from `sheet.stageApprovedTotals` when present; `SheetApprovalsSummary.vue` is unchanged; the honest unavailable/known-zero fallback remains for missing/failed payloads; `src/utils/stageApprovals.ts` stays as the fallback/Finance path (no client-side whole-sheet derivation).
+- **Testing (UXC-7F-02/06)**: backend — aggregate equals `SheetTotals` figures over an approve/reject/return/undecided mix, superseded-revision approval excluded, out-of-scope transactions contribute to the aggregate without appearing in `transactions`; frontend — authoritative source retargeted with the fallback preserved (EN/FA, RTL/LTR unchanged).

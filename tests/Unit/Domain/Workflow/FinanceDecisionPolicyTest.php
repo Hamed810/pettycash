@@ -7,8 +7,9 @@ namespace OCA\PettyCash\Tests\Unit\Domain\Workflow;
 use OCA\PettyCash\Domain\Account\AccountMovement;
 use OCA\PettyCash\Domain\Account\PettyCashAccount;
 use OCA\PettyCash\Domain\Configuration\Currency;
-use OCA\PettyCash\Domain\Shared\Money;
 use OCA\PettyCash\Domain\Shared\CurrencyCode;
+use OCA\PettyCash\Domain\Shared\Enum\MovementType;
+use OCA\PettyCash\Domain\Shared\Money;
 use OCA\PettyCash\Domain\Workflow\Decision;
 use OCA\PettyCash\Domain\Workflow\FinanceDecisionPolicy;
 use OCA\PettyCash\Domain\Workflow\TransactionStatus;
@@ -196,5 +197,79 @@ final class FinanceDecisionPolicyTest extends TestCase
         $movement = AccountMovement::createConsumption('move-1', $amount, 'Test', $this->account, 'rev-1', 'dec-1');
 
         self::assertNotNull($movement->sourceRevisionId());
+    }
+
+    public function testAccountMovementConsumptionRequiresSourceRevision(): void
+    {
+        // A consumption read back from persistence without source revision provenance is
+        // unreadable: the domain rejects it rather than returning a movement with no source.
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Consumption source is required');
+
+        new AccountMovement(
+            'move-consume-nosource',
+            MovementType::Consumption,
+            Money::positive(2000, CurrencyCode::fromString('IRR')),
+            Money::positive(1000, CurrencyCode::fromString('IRR')),
+            'Consumption',
+            'cmd-1',
+            null, // sourceRevisionId: no source -> rejected
+            null, // occurredAt
+            null, // dbId
+            null, // publicId
+            'acc-1', // accountPublicId
+            'dec-1' // sourceDecisionId
+        );
+    }
+
+    public function testAccountMovementConsumptionAcceptsSourceRevision(): void
+    {
+        // A consumption carrying valid source revision provenance is accepted.
+        $movement = new AccountMovement(
+            'move-consume-withsource',
+            MovementType::Consumption,
+            Money::positive(2000, CurrencyCode::fromString('IRR')),
+            Money::positive(1000, CurrencyCode::fromString('IRR')),
+            'Consumption',
+            'cmd-1',
+            'rev-1', // sourceRevisionId
+            null, // occurredAt
+            null, // dbId
+            null, // publicId
+            'acc-1', // accountPublicId
+            'dec-1' // sourceDecisionId
+        );
+
+        self::assertSame('rev-1', $movement->sourceRevisionId());
+        self::assertSame('dec-1', $movement->sourceDecisionId());
+    }
+    public function testAccountMovementRejectsZeroAmount(): void
+    {
+        // Movement amount is a strictly positive magnitude; zero is rejected for both creation paths.
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Movement amount must be positive');
+
+        AccountMovement::createCharge(
+            'move-charge-zero',
+            Money::of(0, CurrencyCode::fromString('IRR')),
+            'Zero charge',
+            $this->account
+        );
+    }
+
+    public function testAccountMovementRejectsNegativeAmount(): void
+    {
+        // A negative magnitude must not be re-signed by the caller; direction is the movement type.
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Movement amount must be positive');
+
+        AccountMovement::createConsumption(
+            'move-consume-negative',
+            Money::of(-2000, CurrencyCode::fromString('IRR')),
+            'Negative consumption',
+            $this->account,
+            'rev-1',
+            'dec-1'
+        );
     }
 }

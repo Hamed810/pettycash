@@ -144,25 +144,32 @@ import { formatMoney } from '@/utils/money'
 import type { AllowedActions, DecisionResult, DecisionValue, Money } from '@/types/api'
 
 /**
- * T027 — the shared single-transaction decision confirmation.
+ * The shared single-transaction decision confirmation (UXC-5-04, generalized from the Senior
+ * flow's `QuickDecisionModal.vue`).
  *
- * Both entry points (the quick-review card and the details drawer) render this one modal, so the
- * copy, the FR-033 explanation rule, the submitting state and the completion behaviour cannot drift
- * between them. It posts exactly one transaction decision through `reviewsStore.recordDecision`
- * and owns no sheet-level mutation — that unit does not exist.
+ * Every stage's decision entry points render this one modal, so the per-kind copy, the FR-033
+ * explanation rule (mandatory for Reject/Return, optional for Approve), the submitting state and
+ * the completion behaviour cannot drift between stages or between the card and the drawer. It
+ * posts exactly one transaction decision through `reviewsStore.recordDecision` — one command
+ * identity per attempt (FR-085 first-write-wins) — and owns no sheet-level mutation and no
+ * stage-specific rule: which decisions a stage may offer arrives entirely through
+ * `allowedActions`.
  */
+
+/** The transaction snapshot the confirmation summarizes; every stage's adapter builds it. */
+export interface DecisionConfirmationTransaction {
+	id: string
+	title: string
+	sheetReference: string
+	amount: Money | null
+	expenseDate: string | null
+}
 
 interface Props {
 	open: boolean
 	decision: DecisionValue | null
 	/** The transaction the decision applies to, with the display fields the modal summarizes. */
-	transaction: {
-		id: string
-		title: string
-		sheetReference: string
-		amount: Money | null
-		expenseDate: string | null
-	} | null
+	transaction: DecisionConfirmationTransaction | null
 	/** The version the decision is optimistic against, from the guarded detail read (T026). */
 	expectedVersion?: number
 	/** Only an explicit server-granted `true` enables the confirm control (T026). */

@@ -65,6 +65,39 @@ final class DbEvidenceRepository implements EvidenceRepository
         return array_map([$this, 'mapRow'], $rows);
     }
 
+    /**
+     * Every evidence row attached to a set of transactions, in one batched read (T016/T018).
+     *
+     * The completed Cost Sheet detail shows evidence metadata per transaction, and a
+     * per-transaction `findByTransactionId()` read would make the detail endpoint N+1 in the
+     * number of transactions on the sheet. The rows are returned newest-first within each
+     * transaction so the caller can present them without a second sort, and an empty input
+     * returns an empty list without issuing a query.
+     *
+     * @param list<int> $transactionDbIds surrogate `pettycash_transactions.id` values
+     * @return list<Evidence>
+     */
+    public function findByTransactionIds(array $transactionDbIds): array
+    {
+        $transactionDbIds = array_values(array_unique(array_filter(
+            $transactionDbIds,
+            static fn (?int $id): bool => $id !== null
+        )));
+
+        if ($transactionDbIds === []) {
+            return [];
+        }
+
+        $qb = $this->connection->getQueryBuilder();
+        $qb->select('*')
+            ->from('pettycash_evidence')
+            ->where($qb->expr()->in('transaction_id', $qb->createNamedParameter($transactionDbIds, IQueryBuilder::PARAM_INT_ARRAY)))
+            ->orderBy('transaction_id', 'ASC')
+            ->addOrderBy('uploaded_at', 'DESC');
+        $rows = $qb->executeQuery()->fetchAllAssociative();
+        return array_map([$this, 'mapRow'], $rows);
+    }
+
     /** @return list<Evidence> */
     public function findByRevisionId(int $revisionId): array
     {

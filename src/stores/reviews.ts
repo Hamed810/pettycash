@@ -14,6 +14,7 @@ import type {
 import { ApiError } from '@/types/api'
 import * as reviewsApi from '@/services/reviewsApi'
 import type { SeniorSheetListPage, TransactionPage } from '@/services/reviewsApi'
+import { checkFinanceQueueCompleteness, type FinanceQueueCompleteness } from '@/composables/useFinanceQueue'
 import { requestExport } from '@/services/reportsApi'
 
 /**
@@ -35,6 +36,13 @@ export const useReviewsStore = defineStore('reviews', () => {
    */
   const seniorQueue = ref<SeniorSheetListPage>({ items: [], page: 1, pageSize: 25, total: 0 })
   const financeQueue = ref<TransactionPage>({ items: [], page: 1, pageSize: 25, total: 0 })
+  /**
+   * Whether the accumulated Finance queue response is the complete finance-eligible pending set.
+   *
+   * `null` until the first load succeeds; `complete: false` means the set is truncated and the
+   * sheet projection must render an honest unavailable state rather than partial rows.
+   */
+  const financeQueueCompleteness = ref<FinanceQueueCompleteness | null>(null)
   const returnsQueue = ref<TransactionPage>({ items: [], page: 1, pageSize: 25, total: 0 })
   const selectedTransaction = ref<TransactionDetail | null>(null)
   /**
@@ -57,8 +65,8 @@ export const useReviewsStore = defineStore('reviews', () => {
   const managerTransactionDetails = ref<Record<string, TransactionDetail>>({})
   /**
    * How the last read of each transaction ended. `forbidden` (the server refused) and `notFound`
-   * (no such transaction in scope) stay distinct so the drawer can render a refusal as a refusal,
-   * and `unavailable` covers every other failure without inventing which one it was.
+   * (no such transaction in scope) stay distinct so the inline expansion can render a refusal as a
+   * refusal, and `unavailable` covers every other failure without inventing which one it was.
    */
   const managerTransactionReads = ref<Record<string, ManagerTransactionReadState>>({})
   /**
@@ -277,10 +285,13 @@ export const useReviewsStore = defineStore('reviews', () => {
   async function fetchFinanceQueue(params: reviewsApi.QueueParams = { stage: 'finance' }) {
     loading.value = true
     error.value = null
+    financeQueueCompleteness.value = null
     try {
-      financeQueue.value = await reviewsApi.fetchQueue(params)
+      financeQueue.value = await reviewsApi.fetchAllFinanceQueues(params.pageSize)
+      financeQueueCompleteness.value = checkFinanceQueueCompleteness(financeQueue.value)
     } catch (e: unknown) {
       error.value = e instanceof Error ? e.message : 'Failed to fetch finance queue'
+      financeQueueCompleteness.value = null
       throw e
     } finally {
       loading.value = false
@@ -343,6 +354,7 @@ export const useReviewsStore = defineStore('reviews', () => {
     costCenterQueue,
     seniorQueue,
     financeQueue,
+    financeQueueCompleteness,
     returnsQueue,
     selectedTransaction,
     managerSheetReviews,

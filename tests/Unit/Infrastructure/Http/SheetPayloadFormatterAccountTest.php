@@ -129,6 +129,7 @@ final class SheetPayloadFormatterAccountTest extends TestCase
 
         return new SheetPayloadFormatter(
             $summaryQuery,
+            $this->createStub(ExpenseSheetRepository::class),
             $this->createStub(ExpenseTransactionRepository::class),
             $this->createStub(CurrencyRepository::class),
             $userDirectory,

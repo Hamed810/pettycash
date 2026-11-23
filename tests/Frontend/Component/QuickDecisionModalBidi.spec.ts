@@ -1,10 +1,11 @@
-// QuickDecisionModal — RTL mixed-direction value isolation (BUG-04).
+// DecisionConfirmation — RTL mixed-direction value isolation (BUG-04; retargeted at UXC-8-04 from
+// the removed QuickDecisionModal suite, which the shared confirmation generalized).
 //
 // The shared decision confirmation renders LTR values (the sheet UUID reference and the money
 // amount) inside a Persian RTL modal. BUG-04: those values were wrapped in a bare `<bdi>`, which
 // only isolates with the base (RTL) direction, so the LTR tokens rendered in the wrong order. The
-// fix puts `dir="ltr"` on the reference and amount `<bdi>`s (matching the parent senior modal's
-// `senior-modal__reference` pattern) while the surrounding Persian text stays RTL.
+// fix puts `dir="ltr"` on the reference and amount `<bdi>`s (matching the parent sheet modal's
+// `sheet-details-modal__reference` pattern) while the surrounding Persian text stays RTL.
 //
 // jsdom cannot measure bidi geometry — this spec pins the authoritative attributes (the same source
 // the run-time unit produces); the live Chrome guard adds the geometric/bounds check.
@@ -12,7 +13,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import QuickDecisionModal from '@/components/review/QuickDecisionModal.vue'
+import DecisionConfirmation from '@/components/review/DecisionConfirmation.vue'
 
 const l10n = vi.hoisted(() => ({
 	t: vi.fn((_app: string, text: string) => text),
@@ -61,7 +62,7 @@ const SHEET_REF = '630a6e00-f7ca-43d7-9bb4-002ce19bfc6b'
 function mountModal(overrides: Record<string, unknown> = {}) {
 	const pinia = createPinia()
 	setActivePinia(pinia)
-	return mount(QuickDecisionModal, {
+	return mount(DecisionConfirmation, {
 		props: {
 			open: true,
 			decision: 'APPROVE',
@@ -80,7 +81,7 @@ function mountModal(overrides: Record<string, unknown> = {}) {
 	})
 }
 
-describe('QuickDecisionModal RTL bidi (BUG-04)', () => {
+describe('DecisionConfirmation RTL bidi (BUG-04)', () => {
 	beforeEach(() => {
 		document.body.innerHTML = ''
 	})

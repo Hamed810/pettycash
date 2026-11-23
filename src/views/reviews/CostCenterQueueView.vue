@@ -15,18 +15,8 @@
 				<h2 class="queue-header__title">
 					{{ viewMode === 'sheets' ? t('pettycash', 'reviews.sheetQueue.title') : t('pettycash', 'reviews.sheetQueue.transactionView') }}
 				</h2>
-				<p class="queue-header__subtitle">
-					{{ viewMode === 'sheets' ? t('pettycash', 'reviews.sheetQueue.subtitle') : t('pettycash', 'reviews.sheetQueue.transactionViewHint') }}
-				</p>
 			</div>
 			<div class="queue-header__aside">
-				<span class="role-badge" data-testid="role-badge">
-					<span class="role-badge__dot" aria-hidden="true" />
-					{{ t('pettycash', 'reviews.sheetQueue.roleBadge') }}
-				</span>
-				<NcButton v-if="viewMode === 'sheets'" data-testid="show-transactions-btn" @click="showTransactions">
-					{{ t('pettycash', 'reviews.sheetQueue.showTransactions') }}
-				</NcButton>
 				<NcButton :disabled="loading" data-testid="refresh-btn" @click="refresh">
 					<template #icon>
 						<NcIconSvgWrapper :path="mdiRefresh" />
@@ -35,22 +25,6 @@
 				</NcButton>
 			</div>
 		</header>
-
-		<section class="responsibility" data-testid="responsibility-banner">
-			<span class="responsibility__icon" aria-hidden="true">
-				<NcIconSvgWrapper :path="mdiShieldCheckOutline" :size="20" />
-			</span>
-			<div class="responsibility__body">
-				<h3 class="responsibility__title">{{ t('pettycash', 'reviews.sheetQueue.banner.title') }}</h3>
-				<p class="responsibility__text">{{ t('pettycash', 'reviews.sheetQueue.banner.body') }}</p>
-			</div>
-			<div v-if="managedCostCenters.length > 0" class="scope" data-testid="cost-center-scope">
-				<span class="scope__label">{{ t('pettycash', 'reviews.sheetQueue.scopeLabel') }}</span>
-				<ul class="scope__list">
-					<li v-for="code in managedCostCenters" :key="code" class="scope__item">{{ code }}</li>
-				</ul>
-			</div>
-		</section>
 
 		<section v-if="viewMode === 'sheets'" class="sheet-panel" data-testid="sheet-queue">
 			<div v-if="loading" class="queue-state" data-testid="loading">
@@ -76,7 +50,7 @@
 			</div>
 
 			<NcEmptyContent
-				v-else-if="sheetItems.length === 0 && searchQuery.trim() === ''"
+				v-else-if="visibleSheets.length === 0 && searchQuery.trim() === ''"
 				:name="t('pettycash', 'reviews.sheetQueue.empty.title')"
 				:description="t('pettycash', 'reviews.sheetQueue.empty.body')"
 				data-testid="empty-queue"
@@ -109,283 +83,96 @@
 					</article>
 				</div>
 
-				<div class="sheet-card">
-					<div class="sheet-card__header">
-						<div>
-							<h3 class="sheet-card__title">{{ t('pettycash', 'reviews.sheetQueue.yourSheets') }}</h3>
-							<p class="sheet-card__description">{{ t('pettycash', 'reviews.sheetQueue.description') }}</p>
-						</div>
-						<span class="sheet-card__count" data-testid="sheet-count">
-							{{ t('pettycash', 'reviews.sheetQueue.queueCount', { count: formatNumber(sheetItems.length) }) }}
-						</span>
-					</div>
-
-					<div class="toolbar">
-						<label class="search">
-							<span class="search__icon" aria-hidden="true">
-								<NcIconSvgWrapper :path="mdiMagnify" :size="18" />
-							</span>
+			<div class="senior-queue-toolbar" data-testid="senior-queue-toolbar">
+						<div class="senior-queue-search" data-testid="senior-queue-search-field">
 							<input
-								v-model="searchQuery"
-								class="search__input"
 								type="search"
+								class="senior-queue-search__input"
+								:value="searchQuery"
 								:placeholder="t('pettycash', 'reviews.sheetQueue.searchPlaceholder')"
 								:aria-label="t('pettycash', 'reviews.sheetQueue.searchLabel')"
 								data-testid="sheet-search"
+								@input="onQueueSearchInput"
 							>
-						</label>
+							<NcButton
+								v-if="searchQuery !== ''"
+								variant="tertiary"
+								size="small"
+								data-testid="senior-queue-search-clear"
+								@click="clearQueueSearch"
+							>
+								{{ t('pettycash', 'reviews.sheetQueue.clearSearch') }}
+							</NcButton>
+						</div>
 
-						<div class="tabs" role="tablist" :aria-label="t('pettycash', 'reviews.sheetQueue.tabsLabel')">
+						<div
+							class="senior-queue-tabs"
+							role="group"
+							:aria-label="t('pettycash', 'reviews.sheetQueue.tabsLabel')"
+							data-testid="senior-queue-tabs"
+						>
 							<button
 								v-for="tab in tabs"
 								:key="tab.key"
 								type="button"
-								role="tab"
-								class="tab"
-								:class="{ 'tab--active': activeTab === tab.key }"
-								:aria-selected="activeTab === tab.key"
-								:data-testid="`tab-${tab.key}`"
-								@click="activeTab = tab.key"
+								class="senior-queue-tabs__tab"
+								:class="{ 'senior-queue-tabs__tab--active': sheetStatusTab === tab.key }"
+								:data-testid="`sheet-queue-tab-${tab.key}`"
+								@click="setQueueTab(tab.key)"
 							>
-								{{ tab.label }}
-								<span v-if="tab.count !== null" class="tab__count">{{ formatNumber(tab.count) }}</span>
+								{{ t('pettycash', tab.labelKey) }}
 							</button>
 						</div>
 
-						<label class="sort">
-							<span class="sort__label">{{ t('pettycash', 'reviews.sheetQueue.sortLabel') }}</span>
-							<NcSelect
-								:model-value="sort"
-								:options="sortOptions"
-								:reduce="selectOptionValue"
-								:get-option-key="selectOptionKey"
-								:clearable="false"
-								:dir="direction"
-								:input-label="t('pettycash', 'reviews.sheetQueue.sortLabel')"
-								label-outside
-								class="sort__select"
-								data-testid="sheet-sort"
-								@update:model-value="onSortChange"
-							/>
-						</label>
-					</div>
-
-					<p class="availability-note" data-testid="manager-scope-note">
-						{{ t('pettycash', 'reviews.sheetQueue.scopeNote') }}
-					</p>
-
-					<div v-if="sheetItems.length === 0" class="queue-state queue-state--empty" data-testid="no-search-results">
-						<p>{{ t('pettycash', 'reviews.sheetQueue.noResults') }}</p>
-						<NcButton @click="searchQuery = ''">{{ t('pettycash', 'reviews.sheetQueue.clearSearch') }}</NcButton>
-					</div>
-
-					<template v-else>
-						<div class="sheet-list__head" aria-hidden="true">
-							<span>{{ t('pettycash', 'reviews.sheetQueue.sheet') }}</span>
-							<span>{{ t('pettycash', 'reviews.sheetQueue.purchaser') }}</span>
-							<span class="sheet-list__head--numeric">{{ t('pettycash', 'reviews.sheetQueue.yourTransactions') }}</span>
-							<span class="sheet-list__head--numeric">{{ t('pettycash', 'reviews.sheetQueue.relevantAmount') }}</span>
-							<span>{{ t('pettycash', 'reviews.sheetQueue.status') }}</span>
-							<span class="sheet-list__head--numeric">{{ t('pettycash', 'reviews.sheetQueue.submitted') }}</span>
-							<span />
-						</div>
-
-						<ul class="sheet-list" data-testid="sheet-list">
-							<li
-								v-for="sheet in sheetItems"
-								:key="sheet.sheetId || 'unresolved'"
-								class="sheet-row"
-								:data-testid="`sheet-row-${sheet.sheetId || 'unresolved'}`"
+						<div class="center-filter" data-testid="center-filter">
+							<span class="center-filter__label">
+								{{ t('pettycash', 'reviews.sheetQueue.costCenterFilter.label') }}
+							</span>
+							<button
+								v-if="filterableCenters.length > 0"
+								type="button"
+								class="center-filter__chip"
+								:class="{ 'center-filter__chip--active': selectedCenterCode === '' }"
+								:aria-pressed="selectedCenterCode === ''"
+								data-testid="center-filter-chip-all"
+								@click="selectedCenterCode = ''"
 							>
-								<button
-									type="button"
-									class="sheet-row__summary"
-									:aria-expanded="expandedSheetId === sheet.sheetId"
-									:aria-controls="detailId(sheet)"
-									:aria-label="expandedSheetId === sheet.sheetId
-										? t('pettycash', 'reviews.sheetQueue.collapse', { reference: sheetReference(sheet) })
-										: t('pettycash', 'reviews.sheetQueue.expand', { reference: sheetReference(sheet) })"
-									@click="toggleSheet(sheet.sheetId)"
-								>
-									<span class="sheet-row__identity">
-										<span class="sheet-row__icon" aria-hidden="true">
-											<NcIconSvgWrapper :path="mdiFileDocumentOutline" :size="20" />
-										</span>
-										<span class="sheet-row__text">
-											<span
-												class="sheet-row__title"
-												:class="{ 'sheet-row__title--unavailable': !sheetTitleAvailable(sheet) }"
-												data-testid="sheet-title"
-												:title="sheetTitleAvailable(sheet) ? sheetTitle(sheet) : t('pettycash', 'reviews.sheetQueue.unavailableField')"
-											>
-												{{ sheetTitle(sheet) }}
-											</span>
-											<span class="sheet-row__meta-line">
-												<span class="sheet-row__reference" data-testid="sheet-reference" :title="sheet.sheetId || undefined">
-													{{ shortenedReference(sheet) }}
-												</span>
-												<span class="sheet-row__meta">{{ costCenterLabel(sheet) }}</span>
-											</span>
-										</span>
-									</span>
+								{{ t('pettycash', 'reviews.sheetQueue.costCenterFilter.all') }}
+							</button>
+							<button
+								v-for="center in filterableCenters"
+								:key="center.code"
+								type="button"
+								class="center-filter__chip"
+								:class="{ 'center-filter__chip--active': selectedCenterCode === center.code }"
+								:aria-pressed="selectedCenterCode === center.code"
+								:data-testid="`center-filter-chip-${center.code}`"
+								@click="selectedCenterCode = center.code"
+							>
+								{{ center.name }}
+							</button>
+						</div>
+					</div>
 
-									<span class="sheet-row__metrics">
-										<span class="metric metric--purchaser" data-testid="sheet-purchaser">
-											<span class="metric__label">{{ t('pettycash', 'reviews.sheetQueue.purchaser') }}</span>
-											<span class="purchaser">
-												<span v-if="purchaserInitials(sheet) !== ''" class="purchaser__avatar purchaser__avatar--named" aria-hidden="true">
-													{{ purchaserInitials(sheet) }}
-												</span>
-												<span v-else class="purchaser__avatar" aria-hidden="true">
-													<NcIconSvgWrapper :path="mdiAccountOutline" :size="16" />
-												</span>
-												<span
-													class="purchaser__name"
-													:class="{ 'purchaser__name--unavailable': !purchaserName(sheet) }"
-													:title="purchaserName(sheet) || t('pettycash', 'reviews.sheetQueue.unavailableField')"
-													data-testid="sheet-purchaser-name"
-												>
-													{{ purchaserName(sheet) || t('pettycash', 'reviews.sheetQueue.purchaserUnavailable') }}
-												</span>
-											</span>
-										</span>
-										<span class="metric metric--numeric" data-testid="sheet-transaction-count">
-											<span class="metric__label">{{ t('pettycash', 'reviews.sheetQueue.yourTransactions') }}</span>
-											<span class="metric__value">{{ formatNumber(sheet.transactionCount) }}</span>
-										</span>
-										<span class="metric metric--numeric" data-testid="sheet-amount">
-											<span class="metric__label">{{ t('pettycash', 'reviews.sheetQueue.relevantAmount') }}</span>
-											<span v-for="total in sheet.totals" :key="total.currency" class="metric__value metric__value--money">
-												{{ formatMoney(total) }}
-											</span>
-										</span>
-										<span class="metric" data-testid="sheet-status">
-											<span class="metric__label">{{ t('pettycash', 'reviews.sheetQueue.status') }}</span>
-											<StatusBadge status="COST_CENTER" :label="sheetStatusLabel(sheet)" />
-										</span>
-										<span class="metric metric--numeric metric--submitted" data-testid="sheet-submitted">
-											<span class="metric__label">{{ t('pettycash', 'reviews.sheetQueue.submitted') }}</span>
-											<span
-												class="metric__value"
-												:class="{ 'metric__value--muted': !sheetSubmittedAt(sheet) }"
-												:title="sheetSubmittedAt(sheet) ? undefined : t('pettycash', 'reviews.sheetQueue.unavailableField')"
-											>
-												{{ sheetSubmittedLabel(sheet) }}
-											</span>
-										</span>
-									</span>
+					<div v-if="visibleSheets.length === 0" class="senior-queue-no-results" data-testid="no-search-results">
+						{{ t('pettycash', 'reviews.sheetQueue.noResults') }}
+					</div>
 
-									<span class="sheet-row__chevron" aria-hidden="true">
-										<NcIconSvgWrapper :path="expandedSheetId === sheet.sheetId ? mdiChevronUp : mdiChevronDown" :size="20" />
-									</span>
-								</button>
-
-								<div
-									v-if="expandedSheetId === sheet.sheetId"
-									:id="detailId(sheet)"
-									class="sheet-row__detail quick-review"
-									:data-testid="`sheet-detail-${sheet.sheetId || 'unresolved'}`"
-								>
-									<header class="quick-review__head">
-										<div class="quick-review__heading">
-											<p class="quick-review__eyebrow">{{ t('pettycash', 'reviews.quickReview.eyebrow') }}</p>
-											<h3 class="quick-review__title">
-												<span
-													:class="{ 'quick-review__title--unavailable': !sheetTitleAvailable(sheet) }"
-													data-testid="quick-review-sheet-title"
-												>
-													{{ sheetTitle(sheet) }}
-												</span>
-												<bdi class="quick-review__reference" data-testid="quick-review-sheet-reference">
-													{{ shortenedReference(sheet) }}
-												</bdi>
-											</h3>
-											<p class="quick-review__meta">
-												<span data-testid="quick-review-purchaser">{{ purchasedByLabel(sheet) }}</span>
-												<span class="quick-review__scope" data-testid="quick-review-scope">
-													{{ t('pettycash', 'reviews.quickReview.scope', { scope: costCenterLabel(sheet) }) }}
-												</span>
-												<span data-testid="quick-review-submitted">{{ sheetSubmittedLabel(sheet) }}</span>
-											</p>
-										</div>
-										<NcButton
-											variant="tertiary"
-											data-testid="collapse-sheet-btn"
-											@click="collapseSheet(sheet)"
-										>
-											{{ t('pettycash', 'reviews.quickReview.collapse') }}
-										</NcButton>
-									</header>
-
-									<p
-										v-if="sheetReview(sheet)"
-										class="quick-review__progress"
-										data-testid="quick-review-progress"
-									>
-										{{ t('pettycash', 'reviews.quickReview.progress', {
-											decided: formatNumber(sheetReview(sheet)?.progress.decidedByManager ?? 0),
-											total: formatNumber(sheetReview(sheet)?.progress.total ?? 0),
-										}) }}
-										<span v-if="(sheetReview(sheet)?.progress.returnedForCorrection ?? 0) > 0" class="quick-review__progress-extra">
-											· {{ t('pettycash', 'reviews.quickReview.returnedCount', {
-												count: formatNumber(sheetReview(sheet)?.progress.returnedForCorrection ?? 0),
-											}) }}
-										</span>
-									</p>
-
-									<div v-if="!sheetReview(sheet) && isDetailLoading(sheet)" class="quick-review__state" data-testid="quick-review-loading">
-										<NcLoadingIcon :size="28" />
-										<p>{{ t('pettycash', 'reviews.quickReview.loading') }}</p>
-									</div>
-
-									<div v-else-if="!sheetReview(sheet)" class="quick-review__state quick-review__state--unavailable" data-testid="quick-review-details-unavailable">
-										<NcIconSvgWrapper :path="mdiAlertCircle" :size="28" class="queue-state__icon--warning" />
-										<p>{{ t('pettycash', 'reviews.quickReview.detailsUnavailable') }}</p>
-										<p class="quick-review__state-note">{{ t('pettycash', 'reviews.quickReview.fallbackNote') }}</p>
-									</div>
-
-									<ul class="quick-review__cards" data-testid="quick-review-cards">
-										<li
-											v-for="transaction in panelTransactions(sheet)"
-											:key="transaction.id"
-											class="quick-review__card-item"
-											:data-testid="`sheet-transaction-${transaction.id}`"
-										>
-											<QuickReviewCard
-												:transaction="transaction"
-												:manager-state="transaction.managerState"
-												:manager-decision="transaction.managerDecision"
-												:evidence="transactionEvidence(transaction.id)"
-												:allowed-actions="transactionDetail(transaction.id)?.allowedActions ?? null"
-												:busy="submittingTransactionId === transaction.id"
-												@open-review="openTransaction"
-												@open-details="openDetails"
-												@open-preview="(evidenceId) => openPreviewFromCard(transaction, evidenceId)"
-												@decide="(kind) => openConfirm(transaction, kind)"
-											/>
-										</li>
-									</ul>
-
-									<p v-if="panelTransactions(sheet).length === 0" class="quick-review__state-note" data-testid="quick-review-no-transactions">
-										{{ t('pettycash', 'reviews.quickReview.noTransactions') }}
-									</p>
-
-									<div class="quick-review__footer" data-testid="quick-review-footer">
-										<NcIconSvgWrapper :path="mdiShieldCheckOutline" :size="18" aria-hidden="true" />
-										<p>
-											<strong>{{ t('pettycash', 'reviews.quickReview.footerTitle') }}</strong>
-											{{ t('pettycash', 'reviews.quickReview.footerBody') }}
-										</p>
-									</div>
-								</div>
-							</li>
-						</ul>
-					</template>
-
-					<p class="sheet-card__footnote" data-testid="relevant-amount-note">
-						{{ t('pettycash', 'reviews.sheetQueue.relevantAmountNote') }}
-					</p>
-				</div>
+					<div v-else class="sheet-card">
+						<ResponsiveTable
+							:columns="sheetColumns()"
+							:rows="visibleSheets"
+							:cell="sheetCell"
+							:row-key="sheetRowKey"
+							:caption="queueCaption"
+							:sort="sheetSort"
+							:on-sort="setSheetSort"
+							test-id="sheet-table"
+							test-id-prefix="costcenter-queue"
+							:row-test-id="sheetRowTestId"
+							:card-row-test-id="sheetCardRowTestId"
+						/>
+					</div>
 			</template>
 		</section>
 
@@ -451,71 +238,203 @@
 		</section>
 
 		<!--
-			T028: the Batch 4 overlay stack. Exactly one overlay is open at a time (single-overlay rule),
-			so the three layers below are mutually exclusive on `activeOverlay`. Only the details drawer
-			and the confirmation modal live here permanently; the evidence preview overlay is the same
-			EvidencePreview instance the card tiles and the drawer both drive.
+			The shared Sheet Details Modal (UXC-6-01) over the still-mounted queue: Cost Center identity,
+			tabs and overlays arrive through the adapter and slots, and the shell owns the canonical
+			structure, focus lifecycle and single-overlay rules. The inline sheet expansion is replaced;
+			no route navigation and no second full modal.
 		-->
-		<EvidencePreview
-			:open="activeOverlay === 'preview'"
-			:evidence="previewEvidence"
-			:documents="previewDocuments"
-			:index="previewIndex"
-			@close="closeOverlay"
-			@navigate="navigatePreview"
-		/>
+		<SheetDetailsModal
+			:open="openSheetItem !== null"
+			:adapter="costCenterAdapter"
+			@close="closeSheetModal"
+		>
+			<!--
+				The manager sheet read is the only authoritative source for the sheet's title, purchaser
+				and submission instant; until it answers, the shell renders its honest unavailable states.
+			-->
+			<template #summary-metrics>
+				<div
+					v-for="(total, idx) in openSheetItem?.totals ?? []"
+					:key="idx"
+					class="cc-metric"
+				>
+					<bdi dir="ltr" class="cc-metric__currency">{{ total.currency }}</bdi>
+					<span class="cc-metric__amount">{{ formatMoney(total) }}</span>
+				</div>
+				<div v-if="openSheetReview" class="cc-metric__progress" data-testid="cc-review-progress">
+					{{ t('pettycash', 'reviews.quickReview.progress', {
+						decided: formatNumber(openSheetReview.progress.decidedByManager),
+						total: formatNumber(openSheetReview.progress.total),
+					}) }}
+					<span v-if="openSheetReview.progress.returnedForCorrection > 0">
+						· {{ t('pettycash', 'reviews.quickReview.returnedCount', {
+							count: formatNumber(openSheetReview.progress.returnedForCorrection),
+						}) }}
+					</span>
+				</div>
+			</template>
 
-		<TransactionDetailsDrawer
-			:open="activeOverlay === 'details'"
-			:transaction="detailsTransaction"
-			:manager-state="detailsManagerState"
-			:manager-decision="detailsManagerDecision"
-			:sheet="detailsSheet"
-			:read-state="detailsReadState"
-			@close="closeOverlay"
-			@decide="decideFromDrawer"
-			@preview="openPreviewFromDrawer"
-		/>
+			<template #tab-transactions>
+				<div v-if="openSheetItem && isDetailLoading(openSheetItem)" class="cc-review-state" data-testid="sheet-details-modal-loading">
+					<NcLoadingIcon :size="28" />
+					<p>{{ t('pettycash', 'reviews.quickReview.loading') }}</p>
+				</div>
 
-		<QuickDecisionModal
-			:open="activeOverlay === 'confirm'"
-			:decision="confirmDecision"
-			:transaction="confirmTransaction"
-			:expected-version="confirmVersion"
-			:allowed-actions="confirmAllowedActions"
-			@close="closeOverlay"
-			@decided="onDecided"
-		/>
+				<!-- One unavailable sheet must not read as an empty one: the failure states stay distinct. -->
+				<div v-else-if="openSheetItem && !sheetReview(openSheetItem)" class="cc-review-state cc-review-state--unavailable" data-testid="sheet-details-modal-unavailable">
+					<NcIconSvgWrapper :path="mdiAlertCircle" :size="28" class="queue-state__icon--warning" />
+					<p>{{ t('pettycash', 'reviews.quickReview.detailsUnavailable') }}</p>
+					<p class="cc-review-note">{{ t('pettycash', 'reviews.quickReview.fallbackNote') }}</p>
+				</div>
+
+				<template v-else-if="openSheetItem">
+					<ul class="cc-transactions" data-testid="transaction-review-cards">
+						<li
+							v-for="transaction in panelTransactions(openSheetItem)"
+							:key="transaction.id"
+							:data-testid="`sheet-transaction-${transaction.id}`"
+						>
+							<!--
+								The shared compact review card (UXC-6-02, v2 interaction per UXC-V2-09): summary
+								fields, transaction-scoped evidence summary, stage-separated previous-decision
+								indicators, always-visible decide bar, and the title that toggles this card's
+								Inline Expanded Transaction in place — no second overlay, no route change. Decide
+								actions come only from the server's `allowedActions`; a transaction this manager
+								already decided keeps no decide bar. The expansion data comes from the same
+								guarded per-transaction detail read.
+							-->
+							<TransactionReviewCard
+								:transaction="transaction"
+								:evidence="transactionEvidence(transaction.id)"
+								:stage-decisions="stageDecisionsFor(transaction)"
+								:allowed-actions="transactionDetail(transaction.id)?.allowedActions ?? null"
+								:busy="submittingTransactionId === transaction.id"
+								:show-actions="transaction.managerState === 'AWAITING_MANAGER_DECISION'"
+								expandable
+								:expanded="expandedTransactionId === transaction.id"
+								:detail="expandedDetail"
+								:detail-read-state="expandedReadState"
+								:detail-sheet="expandedSheet"
+								:detail-stage="inlineStage"
+								@toggle-expand="toggleExpansion"
+								@open-preview="(evidenceId) => openPreviewFromCard(transaction, evidenceId)"
+								@decide="(kind) => openConfirm(transaction, kind)"
+							/>
+						</li>
+					</ul>
+
+					<p v-if="panelTransactions(openSheetItem).length === 0" class="cc-review-note" data-testid="sheet-details-modal-no-transactions">
+						{{ t('pettycash', 'reviews.quickReview.noTransactions') }}
+					</p>
+				</template>
+			</template>
+
+			<!--
+				Approvals is the sheet-level aggregate surface (never per-transaction history, which lives
+				in each transaction's inline expansion): the server's whole-sheet approved totals per
+				workflow stage, consumed authoritatively from the manager read (UXC-7-01, UXC-7F-05).
+				Progress counts and per-currency sheet amounts remain in the header metrics.
+			-->
+			<template #tab-approvals>
+				<SheetApprovalsSummary :stages="approvalsStages" />
+			</template>
+
+			<template #tab-overview>
+				<dl v-if="openSheetItem" class="cc-aggregate" data-testid="cc-tab-overview">
+					<div class="cc-aggregate__item">
+						<dt>{{ t('pettycash', 'reviews.sheetQueue.sheet') }}</dt>
+						<dd>
+							<span :class="{ 'cc-aggregate__unavailable': !sheetTitleAvailable(openSheetItem) }">
+								{{ sheetTitle(openSheetItem) }}
+							</span>
+							<CompactIdentifier :value="openSheetItem.sheetId" class="cc-aggregate__reference" />
+						</dd>
+					</div>
+					<div class="cc-aggregate__item">
+						<dt>{{ t('pettycash', 'reviews.sheetQueue.purchaser') }}</dt>
+						<dd>
+							{{ purchaserName(openSheetItem) || t('pettycash', 'reviews.sheetQueue.purchaserUnavailable') }}
+						</dd>
+					</div>
+					<div class="cc-aggregate__item">
+						<dt>{{ t('pettycash', 'reviews.sheetQueue.submitted') }}</dt>
+						<dd>{{ sheetSubmittedLabel(openSheetItem) }}</dd>
+					</div>
+					<div class="cc-aggregate__item">
+						<dt>{{ t('pettycash', 'reviews.costCenter') }}</dt>
+						<dd>{{ costCenterLabel(openSheetItem) }}</dd>
+					</div>
+					<div class="cc-aggregate__item">
+						<dt>{{ t('pettycash', 'reviews.sheetQueue.yourTransactions') }}</dt>
+						<dd>{{ formatNumber(openSheetItem.transactionCount) }}</dd>
+					</div>
+					<div class="cc-aggregate__item">
+						<dt>{{ t('pettycash', 'reviews.sheetQueue.status') }}</dt>
+						<dd>{{ sheetStatusLabel(openSheetItem) }}</dd>
+					</div>
+				</dl>
+			</template>
+
+			<!-- No sheet-level event history exists under the Cost Center reads — honestly empty (UXC-7-03). -->
+			<template #tab-history>
+				<div class="sheet-details-modal__empty" data-testid="cc-tab-history-empty">
+					{{ t('pettycash', 'reviews.sheetHistory.unavailable') }}
+				</div>
+			</template>
+
+			<!--
+				Evidence Preview and Decision Confirmation remain the only overlays above the sheet modal
+				(UXC-V2-09): the transaction detail lives in the card's inline expansion, not in a second
+				full-height layer. The queue stays mounted behind it.
+			-->
+			<template #overlays>
+				<EvidencePreview
+					:open="activeOverlay === 'preview'"
+					:evidence="previewEvidence"
+					:documents="previewDocuments"
+					:index="previewIndex"
+					@close="closeOverlay"
+					@navigate="navigatePreview"
+				/>
+
+				<DecisionConfirmation
+					:open="activeOverlay === 'confirm'"
+					:decision="confirmDecision"
+					:transaction="confirmTransaction"
+					:expected-version="confirmVersion"
+					:allowed-actions="confirmAllowedActions"
+					@close="closeOverlay"
+					@decided="onDecided"
+				/>
+			</template>
+		</SheetDetailsModal>
 	</div>
 </template>
 
 <script setup lang="ts">
 import { direction } from '@/utils/direction'
-import { computed, h, nextTick, onMounted, ref, type VNode } from 'vue'
+import { computed, h, nextTick, onMounted, ref, watch, type VNode } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { t } from '@nextcloud/l10n'
 import {
-	mdiAccountOutline,
 	mdiAlertCircle,
-	mdiChevronDown,
-	mdiChevronUp,
 	mdiClipboardCheckOutline,
 	mdiFileDocumentOutline,
-	mdiMagnify,
 	mdiRefresh,
-	mdiShieldCheckOutline,
 } from '@mdi/js'
 import NcButton from '@nextcloud/vue/components/NcButton'
 import NcEmptyContent from '@nextcloud/vue/components/NcEmptyContent'
 import NcIconSvgWrapper from '@nextcloud/vue/components/NcIconSvgWrapper'
 import NcLoadingIcon from '@nextcloud/vue/components/NcLoadingIcon'
-import NcSelect from '@nextcloud/vue/components/NcSelect'
-import QuickDecisionModal from '@/components/review/QuickDecisionModal.vue'
-import QuickReviewCard from '@/components/review/QuickReviewCard.vue'
+import DecisionConfirmation from '@/components/review/DecisionConfirmation.vue'
+import TransactionReviewCard, { type TransactionReviewCardStageDecisions } from '@/components/review/TransactionReviewCard.vue'
+import SheetApprovalsSummary from '@/components/review/SheetApprovalsSummary.vue'
+import SheetDetailsModal, { type SheetDetailsModalAdapter } from '@/components/review/SheetDetailsModal.vue'
+import CompactIdentifier from '@/components/review/CompactIdentifier.vue'
+import type { TransactionInlineDetailStageConfig } from '@/components/review/TransactionInlineDetail.vue'
 import ResponsiveTable from '@/components/shared/ResponsiveTable.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import EvidencePreview from '@/components/evidence/EvidencePreview.vue'
-import TransactionDetailsDrawer from '@/components/review/TransactionDetailsDrawer.vue'
 import {
 	queueColumns as queueColumnsAround,
 	queueCardRowTestId,
@@ -524,35 +443,52 @@ import {
 	sharedQueueCell,
 	type QueueColumn,
 } from '@/components/review/queueColumns'
-import { useAuthStore } from '@/stores/auth'
 import { useReviewsStore } from '@/stores/reviews'
+import { useAuthStore } from '@/stores/auth'
+import { useConfigurationStore } from '@/stores/configuration'
 import { formatSheetDate } from '@/utils/date'
 import { formatMoney } from '@/utils/money'
+import {
+	authoritativeStageApprovals,
+	unprovenApprovalsStages,
+	type ApprovalsStageList,
+} from '@/utils/stageApprovals'
 import { formatNumber } from '@/utils/number'
-import { selectOptionKey, selectOptionValue } from '@/utils/selectOption'
 import {
 	SHEET_QUEUE_PAGE_SIZE,
 	buildSheetQueue,
 	checkSheetQueueCompleteness,
 	searchSheetQueue,
-	sortSheetQueue,
+	type SheetAmountTotal,
 	type SheetQueueItem,
-	type SheetQueueSort,
 } from '@/composables/useSheetQueue'
-import type { AllowedActions, DecisionResult, DecisionValue, Evidence, ManagerSheetReview, ManagerSheetSummary, ManagerTransactionState, ManagerTransactionReadState, ManagerTransactionSummary, Money, TransactionDetail, TransactionSummary } from '@/types/api'
+import type { AllowedActions, Decision, DecisionResult, DecisionValue, Evidence, ManagerSheetReview, ManagerSheetSummary, ManagerTransactionReadState, ManagerTransactionSummary, Money, TransactionDetail, TransactionSummary } from '@/types/api'
 
-type SheetTab = 'all' | 'awaiting' | 'inProgress'
+type SheetTab = 'all' | 'pending' | 'completed'
 type DetailState = 'pending' | 'loaded' | 'failed'
+
+type SheetQueueSortKey = 'reference' | 'purchaser' | 'transactions' | 'amount' | 'status' | 'submitted'
+
+interface SheetQueueSortAccess {
+	title: string | null
+	purchaser: string | null
+	amount: { currency: string; amountMinor: number } | null
+	status: 'PENDING_REVIEW' | 'REVIEW_COMPLETED' | null
+	submitted: string | null
+}
 
 const router = useRouter()
 const reviewsStore = useReviewsStore()
-const authStore = useAuthStore()
+const sheetTitle = (sheet: SheetQueueItem): string => {
+	const title = sheetReview(sheet)?.sheet.title?.trim() ?? ''
+	return title !== '' ? title : t('pettycash', 'reviews.sheetQueue.sheetTitleUnavailable')
+}
 
 const viewMode = ref<'sheets' | 'transactions'>('sheets')
 const searchQuery = ref('')
-const sort = ref<SheetQueueSort>('newest')
-const expandedSheetId = ref<string | null>(null)
-const activeTab = ref<SheetTab>('all')
+const selectedCenterCode = ref('')
+const openSheetItem = ref<SheetQueueItem | null>(null)
+const sheetStatusTab = ref<SheetTab>('all')
 /**
  * Per-sheet manager-read state. Kept beside the store's cache so a failed sheet is visible as
  * unavailable instead of being retried on every render, and so the "In progress" count is not
@@ -565,13 +501,32 @@ const transactionQueue = computed(() => reviewsStore.costCenterQueue)
 const loading = computed(() => reviewsStore.loading)
 const error = computed(() => reviewsStore.error)
 
-const managedCostCenters = computed(() => authStore.managedCostCenterCodes)
-
 const completeness = computed(() => checkSheetQueueCompleteness(transactionQueue.value, SHEET_QUEUE_PAGE_SIZE))
 
 const allSheets = computed(() => buildSheetQueue(transactionQueue.value.items))
 const awaitingSheetCount = computed(() => allSheets.value.length)
 const awaitingTransactionCount = computed(() => allSheets.value.reduce((sum, sheet) => sum + sheet.transactionCount, 0))
+
+const authStore = useAuthStore()
+const configurationStore = useConfigurationStore()
+
+/** Cost centers within the current user's authorized management scope, with readable names. */
+const filterableCenters = computed(() => {
+	const codes = authStore.costCenterCodes
+	const byCode = new Map<string, { code: string; name: string }>()
+	for (const center of configurationStore.costCenters) {
+		const key = center.code || center.id
+		if (key) byCode.set(key, { code: key, name: center.name ?? key })
+	}
+	const assigned: { code: string; name: string }[] = []
+	for (const code of codes) {
+		const center = byCode.get(code)
+		if (center) assigned.push(center)
+	}
+	return assigned.sort((a, b) => a.name.localeCompare(b.name))
+})
+
+const costCentersLoaded = ref(false)
 
 const managerSheetReviews = computed(() => reviewsStore.managerSheetReviews)
 
@@ -589,62 +544,292 @@ function sheetReview(sheet: SheetQueueItem): ManagerSheetReview | null {
 	return review
 }
 
-/**
- * A sheet is "in progress" only when this manager has already recorded at least one decision in
- * it. It is not sheet-wide Cost Center completion and never implies Senior eligibility.
- */
-function isSheetInProgress(sheet: SheetQueueItem): boolean {
-	const progress = sheetReview(sheet)?.progress
-	if (!progress) return false
-	return progress.decidedByManager + progress.returnedForCorrection > 0
-}
-
-const detailsComplete = computed(() => allSheets.value.every((sheet) =>
-	sheet.sheetId !== '' && detailState.value[sheet.sheetId] === 'loaded'
-))
-
-/**
- * Hidden until every manager read has answered: a partial count would present a known lower bound
- * as the queue's whole "In progress" set. Once complete, every value is traceable to a real sheet.
- */
-const inProgressSheetCount = computed<number | null>(() =>
-	detailsComplete.value ? allSheets.value.filter(isSheetInProgress).length : null
-)
-
-const tabs = computed<Array<{ key: SheetTab; label: string; count: number | null }>>(() => [
-	{ key: 'all', label: t('pettycash', 'reviews.sheetQueue.tabAll'), count: allSheets.value.length },
-	{ key: 'awaiting', label: t('pettycash', 'reviews.sheetQueue.tabAwaiting'), count: allSheets.value.length },
-	{ key: 'inProgress', label: t('pettycash', 'reviews.sheetQueue.tabInProgress'), count: inProgressSheetCount.value },
+const tabs = computed<Array<{ key: SheetTab; labelKey: string }>>(() => [
+	{ key: 'all', labelKey: 'reviews.seniorSheet.tabAll' },
+	{ key: 'pending', labelKey: 'reviews.seniorSheet.tabAwaiting' },
+	{ key: 'completed', labelKey: 'reviews.seniorSheet.tabCompleted' },
 ])
 
-const searchedSheets = computed(() => sortSheetQueue(
-	searchSheetQueue(allSheets.value, searchQuery.value, (sheet) => {
+const visibleSheets = computed(() => {
+	const searched = searchSheetQueue(allSheets.value, searchQuery.value, (sheet) => {
 		const review = sheetReview(sheet)
 		return [review?.sheet.title, review?.sheet.ownerDisplayName]
-	}),
-	sort.value
-))
+	})
+	const statusOf = (sheet: SheetQueueItem): 'PENDING_REVIEW' | 'REVIEW_COMPLETED' =>
+		panelTransactions(sheet).some((tx) => tx.managerState === 'AWAITING_MANAGER_DECISION')
+			? 'PENDING_REVIEW'
+			: 'REVIEW_COMPLETED'
+	const filtered = sheetStatusTab.value === 'all'
+		? searched
+		: sheetStatusTab.value === 'completed'
+			? searched.filter((s) => statusOf(s) === 'REVIEW_COMPLETED')
+			: searched.filter((s) => statusOf(s) !== 'REVIEW_COMPLETED')
+	const centerFiltered = selectedCenterCode.value === ''
+		? filtered
+		: filtered.filter((sheet) => sheet.costCenters.some((center) => center.code === selectedCenterCode.value))
+	const key = sheetSortKey.value
+	if (key === null) return centerFiltered
+	return sortSheetQueueByColumn(centerFiltered, { key, direction: sheetSortDirection.value }, sheetSortAccess)
+})
 
-const sheetItems = computed(() => activeTab.value === 'inProgress'
-	? searchedSheets.value.filter(isSheetInProgress)
-	: searchedSheets.value
-)
+function onQueueSearchInput(event: Event): void {
+	searchQuery.value = (event.target as HTMLInputElement).value
+}
+
+function clearQueueSearch(): void {
+	searchQuery.value = ''
+}
+
+function setQueueTab(tab: SheetTab): void {
+	sheetStatusTab.value = tab
+}
+
+/** Per-sheet the column sort needs, supplied from the row's own fields and the manager read. */
+function sheetAmountScalar(sheet: SheetQueueItem): { currency: string; amountMinor: number } | null {
+	const totals = selectedCenterCode.value === '' ? sheet.totals : scopedSheetTotals(sheet)
+	const min = totals.reduce<{ currency: string; amountMinor: number } | null>((acc, total) => {
+		if (acc === null || total.currency < acc.currency) return { currency: total.currency, amountMinor: total.amountMinor }
+		return acc
+	}, null)
+	return min
+}
+
+/** Transactions of this sheet scoped to the selected cost center (all when none is selected). */
+function scopedSheetTransactions(sheet: SheetQueueItem): TransactionSummary[] {
+	if (selectedCenterCode.value === '') return sheet.transactions
+	return sheet.transactions.filter((tx) => tx.activeRevision?.costCenter?.code === selectedCenterCode.value)
+}
+
+/** Per-currency totals scoped to the selected cost center. */
+function scopedSheetTotals(sheet: SheetQueueItem): SheetAmountTotal[] {
+	const byCurrency = new Map<string, SheetAmountTotal>()
+	for (const tx of scopedSheetTransactions(sheet)) {
+		const money = tx.activeRevision?.amount
+		if (!money || !Number.isFinite(money.amountMinor) || !Number.isFinite(money.minorUnit)) continue
+		const key = `${money.currency}\u0000${money.minorUnit}`
+		const existing = byCurrency.get(key)
+		if (existing) {
+			existing.amountMinor += money.amountMinor
+		} else {
+			byCurrency.set(key, {
+				currency: money.currency,
+				minorUnit: money.minorUnit,
+				amountMinor: money.amountMinor,
+			})
+		}
+	}
+	return [...byCurrency.values()].sort((a, b) => a.currency.localeCompare(b.currency))
+}
+
+function sortSheetQueueByColumn(
+	items: readonly SheetQueueItem[],
+	sort: { key: SheetQueueSortKey; direction: 'asc' | 'desc' },
+	access: (sheet: SheetQueueItem) => SheetQueueSortAccess
+): SheetQueueItem[] {
+	const copy = [...items]
+	const direction = sort.direction === 'asc' ? 1 : -1
+
+	copy.sort((a, b) => {
+		const aa = access(a)
+		const ba = access(b)
+		let primary = 0
+
+		switch (sort.key) {
+			case 'reference': {
+				const aValue = aa.title?.trim() !== '' ? aa.title!.trim() : a.sheetId
+				const bValue = ba.title?.trim() !== '' ? ba.title!.trim() : b.sheetId
+				if (aValue === '' && bValue !== '') { primary = 1; break }
+				if (aValue !== '' && bValue === '') { primary = -1; break }
+				primary = aValue.localeCompare(bValue)
+				break
+			}
+			case 'purchaser': {
+				const aName = aa.purchaser?.trim() ?? ''
+				const bName = ba.purchaser?.trim() ?? ''
+				if (aName === '' && bName !== '') { primary = 1; break }
+				if (aName !== '' && bName === '') { primary = -1; break }
+				primary = aName.localeCompare(bName)
+				break
+			}
+			case 'transactions': {
+				primary = a.transactionCount - b.transactionCount
+				break
+			}
+			case 'amount': {
+				const aAmt = aa.amount
+				const bAmt = ba.amount
+				if (aAmt === null && bAmt !== null) { primary = 1; break }
+				if (aAmt !== null && bAmt === null) { primary = -1; break }
+				if (aAmt !== null && bAmt !== null) {
+					if (aAmt.amountMinor !== bAmt.amountMinor) primary = aAmt.amountMinor - bAmt.amountMinor
+					else if (aAmt.currency !== bAmt.currency) primary = aAmt.currency.localeCompare(bAmt.currency)
+				}
+				break
+			}
+			case 'status': {
+				const aStatus = aa.status ?? 'PENDING_REVIEW'
+				const bStatus = ba.status ?? 'PENDING_REVIEW'
+				primary = aStatus.localeCompare(bStatus)
+				break
+			}
+			case 'submitted': {
+				const aTime = aa.submitted === null ? null : Date.parse(aa.submitted)
+				const bTime = ba.submitted === null ? null : Date.parse(ba.submitted)
+				if (aTime === null && bTime === null) primary = 0
+				else if (aTime === null) primary = 1
+				else if (bTime === null) primary = -1
+				else primary = aTime - bTime
+				break
+			}
+		}
+		return primary * direction
+	})
+	return copy
+}
+
+/** Column descriptors for the shared ResponsiveTable; mirrors Senior's order. */
+function sheetColumns(): { key: string; label: string; sortable: boolean }[] {
+	return [
+		{ key: 'reference', label: t('pettycash', 'reviews.sheetQueue.sheet'), sortable: true },
+		{ key: 'purchaser', label: t('pettycash', 'reviews.sheetQueue.purchaser'), sortable: true },
+		{ key: 'transactions', label: t('pettycash', 'reviews.sheetQueue.transactions'), sortable: true },
+		{ key: 'amount', label: t('pettycash', 'reviews.amount'), sortable: true },
+		{ key: 'status', label: t('pettycash', 'reviews.sheetQueue.status'), sortable: true },
+		{ key: 'submitted', label: t('pettycash', 'reviews.sheetQueue.submitted'), sortable: true },
+	]
+}
+
+function sheetRowKey(sheet: SheetQueueItem): string {
+	return sheet.sheetId || 'unresolved'
+}
+
+function sheetRowTestId(sheet: SheetQueueItem): string {
+	return `sheet-row-${sheet.sheetId || 'unresolved'}`
+}
+
+function sheetCardRowTestId(sheet: SheetQueueItem): string {
+	return `sheet-card-row-${sheet.sheetId || 'unresolved'}`
+}
+
+function sheetCell(sheet: SheetQueueItem, column: { key: string; label: string }): VNode | string | number {
+	switch (column.key) {
+		case 'reference':
+			return h(
+				'span',
+				{ class: 'sheet-row__identity' },
+				[
+					h('span', { class: 'sheet-row__icon', 'aria-hidden': 'true' }, [
+						h(NcIconSvgWrapper, { path: mdiFileDocumentOutline, size: 20 }),
+					]),
+					h('span', { class: 'sheet-row__text' }, [
+						h(
+							NcButton,
+							{
+								class: 'sheet-row__title-button',
+								variant: 'tertiary',
+								'data-testid': 'sheet-title',
+								title: sheetTitle(sheet),
+								'aria-label': sheetTitle(sheet),
+								onClick: () => openSheet(sheet),
+							},
+							() => sheetTitle(sheet)
+						),
+						h(CompactIdentifier, {
+							value: sheet.sheetId,
+							'data-testid': 'sheet-reference',
+							class: 'sheet-row__reference',
+						}),
+						h('span', { class: 'sheet-row__meta' }, costCenterLabel(sheet)),
+					]),
+				]
+			)
+		case 'purchaser': {
+			const name = purchaserName(sheet)
+			const initials = purchaserInitials(sheet)
+			return h(
+				'span',
+				{ class: 'sheet-row__owner', 'data-testid': 'sheet-purchaser' },
+				name !== ''
+					? [
+						initials
+							? h('span', { class: 'sheet-row__owner-avatar', 'aria-hidden': 'true' }, initials)
+							: null,
+						h('span', { class: 'sheet-row__owner-name', 'data-testid': 'sheet-purchaser-name' }, name),
+					].filter(Boolean)
+					: t('pettycash', 'reviews.sheetQueue.purchaserUnavailable')
+			)
+		}
+		case 'transactions':
+			return h('span', { class: 'sheet-row__count', 'data-testid': 'sheet-transaction-count' }, [
+				formatNumber(scopedSheetTransactions(sheet).length),
+			])
+		case 'amount':
+			return h('span', { class: 'sheet-row__amount', 'data-testid': 'sheet-amount' }, [
+				...scopedSheetTotals(sheet).map((total) =>
+					h(
+						'span',
+						{ key: `${total.currency}-${total.amountMinor}`, class: 'sheet-row__money' },
+						formatMoney(total)
+					)
+				),
+			])
+		case 'status':
+			return h('span', { class: 'sheet-row__status', 'data-testid': 'sheet-status' }, [
+				h('span', { 'data-testid': 'sheet-status-badge' }, [
+					h(StatusBadge, {
+						status: 'COST_CENTER',
+						variant: panelTransactions(sheet).some((tx) => tx.managerState === 'AWAITING_MANAGER_DECISION')
+							? 'warning'
+							: 'success',
+						label: panelTransactions(sheet).some((tx) => tx.managerState === 'AWAITING_MANAGER_DECISION')
+							? t('pettycash', 'reviews.sheetQueue.awaiting')
+							: t('pettycash', 'reviews.seniorSheet.reviewCompleted'),
+					}),
+				]),
+				sheetReturnedCount(sheet) > 0
+					? h('span', { class: 'sheet-row__returned' }, sheetReturnedCount(sheet) === 1
+						? t('pettycash', 'reviews.sheetQueue.returnedTransactionOne')
+						: t('pettycash', 'reviews.sheetQueue.returnedTransactionMany', { count: formatNumber(sheetReturnedCount(sheet)) }))
+					: null,
+			])
+		case 'submitted':
+			return h('span', { class: 'sheet-row__submitted', 'data-testid': 'sheet-submitted' }, [
+				sheetSubmittedLabel(sheet),
+			])
+		default:
+			return h('span', { 'data-testid': `sheet-unrendered-${column.key}` }, column.key)
+	}
+}
 
 const currentPage = computed(() => transactionQueue.value.page)
 const pageCount = computed(() => Math.max(1, Math.ceil(transactionQueue.value.total / Math.max(1, transactionQueue.value.pageSize))))
 const hasTransactions = computed(() => transactionQueue.value.items.length > 0)
 
-const sortOptions = computed(() => [
-	{ value: 'newest', label: t('pettycash', 'reviews.sheetQueue.sort.newest') },
-	{ value: 'oldest', label: t('pettycash', 'reviews.sheetQueue.sort.oldest') },
-	{ value: 'mostTransactions', label: t('pettycash', 'reviews.sheetQueue.sort.mostTransactions') },
-	{ value: 'reference', label: t('pettycash', 'reviews.sheetQueue.sort.reference') },
-] as Array<{ value: SheetQueueSort; label: string }>)
+const sheetSortKey = ref<SheetQueueSortKey | null>(null)
+const sheetSortDirection = ref<'asc' | 'desc'>('asc')
 
-function onSortChange(value: unknown): void {
-	const next = typeof value === 'string' ? value : ''
-	if (sortOptions.value.some((option) => option.value === next)) {
-		sort.value = next as SheetQueueSort
+const sheetSort = computed(() =>
+	sheetSortKey.value === null ? null : { key: sheetSortKey.value, direction: sheetSortDirection.value }
+)
+
+function setSheetSort(key: string): void {
+	if (sheetSortKey.value === key) {
+		sheetSortDirection.value = sheetSortDirection.value === 'asc' ? 'desc' : 'asc'
+		return
+	}
+	sheetSortKey.value = key as SheetQueueSortKey
+	sheetSortDirection.value = 'asc'
+}
+
+function sheetSortAccess(sheet: SheetQueueItem): SheetQueueSortAccess {
+	return {
+		title: sheetTitle(sheet) || null,
+		purchaser: purchaserName(sheet) || null,
+		amount: sheetAmountScalar(sheet),
+		status: panelTransactions(sheet).some((tx) => tx.managerState === 'AWAITING_MANAGER_DECISION')
+			? 'PENDING_REVIEW'
+			: 'REVIEW_COMPLETED',
+		submitted: sheet.latestActivityAt ?? null,
 	}
 }
 
@@ -695,11 +880,12 @@ async function fetchSheets(): Promise<void> {
 			page: 1,
 			pageSize: SHEET_QUEUE_PAGE_SIZE,
 		})
-		expandedSheetId.value = null
+		openSheetItem.value = null
 		closeOverlay()
 		reviewsStore.clearManagerSheetReviews()
 		detailState.value = {}
 		await prefetchManagerDetails(allSheets.value.map((sheet) => sheet.sheetId))
+		void prefetchTransactionDetails(allSheets.value.flatMap((sheet) => sheet.transactions.map((t) => t.id)))
 	} catch {
 		// The store exposes the failure; the template renders it.
 	}
@@ -735,78 +921,35 @@ async function showSheets(): Promise<void> {
 	await fetchSheets()
 }
 
-function shouldReduceMotion(): boolean {
-	return typeof window.matchMedia === 'function'
-		&& window.matchMedia('(prefers-reduced-motion: reduce)').matches
-}
-
 /**
- * T036 / UX_SPEC §0.4: on mobile the expanded panel scrolls into view, so opening a row that sits
- * below the fold lands the reviewer on the panel rather than leaving the disclosure hidden at the
- * top of the viewport. Instant when the reviewer prefers reduced motion. The scroll is
- * opportunistic — it must never block the expansion, and jsdom records no layout so it is a
- * browser-time behaviour, not a unit-detectable one.
+ * Opens the shared Sheet Details Modal over the still-mounted queue (UXC-6-01). The sheet's
+ * manager read starts immediately, and its cards' evidence tiles and capability grants come from
+ * the per-transaction detail reads, so the bounded prefetch starts with the sheet.
  */
-async function toggleSheet(sheetId: string): Promise<void> {
-	if (expandedSheetId.value === sheetId) {
-		expandedSheetId.value = null
-		return
-	}
-
-	expandedSheetId.value = sheetId
-	if (sheetId !== '') {
-		void loadManagerDetail(sheetId)
-		const sheet = allSheets.value.find((item) => item.sheetId === sheetId)
-		if (sheet) {
-			// T028: the expanded panel's cards read their evidence tiles and capability grants from
-			// the per-transaction detail reads, so they start as soon as the panel opens.
-			void prefetchTransactionDetails(panelTransactions(sheet).map((transaction) => transaction.id))
-		}
-		await nextTick()
-		if (typeof window.matchMedia === 'function' && window.matchMedia('(width <= 640px)').matches) {
-			const panel = document.querySelector<HTMLElement>(`[data-testid="sheet-detail-${sheetId || 'unresolved'}"]`)
-			panel?.scrollIntoView({ behavior: shouldReduceMotion() ? 'auto' : 'smooth', block: 'start' })
-		}
-	}
+function openSheet(sheet: SheetQueueItem): void {
+	if (sheet.sheetId === '') return
+	openSheetItem.value = sheet
+	void loadManagerDetail(sheet.sheetId)
+	void prefetchTransactionDetails(panelTransactions(sheet).map((transaction) => transaction.id))
 }
 
-async function collapseSheet(sheet: SheetQueueItem): Promise<void> {
-	expandedSheetId.value = null
+/** Closing restores focus to the originating sheet row, so a keyboard user is not dropped. */
+async function closeSheetModal(): Promise<void> {
+	const origin = openSheetItem.value?.sheetId ?? null
+	openSheetItem.value = null
+	if (origin === null || origin === '') return
 	await nextTick()
-	const row = document.querySelector(`[data-testid="sheet-row-${sheet.sheetId || 'unresolved'}"] .sheet-row__summary`)
-	if (row instanceof HTMLElement) row.focus()
-}
-
-function detailId(sheet: SheetQueueItem): string {
-	return `sheet-detail-${sheet.sheetId || 'unresolved'}`
+	const row = document.querySelector<HTMLElement>(`[data-testid="sheet-row-${origin}"] .sheet-row__summary`)
+	row?.focus()
 }
 
 function isDetailLoading(sheet: SheetQueueItem): boolean {
 	return sheet.sheetId !== '' && detailState.value[sheet.sheetId] === 'pending'
 }
 
-function sheetReference(sheet: SheetQueueItem): string {
-	return sheet.sheetId || t('pettycash', 'reviews.sheetQueue.unresolved')
-}
-
-/**
- * The visible reference is a short prefix, because the API publishes a uuid and no sheet title.
- * The full identifier stays on the row's `title` and in its accessible label, so the short form is
- * a readable reference rather than a replacement for the real id.
- */
-function shortenedReference(sheet: SheetQueueItem): string {
-	if (sheet.sheetId === '') return t('pettycash', 'reviews.sheetQueue.unresolved')
-	return sheet.sheetId.length > 12 ? `${sheet.sheetId.slice(0, 8)}…` : sheet.sheetId
-}
-
 function costCenterLabel(sheet: SheetQueueItem): string {
 	if (sheet.costCenters.length === 0) return t('pettycash', 'reviews.sheetQueue.noCostCenter')
 	return sheet.costCenters.map((center) => center.code || center.name).filter(Boolean).join(' · ')
-}
-
-function sheetTitle(sheet: SheetQueueItem): string {
-	const title = sheetReview(sheet)?.sheet.title?.trim() ?? ''
-	return title !== '' ? title : t('pettycash', 'reviews.sheetQueue.sheetTitleUnavailable')
 }
 
 function sheetTitleAvailable(sheet: SheetQueueItem): boolean {
@@ -839,17 +982,22 @@ function sheetSubmittedLabel(sheet: SheetQueueItem): string {
 		: formatSheetDate(submittedAt)
 }
 
-function purchasedByLabel(sheet: SheetQueueItem): string {
-	const name = purchaserName(sheet)
-	return t('pettycash', 'reviews.quickReview.purchasedBy', {
-		purchaser: name !== '' ? name : t('pettycash', 'reviews.sheetQueue.purchaserUnavailable'),
-	})
+function sheetStatusLabel(sheet: SheetQueueItem): string {
+	const awaiting = panelTransactions(sheet).some((tx) => tx.managerState === 'AWAITING_MANAGER_DECISION')
+	return awaiting
+		? t('pettycash', 'reviews.sheetQueue.awaiting')
+		: t('pettycash', 'reviews.seniorSheet.reviewCompleted')
 }
 
-function sheetStatusLabel(sheet: SheetQueueItem): string {
-	return isSheetInProgress(sheet)
-		? t('pettycash', 'reviews.sheetQueue.statusInProgress')
-		: t('pettycash', 'reviews.sheetQueue.needsAttention')
+function sheetReturnedCount(sheet: SheetQueueItem): number {
+	let count = 0
+	for (const tx of panelTransactions(sheet)) {
+		if (tx.managerState !== 'AWAITING_MANAGER_DECISION') continue
+		const detail = transactionDetail(tx.id)
+		if (!detail) continue
+		if (detail.decisions?.some((d) => d.stage === 'COST_CENTER' && d.decision === 'RETURN')) count += 1
+	}
+	return count
 }
 
 /**
@@ -874,12 +1022,12 @@ function openTransaction(transactionId: string): void {
 /*
  * T028 — the Batch 4 overlay state machine.
  *
- * Exactly one overlay is ever open: the evidence preview, the details drawer, or the decision
- * confirmation. A single `activeOverlay` value is the whole rule — two `v-if`s keyed off separate
- * booleans is how two overlays end up stacked, and the approved design keeps one overlay at a time
- * with each transition replacing the previous layer.
+ * Exactly one overlay is ever open: the evidence preview or the decision confirmation. A single
+ * `activeOverlay` value is the whole rule — two `v-if`s keyed off separate booleans is how two
+ * overlays end up stacked, and the approved design keeps one overlay at a time with each
+ * transition replacing the previous layer.
  */
-type OverlayState = 'none' | 'preview' | 'details' | 'confirm'
+type OverlayState = 'none' | 'preview' | 'confirm'
 
 interface ConfirmSnapshot {
 	id: string
@@ -894,7 +1042,8 @@ const activeOverlay = ref<OverlayState>('none')
 const previewTransactionId = ref('')
 const previewIndex = ref(0)
 
-const detailsTransactionId = ref('')
+/** The one Inline Expanded Transaction (UXC-V2-09); `null` collapses every card. */
+const expandedTransactionId = ref<string | null>(null)
 
 const confirmTransaction = ref<ConfirmSnapshot | null>(null)
 const confirmDecision = ref<DecisionValue | null>(null)
@@ -958,16 +1107,57 @@ function closeOverlay(): void {
 	submittingTransactionId.value = null
 }
 
-function openDetails(transactionId: string): void {
-	detailsTransactionId.value = transactionId
-	activeOverlay.value = 'details'
-	void ensureTransactionDetail(transactionId)
+// ---------------------------------------------------------------------------
+// Inline Expanded Transaction (UXC-V2-09): the drawer's detail surface now lives
+// inside the card's disclosure. Exactly one transaction is expanded at a time
+// because this view owns the single `expandedTransactionId`; the card only renders
+// what it is told. Escape/focus lifecycle belongs to the shared card.
+// ---------------------------------------------------------------------------
+
+/** Zero or one expanded transaction; toggling the same card collapses it. */
+function toggleExpansion(transactionId: string): void {
+	const next = expandedTransactionId.value === transactionId ? null : transactionId
+	expandedTransactionId.value = next
+	if (next !== null) void ensureTransactionDetail(next)
 }
+
+const expandedDetail = computed<TransactionDetail | null>(() =>
+	expandedTransactionId.value !== null ? transactionDetail(expandedTransactionId.value) : null)
+
+const expandedReadState = computed<ManagerTransactionReadState>(() =>
+	expandedTransactionId.value !== null
+		? managerTransactionReads.value[expandedTransactionId.value] ?? 'loading'
+		: 'loading')
+
+/** The sheet header facts for the expanded details; the read answers them honestly or not at all. */
+const expandedSheet = computed<ManagerSheetSummary | null>(() => {
+	const sheetId = expandedTransactionId.value !== null
+		? findManagerTransaction(expandedTransactionId.value)?.sheet.sheetId
+		: undefined
+	return sheetId !== undefined && sheetId !== '' ? managerSheetReviews.value[sheetId]?.sheet ?? null : null
+})
+
+/**
+ * The current stage's action surface for the expanded proximity row (UXC-6-03): offered while the
+ * transaction still awaits this manager's decision; withheld once decided or returned. Which kinds
+ * the server actually grants is gated inside the shared decide row from `allowedActions` — this
+ * config adds no rule.
+ */
+const inlineStage = computed<TransactionInlineDetailStageConfig | null>(() => {
+	if (expandedDetail.value === null) return null
+	const manager = expandedTransactionId.value !== null
+		? findManagerTransaction(expandedTransactionId.value)?.transaction ?? null
+		: null
+	if (manager && manager.managerState !== 'AWAITING_MANAGER_DECISION') {
+		return { actionsVisible: false, actions: [] }
+	}
+	return { actionsVisible: true, actions: ['REJECT', 'RETURN', 'APPROVE'] }
+})
 
 /**
  * Opens the preview from a card tile. The evidence set lives in the per-transaction detail, so a
  * tile on a card whose read failed cannot open an empty overlay: the read runs first and a failure
- * routes to the drawer, whose read state says what actually happened.
+ * expands the transaction, whose inline region shows the honest read state.
  */
 async function openPreviewFromCard(transaction: ManagerTransactionSummary, evidenceId: string): Promise<void> {
 	const detail = await ensureTransactionDetail(transaction.id)
@@ -978,16 +1168,7 @@ async function openPreviewFromCard(transaction: ManagerTransactionSummary, evide
 		activeOverlay.value = 'preview'
 		return
 	}
-	openDetails(transaction.id)
-}
-
-/** The drawer hands over an evidence item it rendered; the index comes from the same detail read. */
-function openPreviewFromDrawer(evidence: Evidence): void {
-	const index = transactionEvidence(detailsTransactionId.value).findIndex((item) => item.id === evidence.id)
-	if (index < 0) return
-	previewTransactionId.value = detailsTransactionId.value
-	previewIndex.value = index
-	activeOverlay.value = 'preview'
+	expandedTransactionId.value = transaction.id
 }
 
 function navigatePreview(index: number): void {
@@ -997,28 +1178,108 @@ function navigatePreview(index: number): void {
 const previewDocuments = computed<Evidence[]>(() => transactionEvidence(previewTransactionId.value))
 const previewEvidence = computed<Evidence | null>(() => previewDocuments.value[previewIndex.value] ?? null)
 
-/** The details drawer renders from the guarded detail read; its read state is the store's. */
-const detailsTransaction = computed<TransactionDetail | null>(() =>
-	activeOverlay.value === 'details' ? transactionDetail(detailsTransactionId.value) : null)
-const detailsReadState = computed<ManagerTransactionReadState>(() =>
-	managerTransactionReads.value[detailsTransactionId.value] ?? 'loading')
-const detailsManagerTransaction = computed<ManagerTransactionSummary | null>(() =>
-	activeOverlay.value === 'details' ? findManagerTransaction(detailsTransactionId.value)?.transaction ?? null : null)
-const detailsManagerState = computed<ManagerTransactionState>(() =>
-	detailsManagerTransaction.value?.managerState ?? 'AWAITING_MANAGER_DECISION')
-const detailsManagerDecision = computed(() => detailsManagerTransaction.value?.managerDecision ?? null)
-const detailsSheet = computed<ManagerSheetSummary | null>(() => {
-	if (activeOverlay.value !== 'details') return null
-	const sheetId = detailsManagerTransaction.value?.sheetId
-	return sheetId !== undefined && sheetId !== '' ? managerSheetReviews.value[sheetId]?.sheet ?? null : null
+/** The manager read for the open sheet, or `null` while it is loading/failed. */
+const openSheetReview = computed<ManagerSheetReview | null>(() =>
+	openSheetItem.value !== null ? sheetReview(openSheetItem.value) : null)
+
+/**
+ * Sheet-level approved monetary totals per workflow stage (UXC-7-01), from the server's
+ * whole-sheet `stageApprovedTotals` on the manager read (UXC-7F-05, owner decision 2026-11-20) —
+ * never per-transaction decision history, which stays in each transaction's inline expansion, and
+ * never a client-side sum over this manager's scoped transaction subset presented as a whole-sheet
+ * figure.
+ *
+ * With the read missing (failed or still loading) or the field absent/malformed (old payload),
+ * every stage renders honestly unavailable. A decoded zero total is a real answer, rendered as a
+ * known zero.
+ */
+const approvalsStages = computed<ApprovalsStageList>(() =>
+	openSheetReview.value !== null
+		? authoritativeStageApprovals(openSheetReview.value.sheet.stageApprovedTotals) ?? unprovenApprovalsStages()
+		: unprovenApprovalsStages()
+)
+
+/**
+ * The Cost Center stage adapter for the shared shell (UXC-6-01): authoritative identity from the
+ * manager sheet read — title, purchaser and submission instant are honest-unavailable until that
+ * read answers — plus the sheet's per-currency amounts and the manager's progress aggregate.
+ */
+const costCenterAdapter = computed<SheetDetailsModalAdapter>(() => {
+	const sheet = openSheetItem.value
+	const review = openSheetReview.value
+	return {
+		stage: 'cost-center',
+		identity: {
+			reference: sheet?.sheetId ?? null,
+			eyebrow: t('pettycash', 'reviews.quickReview.eyebrow'),
+			title: review?.sheet.title?.trim() || null,
+			owner: review?.sheet.ownerDisplayName?.trim() || null,
+			submitted: review?.sheet.submittedAt ? formatSheetDate(review.sheet.submittedAt) : null,
+			status: sheet ? sheetStatusLabel(sheet) : null,
+			currency: review?.sheet.currency ?? null,
+			totals: sheet?.totals ?? [],
+			progress: review && review.progress.total > 0
+				? { decided: review.progress.decidedByManager, total: review.progress.total }
+				: null,
+		},
+		metrics: { transactionCount: sheet?.transactionCount ?? null },
+		readOnly: false,
+		submitting: submittingTransactionId.value !== null,
+	}
 })
 
-/** Drawer → confirmation. The drawer closes first; the single-overlay rule keeps only the modal. */
-function decideFromDrawer(kind: DecisionValue): void {
-	const transaction = detailsTransaction.value
-	if (transaction === null) return
-	openConfirmForTransaction(transaction.id, kind)
+/**
+ * Per-stage previous decisions for the card's indicators, derived only from authoritative data:
+ * the transaction's decisions (detail read), falling back to this manager's own decision for the
+ * Cost Center stage and the summary's `latestDecision` for its stage. A stage with no known
+ * decision stays `null` — the indicator then reads "No decision yet".
+ */
+function stageDecisionsFor(transaction: ManagerTransactionSummary): TransactionReviewCardStageDecisions {
+	const decisions = transactionDetail(transaction.id)?.decisions ?? []
+	const latestForStage = (stage: Decision['stage']): Decision | null => {
+		const matches = decisions.filter((decision) => decision.stage === stage)
+		return matches.length > 0 ? matches[matches.length - 1]! : null
+	}
+	const fallbackForStage = (stage: Decision['stage']): Decision | null => {
+		if (stage === 'COST_CENTER' && transaction.managerDecision) return transaction.managerDecision
+		return transaction.latestDecision?.stage === stage ? transaction.latestDecision : null
+	}
+	return {
+		costCenter: latestForStage('COST_CENTER') ?? fallbackForStage('COST_CENTER'),
+		senior: latestForStage('SENIOR') ?? fallbackForStage('SENIOR'),
+		finance: latestForStage('FINANCE') ?? fallbackForStage('FINANCE'),
+	}
 }
+
+/**
+ * Dangling-expansion guard (UXC-V2-09 state lifecycle): if the expanded transaction leaves the
+ * server-authoritative set (refreshed sheet read, reconciliation), the expansion collapses instead
+ * of rendering a stale region against data the server no longer presents.
+ */
+watch(
+	() => openSheetItem.value !== null ? panelTransactions(openSheetItem.value).map((transaction) => transaction.id) : [],
+	(ids) => {
+		if (expandedTransactionId.value !== null && !ids.includes(expandedTransactionId.value)) {
+			expandedTransactionId.value = null
+		}
+	}
+)
+
+// Opening a sheet resets the overlay stack and the expansion (preserved single-overlay behaviour
+// from the inline panel) so a stale expansion or confirmation cannot survive into the next sheet's
+// context.
+watch(
+	() => [openSheetItem.value !== null, openSheetItem.value?.sheetId ?? ''] as const,
+	([open]) => {
+		if (open) {
+			activeOverlay.value = 'none'
+			expandedTransactionId.value = null
+			previewTransactionId.value = ''
+			previewIndex.value = 0
+			submittingTransactionId.value = null
+		}
+	}
+)
 
 /** Card → confirmation. The detail read supplies the version and capability grant. */
 function openConfirm(transaction: ManagerTransactionSummary, kind: DecisionValue): void {
@@ -1034,8 +1295,9 @@ async function openConfirmForTransaction(transactionId: string, kind: DecisionVa
 	const detail = await ensureTransactionDetail(transactionId)
 	if (detail === null) {
 		// Without the detail there is neither a version to be optimistic against nor a capability
-		// grant to honour — the drawer says what happened instead of a modal that cannot submit.
-		openDetails(transactionId)
+		// grant to honour — the inline expansion says what happened instead of a modal that cannot
+		// submit.
+		expandedTransactionId.value = transactionId
 		return
 	}
 
@@ -1057,10 +1319,11 @@ async function openConfirmForTransaction(transactionId: string, kind: DecisionVa
 }
 
 /**
- * Decision recorded: close the modal, refresh the sheet read (progress counts and the card's
- * decided state come from the server, not from a client-side patch), drop the now-stale per-
+ * Decision recorded: close the confirmation, collapse the expansion (the deterministic post-decision
+ * presentation), refresh the sheet read (progress counts and the
+ * card's decided state come from the server, not from a client-side patch), drop the now-stale per-
  * transaction detail, and re-read it in the background so the card keeps its evidence row and the
- * drawer its history. The toast words come from the approved mockup's completion state.
+ * expansion its history. The toast words come from the approved mockup's completion state.
  */
 async function onDecided(result: DecisionResult): Promise<void> {
 	const transactionId = confirmTransaction.value?.id ?? result.transaction.id
@@ -1068,6 +1331,7 @@ async function onDecided(result: DecisionResult): Promise<void> {
 
 	activeOverlay.value = 'none'
 	submittingTransactionId.value = null
+	expandedTransactionId.value = null
 	reviewsStore.clearManagerTransactionDetail(transactionId)
 
 	void (async () => {
@@ -1090,6 +1354,16 @@ async function onDecided(result: DecisionResult): Promise<void> {
 
 onMounted(() => {
 	void fetchSheets()
+	// Cost-center options must not depend on visiting /admin/configuration.
+	// configurationStore.costCenters is populated there, but the Cost Center queue must load
+	// its assigned centers independently. listCostCenters() is #[NoAdminRequired] and
+	// caller-scoped; filterableCenters further narrows to authStore.costCenterCodes.
+	if (!configurationStore.costCenters.length && !costCentersLoaded.value) {
+		costCentersLoaded.value = true
+		void configurationStore.loadCostCenters().catch(() => {
+			// Error is stored in configurationStore.error; view renders without chips.
+		})
+	}
 })
 
 const QUEUE_OWN_COLUMN: QueueColumn = {
@@ -1114,7 +1388,7 @@ function queueCell(item: TransactionSummary, column: QueueColumn): VNode | strin
 .queue-view {
 	display: flex;
 	flex-direction: column;
-	gap: 20px;
+	gap: 16px;
 	inline-size: 100%;
 	min-inline-size: 0;
 }
@@ -1139,12 +1413,13 @@ function queueCell(item: TransactionSummary, column: QueueColumn): VNode | strin
 	display: flex;
 	align-items: flex-start;
 	justify-content: space-between;
-	gap: 16px;
+	gap: 8px;
 	flex-wrap: wrap;
+	margin-block-end: 6px;
 }
 
 .queue-header__eyebrow {
-	margin: 0 0 6px;
+	margin: 0 0 4px;
 	font-size: var(--font-size-floor);
 	font-weight: 700;
 	letter-spacing: 0.08em;
@@ -1159,16 +1434,10 @@ function queueCell(item: TransactionSummary, column: QueueColumn): VNode | strin
 	line-height: 1.2;
 }
 
-.queue-header__subtitle {
-	margin: 6px 0 0;
-	max-inline-size: 62ch;
-	color: var(--color-text-maxcontrast);
-}
-
 .queue-header__aside {
 	display: flex;
 	align-items: center;
-	gap: 10px;
+	gap: 8px;
 	flex-wrap: wrap;
 }
 
@@ -1228,60 +1497,23 @@ function queueCell(item: TransactionSummary, column: QueueColumn): VNode | strin
 	unicode-bidi: isolate;
 }
 
-.responsibility {
-	display: flex;
-	align-items: center;
-	gap: 12px;
-	flex-wrap: wrap;
-	padding: 12px 16px;
-	border: 1px solid color-mix(in srgb, var(--color-primary-element) 22%, var(--color-border));
-	border-radius: 12px;
-	background-color: color-mix(in srgb, var(--color-primary-element) 5%, var(--color-main-background));
-}
-
-.responsibility__icon {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	flex: none;
-	inline-size: 32px;
-	block-size: 32px;
-	border-radius: 9px;
-	background-color: var(--color-main-background);
-	color: var(--color-primary-element);
-}
-
-.responsibility__body {
-	flex: 1 1 320px;
-	min-inline-size: 0;
-}
-
-.responsibility__title {
-	margin: 0;
-	font-size: var(--font-size-emphasis);
-	line-height: 1.3;
-}
-
-.responsibility__text {
-	margin: 2px 0 0;
-	max-inline-size: 80ch;
-	color: var(--color-text-maxcontrast);
-}
-
 .summary {
-	display: grid;
-	grid-template-columns: repeat(2, minmax(0, 1fr));
-	gap: 14px;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	align-items: baseline;
+	padding: 0;
 }
 
 .stat {
 	display: flex;
-	flex-direction: column;
-	gap: 8px;
+	flex-direction: row;
+	gap: 6px;
+	align-items: center;
 	min-inline-size: 0;
-	padding: 14px 16px;
+	padding: 3px 8px;
 	border: 1px solid var(--color-border);
-	border-radius: 12px;
+	border-radius: 8px;
 	background-color: var(--color-main-background);
 }
 
@@ -1290,6 +1522,7 @@ function queueCell(item: TransactionSummary, column: QueueColumn): VNode | strin
 	align-items: center;
 	justify-content: space-between;
 	gap: 6px;
+	width: 100%;
 }
 
 .stat__label {
@@ -1304,9 +1537,9 @@ function queueCell(item: TransactionSummary, column: QueueColumn): VNode | strin
 	align-items: center;
 	justify-content: center;
 	flex: none;
-	inline-size: 28px;
-	block-size: 28px;
-	border-radius: 8px;
+	inline-size: 20px;
+	block-size: 20px;
+	border-radius: 6px;
 }
 
 .stat__icon--primary {
@@ -1320,10 +1553,11 @@ function queueCell(item: TransactionSummary, column: QueueColumn): VNode | strin
 }
 
 .stat__value {
-	font-size: 26px;
+	font-size: 16px;
 	font-weight: 700;
 	line-height: 1.15;
-	overflow-wrap: anywhere;
+	white-space: nowrap;
+	overflow-wrap: normal;
 }
 
 .stat__hint {
@@ -1352,19 +1586,16 @@ function queueCell(item: TransactionSummary, column: QueueColumn): VNode | strin
 }
 
 .sheet-card {
-	padding: 18px 20px;
-	border: 1px solid var(--color-border);
-	border-radius: 14px;
-	background-color: var(--color-main-background);
+	margin-block-start: 4px;
 }
 
 .sheet-card__header {
 	display: flex;
 	align-items: flex-start;
 	justify-content: space-between;
-	gap: 12px;
+	gap: 8px;
 	flex-wrap: wrap;
-	margin-block-end: 14px;
+	margin-block-end: 6px;
 }
 
 .sheet-card__header--actions {
@@ -1400,196 +1631,111 @@ function queueCell(item: TransactionSummary, column: QueueColumn): VNode | strin
 	background-color: var(--color-success);
 }
 
-.toolbar {
-	display: grid;
-	grid-template-columns: minmax(0, 1fr) auto auto;
-	align-items: center;
-	gap: 12px;
-}
-
-.search {
+.senior-queue-toolbar {
 	display: flex;
+	flex-wrap: wrap;
 	align-items: center;
-	gap: 8px;
-	min-inline-size: 0;
-	padding: 0 12px;
-	border: 1px solid var(--color-border);
-	border-radius: 10px;
-	background-color: var(--color-main-background);
+	justify-content: space-between;
+	gap: 10px;
+	margin-block-end: 12px;
 }
 
-.search:focus-within {
-	border-color: var(--color-primary-element);
-}
-
-.search__icon {
-	display: inline-flex;
-	color: var(--color-text-maxcontrast);
-}
-
-.search__input {
-	inline-size: 100%;
-	min-inline-size: 0;
-	padding: 10px 0;
-	border: 0;
-	background: transparent;
-	color: inherit;
-	font-family: inherit;
-	font-size: var(--font-size-floor);
-}
-
-.search__input:focus-visible {
-	outline: 2px solid var(--color-primary-element);
-	outline-offset: -2px;
-	border-radius: var(--border-radius, 4px);
-}
-
-.tabs {
+.senior-queue-search {
 	display: flex;
-	gap: 4px;
-	padding: 4px;
-	border: 1px solid var(--color-border);
-	border-radius: 10px;
-	background-color: var(--color-background-hover);
-}
-
-.tab {
-	display: inline-flex;
 	align-items: center;
 	gap: 6px;
-	padding: 6px 12px;
-	border: 0;
-	border-radius: 8px;
-	background: transparent;
-	color: var(--color-main-text);
-	font-family: inherit;
-	font-size: var(--font-size-floor);
-	cursor: pointer;
-	white-space: nowrap;
+	min-width: min(280px, 100%);
 }
 
-.tab--active {
+.senior-queue-search__input {
+	flex: 1;
+	min-width: 0;
+	padding: 6px 10px;
+	border: 1px solid var(--color-border);
+	border-radius: var(--border-radius-large, 8px);
 	background-color: var(--color-main-background);
-	font-weight: 600;
-	box-shadow: 0 1px 2px color-mix(in srgb, black 12%, transparent);
+	color: var(--color-main-text);
+	font-size: var(--font-size-floor);
 }
 
-.tab__count {
-	padding: 0 6px;
-	border-radius: 999px;
-	background-color: color-mix(in srgb, var(--color-primary-element) 12%, transparent);
-	color: var(--color-primary-element);
-	font-weight: 600;
-}
-
-.sort {
+.senior-queue-tabs {
 	display: flex;
-	align-items: center;
-	gap: 8px;
-	white-space: nowrap;
+	flex-wrap: wrap;
+	gap: 6px;
 }
 
-.sort__label {
-	color: var(--color-text-maxcontrast);
-}
-
-.sort__select {
-	inline-size: 240px;
-	min-inline-size: 0;
-}
-
-.availability-note {
-	margin: 8px 0 0;
-	color: var(--color-text-maxcontrast);
+.senior-queue-tabs__tab {
+	padding: 4px 10px;
+	border: 1px solid var(--color-border);
+	border-radius: var(--border-radius-large, 8px);
+	background-color: var(--color-main-background);
+	color: var(--color-main-text);
 	font-size: var(--font-size-floor);
-}
-
-.sheet-list__head,
-.sheet-row__summary {
-	display: grid;
-	grid-template-columns: minmax(0, 2fr) minmax(0, 1.2fr) 0.85fr 1fr 1.05fr 0.85fr 24px;
-	align-items: center;
-	gap: 12px;
-}
-
-.sheet-list__head {
-	padding: 8px;
-	color: var(--color-text-maxcontrast);
-	font-size: var(--font-size-floor);
-	font-weight: 600;
-	line-height: 1.3;
-	text-transform: uppercase;
-	letter-spacing: 0.06em;
-	word-break: normal;
-	overflow-wrap: normal;
-	hyphens: none;
-}
-
-.sheet-list__head--numeric {
-	text-align: end;
-}
-
-.sheet-list {
-	margin: 0;
-	padding: 0;
-	list-style: none;
-	border-block-start: 1px solid var(--color-border);
-}
-
-.sheet-row + .sheet-row {
-	border-block-start: 1px solid var(--color-border);
-}
-
-.sheet-row__summary {
-	inline-size: 100%;
-	padding: 12px 8px;
-	border: 0;
-	background: transparent;
-	color: inherit;
-	font-family: inherit;
-	font-size: var(--font-size-floor);
-	text-align: start;
 	cursor: pointer;
 }
 
-.sheet-row__summary:hover {
-	background-color: var(--color-background-hover);
+.senior-queue-tabs__tab--active {
+	border-color: var(--color-primary);
+	background-color: var(--color-primary-light, var(--color-primary));
+	color: var(--color-primary-text);
 }
 
-.sheet-row__identity {
+.senior-queue-no-results {
+	margin: 0;
+	padding: 24px 0;
+	text-align: center;
+	color: var(--color-text-maxcontrast);
+}
+
+@media (width <= 640px) {
+	.senior-queue-tabs {
+		inline-size: 100%;
+	}
+
+	.senior-queue-tabs__tab {
+		flex: 1 1 auto;
+		justify-content: center;
+		min-block-size: 44px;
+	}
+
+	.senior-queue-search {
+		min-width: 100%;
+	}
+
+	.senior-queue-search__input {
+		min-block-size: 44px;
+	}
+}
+
+:deep(.sheet-row__identity) {
 	display: flex;
 	align-items: center;
-	gap: 12px;
-	min-inline-size: 0;
+	gap: 10px;
+	min-width: 0;
 }
 
-.sheet-row__icon {
+:deep(.sheet-row__icon) {
 	display: inline-flex;
-	align-items: center;
-	justify-content: center;
+	color: var(--color-text-maxcontrast);
 	flex: none;
-	inline-size: 40px;
-	block-size: 40px;
-	border-radius: 10px;
-	background-color: var(--color-primary-element-light);
-	color: var(--color-primary-element);
 }
 
-.sheet-row__text {
+:deep(.sheet-row__text) {
 	display: flex;
 	flex-direction: column;
 	gap: 2px;
-	min-inline-size: 0;
+	min-width: 0;
 }
 
-.sheet-row__title {
+:deep(.sheet-row__title-button) {
+	max-width: 100%;
+	min-width: 0;
+	font-size: var(--font-size-floor);
 	font-weight: 600;
-	line-height: 1.3;
 	color: var(--color-text-maxcontrast);
-	overflow-wrap: anywhere;
 }
 
-.sheet-row__meta-line {
+:deep(.sheet-row__meta-line) {
 	display: flex;
 	align-items: center;
 	gap: 6px;
@@ -1597,7 +1743,7 @@ function queueCell(item: TransactionSummary, column: QueueColumn): VNode | strin
 	min-inline-size: 0;
 }
 
-.sheet-row__reference {
+:deep(.sheet-row__reference) {
 	font-family: monospace;
 	font-size: var(--font-size-floor);
 	font-weight: 500;
@@ -1607,13 +1753,13 @@ function queueCell(item: TransactionSummary, column: QueueColumn): VNode | strin
 	overflow-wrap: anywhere;
 }
 
-.sheet-row__meta {
+:deep(.sheet-row__meta) {
 	color: var(--color-text-maxcontrast);
 	font-size: var(--font-size-floor);
 	overflow-wrap: anywhere;
 }
 
-.sheet-row__meta::before {
+:deep(.sheet-row__meta::before) {
 	content: '·';
 	margin-inline-end: 6px;
 	color: var(--color-text-maxcontrast);
@@ -1647,6 +1793,7 @@ function queueCell(item: TransactionSummary, column: QueueColumn): VNode | strin
 }
 
 .metric__value--money {
+	font-family: 'Noto Sans Mono', monospace;
 	font-variant-numeric: tabular-nums;
 }
 
@@ -1656,123 +1803,73 @@ function queueCell(item: TransactionSummary, column: QueueColumn): VNode | strin
 	font-weight: 400;
 }
 
-.purchaser {
+.sheet-row__returned {
+	font-size: var(--font-size-floor);
+	font-weight: 400;
+	color: var(--color-text-maxcontrast);
+	opacity: 0.7;
+	margin-block-start: 2px;
+}
+
+.sheet-row__owner {
 	display: flex;
 	align-items: center;
 	gap: 8px;
-	min-inline-size: 0;
-}
-
-.purchaser__avatar {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	flex: none;
-	inline-size: 28px;
-	block-size: 28px;
-	border: 1px dashed var(--color-border);
-	border-radius: 50%;
-	background-color: var(--color-background-hover);
-	color: var(--color-text-maxcontrast);
-}
-
-.purchaser__name {
-	color: var(--color-text-maxcontrast);
+	min-width: 0;
+	overflow: hidden;
 	font-size: var(--font-size-floor);
-	overflow-wrap: anywhere;
 }
 
-.sheet-row__chevron {
-	display: inline-flex;
-	justify-content: flex-end;
-	color: var(--color-text-maxcontrast);
+.sheet-row__owner-avatar {
+	flex: none;
+	inline-size: 26px;
+	block-size: 26px;
+	border-radius: 50%;
+	display: grid;
+	place-items: center;
+	background-color: color-mix(in srgb, var(--color-primary-element) 15%, transparent);
+	color: var(--color-primary-element);
+	font-weight: 700;
 }
 
-.sheet-row__detail {
-	padding: 0;
-	border-block-start: 1px dashed var(--color-border);
-	background-color: var(--color-background-hover);
+.sheet-row__owner-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
-.quick-review {
+.cc-metric {
 	display: flex;
 	flex-direction: column;
-	gap: 14px;
-	padding: 18px;
-}
-
-.quick-review__head {
-	display: flex;
-	align-items: flex-start;
-	justify-content: space-between;
-	gap: 12px;
-	flex-wrap: wrap;
-}
-
-.quick-review__heading {
-	min-inline-size: 0;
-}
-
-.quick-review__eyebrow {
-	margin: 0 0 4px;
-	color: var(--color-primary-element);
+	gap: 2px;
 	font-size: var(--font-size-floor);
-	font-weight: 700;
-	letter-spacing: 0.08em;
-	text-transform: uppercase;
-}
-
-.quick-review__title {
-	display: flex;
-	align-items: baseline;
-	gap: 8px;
-	flex-wrap: wrap;
-	margin: 0;
-	font-size: var(--font-size-section);
-	font-weight: 700;
-	line-height: 1.3;
-}
-
-.quick-review__title--unavailable {
 	color: var(--color-text-maxcontrast);
 }
 
-.quick-review__reference {
-	color: var(--color-text-maxcontrast);
-	font-family: monospace;
-	font-size: var(--font-size-floor);
-	font-weight: 500;
-	direction: ltr;
-	unicode-bidi: isolate;
-}
-
-.quick-review__meta {
-	display: flex;
-	align-items: center;
-	gap: 6px;
-	flex-wrap: wrap;
-	margin: 6px 0 0;
-	color: var(--color-text-maxcontrast);
-	font-size: var(--font-size-floor);
-}
-
-.quick-review__meta > span + span::before {
-	content: '·';
-	margin-inline-end: 6px;
-}
-
-.quick-review__progress {
-	margin: 0;
-	color: var(--color-text-maxcontrast);
-	font-size: var(--font-size-floor);
-}
-
-.quick-review__progress-extra {
-	color: var(--pettycash-review);
+.cc-metric__currency {
 	font-weight: 600;
 }
 
-.quick-review__state {
+.cc-metric__amount {
+	font-family: 'Noto Sans Mono', monospace;
+	font-variant-numeric: tabular-nums;
+}
+
+.cc-metric__progress {
+	font-size: var(--font-size-floor);
+	color: var(--color-text-maxcontrast);
+}
+
+.cc-transactions {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.cc-review-state {
 	display: grid;
 	grid-template-columns: auto minmax(0, 1fr);
 	align-items: center;
@@ -1783,57 +1880,57 @@ function queueCell(item: TransactionSummary, column: QueueColumn): VNode | strin
 	color: var(--color-text-maxcontrast);
 }
 
-.quick-review__state--unavailable {
+.cc-review-state--unavailable {
 	border-color: color-mix(in srgb, var(--color-warning) 35%, var(--color-border));
 	background-color: color-mix(in srgb, var(--color-warning) 6%, var(--color-main-background));
 }
 
-.quick-review__state p {
+.cc-review-state p {
 	margin: 0;
 }
 
-.quick-review__state-note {
+.cc-review-note {
 	margin: 0;
 	color: var(--color-text-maxcontrast);
 	font-size: var(--font-size-floor);
 }
 
-.quick-review__state .quick-review__state-note {
-	grid-column: 1 / -1;
-}
-
-.quick-review__cards {
-	display: flex;
-	flex-direction: column;
-	gap: 10px;
+.cc-aggregate {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+	gap: 12px 16px;
 	margin: 0;
-	padding: 0;
-	list-style: none;
 }
 
-.quick-review__card-item {
+.cc-aggregate__item dt {
+	color: var(--color-text-maxcontrast);
+	font-size: var(--font-size-floor);
+	font-weight: 600;
+}
+
+.cc-aggregate__item dd {
+	margin: 2px 0 0;
 	min-inline-size: 0;
+	overflow-wrap: anywhere;
+	font-weight: 500;
 }
 
-.quick-review__footer {
-	display: flex;
-	align-items: flex-start;
-	gap: 8px;
-	padding: 10px 12px;
-	border: 1px solid color-mix(in srgb, var(--color-primary-element) 18%, var(--color-border));
-	border-radius: 10px;
-	background-color: color-mix(in srgb, var(--color-primary-element) 4%, var(--color-main-background));
-	color: var(--color-text-maxcontrast);
+.cc-aggregate__money {
+	display: block;
+	font-family: 'Noto Sans Mono', monospace;
+	font-variant-numeric: tabular-nums;
+}
+
+.cc-aggregate__reference {
+	display: block;
+	font-family: monospace;
 	font-size: var(--font-size-floor);
-	line-height: 1.45;
+	direction: ltr;
+	unicode-bidi: isolate;
 }
 
-.quick-review__footer p {
-	margin: 0;
-}
-
-.quick-review__footer strong {
-	color: var(--color-main-text);
+.cc-aggregate__unavailable {
+	color: var(--color-text-maxcontrast);
 }
 
 .sheet-card__footnote {
@@ -2021,35 +2118,11 @@ function queueCell(item: TransactionSummary, column: QueueColumn): VNode | strin
 		min-inline-size: 0;
 	}
 
-	.responsibility {
-		padding: 12px;
-	}
-
-	.responsibility__icon {
-		inline-size: 30px;
-		block-size: 30px;
-	}
-
-	.responsibility__body {
-		flex-basis: calc(100% - 42px);
-	}
-
-	.scope {
-		inline-size: 100%;
-		justify-content: flex-start;
-		margin-inline-start: 0;
-	}
-
 	.sheet-row__summary {
 		padding: 12px 4px;
 	}
 
-	.sheet-row__icon {
-		inline-size: 36px;
-		block-size: 36px;
-	}
-
-	.purchaser__avatar {
+	.sheet-row__owner-avatar {
 		inline-size: 26px;
 		block-size: 26px;
 	}
@@ -2058,22 +2131,97 @@ function queueCell(item: TransactionSummary, column: QueueColumn): VNode | strin
 		font-size: var(--font-size-floor);
 	}
 
-	.quick-review {
-		gap: 12px;
-		padding: 12px;
+	.cc-transactions {
+		gap: 8px;
 	}
+}
 
-	.quick-review__head {
-		flex-direction: column;
-		align-items: stretch;
-	}
+.center-filter {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+	margin-block-start: 8px;
+}
 
-	.quick-review__title {
-		font-size: var(--font-size-emphasis);
-	}
+.center-filter__label {
+	color: var(--color-text-maxcontrast);
+	font-size: var(--font-size-floor);
+	white-space: nowrap;
+}
 
-	.quick-review__footer {
-		padding: 10px;
-	}
+.center-filter__chip {
+	padding: 2px 8px;
+	border: 1px solid var(--color-border);
+	border-radius: 999px;
+	background-color: var(--color-main-background);
+	font-size: var(--font-size-floor);
+	cursor: pointer;
+	white-space: nowrap;
+	direction: ltr;
+	unicode-bidi: isolate;
+}
+
+.center-filter__chip--active {
+	border-color: var(--color-primary-element);
+	background-color: color-mix(in srgb, var(--color-primary-element) 10%, transparent);
+	color: var(--color-primary-element);
+	font-weight: 600;
+}
+
+.center-filter__chip:focus-visible {
+	outline: 2px solid var(--color-primary-element);
+	outline-offset: 2px;
+}
+
+/* Table column sizing (UXC-V2-FU-15 / UXC-V2-FU-15-VERIFY): deterministic column widths eliminate
+   the initial-load horizontal shift. Root cause: async manager sheet reads (titles, purchaser
+   names, submitted dates) change cell content after the first table render; table-layout: auto
+   recalculates column widths on every content change, producing visible column movement.
+   table-layout: fixed freezes column geometry from the first paint; content wraps or clips
+   inside its column instead of resizing it. */
+:deep(.responsive-table__desktop table) {
+	width: 100%;
+	table-layout: fixed;
+}
+
+:deep(.responsive-table__desktop th[data-testid="costcenter-queue-sort-reference"]),
+:deep(.responsive-table__desktop td[data-testid="costcenter-queue-cell-reference"]) {
+	min-width: 180px;
+}
+
+:deep(.responsive-table__desktop th[data-testid="costcenter-queue-sort-purchaser"]),
+:deep(.responsive-table__desktop td[data-testid="costcenter-queue-cell-purchaser"]) {
+	min-width: 140px;
+}
+
+:deep(.responsive-table__desktop th[data-testid="costcenter-queue-sort-transactions"]),
+:deep(.responsive-table__desktop td[data-testid="costcenter-queue-cell-transactions"]) {
+	min-width: 100px;
+}
+
+:deep(.responsive-table__desktop th[data-testid="costcenter-queue-sort-amount"]),
+:deep(.responsive-table__desktop td[data-testid="costcenter-queue-cell-amount"]) {
+	min-width: 130px;
+}
+
+:deep(.responsive-table__desktop th[data-testid="costcenter-queue-sort-status"]),
+:deep(.responsive-table__desktop td[data-testid="costcenter-queue-cell-status"]) {
+	min-width: 100px;
+}
+
+:deep(.responsive-table__desktop th[data-testid="costcenter-queue-sort-submitted"]),
+:deep(.responsive-table__desktop td[data-testid="costcenter-queue-cell-submitted"]) {
+	min-width: 110px;
+}
+
+/* Monetary values stay intact: no wrapping between amount and currency */
+:deep(.responsive-table__desktop .sheet-row__money) {
+	white-space: nowrap;
+}
+
+/* Dates stay readable: no fragment wrapping */
+:deep(.responsive-table__desktop .sheet-row__submitted) {
+	white-space: nowrap;
 }
 </style>

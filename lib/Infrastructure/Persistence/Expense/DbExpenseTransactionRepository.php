@@ -413,6 +413,99 @@ final class DbExpenseTransactionRepository implements ExpenseTransactionReposito
         return (int) $qb->executeQuery()->fetchOne();
     }
 
+    /**
+     * Every transaction of a set of sheets, in one batched read (T016/T018).
+     *
+     * `CompletedSheetHistoryService` loads the transactions of a completed sheet to validate
+     * terminality and to render the detail table; a per-sheet `findBySheetId()` read per listed
+     * sheet would make the list endpoint N+1. The rows are ordered by sheet id and then by the
+     * same tiebreaker `findBySheetId()` uses (`created_at`, then `id`) so a caller can page or
+     * sort without a second read, and an empty input returns an empty list without issuing a
+     * query.
+     *
+     * @param list<int> $sheetDbIds surrogate `pettycash_sheets.id` values
+     * @return list<ExpenseTransaction>
+     */
+    public function findBySheetIds(array $sheetDbIds): array
+    {
+        $sheetDbIds = array_values(array_unique(array_filter(
+            $sheetDbIds,
+            static fn (?int $id): bool => $id !== null
+        )));
+
+        if ($sheetDbIds === []) {
+            return [];
+        }
+
+        $qb = $this->connection->getQueryBuilder();
+        $qb->select('*')
+            ->from('pettycash_transactions')
+            ->where($qb->expr()->in('sheet_id', $qb->createNamedParameter($sheetDbIds, IQueryBuilder::PARAM_INT_ARRAY)))
+            ->orderBy('sheet_id', 'ASC')
+            ->addOrderBy('created_at', 'ASC')
+            ->addOrderBy('id', 'ASC');
+
+        return array_map([$this, 'mapRow'], $qb->executeQuery()->fetchAllAssociative());
+    }
+
+    /**
+     * The transaction-status projection for a set of sheets, in one grouped read (T016/T017).
+     *
+     * The completed list needs, per sheet, the total, approved and rejected transaction counts —
+     * and `approved + rejected = total` is an invariant the list must hold, so all three come from
+     * one grouped read over `final_outcome` rather than from three separate predicates that could
+     * drift. The approved count is the current count of transactions whose authoritative
+     * `final_outcome` is `APPROVED`; it is the sheet fact, not a posting-time snapshot, and is
+     * never stored as a second aggregate. The CASE expressions are the portable form the project's
+     * static portability check enforces — `SUM(boolean)` would be rejected by PostgreSQL — and
+     * grouping by the selected sheet id keeps `ONLY_FULL_GROUP_BY` satisfied.
+     *
+     * A sheet with no rows is absent from the map; the caller must not invent a count for it.
+     *
+     * @param list<int> $sheetDbIds
+     * @return array<int, array{total: int, approved: int, rejected: int}>
+     */
+    public function transactionStatusProjectionFor(array $sheetDbIds): array
+    {
+        $sheetDbIds = array_values(array_unique(array_filter(
+            $sheetDbIds,
+            static fn (?int $id): bool => $id !== null
+        )));
+
+        if ($sheetDbIds === []) {
+            return [];
+        }
+
+        $qb = $this->connection->getQueryBuilder();
+        $approvedParam = (string) $qb->createNamedParameter('APPROVED');
+        $rejectedParam = (string) $qb->createNamedParameter('REJECTED');
+
+        $qb->selectAlias('t.sheet_id', 'sheet_id')
+            ->selectAlias($qb->func()->count('t.id'), 'total_count')
+            ->selectAlias(
+                $qb->createFunction('SUM(CASE WHEN t.final_outcome = ' . $approvedParam . ' THEN 1 ELSE 0 END)'),
+                'approved_count'
+            )
+            ->selectAlias(
+                $qb->createFunction('SUM(CASE WHEN t.final_outcome = ' . $rejectedParam . ' THEN 1 ELSE 0 END)'),
+                'rejected_count'
+            )
+            ->from('pettycash_transactions', 't')
+            ->where($qb->expr()->in('t.sheet_id', $qb->createNamedParameter($sheetDbIds, IQueryBuilder::PARAM_INT_ARRAY)))
+            ->groupBy('t.sheet_id');
+
+        $projection = [];
+        foreach ($qb->executeQuery()->fetchAllAssociative() as $row) {
+            $projection[(int) $row['sheet_id']] = [
+                'total' => (int) $row['total_count'],
+                'approved' => (int) $row['approved_count'],
+                'rejected' => (int) $row['rejected_count'],
+            ];
+        }
+
+        return $projection;
+    }
+
     public function save(ExpenseTransaction $transaction): void
     {
         $qb = $this->connection->getQueryBuilder();

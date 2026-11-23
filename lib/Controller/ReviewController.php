@@ -83,8 +83,16 @@ class ReviewController extends OCSController
                 default => ['items' => [], 'total' => 0],
             };
 
+            // Owner decision (2026-11-20): ONLY the finance queue stamps each item with its owning
+            // Cost Sheet's whole-sheet `stageApprovedTotals` aggregate. The cost-center and senior
+            // queues keep the plain `TransactionSummary` shape — the field is contract-absent there,
+            // and their sheet aggregates belong to the per-sheet review reads.
+            $items = $workflowStage === WorkflowStage::Finance
+                ? $this->financeQueueItems($result['items'])
+                : array_map([$this, 'formatSummary'], $result['items']);
+
             return new DataResponse([
-                'items' => array_map([$this, 'formatSummary'], $result['items']),
+                'items' => $items,
                 'total' => $result['total'],
                 'page' => $page,
                 'pageSize' => $pageSize,
@@ -117,8 +125,17 @@ class ReviewController extends OCSController
                 return $this->ocsErrorMapper->notFound('Sheet not found');
             }
 
+            // Owner decision (2026-11-20): the sheet summary carries the whole-Cost-Sheet
+            // `stageApprovedTotals` aggregate. It is stamped here rather than inside
+            // `managerSummary()` because `seniorQueueSummary()` reuses that builder, and the senior
+            // list rows must not carry the aggregate. Aggregate disclosure only: computed from the
+            // sheet's complete transaction set, it widens no transaction, evidence, or
+            // individual-decision visibility.
+            $sheetPayload = $this->sheetPayloadFormatter->managerSummary($review['sheet']);
+            $sheetPayload['stageApprovedTotals'] = $this->sheetPayloadFormatter->stageApprovedTotals($review['sheet']);
+
             return new DataResponse([
-                'sheet' => $this->sheetPayloadFormatter->managerSummary($review['sheet']),
+                'sheet' => $sheetPayload,
                 'progress' => $review['progress'],
                 'transactions' => array_map(
                     fn (array $item): array => $this->formatManagerTransaction($item),
@@ -152,11 +169,11 @@ class ReviewController extends OCSController
             }
 
             return new DataResponse([
-                'sheet' => $this->sheetPayloadFormatter->seniorSummary(
-                    $review['sheet'],
-                    $review['allTransactionsCostCenterDecided'],
-                    $review['reviewStatus']
-                ),
+                // Owner decision (2026-11-20): the per-sheet read's sheet summary carries the
+                // whole-Cost-Sheet `stageApprovedTotals` aggregate. Stamped here rather than inside
+                // `seniorSummary()` because the senior list rows reuse that builder — the list must
+                // not carry the aggregate. Aggregate disclosure only.
+                'sheet' => $this->seniorSheetPayload($review),
                 'progress' => $review['progress'],
                 'transactions' => array_map(
                     fn (array $item): array => $this->formatSeniorTransaction($item),
@@ -487,6 +504,70 @@ class ReviewController extends OCSController
     private function formatSummary(\OCA\PettyCash\Domain\Expense\ExpenseTransaction $transaction): array
     {
         return $this->payloadFormatter->summary($transaction);
+    }
+
+    /**
+     * The Senior per-sheet read's sheet payload: the shared `seniorSummary()` header plus the
+     * whole-Cost-Sheet `stageApprovedTotals` aggregate (owner decision, 2026-11-20).
+     *
+     * A private builder rather than an argument on `seniorSummary()` keeps the aggregate off the
+     * senior LIST rows, which reuse that same header through `seniorQueueSummary()`.
+     *
+     * @param array{sheet: \OCA\PettyCash\Domain\Expense\ExpenseSheet, allTransactionsCostCenterDecided: bool, reviewStatus: string, progress: array{awaitingSenior: int, decidedBySenior: int, total: int}, transactions: list<array<string, mixed>>} $review
+     * @return array<string, mixed>
+     */
+    private function seniorSheetPayload(array $review): array
+    {
+        $sheetPayload = $this->sheetPayloadFormatter->seniorSummary(
+            $review['sheet'],
+            $review['allTransactionsCostCenterDecided'],
+            $review['reviewStatus']
+        );
+        $sheetPayload['stageApprovedTotals'] = $this->sheetPayloadFormatter->stageApprovedTotals($review['sheet']);
+
+        return $sheetPayload;
+    }
+
+    /**
+     * The Finance queue's item projection (owner decision, 2026-11-20): the contract's
+     * `TransactionSummary` plus the owning Cost Sheet's whole-sheet `stageApprovedTotals`.
+     *
+     * The aggregates are computed once per queue page over the page's **distinct** sheet db ids —
+     * never one query per item — so every item of one Cost Sheet carries the identical value.
+     * Aggregate disclosure only: no transaction, evidence, actor, comment, or individual-decision
+     * visibility is widened, and the queue's eligibility and authorization are untouched.
+     *
+     * @param list<\OCA\PettyCash\Domain\Expense\ExpenseTransaction> $transactions
+     * @return list<array<string, mixed>>
+     */
+    private function financeQueueItems(array $transactions): array
+    {
+        $sheetDbIds = array_map(
+            static fn (\OCA\PettyCash\Domain\Expense\ExpenseTransaction $t): ?int => $t->sheetId,
+            $transactions
+        );
+        $totalsBySheet = $this->sheetPayloadFormatter->stageApprovedTotalsForSheets($sheetDbIds);
+        $metadataBySheet = $this->sheetPayloadFormatter->financeSheetMetadataBySheets($sheetDbIds);
+
+        return array_map(
+            function (\OCA\PettyCash\Domain\Expense\ExpenseTransaction $transaction) use ($totalsBySheet, $metadataBySheet): array {
+                $summary = $this->payloadFormatter->summary($transaction);
+                $sheetDbId = $transaction->sheetId;
+                if ($sheetDbId !== null && isset($metadataBySheet[$sheetDbId])) {
+                    $metadata = $metadataBySheet[$sheetDbId];
+                    $summary['sheetTitle'] = $metadata['title'];
+                    $summary['sheetOwnerId'] = $metadata['ownerId'];
+                    $summary['sheetOwnerDisplayName'] = $metadata['ownerDisplayName'];
+                    $summary['sheetSubmittedAt'] = $metadata['submittedAt'];
+                }
+                if ($sheetDbId !== null && isset($totalsBySheet[$sheetDbId])) {
+                    $summary['stageApprovedTotals'] = $totalsBySheet[$sheetDbId];
+                }
+
+                return $summary;
+            },
+            $transactions
+        );
     }
 
     /**

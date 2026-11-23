@@ -70,6 +70,15 @@ const kind = computed<'' | 'image' | 'pdf' | 'text'>(() => {
 })
 
 /**
+ * Inline content URL for PDFs — avoids blob: URL iframe restrictions.
+ * The endpoint returns the PDF with proper Content-Disposition: inline.
+ */
+const pdfContentUrl = computed(() => {
+	if (kind.value !== 'pdf' || !props.evidence) return ''
+	return `/ocs/v2.php/apps/pettycash/api/v1/evidence/${props.evidence.id}/content?disposition=inline`
+})
+
+/**
  * Inactive evidence keeps its metadata but never renders content (C-16.8). The existing download
  * policy offers download only for active rows, so an inactive preview is informational only.
  */
@@ -103,9 +112,10 @@ async function load(): Promise<void> {
 			// markup, even when its bytes contain angle brackets.
 			textContent.value = await blob.text()
 			if (token !== requestToken) return
-		} else {
+		} else if (kind.value === 'image') {
 			objectUrl.value = URL.createObjectURL(blob)
 		}
+		// For PDF, we use the direct endpoint URL via pdfContentUrl — no blob needed
 	} catch (e: unknown) {
 		if (token !== requestToken) return
 		error.value = (e as Error).message || t('pettycash', 'evidence.previewFailed')
@@ -243,8 +253,8 @@ onBeforeUnmount(() => {
 						class="evidence-preview-layer__image"
 						data-test="evidence-preview-image" />
 					<iframe
-						v-else-if="kind === 'pdf' && objectUrl"
-						:src="objectUrl"
+						v-else-if="kind === 'pdf'"
+						:src="pdfContentUrl"
 						:title="evidence.name"
 						class="evidence-preview-layer__pdf"
 						data-test="evidence-preview-pdf" />

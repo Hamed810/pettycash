@@ -136,10 +136,33 @@ final class DbAccountMovementRepository implements AccountMovementRepository
         $this->applyJoins($qb);
         $qb->where($qb->expr()->eq('m.account_id', $qb->createNamedParameter($accountId)))
             ->orderBy('m.occurred_at', 'DESC')
+            // A timestamp tie is decided by the surrogate id, so the order is total and a page
+            // boundary can neither repeat nor skip a row. Without this the database is free to
+            // answer two equal instants differently on two executions.
+            ->addOrderBy('m.id', 'DESC')
             ->setFirstResult($offset)
             ->setMaxResults($limit);
         $rows = $qb->executeQuery()->fetchAllAssociative();
         return array_map([$this, 'mapRow'], $rows);
+    }
+
+    /**
+     * The account's complete movement population, counted independently of any page.
+     *
+     * `COUNT(m.id)` over the account predicate, with no joins: the count is a fact about the
+     * movement table, and joining the currency or revision tables would make a corrupted reference
+     * reduce the total rather than surface as unreadable data.
+     *
+     * @param int $accountId surrogate `pettycash_accounts.id`
+     */
+    public function countByAccountId(int $accountId): int
+    {
+        $qb = $this->connection->getQueryBuilder();
+        $qb->select($qb->func()->count('m.id'))
+            ->from('pettycash_account_movements', 'm')
+            ->where($qb->expr()->eq('m.account_id', $qb->createNamedParameter($accountId, IQueryBuilder::PARAM_INT)));
+
+        return (int) $qb->executeQuery()->fetchOne();
     }
 
     public function save(AccountMovement $movement): void

@@ -91,6 +91,7 @@ export function adaptSeniorSheetListRows(rows: readonly SeniorSheetListRow[]): S
 export interface SeniorCostCenter {
 	id: string
 	name: string
+	code: string
 }
 
 function collectSeniorCostCenters(transactions: readonly TransactionSummary[]): SeniorCostCenter[] {
@@ -103,7 +104,7 @@ function collectSeniorCostCenters(transactions: readonly TransactionSummary[]): 
 		const key = costCenter.id || costCenter.name
 		if (!key || seen.has(key)) continue
 		seen.add(key)
-		centers.push({ id: costCenter.id ?? '', name: costCenter.name ?? '' })
+		centers.push({ id: costCenter.id ?? '', name: costCenter.name ?? '', code: costCenter.code ?? '' })
 	}
 
 	return centers.sort((a, b) => (a.id || a.name).localeCompare(b.id || b.name))
@@ -130,11 +131,12 @@ export function buildSeniorSheetQueue(items: readonly TransactionSummary[]): Sen
 /**
  * Queue-level (sheet-level) search over the proven-complete set (owner D2).
  *
- * The shared `searchSheetQueue` matches the CC-shaped cost-centre row (`{code, name}`), so the
- * Senior search adapts the same matching semantics for the Senior row (`{id, name}`): sheet
- * reference, title/purchaser supplied by the sheet list, cost-centre name/id when a legacy
- * transaction-derived row carries them, plus any caller-supplied terms. Transaction-level controls
- * are never duplicated at the queue (FR-007-041), and no vendor term exists (owner D7).
+ * Matches sheet reference, title, purchaser, cost-centre name and cost-centre code. The shared
+ * `searchSheetQueue` matches the CC-shaped cost-centre row (`{code, name}`); the Senior row
+ * carries `{id, name, code}` — `code` is populated from the per-sheet read's cost-centre
+ * snapshot when available, and `id` remains as an additional (internal) searchable key.
+ * Transaction-level controls are never duplicated at the queue (FR-007-041), and no vendor term
+ * exists (owner D7).
  */
 export function searchSeniorSheets(
 	items: readonly SeniorSheetQueueItem[],
@@ -151,6 +153,7 @@ export function searchSeniorSheets(
 		|| item.costCenters.some((center) =>
 			center.name.toLocaleLowerCase().includes(needle)
 			|| center.id.toLocaleLowerCase().includes(needle)
+			|| center.code.toLocaleLowerCase().includes(needle)
 		)
 		|| additionalTerms(item).some((term) =>
 			typeof term === 'string' && term.toLocaleLowerCase().includes(needle)
@@ -340,7 +343,7 @@ export type SeniorQueueSortKey =
 	| 'owner'
 	| 'pendingCount'
 	| 'amount'
-	| 'latestActivity'
+	| 'submitted'
 	| 'status'
 
 export type SeniorQueueSortDirection = 'asc' | 'desc'
@@ -430,10 +433,10 @@ function compareSeniorSheets(
 			if (!aAmount && bAmount) { primary = 1; break }
 			break
 		}
-		case 'latestActivity': {
+		case 'submitted': {
 			// ISO8601 string compare is locale-independent and chronological (plan §Sorting Model).
-			const aDate = a.latestActivityAt ?? ''
-			const bDate = b.latestActivityAt ?? ''
+			const aDate = a.submittedAt ?? ''
+			const bDate = b.submittedAt ?? ''
 			if (aDate === '' && bDate !== '') { primary = 1; break }
 			if (aDate !== '' && bDate === '') { primary = -1; break }
 			if (aDate !== bDate) { primary = (aDate < bDate ? -1 : 1) * direction; break }

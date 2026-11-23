@@ -116,14 +116,14 @@ describe('EvidencePreview (T068)', () => {
 		expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:evidence-preview')
 	})
 
-	it('renders a PDF in an iframe rather than navigating to the file', async () => {
+	it('renders a PDF in an iframe using the direct endpoint URL', async () => {
 		evidenceApi.getEvidenceContent.mockResolvedValue(new Blob(['pdf']))
-		const wrapper = mountPreview(evidence({ name: 'invoice.pdf', mediaType: 'application/pdf' }))
+		const wrapper = mountPreview(evidence({ id: 'ev-1', name: 'invoice.pdf', mediaType: 'application/pdf' }))
 		await flushPromises()
 
 		const frame = wrapper.find('[data-test="evidence-preview-pdf"]')
 		expect(frame.exists()).toBe(true)
-		expect(frame.attributes('src')).toBe('blob:evidence-preview')
+		expect(frame.attributes('src')).toBe('/ocs/v2.php/apps/pettycash/api/v1/evidence/ev-1/content?disposition=inline')
 		expect(wrapper.find('[data-test="evidence-preview-image"]').exists()).toBe(false)
 	})
 

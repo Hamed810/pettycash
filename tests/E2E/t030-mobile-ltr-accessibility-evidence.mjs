@@ -4,7 +4,7 @@
  * Complements the preserved T034/T035 batch8 evidence run, which covered 1440px English LTR and
  * 390px Persian RTL + dark. This runner closes the T030 gaps on the SENIOR surface:
  *   - English LTR at 390×844: no horizontal scroll on the senior queue, its sheet modal, the
- *     details drawer, the evidence preview and the decision modal (FR-007-008).
+ *     card's inline expanded detail, the evidence preview and the decision modal (FR-007-008).
  *   - Live touch-target measurements (>= 44px) on the senior queue tabs/search, open-sheet rows,
  *     modal close, filter/sort/export controls and the reused quick-review card actions.
  *   - Focus restore: senior modal close returns focus to the originating sheet row control.
@@ -158,18 +158,18 @@ try {
 	}
 
 	async function openFirstSheet() {
-		const openButton = page.locator('[data-testid="open-sheet-btn"]:visible').first()
+		const openButton = page.locator('[data-testid="sheet-title"]:visible').first()
 		await expect(openButton).toBeVisible({ timeout: 15000 })
-		const row = page.locator('[data-testid^="senior-sheet-row-"]:visible, [data-testid^="senior-sheet-card-"]:visible').first()
+		const row = page.locator('[data-testid^="sheet-row-"]:visible, [data-testid^="sheet-card-row-"]:visible').first()
 		const rowId = await row.getAttribute('data-testid')
 		await openButton.click()
-		await expect(page.locator('[data-testid="senior-sheet-modal"]')).toBeVisible({ timeout: 15000 })
+		await expect(page.locator('[data-testid="sheet-details-modal"]')).toBeVisible({ timeout: 15000 })
 		return { rowId, openButton }
 	}
 
 	async function closeModal() {
-		await page.locator('[data-testid="senior-modal-close"]').click()
-		await expect(page.locator('[data-testid="senior-sheet-modal"]')).toHaveCount(0, { timeout: 10000 })
+		await page.locator('[data-testid="sheet-details-modal-close"]').click()
+		await expect(page.locator('[data-testid="sheet-details-modal"]')).toHaveCount(0, { timeout: 10000 })
 	}
 
 	// ===================================================== 390×844, English LTR
@@ -187,7 +187,7 @@ try {
 	const searchBox = await page.locator('[data-testid="senior-queue-search"]').boundingBox()
 	const searchTarget = searchBox ? { name: 'queue search input', selector: '[data-testid="senior-queue-search"]', height: Math.round(searchBox.height * 10) / 10, width: Math.round(searchBox.width * 10) / 10 } : null
 	if (searchTarget) record.touchTargets.push(searchTarget)
-	const rowOpenTarget = await measureTarget('sheet row open button', '[data-testid="open-sheet-btn"]:visible')
+	const rowOpenTarget = await measureTarget('sheet row title button', '[data-testid="sheet-title"]:visible')
 	check(
 		'queue tabs/search/open-row touch targets are >= 44px on the active axis',
 		[tabTarget, searchTarget, rowOpenTarget].every((t) => t !== null && t.height !== null && t.height >= 44),
@@ -202,13 +202,13 @@ try {
 
 	// ---- sheet modal ----
 	const { rowId, openButton } = await openFirstSheet()
-	const dialog = page.locator('[data-testid="senior-modal-dialog"]')
+	const dialog = page.locator('[data-testid="sheet-details-modal-dialog"]')
 	await expect(dialog).toBeVisible()
 	check('modal dialog is a 390-width overlay', true)
 	await assertNoHorizontalScroll('sheet modal (en mobile)')
 
 	// Latin isolate for the sheet reference.
-	const bdi = page.locator('[data-testid="senior-modal-reference"]')
+	const bdi = page.locator('[data-testid="sheet-details-modal-reference"]')
 	check('sheet reference is isolated in bdi dir=ltr', (await bdi.getAttribute('dir')) === 'ltr')
 
 	// Dialog labelled by its control surface (accessible name present).
@@ -216,40 +216,40 @@ try {
 	check('dialog has an accessible aria-label', Boolean(ariaLabel && ariaLabel.trim().length > 0), { ariaLabel })
 
 	// Modal surface touch targets.
-	const closeTarget = await measureTarget('senior modal close', '[data-testid="senior-modal-close"]')
+	const closeTarget = await measureTarget('senior modal close', '[data-testid="sheet-details-modal-close"]')
 	await assertNoHorizontalScroll('sheet modal toolbar (en mobile)')
 	await shot('sheet-modal-mobile-en')
 
 	// Transaction cards: confirm the reused quick-review surface renders at 390 and measures >= 44px.
-	const cards = page.locator('[data-testid^="senior-transaction-"]')
+	const cards = page.locator('[data-testid^="sheet-transaction-"]')
 	await expect(cards.first()).toBeVisible({ timeout: 15000 })
-	const detailsTarget = await measureTarget('quick-review full-details', '[data-testid="quick-review-full-details"]')
-	const approveTarget = await measureTarget('quick-review approve', '[data-testid="quick-review-decide-approve"]')
+	const detailsTarget = await measureTarget('transaction card title', '[data-testid="transaction-card-title"]')
+	const approveTarget = await measureTarget('transaction card approve', '[data-testid="transaction-card-decide-approve"]')
 	check(
-		'search + close + quick-review action touch targets are >= 44px',
+		'search + close + transaction card action touch targets are >= 44px',
 		[closeTarget, detailsTarget, approveTarget].every((t) => t !== null && t.height !== null && t.height >= 44),
 		[closeTarget, detailsTarget, approveTarget],
 	)
 	await assertNoHorizontalScroll('sheet modal transactions (en mobile)')
 
 	// ---- focus restore on modal close (FR-007-009) ----
-	await page.locator('[data-testid="senior-modal-close"]').click()
-	await expect(page.locator('[data-testid="senior-sheet-modal"]')).toHaveCount(0, { timeout: 10000 })
+	await page.locator('[data-testid="sheet-details-modal-close"]').click()
+	await expect(page.locator('[data-testid="sheet-details-modal"]')).toHaveCount(0, { timeout: 10000 })
 	const active = await page.evaluate(() => ({ tag: document.activeElement?.tagName, id: document.activeElement?.getAttribute('data-testid') }))
-	const restoreToTrigger = active.id === 'open-sheet-btn' || (rowId !== null && active.id === rowId)
+	const restoreToTrigger = active.id === 'sheet-title' || (rowId !== null && active.id === rowId)
 	check('modal close restores focus to the originating sheet row control', restoreToTrigger, active)
 
-	// ---- details drawer (full layer above the modal), then preview ----
+	// ---- inline expanded detail (in place under the modal), then preview ----
 	await openFirstSheet()
-	const drawerTrigger = page.locator('[data-testid="quick-review-full-details"]').first()
-	await drawerTrigger.click()
-	await expect(page.locator('[data-testid="details-drawer-layer"]')).toBeVisible({ timeout: 15000 })
-	await assertNoHorizontalScroll('details drawer (en mobile)')
-	await shot('drawer-mobile-en')
-	await page.locator('[data-testid="details-drawer-close"]').click()
-	await expect(page.locator('[data-testid="details-drawer-layer"]')).toHaveCount(0)
+	const expansionToggle = page.locator('[data-testid="transaction-card-title"]').first()
+	await expansionToggle.click()
+	await expect(page.locator('[data-testid="transaction-expanded-detail"]')).toBeVisible({ timeout: 15000 })
+	await assertNoHorizontalScroll('expanded detail (en mobile)')
+	await shot('expanded-mobile-en')
+	await page.keyboard.press('Escape')
+	await expect(page.locator('[data-testid="transaction-expanded-detail"]')).toHaveCount(0)
 
-	const thumb = page.locator('[data-testid^="quick-review-thumb-"]:not([data-testid^="quick-review-thumb-more"])').first()
+	const thumb = page.locator('[data-testid^="transaction-card-thumb-"]:not([data-testid^="transaction-card-thumb-more"])').first()
 	if (await thumb.count()) {
 		await thumb.click()
 		await expect(page.locator('[data-test="evidence-preview-layer"]')).toBeVisible({ timeout: 15000 })
@@ -262,7 +262,7 @@ try {
 	}
 
 	// ---- decision modal (full layer above the modal) ----
-	const decide = page.locator('[data-testid="quick-review-decide-approve"]').first()
+	const decide = page.locator('[data-testid="transaction-card-decide-approve"]').first()
 	if (await decide.count()) {
 		await decide.click()
 		await expect(page.locator('[data-testid="decision-modal-layer"]')).toBeVisible({ timeout: 15000 })
@@ -288,7 +288,7 @@ try {
 	await assertNoHorizontalScroll('senior queue (en mobile, forced-colours)')
 	await shot('queue-mobile-en-forced-colors')
 	await openFirstSheet()
-	await expect(page.locator('[data-testid="senior-modal-dialog"]')).toBeVisible()
+	await expect(page.locator('[data-testid="sheet-details-modal-dialog"]')).toBeVisible()
 	await assertNoHorizontalScroll('sheet modal (en mobile, forced-colours)')
 	await shot('sheet-modal-mobile-en-forced-colors')
 	await closeModal()

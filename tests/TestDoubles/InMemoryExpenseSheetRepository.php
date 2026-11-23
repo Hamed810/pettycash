@@ -146,10 +146,25 @@ final class InMemoryExpenseSheetRepository implements ExpenseSheetRepository
         return array_slice(array_values($result), $offset, $limit);
     }
 
+    public function countByStatus(\OCA\PettyCash\Domain\Workflow\SheetStatus $status): int
+    {
+        return count(array_filter($this->sheets, fn($s) => $s->status === $status));
+    }
+
+    public function findByPublicIdCompleted(string $publicId): ?ExpenseSheet
+    {
+        return $this->findByPublicId($publicId);
+    }
+
     public function save(ExpenseSheet $sheet): void
     {
         if ($sheet->dbId === null) {
             $sheet->dbId = count($this->sheets) + 1;
+        }
+        // `publicId` is assigned from the aggregate's own `id`, mirroring
+        // `DbExpenseSheetRepository::save()` which uses `$sheet->publicId ?? $sheet->id`.
+        if ($sheet->publicId === null) {
+            $sheet->publicId = $sheet->id;
         }
         $this->sheets[$sheet->dbId] = $sheet;
     }

@@ -151,7 +151,7 @@ try {
 		// visible row to show a real (non-unavailable) title before measuring the converged identity.
 		try {
 			await page.waitForFunction(() => {
-				const rows = [...document.querySelectorAll('[data-testid^="senior-sheet-row-"], [data-testid^="senior-sheet-card-"]')]
+				const rows = [...document.querySelectorAll('[data-testid^="sheet-row-"], [data-testid^="sheet-card-row-"]')]
 					.filter((el) => {
 						const r = el.getBoundingClientRect()
 						return r.width > 0 && r.height > 0
@@ -183,7 +183,7 @@ try {
 				const r = el.getBoundingClientRect()
 				return { x: r.x, y: r.y, w: r.width, h: r.height }
 			}
-			const visibleRows = [...document.querySelectorAll('[data-testid^="senior-sheet-row-"], [data-testid^="senior-sheet-card-"]')]
+			const visibleRows = [...document.querySelectorAll('[data-testid^="sheet-row-"], [data-testid^="sheet-card-row-"]')]
 				.filter((el) => {
 					const r = el.getBoundingClientRect()
 					return r.width > 0 && r.height > 0
@@ -341,7 +341,7 @@ try {
 	const completedBadges = page.locator('[data-testid="review-completed-badge"]')
 	const completedCount = await completedBadges.count()
 	check('completed sheet rows retained by the sheet-list queue (en)', completedCount > 0, { completedCount })
-	const completedRow = page.locator('[data-testid^="senior-sheet-row-"]')
+	const completedRow = page.locator('[data-testid^="sheet-row-"]')
 		.filter({ has: page.locator('[data-testid="review-completed-badge"]') })
 		.first()
 	const completedTitle = (await completedRow.locator('[data-testid="sheet-title"]').textContent())?.trim() ?? ''
@@ -349,12 +349,12 @@ try {
 	const completedPending = (await completedRow.locator('[data-testid="sheet-pending-count"]').textContent())?.trim() ?? ''
 	check('completed row pending count is zero (en)', completedPending === '0', completedPending)
 	await completedRow.locator('[data-testid="sheet-title"]').click()
-	await expect(page.locator('[data-testid="senior-sheet-modal"]')).toBeVisible({ timeout: 15000 })
-	const completedModalActions = await page.locator('[data-testid="senior-sheet-modal"] [data-testid^="quick-review-decide-"]').count()
+	await expect(page.locator('[data-testid="sheet-details-modal"]')).toBeVisible({ timeout: 15000 })
+	const completedModalActions = await page.locator('[data-testid="sheet-details-modal"] [data-testid^="transaction-card-decide-"]').count()
 	check('completed sheet modal is read-only (no decision actions) (en)', completedModalActions === 0, { completedModalActions })
 	await shot('completed-sheet-modal-en')
-	await page.locator('[data-testid="senior-modal-close"]').click()
-	await expect(page.locator('[data-testid="senior-sheet-modal"]')).toHaveCount(0)
+	await page.locator('[data-testid="sheet-details-modal-close"]').click()
+	await expect(page.locator('[data-testid="sheet-details-modal"]')).toHaveCount(0)
 
 	// ============================================================= FA desktop (1440 × 900, RTL)
 	setLanguage('fa')
@@ -406,7 +406,7 @@ try {
 	setLanguage('en')
 	await openSeniorQueue()
 	await page.locator('[data-testid="sheet-title"]:visible').first().click()
-	await expect(page.locator('[data-testid="senior-sheet-modal"]')).toBeVisible({ timeout: 15000 })
+	await expect(page.locator('[data-testid="sheet-details-modal"]')).toBeVisible({ timeout: 15000 })
 	await shot('sheet-modal-desktop-en')
 	check('senior sheet modal opens from the row title', true)
 

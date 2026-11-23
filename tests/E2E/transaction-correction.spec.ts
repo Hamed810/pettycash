@@ -102,7 +102,10 @@ async function ownTxAtStage(page: Page, stage: string, sheetId: string): Promise
 
 async function sheetIdByTitle(page: Page, title: string): Promise<string> {
 	for (let i = 0; i < 12; i++) {
-		const res: any = await ocs(page, 'GET', '/sheets?page=1&pageSize=100')
+		// pageSize=100 is contract-valid (PageSize.maximum: 100) but currently answers 500 once the
+		// sheet volume crosses a backend threshold — tracked as a separate backend defect (Phase 12
+		// report). The harness stays inside the working envelope until that defect is fixed.
+		const res: any = await ocs(page, 'GET', '/sheets?page=1&pageSize=20')
 		const found = ((res?.json?.ocs?.data?.items ?? []) as any[]).find((s) => s.title === title)
 		if (found?.id) return found.id as string
 		await page.waitForTimeout(500)

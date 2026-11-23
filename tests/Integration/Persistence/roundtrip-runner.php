@@ -86,6 +86,7 @@ use OCA\PettyCash\Domain\Expense\ExpenseSheet;
 use OCA\PettyCash\Domain\Expense\ExpenseTransaction;
 use OCA\PettyCash\Domain\Expense\SheetListFilter;
 use OCA\PettyCash\Domain\Expense\TransactionRevision;
+use OCA\PettyCash\Domain\Shared\CurrencyCode;
 use OCA\PettyCash\Domain\Shared\Enum\AuditEventType;
 use OCA\PettyCash\Domain\Shared\Enum\Role;
 use OCA\PettyCash\Domain\Shared\Money;
@@ -108,6 +109,7 @@ use OCA\PettyCash\Application\Configuration\CurrencyService;
 use OCA\PettyCash\Application\Configuration\ExpenseTypeService;
 use OCA\PettyCash\Application\DataIntegrity\UnreadableRecordData;
 use OCA\PettyCash\Application\Expense\SheetService;
+use OCA\PettyCash\Application\Finance\FinanceLedgerService;
 use OCA\PettyCash\Application\Audit\AuditWriterService;
 use OCA\PettyCash\Application\Audit\ConfigurationAuditService;
 use OCA\PettyCash\Application\Configuration\FinanceAssignmentService;
@@ -124,14 +126,567 @@ use OCA\PettyCash\Infrastructure\Persistence\Evidence\DbEvidenceRepository;
 use OCA\PettyCash\Infrastructure\Persistence\Expense\DbExpenseSheetRepository;
 use OCA\PettyCash\Infrastructure\Persistence\Expense\DbExpenseTransactionRepository;
 use OCA\PettyCash\Infrastructure\Persistence\Expense\DbTransactionRevisionRepository;
+use OCA\PettyCash\Infrastructure\Persistence\Expense\SheetSummaryQuery;
+use OCA\PettyCash\Infrastructure\Persistence\Finance\FinanceReadQuery;
 use OCA\PettyCash\Infrastructure\Persistence\Workflow\DbWorkflowDecisionRepository;
 use OCA\PettyCash\Tests\Support\LeakedRows;
 use OCP\DB\QueryBuilder\IQueryBuilder;
+use OCP\DB\IResult;
 use OCP\IDBConnection;
 use OCP\IUserManager;
 use OCP\IUserSession;
 
 require_once __DIR__ . '/../../Support/LeakedRows.php';
+
+/**
+ * Query-counting wrapper for IDBConnection.
+ * Delegates to the real connection but counts executeQuery/executeStatement calls.
+ */
+final class QueryCountingConnection implements IDBConnection
+{
+    public function __construct(
+        private readonly IDBConnection $inner,
+        private int &$queryCount
+    ) {}
+
+    public function getQueryBuilder(): IQueryBuilder
+    {
+        return new QueryCountingQueryBuilder($this->inner->getQueryBuilder(), $this->queryCount);
+    }
+
+    public function getTypedQueryBuilder(): \OCP\DB\QueryBuilder\ITypedQueryBuilder
+    {
+        return new QueryCountingQueryBuilder($this->inner->getTypedQueryBuilder(), $this->queryCount);
+    }
+
+    public function prepare($sql, $limit = null, $offset = null): \OCP\DB\IPreparedStatement
+    {
+        return $this->inner->prepare($sql, $limit, $offset);
+    }
+
+    public function executeQuery($sql, $params = [], $types = []): \OCP\DB\IResult
+    {
+        $this->queryCount++;
+        return $this->inner->executeQuery($sql, $params, $types);
+    }
+
+    public function executeUpdate($sql, $params = [], $types = []): int
+    {
+        $this->queryCount++;
+        return $this->inner->executeUpdate($sql, $params, $types);
+    }
+
+    public function executeStatement($sql, $params = [], $types = []): int
+    {
+        $this->queryCount++;
+        return $this->inner->executeStatement($sql, $params, $types);
+    }
+
+    public function lastInsertId($table): int
+    {
+        return $this->inner->lastInsertId($table);
+    }
+
+    public function insertIfNotExist($table, $input, $compare = null): int
+    {
+        $this->queryCount++;
+        return $this->inner->insertIfNotExist($table, $input, $compare);
+    }
+
+    public function insertIgnoreConflict($table, $values): int
+    {
+        $this->queryCount++;
+        return $this->inner->insertIgnoreConflict($table, $values);
+    }
+
+    public function setValues($table, $keys, $values, $updatePreconditionValues = []): int
+    {
+        $this->queryCount++;
+        return $this->inner->setValues($table, $keys, $values, $updatePreconditionValues);
+    }
+
+    public function lockTable($tableName): void
+    {
+        $this->inner->lockTable($tableName);
+    }
+
+    public function unlockTable(): void
+    {
+        $this->inner->unlockTable();
+    }
+
+    public function beginTransaction(): void
+    {
+        $this->inner->beginTransaction();
+    }
+
+    public function inTransaction(): bool
+    {
+        return $this->inner->inTransaction();
+    }
+
+    public function commit(): void
+    {
+        $this->inner->commit();
+    }
+
+    public function rollBack(): void
+    {
+        $this->inner->rollBack();
+    }
+
+    public function getError(): string
+    {
+        return $this->inner->getError();
+    }
+
+    public function errorCode()
+    {
+        return $this->inner->errorCode();
+    }
+
+    public function errorInfo()
+    {
+        return $this->inner->errorInfo();
+    }
+
+    public function connect(): bool
+    {
+        return $this->inner->connect();
+    }
+
+    public function close(): void
+    {
+        $this->inner->close();
+    }
+
+    public function quote($input, $type = IQueryBuilder::PARAM_STR): mixed
+    {
+        return $this->inner->quote($input, $type);
+    }
+
+    public function getDatabasePlatform()
+    {
+        return $this->inner->getDatabasePlatform();
+    }
+
+    public function dropTable($table): void
+    {
+        $this->queryCount++;
+        $this->inner->dropTable($table);
+    }
+
+    public function truncateTable($table, $cascade): void
+    {
+        $this->queryCount++;
+        $this->inner->truncateTable($table, $cascade);
+    }
+
+    public function tableExists($table): bool
+    {
+        $this->queryCount++;
+        return $this->inner->tableExists($table);
+    }
+
+    public function escapeLikeParameter($param): string
+    {
+        return $this->inner->escapeLikeParameter($param);
+    }
+
+    public function supports4ByteText(): bool
+    {
+        return $this->inner->supports4ByteText();
+    }
+
+    public function createSchema(): \Doctrine\DBAL\Schema\Schema
+    {
+        return $this->inner->createSchema();
+    }
+
+    public function migrateToSchema(\Doctrine\DBAL\Schema\Schema $toSchema): void
+    {
+        $this->inner->migrateToSchema($toSchema);
+    }
+
+    public function getDatabaseProvider($strict = false): string
+    {
+        return $this->inner->getDatabaseProvider($strict);
+    }
+
+    public function getShardDefinition($name): ?\OC\DB\QueryBuilder\Sharded\ShardDefinition
+    {
+        return $this->inner->getShardDefinition($name);
+    }
+
+    public function getCrossShardMoveHelper(): \OC\DB\QueryBuilder\Sharded\CrossShardMoveHelper
+    {
+        return $this->inner->getCrossShardMoveHelper();
+    }
+}
+
+/**
+ * Query-counting wrapper for IQueryBuilder.
+ * Delegates to the real query builder but counts executeQuery/executeStatement calls.
+ */
+final class QueryCountingQueryBuilder implements IQueryBuilder
+{
+    public function __construct(
+        private readonly IQueryBuilder $inner,
+        private int &$queryCount
+    ) {}
+
+    public function automaticTablePrefix($enabled): void
+    {
+        $this->inner->automaticTablePrefix($enabled);
+    }
+
+    public function expr(): \OCP\DB\QueryBuilder\IExpressionBuilder
+    {
+        return $this->inner->expr();
+    }
+
+    public function func(): \OCP\DB\QueryBuilder\IFunctionBuilder
+    {
+        return $this->inner->func();
+    }
+
+    public function getType(): int
+    {
+        return $this->inner->getType();
+    }
+
+    public function getConnection(): IDBConnection
+    {
+        return $this->inner->getConnection();
+    }
+
+    public function getState(): int
+    {
+        return $this->inner->getState();
+    }
+
+    public function executeQuery(?IDBConnection $connection = null): \OCP\DB\IResult
+    {
+        $this->queryCount++;
+        return $this->inner->executeQuery($connection);
+    }
+
+    public function executeStatement(?IDBConnection $connection = null): int
+    {
+        $this->queryCount++;
+        return $this->inner->executeStatement($connection);
+    }
+
+    public function getSQL()
+    {
+        return $this->inner->getSQL();
+    }
+
+    public function setParameter($key, $value, $type = null)
+    {
+        return $this->inner->setParameter($key, $value, $type);
+    }
+
+    public function setParameters(array $params, array $types = [])
+    {
+        return $this->inner->setParameters($params, $types);
+    }
+
+    public function getParameters()
+    {
+        return $this->inner->getParameters();
+    }
+
+    public function getParameter($key)
+    {
+        return $this->inner->getParameter($key);
+    }
+
+    public function getParameterTypes()
+    {
+        return $this->inner->getParameterTypes();
+    }
+
+    public function getParameterType($key)
+    {
+        return $this->inner->getParameterType($key);
+    }
+
+    public function setFirstResult($firstResult)
+    {
+        return $this->inner->setFirstResult($firstResult);
+    }
+
+    public function getFirstResult()
+    {
+        return $this->inner->getFirstResult();
+    }
+
+    public function setMaxResults($maxResults)
+    {
+        return $this->inner->setMaxResults($maxResults);
+    }
+
+    public function getMaxResults()
+    {
+        return $this->inner->getMaxResults();
+    }
+
+    public function select(...$selects)
+    {
+        return $this->inner->select(...$selects);
+    }
+
+    public function selectAlias($select, $alias): self
+    {
+        $this->inner->selectAlias($select, $alias);
+        return $this;
+    }
+
+    public function selectDistinct($select)
+    {
+        return $this->inner->selectDistinct($select);
+    }
+
+    public function addSelect(...$select)
+    {
+        return $this->inner->addSelect(...$select);
+    }
+
+    public function delete($delete = null, $alias = null)
+    {
+        return $this->inner->delete($delete, $alias);
+    }
+
+    public function update($update = null, $alias = null)
+    {
+        return $this->inner->update($update, $alias);
+    }
+
+    public function insert($insert = null)
+    {
+        return $this->inner->insert($insert);
+    }
+
+    public function from($from, $alias = null)
+    {
+        return $this->inner->from($from, $alias);
+    }
+
+    public function join($fromAlias, $join, $alias, $condition = null)
+    {
+        return $this->inner->join($fromAlias, $join, $alias, $condition);
+    }
+
+    public function innerJoin($fromAlias, $join, $alias, $condition = null)
+    {
+        return $this->inner->innerJoin($fromAlias, $join, $alias, $condition);
+    }
+
+    public function leftJoin($fromAlias, $join, $alias, $condition = null)
+    {
+        return $this->inner->leftJoin($fromAlias, $join, $alias, $condition);
+    }
+
+    public function rightJoin($fromAlias, $join, $alias, $condition = null)
+    {
+        return $this->inner->rightJoin($fromAlias, $join, $alias, $condition);
+    }
+
+    public function where(...$predicates)
+    {
+        return $this->inner->where(...$predicates);
+    }
+
+    public function andWhere(...$where)
+    {
+        return $this->inner->andWhere(...$where);
+    }
+
+    public function orWhere(...$where)
+    {
+        return $this->inner->orWhere(...$where);
+    }
+
+    public function whereIn($column, $values)
+    {
+        return $this->inner->whereIn($column, $values);
+    }
+
+    public function andWhereIn($column, $values)
+    {
+        return $this->inner->andWhereIn($column, $values);
+    }
+
+    public function orWhereIn($column, $values)
+    {
+        return $this->inner->orWhereIn($column, $values);
+    }
+
+    public function whereNotIn($column, $values)
+    {
+        return $this->inner->whereNotIn($column, $values);
+    }
+
+    public function andWhereNotIn($column, $values)
+    {
+        return $this->inner->andWhereNotIn($column, $values);
+    }
+
+    public function orWhereNotIn($column, $values)
+    {
+        return $this->inner->orWhereNotIn($column, $values);
+    }
+
+    public function groupBy(...$groupBys)
+    {
+        return $this->inner->groupBy(...$groupBys);
+    }
+
+    public function addGroupBy(...$groupBy)
+    {
+        return $this->inner->addGroupBy(...$groupBy);
+    }
+
+    public function having(...$having)
+    {
+        return $this->inner->having(...$having);
+    }
+
+    public function andHaving(...$having)
+    {
+        return $this->inner->andHaving(...$having);
+    }
+
+    public function orHaving(...$having)
+    {
+        return $this->inner->orHaving(...$having);
+    }
+
+    public function orderBy($sort, $order = null)
+    {
+        return $this->inner->orderBy($sort, $order);
+    }
+
+    public function addOrderBy($sort, $order = null)
+    {
+        return $this->inner->addOrderBy($sort, $order);
+    }
+
+    public function getLastInsertId(): int
+    {
+        return (int) $this->inner->getLastInsertId();
+    }
+
+    public function resetQueryParts($queryParts = null)
+    {
+        return $this->inner->resetQueryParts($queryParts);
+    }
+
+    public function getQueryParts()
+    {
+        return $this->inner->getQueryParts();
+    }
+
+    public function createNamedParameter($value, $type = \OCP\DB\QueryBuilder\IQueryBuilder::PARAM_STR, $placeHolder = null)
+    {
+        return $this->inner->createNamedParameter($value, $type, $placeHolder);
+    }
+
+    public function createPositionalParameter($value, $type = \OCP\DB\QueryBuilder\IQueryBuilder::PARAM_STR, $placeHolder = null)
+    {
+        return $this->inner->createPositionalParameter($value, $type, $placeHolder);
+    }
+
+    public function quote($value, $type = \OCP\DB\QueryBuilder\IQueryBuilder::PARAM_STR)
+    {
+        return $this->inner->quote($value, $type);
+    }
+
+    public function quoteIdentifier($str)
+    {
+        return $this->inner->quoteIdentifier($str);
+    }
+
+    // Missing interface methods — transparent delegation, no query counting:
+    public function set($key, $value): self
+    {
+        $this->inner->set($key, $value);
+        return $this;
+    }
+
+    public function setValue($column, $value): self
+    {
+        $this->inner->setValue($column, $value);
+        return $this;
+    }
+
+    public function values(array $values): self
+    {
+        $this->inner->values($values);
+        return $this;
+    }
+
+    public function getQueryPart($queryPartName)
+    {
+        return $this->inner->getQueryPart($queryPartName);
+    }
+
+    public function resetQueryPart($queryPartName): self
+    {
+        $this->inner->resetQueryPart($queryPartName);
+        return $this;
+    }
+
+    public function createParameter($name): \OCP\DB\QueryBuilder\IParameter
+    {
+        return $this->inner->createParameter($name);
+    }
+
+    public function createFunction($call): \OCP\DB\QueryBuilder\IQueryFunction
+    {
+        return $this->inner->createFunction($call);
+    }
+
+    public function getTableName($table): string
+    {
+        return $this->inner->getTableName($table);
+    }
+
+    public function prefixTableName(string $table): string
+    {
+        return $this->inner->prefixTableName($table);
+    }
+
+    public function getColumnName($column, $tableAlias = ''): string
+    {
+        return $this->inner->getColumnName($column, $tableAlias);
+    }
+
+    public function hintShardKey(string $column, mixed $value, bool $overwrite = false): self
+    {
+        $this->inner->hintShardKey($column, $value, $overwrite);
+        return $this;
+    }
+
+    public function runAcrossAllShards(): self
+    {
+        $this->inner->runAcrossAllShards();
+        return $this;
+    }
+
+    public function getOutputColumns(): array
+    {
+        return $this->inner->getOutputColumns();
+    }
+
+    public function forUpdate(
+        \OCP\DB\QueryBuilder\ConflictResolutionMode $conflictResolutionMode = \OCP\DB\QueryBuilder\ConflictResolutionMode::Ordinary
+    ): self {
+        $this->inner->forUpdate($conflictResolutionMode);
+        return $this;
+    }
+}
 
 /**
  * The owner the `sheetlist` scenario's rows belong to.
@@ -200,7 +755,7 @@ const DANGLING_CURRENCY_ID = 4294000000;
 const DANGLING_ACCOUNT_ID = 4294000001;
 
 $scenario = $argv[1] ?? '';
-$scenarios = ['configuration', 'account', 'expense', 'command', 'retention', 'appdata', 'exportservice', 'sheetlist', 'dashboardcounts', 'provisioning'];
+$scenarios = ['configuration', 'account', 'expense', 'command', 'retention', 'appdata', 'exportservice', 'sheetlist', 'dashboardcounts', 'provisioning', 'financereads', 'financeledger', 'postedamounts', 'stageapprovedtotals'];
 if (!in_array($scenario, $scenarios, true)) {
     fwrite(STDERR, 'Unknown scenario ' . var_export($scenario, true) . '; expected one of ' . implode(', ', $scenarios) . ".\n");
     exit(1);
@@ -611,6 +1166,118 @@ try {
             $surrogateIdOfCurrency,
             $currencyCode,
             $rawCount
+        ),
+        // T006/T007/T008: the real `FinanceReadQuery` grouped holder projection and batched account
+        // activity, verified against MariaDB. The PHPUnit process has no `IDBConnection`, so the real
+        // SQL is exercised here and the observations asserted in `FinanceReadQueryRoundTripTest`.
+        'financereads' => scenarioFinanceReads(
+            $db,
+            $currencies,
+            $accounts,
+            $movements,
+            $track,
+            $surrogateIdOf,
+            $surrogateIdOfCurrency,
+            $currencyCode,
+            $commandIdFor
+        ),
+        // T011/T012/T013/T015: the authoritative ledger page over the real movement repository and the
+        // real provenance/count queries. Paged ordering, the independent total, movement-to-sheet
+        // enrichment, and the dangling-provenance data fault are observed here and asserted in
+        // `FinanceLedgerRoundTripTest`. The connection is wrapped by `QueryCountingConnection` so the
+        // per-request query budget can be measured against real MariaDB.
+        'financeledger' => (function () use (
+            $db,
+            $currencies,
+            $accounts,
+            $movements,
+            $sheets,
+            $transactions,
+            $revisions,
+            $decisions,
+            $actorUid,
+            $now,
+            $track,
+            $surrogateIdOf,
+            $surrogateIdOfCurrency,
+            $currencyCode,
+            $commandIdFor,
+            $userDirectory,
+            $currentUser
+        ): array {
+            // Wrap the connection to count queries during the ledger service call
+            $queryCount = 0;
+            $countingDb = new QueryCountingConnection($db, $queryCount);
+
+            // Create repositories with the counting connection
+            $countingCurrencies = new DbCurrencyRepository($countingDb, $userDirectory, $currentUser);
+            $countingAccounts = new DbAccountRepository($countingDb, $userDirectory, $currentUser);
+            $countingMovements = new DbAccountMovementRepository($countingDb, $userDirectory, $currentUser);
+            $countingSheets = new DbExpenseSheetRepository($countingDb, $userDirectory, $currentUser);
+            $countingTransactions = new DbExpenseTransactionRepository($countingDb, $userDirectory, $currentUser, $revisions);
+            $countingRevisions = new DbTransactionRevisionRepository($countingDb, $userDirectory, $currentUser);
+            $countingDecisions = new DbWorkflowDecisionRepository($countingDb, $userDirectory, $currentUser);
+
+            $result = scenarioFinanceLedger(
+                $queryCount,
+                $countingDb,
+                $countingCurrencies,
+                $countingAccounts,
+                $countingMovements,
+                $countingSheets,
+                $countingTransactions,
+                $countingRevisions,
+                $countingDecisions,
+                $actorUid,
+                $now,
+                $track,
+                $surrogateIdOf,
+                $surrogateIdOfCurrency,
+                $currencyCode,
+                $commandIdFor
+            );
+
+            // Include per-page query counts in the result
+            return $result;
+        })(),
+        // T014/T019: `SheetSummaryQuery::postedAmountsFor()` must answer one row per requested
+        // completed sheet even when the sheet has no linked consumption movement. The scenario
+        // covers both left-join levels: a completed sheet with no transaction at all, and one whose
+        // active revision exists but has no movement. The PHPUnit assertions live in
+        // `FinanceReadQueryRoundTripTest`.
+        'postedamounts' => scenarioPostedAmounts(
+            $db,
+            $currencies,
+            $accounts,
+            $sheets,
+            $transactions,
+            $revisions,
+            $now,
+            $track,
+            $surrogateIdOfCurrency,
+            $currencyCode
+        ),
+        // UXC-7F-01/02/03/04: `SheetSummaryQuery::stageApprovedTotalsForSheets()` — the batched
+        // whole-sheet per-stage approved totals behind the review surfaces' `stageApprovedTotals`
+        // field (owner decision, 2026-11-20). The scenario seeds one sheet with a full decision
+        // mix (approve/reject/return/undecided/superseded-revision/two-cost-centre) and one
+        // undecided sheet, then prints exactly what the batched read answered for each requested
+        // sheet id. The PHPUnit assertions live in `SheetSummaryQueryStageTotalsRoundTripTest`.
+        'stageapprovedtotals' => scenarioStageApprovedTotals(
+            $db,
+            $currencies,
+            $accounts,
+            $sheets,
+            $transactions,
+            $revisions,
+            $decisions,
+            $now,
+            $actorUid,
+            $track,
+            $surrogateIdOf,
+            $surrogateIdOfCurrency,
+            $currencyCode,
+            $commandIdFor
         ),
     };
 } catch (Throwable $e) {
@@ -1441,6 +2108,861 @@ function scenarioAccount(
                 $ledger
             ),
             'pagedCount' => count($ledgerPaged),
+        ],
+    ];
+}
+
+/**
+ * T006/T007/T008: the real `FinanceReadQuery` against MariaDB.
+ *
+ * The PHPUnit process has no `IDBConnection`, so the Application-layer services are tested over an
+ * in-memory `FinanceRead` double in `tests/Integration/Finance/FinanceReadQueryTest.php`, and the real
+ * SQL is verified here: the grouped holder projection (`holderCount`/`allHolders`/`holderPage`), the
+ * independent distinct-holder total, deterministic pagination, and the batched `accountActivityFor`.
+ *
+ * The scenario seeds four probe holders with known per-holder account/active counts (so the exact
+ * figures are assertions the fixture can make), writes two movements for one holder's first account
+ * and back-dates them to known instants (so `MAX(occurred_at)` is exact), and compares every
+ * `FinanceReadQuery` answer against an independent raw projection of the same table. Asserting
+ * `allHolders()` against `COUNT(DISTINCT ...)` / a second GROUP BY would be two halves of the same
+ * design agreeing with each other; the raw probe is written by hand so it cannot.
+ *
+ * The seeded uids own no Nextcloud account, which is exactly what these read projections must tolerate
+ * — `FinanceReadQuery` never consults the user directory.
+ */
+function scenarioFinanceReads(
+    IDBConnection $db,
+    DbCurrencyRepository $currencies,
+    DbAccountRepository $accounts,
+    DbAccountMovementRepository $movements,
+    callable $track,
+    callable $surrogateIdOf,
+    callable $surrogateIdOfCurrency,
+    callable $currencyCode,
+    callable $commandIdFor
+): array {
+    // Accounts are one per (user, currency) — `pettycash_accounts_user_currency_uniq` — so a holder
+    // with more than one account must hold it in a distinct currency. Each seeded account therefore
+    // gets its own freshly-created currency. The root cause this scenario catches is real: seeding two
+    // accounts in one currency collides on that unique index, exactly as the schema intends.
+    $freshCurrency = static function () use ($currencies, $track, $surrogateIdOfCurrency, $currencyCode): Currency {
+        $code = $currencyCode();
+        $currencies->save(Currency::create($code, 'Finance Reads Currency', 2));
+        $track('pettycash_currencies', $surrogateIdOfCurrency($code));
+        $c = $currencies->findByCode($code);
+        if ($c === null) {
+            throw new RuntimeException('Finance-reads currency did not persist');
+        }
+
+        return $c;
+    };
+
+    // Per holder, the desired `active` flags of its accounts; fixed uids that sort in a known order
+    // and that no seeded user collides with.
+    $seedSpec = [
+        't008-finance-alpha' => [true, true],
+        't008-finance-bravo' => [false, false],
+        't008-finance-charlie' => [true, false],
+        't008-finance-delta' => [true],
+    ];
+
+    /** @var array<string, list<int>> $holderDbs */
+    $holderDbs = [];
+    /** @var array<int, PettyCashAccount> $accountByDb */
+    $accountByDb = [];
+    /** @var array<string, array{accountCount: int, activeAccountCount: int}> $seedHolders */
+    $seedHolders = [];
+    $accountSeq = 0;
+    foreach ($seedSpec as $uid => $flags) {
+        $seedHolders[$uid] = [
+            'accountCount' => count($flags),
+            'activeAccountCount' => count(array_filter($flags)),
+        ];
+        foreach ($flags as $active) {
+            $accCurrency = $freshCurrency();
+            $account = PettyCashAccount::create((string) Uuid::random(), $uid, $accCurrency);
+            $account->balanceMinor = ++$accountSeq * 1000; // deterministic, distinct
+            if (!$active) {
+                $account->setActiveByAdministrator(false);
+            }
+            $accounts->save($account);
+            $track('pettycash_accounts', (int) $account->dbId);
+            $holderDbs[$uid][] = (int) $account->dbId;
+            $accountByDb[(int) $account->dbId] = $account;
+        }
+    }
+
+    // Two movements on alpha's first account, back-dated to known instants so MAX(occurred_at) is
+    // exact. `DbAccountMovementRepository::save()` stamps `occurred_at` with the current time, so the
+    // rows are back-dated by SQL afterwards just as the `sheetlist` scenario back-dates `created_at`.
+    $alphaAct = $holderDbs['t008-finance-alpha'][0];
+    $alphaAccount = $accountByDb[$alphaAct];
+    $m1 = $alphaAccount->charge(Money::of(1000, $alphaAccount->currencyCode()), $commandIdFor('fr1'), 'round trip charge one');
+    $movements->save($m1);
+    $m1DbId = $surrogateIdOf('pettycash_account_movements', $m1->id);
+    $track('pettycash_account_movements', $m1DbId);
+    $m2 = $alphaAccount->charge(Money::of(500, $alphaAccount->currencyCode()), $commandIdFor('fr2'), 'round trip charge two');
+    $movements->save($m2);
+    $m2DbId = $surrogateIdOf('pettycash_account_movements', $m2->id);
+    $track('pettycash_account_movements', $m2DbId);
+    // Keep the stored balance consistent with the ledger.
+    $accounts->save($alphaAccount);
+
+    $backdate = static function (int $movementDbId, string $occurredAt) use ($db): void {
+        $qb = $db->getQueryBuilder();
+        $qb->update('pettycash_account_movements')
+            ->set('occurred_at', $qb->createNamedParameter($occurredAt))
+            ->where($qb->expr()->eq('id', $qb->createNamedParameter($movementDbId)))
+            ->executeStatement();
+    };
+    $backdate($m1DbId, '2024-01-01 10:00:00');
+    $backdate($m2DbId, '2024-01-01 11:00:00');
+
+    // The subject under test.
+    $read = new FinanceReadQuery($db);
+    $all = $read->allHolders();
+    $count = $read->holderCount();
+    $pageA = $read->holderPage(0, 2);
+    $pageB = $read->holderPage(2, 2);
+
+    $activityIds = array_values(array_unique(array_merge(
+        $holderDbs['t008-finance-alpha'],   // includes one used and one unused account
+        $holderDbs['t008-finance-bravo']    // two unused accounts
+    )));
+    $activity = $read->accountActivityFor($activityIds);
+    $emptyActivity = $read->accountActivityFor([]);
+
+    // Independent raw probes, written by hand rather than through `FinanceReadQuery`, so the real
+    // query is compared against the table and not against itself.
+    $rawDistinctCount = static function () use ($db): int {
+        $qb = $db->getQueryBuilder();
+        $qb->select($qb->createFunction('COUNT(DISTINCT user_uid)'))->from('pettycash_accounts');
+
+        return (int) $qb->executeQuery()->fetchOne();
+    };
+    $rawHolders = static function () use ($db): array {
+        $qb = $db->getQueryBuilder();
+        $qb->selectAlias('user_uid', 'userId')
+            ->selectAlias($qb->func()->count('id'), 'accountCount')
+            ->selectAlias($qb->createFunction('SUM(CASE WHEN active THEN 1 ELSE 0 END)'), 'activeAccountCount')
+            ->from('pettycash_accounts')
+            ->groupBy('user_uid')
+            ->orderBy('user_uid', 'ASC');
+
+        return array_map(static fn (array $row): array => [
+            'userId' => (string) $row['userId'],
+            'accountCount' => (int) $row['accountCount'],
+            'activeAccountCount' => (int) $row['activeAccountCount'],
+        ], $qb->executeQuery()->fetchAllAssociative());
+    };
+
+    /** @var array<string, string> $activityFacts */
+    $activityFacts = [];
+    foreach ($activity as $dbId => $facts) {
+        $activityFacts[(string) $dbId] = [
+            'movementCount' => $facts['movementCount'],
+            'lastMovementAt' => $facts['lastMovementAt'] !== null
+                ? $facts['lastMovementAt']->format('Y-m-d H:i:s')
+                : null,
+        ];
+    }
+
+    return [
+        'raw' => [
+            'distinctCount' => $rawDistinctCount(),
+            'holders' => $rawHolders(),
+        ],
+        'read' => [
+            'count' => $count,
+            'all' => $all,
+            'pageA' => $pageA,
+            'pageB' => $pageB,
+        ],
+        'activity' => [
+            'ids' => $activityIds,
+            'fact' => $activityFacts,
+            'empty' => $emptyActivity,
+        ],
+        'seed' => [
+            'holders' => $seedHolders,
+            'alphaActivityDbId' => $alphaAct,
+            'alphaUnusedDbId' => $holderDbs['t008-finance-alpha'][1],
+            'bravoDbIds' => array_values($holderDbs['t008-finance-bravo']),
+        ],
+    ];
+}
+
+/**
+ * T011/T012/T013: the authoritative ledger page against MariaDB.
+ *
+ * The service under test is the real `FinanceLedgerService` over the real movement repository, the
+ * real account repository and the real `FinanceReadQuery`. The fixture is built so every required
+ * property is *observable* rather than inferred:
+ *
+ * - six movements on one account, back-dated by SQL because `save()` stamps `occurred_at` with the
+ *   request time — so the persisted timestamp is a value the test can name;
+ * - two movements at the **same instant**, so the `id DESC` tie-break is exercised;
+ * - two consumption movements from **one** Cost Sheet, at different instants and with different
+ *   resulting balances, so "no consolidation" is proven by the rows themselves;
+ * - an interleaved charge between them, so unrelated money movements keep their own rows;
+ * - a negative persisted balance, transmitted verbatim;
+ * - a second account with its own movements, so page scoping is not a global ledger;
+ * - an account with no movements (valid empty ledger) and a page beyond the final row;
+ * - a consumption whose revision resolves but whose transaction does not, so the data fault is
+ *   raised by the existing `UnreadableRecordData` path rather than degraded into a valid-looking row.
+ *
+ * The raw probes are hand-written SQL: comparing the repository against itself would let one wrong
+ * predicate satisfy both halves.
+ */
+function scenarioFinanceLedger(
+    int &$queryCount,
+    IDBConnection $db,
+    DbCurrencyRepository $currencies,
+    DbAccountRepository $accounts,
+    DbAccountMovementRepository $movements,
+    DbExpenseSheetRepository $sheets,
+    DbExpenseTransactionRepository $transactions,
+    DbTransactionRevisionRepository $revisions,
+    DbWorkflowDecisionRepository $decisions,
+    string $actorUid,
+    DateTimeImmutable $now,
+    callable $track,
+    callable $surrogateIdOf,
+    callable $surrogateIdOfCurrency,
+    callable $currencyCode,
+    callable $commandIdFor
+): array {
+    $code = $currencyCode();
+    $currencies->save(Currency::create($code, 'Ledger Round Trip Currency', 0));
+    $track('pettycash_currencies', $surrogateIdOfCurrency($code));
+    $currency = $currencies->findByCode($code);
+    if ($currency === null) {
+        throw new RuntimeException('Ledger round-trip currency did not persist');
+    }
+    $currencyValue = CurrencyCode::fromString($code);
+
+    $newAccount = static function (string $uid) use ($accounts, $currency, $track): PettyCashAccount {
+        $account = PettyCashAccount::create((string) Uuid::random(), $uid, $currency);
+        $accounts->save($account);
+        $track('pettycash_accounts', (int) $account->dbId);
+
+        return $account;
+    };
+
+    $account = $newAccount('t011-ledger-alpha');
+    $otherAccount = $newAccount('t011-ledger-bravo');
+    $emptyAccount = $newAccount('t011-ledger-empty');
+    $danglingAccount = $newAccount('t011-ledger-dangling');
+
+    $sheetTitle = 'T011 Ledger Cost Sheet ' . strtoupper(substr(str_replace('-', '', (string) Uuid::random()), 0, 6));
+    $sheet = new ExpenseSheet(
+        (string) Uuid::random(),
+        $actorUid,
+        $account->id,
+        $account->currencyCode(),
+        title: $sheetTitle
+    );
+    $sheets->save($sheet);
+    $track('pettycash_sheets', (int) $sheet->dbId);
+
+    /**
+     * One transaction and its active revision. Two are approved (and each funds one consumption
+     * movement); the third is rejected so the sheet's approved count is 2 of 3.
+     *
+     * @return array{0: ExpenseTransaction, 1: TransactionRevision}
+     */
+    $newTransaction = static function (int $revisionNumber, int $amountMinor, bool $approved) use (
+        $account,
+        $actorUid,
+        $sheet,
+        $transactions,
+        $revisions,
+        $now,
+        $track
+    ): array {
+        $revision = new TransactionRevision(
+            (string) Uuid::random(),
+            $revisionNumber,
+            $now,
+            Money::of($amountMinor, $account->currencyCode())
+        );
+        $transaction = new ExpenseTransaction((string) Uuid::random(), $actorUid, $revision);
+        $transaction->sheetId = (int) $sheet->dbId;
+        $transaction->finalOutcome = $approved ? 'APPROVED' : 'REJECTED';
+        $transactions->save($transaction);
+        $track('pettycash_transactions', (int) $transaction->dbId);
+
+        $revision->transactionDbId = (int) $transaction->dbId;
+        $revisions->save($revision);
+        $track('pettycash_transaction_revisions', (int) $revision->dbId);
+
+        // The transaction can name its active revision only after the revision row exists.
+        $transactions->save($transaction);
+
+        return [$transaction, $revision];
+    };
+
+    [$tx1, $rev1] = $newTransaction(1, 800, true);
+    [$tx2, $rev2] = $newTransaction(2, 500, true);
+    [, $rev3] = $newTransaction(3, 300, false);
+
+    $decisionFor = static function (ExpenseTransaction $transaction, TransactionRevision $revision, string $label) use (
+        $actorUid,
+        $decisions,
+        $track,
+        $surrogateIdOf,
+        $commandIdFor
+    ): WorkflowDecision {
+        $decision = WorkflowDecision::create(
+            (string) Uuid::random(),
+            $transaction->id,
+            $revision->id(),
+            WorkflowStage::Finance,
+            Decision::Approve,
+            'ledger round trip',
+            $commandIdFor($label)
+        );
+        $decision->actorUid = $actorUid;
+        $decision->actorName = 'Ledger Round Trip Actor';
+        $decision->actorRole = Role::Finance->value;
+        $decisions->save($decision);
+        $track('pettycash_workflow_decisions', $surrogateIdOf('pettycash_workflow_decisions', $decision->publicId));
+
+        return $decision;
+    };
+
+    $dec1 = $decisionFor($tx1, $rev1, 'ledger-d1');
+    $dec2 = $decisionFor($tx2, $rev2, 'ledger-d2');
+
+    /** @var array<string, AccountMovement> $seeded */
+    $seeded = [];
+    /** @var array<string, int> $movementDbIds */
+    $movementDbIds = [];
+    $saveMovement = static function (string $label, AccountMovement $movement) use (
+        $movements,
+        $track,
+        $surrogateIdOf,
+        &$seeded,
+        &$movementDbIds
+    ): void {
+        $movements->save($movement);
+        $movementDbIds[$label] = $surrogateIdOf('pettycash_account_movements', $movement->id);
+        $track('pettycash_account_movements', $movementDbIds[$label]);
+        $seeded[$label] = $movement;
+    };
+
+    // Balance walk: 0 + 1000 = 1000; −800 = 200; +100 = 300; −500 = −200; +50 = −150; +25 = −125.
+    $saveMovement('chg-a', $account->charge(Money::of(1000, $currencyValue), $commandIdFor('ledger-chg-a'), 'Initial funding'));
+    $saveMovement('c1', $account->consume(Money::of(800, $currencyValue), $commandIdFor('ledger-c1'), $rev1->id(), (string) $dec1->publicId));
+    $saveMovement('chg-b', $account->charge(Money::of(100, $currencyValue), $commandIdFor('ledger-chg-b'), 'Top-up'));
+    $saveMovement('c2', $account->consume(Money::of(500, $currencyValue), $commandIdFor('ledger-c2'), $rev2->id(), (string) $dec2->publicId));
+    $saveMovement('chg-c', $account->charge(Money::of(50, $currencyValue), $commandIdFor('ledger-chg-c'), 'Same-instant top-up'));
+    $saveMovement('chg-d', $account->charge(Money::of(25, $currencyValue), $commandIdFor('ledger-chg-d'), 'Latest top-up'));
+
+    $saveMovement('other-1', $otherAccount->charge(Money::of(700, $currencyValue), $commandIdFor('ledger-other-1'), 'Other account funding'));
+    $saveMovement('other-2', $otherAccount->charge(Money::of(70, $currencyValue), $commandIdFor('ledger-other-2'), 'Other account top-up'));
+
+    // The dangling consumption: its revision row resolves, but the transaction it names does not.
+    $danglingRevision = new TransactionRevision((string) Uuid::random(), 1, $now, Money::of(10, $currencyValue));
+    $danglingRevision->transactionDbId = 999999999;
+    $revisions->save($danglingRevision);
+    $track('pettycash_transaction_revisions', (int) $danglingRevision->dbId);
+    $saveMovement(
+        'dangling',
+        $danglingAccount->consume(Money::of(10, $currencyValue), $commandIdFor('ledger-dangling'), $danglingRevision->id(), (string) $dec1->publicId)
+    );
+
+    // `save()` stamps `occurred_at` with the request time. Back-dating by SQL is the only way to get
+    // known instants and an exact tie, and it is how `sheetlist` already handles the same limitation.
+    $instants = [
+        'chg-a' => '2024-03-01 09:00:00',
+        'c1' => '2024-03-02 10:00:00',
+        'chg-b' => '2024-03-03 09:00:00',
+        'c2' => '2024-03-04 10:00:00',
+        'chg-c' => '2024-03-04 10:00:00',
+        'chg-d' => '2024-03-05 09:00:00',
+        'other-1' => '2024-03-01 08:00:00',
+        'other-2' => '2024-03-02 08:00:00',
+        'dangling' => '2024-03-06 08:00:00',
+    ];
+    foreach ($instants as $label => $occurredAt) {
+        $qb = $db->getQueryBuilder();
+        $qb->update('pettycash_account_movements')
+            ->set('occurred_at', $qb->createNamedParameter($occurredAt))
+            ->where($qb->expr()->eq('id', $qb->createNamedParameter($movementDbIds[$label], IQueryBuilder::PARAM_INT)))
+            ->executeStatement();
+    }
+
+    // --- independent raw probes, written by hand rather than through the code under test ---
+    $rawCount = static function (int $accountDbId) use ($db): int {
+        $qb = $db->getQueryBuilder();
+        $qb->select($qb->func()->count('m.id'))
+            ->from('pettycash_account_movements', 'm')
+            ->where($qb->expr()->eq('m.account_id', $qb->createNamedParameter($accountDbId, IQueryBuilder::PARAM_INT)));
+
+        return (int) $qb->executeQuery()->fetchOne();
+    };
+    $rawOrdered = static function (int $accountDbId) use ($db): array {
+        $qb = $db->getQueryBuilder();
+        $qb->select('m.public_id', 'm.movement_type', 'm.occurred_at', 'm.amount_minor', 'm.balance_after_minor', 'm.description')
+            ->from('pettycash_account_movements', 'm')
+            ->where($qb->expr()->eq('m.account_id', $qb->createNamedParameter($accountDbId, IQueryBuilder::PARAM_INT)))
+            ->orderBy('m.occurred_at', 'DESC')
+            ->addOrderBy('m.id', 'DESC');
+
+        return array_map(static fn (array $row): array => [
+            'publicId' => (string) $row['public_id'],
+            'type' => (string) $row['movement_type'],
+            'occurredAt' => (string) $row['occurred_at'],
+            'amountMinor' => (int) $row['amount_minor'],
+            'balanceAfterMinor' => (int) $row['balance_after_minor'],
+            'description' => (string) $row['description'],
+        ], $qb->executeQuery()->fetchAllAssociative());
+    };
+    $rawProvenance = static function (array $revisionPublicIds) use ($db): array {
+        $qb = $db->getQueryBuilder();
+        $qb->selectAlias('r.public_id', 'revision_public_id')
+            ->selectAlias('s.public_id', 'sheet_public_id')
+            ->selectAlias('s.title', 'sheet_title')
+            ->from('pettycash_transaction_revisions', 'r')
+            ->join('r', 'pettycash_transactions', 't', $qb->expr()->eq('r.transaction_id', 't.id'))
+            ->join('t', 'pettycash_sheets', 's', $qb->expr()->eq('t.sheet_id', 's.id'))
+            ->where($qb->expr()->in(
+                'r.public_id',
+                $qb->createNamedParameter(array_values($revisionPublicIds), IQueryBuilder::PARAM_STR_ARRAY)
+            ));
+
+        $map = [];
+        foreach ($qb->executeQuery()->fetchAllAssociative() as $row) {
+            $map[(string) $row['revision_public_id']] = [
+                'sheetId' => (string) $row['sheet_public_id'],
+                'sheetTitle' => (string) $row['sheet_title'],
+            ];
+        }
+
+        return $map;
+    };
+    $rawCounts = static function (int $sheetDbId) use ($db): array {
+        $qb = $db->getQueryBuilder();
+        $qb->selectAlias($qb->func()->count('t.id'), 'total_count')
+            ->selectAlias(
+                $qb->createFunction('SUM(CASE WHEN t.final_outcome = ' . $qb->createNamedParameter('APPROVED') . ' THEN 1 ELSE 0 END)'),
+                'approved_count'
+            )
+            ->from('pettycash_transactions', 't')
+            ->where($qb->expr()->eq('t.sheet_id', $qb->createNamedParameter($sheetDbId, IQueryBuilder::PARAM_INT)));
+        $row = $qb->executeQuery()->fetchAssociative();
+
+        return [
+            'approvedCount' => (int) ($row['approved_count'] ?? 0),
+            'totalCount' => (int) ($row['total_count'] ?? 0),
+        ];
+    };
+
+    // --- the subject: the real service over the real repositories ---
+    $service = new FinanceLedgerService($accounts, $movements, new FinanceReadQuery($db));
+
+    $serialize = static function (?array $page): ?array {
+        if ($page === null) {
+            return null;
+        }
+
+        return [
+            'page' => $page['page'],
+            'pageSize' => $page['pageSize'],
+            'total' => $page['total'],
+            'account' => [
+                'id' => $page['account']['id'],
+                'userId' => $page['account']['userId'],
+                'movementCount' => $page['account']['movementCount'],
+                'lastMovementAt' => $page['account']['lastMovementAt']?->format('Y-m-d H:i:s'),
+                'balanceMinor' => $page['account']['balance']->minorUnits(),
+            ],
+            'items' => array_map(static fn (array $row): array => [
+                'id' => $row['id'],
+                'type' => $row['type'],
+                'occurredAt' => $row['occurredAt']?->format('Y-m-d H:i:s'),
+                'description' => $row['description'],
+                'sheet' => $row['sheet'],
+                'approved' => $row['approved'],
+                'rechargeMinor' => $row['recharge']?->minorUnits(),
+                'expenseMinor' => $row['expense']?->minorUnits(),
+                'balanceAfterMinor' => $row['balanceAfter']->minorUnits(),
+                'sourceRevisionId' => $row['sourceRevisionId'],
+            ], $page['items']),
+        ];
+    };
+
+    // Measure the per-request query budget: reset the counter before each ledger call so each
+    // page's count is isolated. The mixed populated page (both CHARGE and CONSUMPTION rows) must
+    // stay within the six-query constant budget; page 2 and a different page size must not grow it.
+    $danglingOutcome = ['threw' => false, 'type' => null];
+    $queryCount = 0;
+    try {
+        $service->ledger($danglingAccount->id, 1, 25);
+    } catch (UnreadableRecordData $e) {
+        $danglingOutcome = ['threw' => true, 'type' => $e::class];
+    }
+
+    $queryCount = 0;
+    $pageOne = $service->ledger($account->id, 1, 2);
+    $pageOneQueryCount = $queryCount;
+
+    $queryCount = 0;
+    $pageTwo = $service->ledger($account->id, 2, 2);
+    $pageTwoQueryCount = $queryCount;
+
+    $queryCount = 0;
+    $pageThree = $service->ledger($account->id, 3, 2);
+    $pageThreeQueryCount = $queryCount;
+
+    $queryCount = 0;
+    $pageBeyond = $service->ledger($account->id, 4, 2);
+    $pageBeyondQueryCount = $queryCount;
+
+    $queryCount = 0;
+    $pageWhole = $service->ledger($account->id, 1, 25);
+    $pageWholeQueryCount = $queryCount;
+
+    $queryCount = 0;
+    $pageOther = $service->ledger($otherAccount->id, 1, 25);
+    $pageOtherQueryCount = $queryCount;
+
+    $queryCount = 0;
+    $pageEmpty = $service->ledger($emptyAccount->id, 1, 25);
+    $pageEmptyQueryCount = $queryCount;
+
+    return [
+        'seed' => [
+            'accountId' => $account->id,
+            'otherAccountId' => $otherAccount->id,
+            'emptyAccountId' => $emptyAccount->id,
+            'danglingAccountId' => $danglingAccount->id,
+            'sheetPublicId' => $sheet->id,
+            'sheetTitle' => $sheetTitle,
+            'revisionPublicIds' => [$rev1->id(), $rev2->id(), $rev3->id()],
+            'movements' => array_map(
+                static fn (string $label): array => [
+                    'label' => $label,
+                    'publicId' => $seeded[$label]->id,
+                    'dbId' => $movementDbIds[$label],
+                ],
+                array_keys($seeded)
+            ),
+        ],
+        'raw' => [
+            'count' => $rawCount((int) $account->dbId),
+            'ordered' => $rawOrdered((int) $account->dbId),
+            'otherCount' => $rawCount((int) $otherAccount->dbId),
+            'provenance' => $rawProvenance([$rev1->id(), $rev2->id()]),
+            'sheetCounts' => $rawCounts((int) $sheet->dbId),
+        ],
+        'pages' => [
+            'one' => $serialize($pageOne),
+            'two' => $serialize($pageTwo),
+            'three' => $serialize($pageThree),
+            'beyond' => $serialize($pageBeyond),
+            'whole' => $serialize($pageWhole),
+        ],
+        'other' => $serialize($pageOther),
+        'empty' => $serialize($pageEmpty),
+        'dangling' => $danglingOutcome,
+        'queryCount' => [
+            'pageOne' => $pageOneQueryCount,
+            'pageTwo' => $pageTwoQueryCount,
+            'pageThree' => $pageThreeQueryCount,
+            'pageBeyond' => $pageBeyondQueryCount,
+            'pageWhole' => $pageWholeQueryCount,
+            'pageOther' => $pageOtherQueryCount,
+            'pageEmpty' => $pageEmptyQueryCount,
+        ],
+    ];
+}
+
+/**
+ * T014/T019: `SheetSummaryQuery::postedAmountsFor()` over real MariaDB.
+ *
+ * The zero-posting defect was a set-based query that dropped a completed sheet because its
+ * transaction/revision/movement chain was joined with `INNER JOIN`s. This scenario asks for two
+ * completed sheets that have no consumption movement — one with no transaction at all and one with
+ * an active revision but no movement — so both left-join levels are exercised. The report includes
+ * whatever the query actually returned; the assertions live in `FinanceReadQueryRoundTripTest`.
+ */
+function scenarioPostedAmounts(
+    IDBConnection $db,
+    DbCurrencyRepository $currencies,
+    DbAccountRepository $accounts,
+    DbExpenseSheetRepository $sheets,
+    DbExpenseTransactionRepository $transactions,
+    DbTransactionRevisionRepository $revisions,
+    DateTimeImmutable $now,
+    callable $track,
+    callable $surrogateIdOfCurrency,
+    callable $currencyCode
+): array {
+    $code = $currencyCode();
+    $currencies->save(Currency::create($code, 'Posted Amounts Round Trip Currency', 2));
+    $track('pettycash_currencies', $surrogateIdOfCurrency($code));
+    $currency = $currencies->findByCode($code);
+    if ($currency === null) {
+        throw new RuntimeException('Posted-amounts round-trip currency did not persist');
+    }
+
+    $ownerUid = 't014-posted-amounts-probe';
+    $account = PettyCashAccount::create((string) Uuid::random(), $ownerUid, $currency);
+    $accounts->save($account);
+    $track('pettycash_accounts', (int) $account->dbId);
+
+    $newSheet = static function (string $title) use ($account, $ownerUid, $sheets, $track): ExpenseSheet {
+        $sheet = new ExpenseSheet(
+            (string) Uuid::random(),
+            $ownerUid,
+            $account->id,
+            $account->currencyCode(),
+            SheetStatus::Completed,
+            title: $title
+        );
+        $sheets->save($sheet);
+        $track('pettycash_sheets', (int) $sheet->dbId);
+
+        return $sheet;
+    };
+
+    $withoutTransactions = $newSheet('Zero-posting completed sheet without transactions');
+    $withoutMovement = $newSheet('Zero-posting completed sheet with a revision but no movement');
+
+    $revision = new TransactionRevision(
+        (string) Uuid::random(),
+        1,
+        $now,
+        Money::of(2500, $account->currencyCode())
+    );
+    $transaction = new ExpenseTransaction((string) Uuid::random(), $ownerUid, $revision);
+    $transaction->sheetId = (int) $withoutMovement->dbId;
+    $transaction->finalOutcome = 'APPROVED';
+    $transactions->save($transaction);
+    $track('pettycash_transactions', (int) $transaction->dbId);
+
+    $revision->transactionDbId = (int) $transaction->dbId;
+    $revisions->save($revision);
+    $track('pettycash_transaction_revisions', (int) $revision->dbId);
+    $transactions->save($transaction);
+
+    $requested = [(int) $withoutTransactions->dbId, (int) $withoutMovement->dbId];
+    $posted = (new SheetSummaryQuery($db))->postedAmountsFor($requested);
+
+    $rows = [];
+    foreach ($requested as $sheetDbId) {
+        $row = $posted[$sheetDbId] ?? null;
+        $rows[] = $row === null
+            ? ['sheetDbId' => $sheetDbId, 'present' => false]
+            : ['sheetDbId' => $sheetDbId, 'present' => true] + $row;
+    }
+
+    return [
+        'postedAmounts' => [
+            'currency' => $code,
+            'configuredMinorUnit' => 2,
+            'requested' => $requested,
+            'rowCount' => count($posted),
+            'rows' => $rows,
+            'sheets' => [
+                'withoutTransactions' => (int) $withoutTransactions->dbId,
+                'withoutMovement' => (int) $withoutMovement->dbId,
+            ],
+        ],
+    ];
+}
+
+/**
+ * `SheetSummaryQuery::stageApprovedTotalsForSheets()` — the batched whole-sheet per-stage approved
+ * totals the review surfaces' `stageApprovedTotals` field is served from (owner decision,
+ * 2026-11-20).
+ *
+ * The PHPUnit suite cannot reach MariaDB, so this scenario seeds the real tables and prints what
+ * the real query answered; `SheetSummaryQueryStageTotalsRoundTripTest` asserts the figures against
+ * values derived by hand from the seeded decisions, never against the code under test.
+ *
+ * The seeded decision mix pins every aggregation rule the owner decision names, on one sheet:
+ *
+ * - t1 (12000) — Cost Center APPROVE + Senior APPROVE: counts toward both stage totals.
+ * - t2 (8000) — Cost Center REJECT: counts toward no approved total.
+ * - t3 (5000) — Cost Center RETURN: counts toward no approved total.
+ * - t4 — Cost Center APPROVE on **revision 1**, whose **revision 2** is then attached as the
+ *   working/active revision with no decisions of its own: the superseded approval must not count
+ *   (only decisions joined to `active_revision_id` are read).
+ * - t5 (3000) — Cost Center APPROVE with a **different cost-centre code** and no cost-centre db
+ *   id: the query carries no cost-centre predicate, so the amount counts even though a scoped
+ *   manager read would never list the transaction.
+ *
+ * Sheet B holds one undecided transaction: every stage total is a derived zero — a real answer,
+ * distinct from an absent sheet. A request naming an unknown sheet db id must yield no entry for
+ * it, and every entry carries the sheet's own currency scale so the caller never needs a per-item
+ * currency lookup.
+ *
+ * @param callable(string): string $commandIdFor
+ * @param callable(string, string): int $surrogateIdOf
+ * @param callable(): string $currencyCode
+ */
+function scenarioStageApprovedTotals(
+    IDBConnection $db,
+    DbCurrencyRepository $currencies,
+    DbAccountRepository $accounts,
+    DbExpenseSheetRepository $sheets,
+    DbExpenseTransactionRepository $transactions,
+    DbTransactionRevisionRepository $revisions,
+    DbWorkflowDecisionRepository $decisions,
+    DateTimeImmutable $now,
+    string $actorUid,
+    callable $track,
+    callable $surrogateIdOf,
+    callable $surrogateIdOfCurrency,
+    callable $currencyCode,
+    callable $commandIdFor
+): array {
+    $code = $currencyCode();
+    $currencies->save(Currency::create($code, 'Stage Approved Totals Round Trip Currency', 2));
+    $track('pettycash_currencies', $surrogateIdOfCurrency($code));
+    $currency = $currencies->findByCode($code);
+    if ($currency === null) {
+        throw new RuntimeException('Stage-approved-totals round-trip currency did not persist');
+    }
+
+    $ownerUid = 't7f-stage-totals-probe';
+    $account = PettyCashAccount::create((string) Uuid::random(), $ownerUid, $currency);
+    $accounts->save($account);
+    $track('pettycash_accounts', (int) $account->dbId);
+
+    $newSheet = static function (string $title, SheetStatus $status) use ($account, $ownerUid, $sheets, $track): ExpenseSheet {
+        $sheet = new ExpenseSheet(
+            (string) Uuid::random(),
+            $ownerUid,
+            $account->id,
+            $account->currencyCode(),
+            $status,
+            title: $title
+        );
+        $sheets->save($sheet);
+        $track('pettycash_sheets', (int) $sheet->dbId);
+
+        return $sheet;
+    };
+
+    $newTransaction = static function (
+        ExpenseSheet $sheet,
+        int $amountMinor,
+        ?string $costCenterCode
+    ) use ($transactions, $revisions, $now, $ownerUid, $account, $track): array {
+        $revision = new TransactionRevision(
+            (string) Uuid::random(),
+            1,
+            $now,
+            Money::of($amountMinor, $account->currencyCode())
+        );
+        if ($costCenterCode !== null) {
+            $revision->costCenterCode = $costCenterCode;
+            $revision->costCenterName = $costCenterCode . ' (stage-totals probe)';
+        }
+        $transaction = new ExpenseTransaction((string) Uuid::random(), $ownerUid, $revision);
+        $transaction->sheetId = (int) $sheet->dbId;
+        $transactions->save($transaction);
+        $revision->transactionDbId = (int) $transaction->dbId;
+        $revisions->save($revision);
+        $track('pettycash_transaction_revisions', (int) $revision->dbId);
+        $transactions->save($transaction);
+        $track('pettycash_transactions', (int) $transaction->dbId);
+
+        return [$transaction, $revision];
+    };
+
+    $decide = static function (
+        ExpenseTransaction $transaction,
+        TransactionRevision $revision,
+        WorkflowStage $stage,
+        Decision $decision,
+        string $label
+    ) use ($actorUid, $decisions, $track, $surrogateIdOf, $commandIdFor): void {
+        $recorded = WorkflowDecision::create(
+            (string) Uuid::random(),
+            $transaction->id,
+            $revision->id(),
+            $stage,
+            $decision,
+            in_array($decision, [Decision::Reject, Decision::Return], true)
+                ? 'Stage-totals probe: ' . $decision->value
+                : null,
+            $commandIdFor($label)
+        );
+        $recorded->actorUid = $actorUid;
+        $recorded->actorName = 'Stage Totals Probe Actor';
+        $actorRole = match ($stage) {
+            WorkflowStage::CostCenter => Role::CostCenterManager,
+            WorkflowStage::Senior => Role::SeniorManager,
+            WorkflowStage::Finance => Role::Finance,
+        };
+        $recorded->actorRole = $actorRole->value;
+        $decisions->save($recorded);
+        $track('pettycash_workflow_decisions', $surrogateIdOf('pettycash_workflow_decisions', $recorded->publicId));
+    };
+
+    $sheetA = $newSheet('Mixed stage decisions sheet', SheetStatus::Senior);
+    [$t1, $t1Revision] = $newTransaction($sheetA, 12000, 'CC-7F-1');
+    [$t2, $t2Revision] = $newTransaction($sheetA, 8000, 'CC-7F-1');
+    [$t3, $t3Revision] = $newTransaction($sheetA, 5000, 'CC-7F-1');
+    [$t4, $t4Revision1] = $newTransaction($sheetA, 7000, 'CC-7F-1');
+    [$t5, $t5Revision] = $newTransaction($sheetA, 3000, 'CC-7F-OTHER-SCOPE');
+
+    $decide($t1, $t1Revision, WorkflowStage::CostCenter, Decision::Approve, 'stage-totals-t1-cc');
+    $decide($t1, $t1Revision, WorkflowStage::Senior, Decision::Approve, 'stage-totals-t1-senior');
+    $decide($t2, $t2Revision, WorkflowStage::CostCenter, Decision::Reject, 'stage-totals-t2-cc');
+    $decide($t3, $t3Revision, WorkflowStage::CostCenter, Decision::Return, 'stage-totals-t3-cc');
+    $decide($t4, $t4Revision1, WorkflowStage::CostCenter, Decision::Approve, 'stage-totals-t4-cc');
+    $decide($t5, $t5Revision, WorkflowStage::CostCenter, Decision::Approve, 'stage-totals-t5-cc');
+
+    // t4's superseded revision: attach a second revision as the working/active one. The approval
+    // recorded against revision 1 stays in `pettycash_workflow_decisions` (FR-050) but is joined to
+    // no active revision, so the batched read must not count it.
+    $t4Revision2 = new TransactionRevision(
+        (string) Uuid::random(),
+        2,
+        $now,
+        Money::of(7000, $account->currencyCode()),
+        $t4Revision1->id()
+    );
+    $t4Revision2->transactionDbId = (int) $t4->dbId;
+    $revisions->save($t4Revision2);
+    $track('pettycash_transaction_revisions', (int) $t4Revision2->dbId);
+    $t4->attachWorkingRevision($t4Revision2);
+    $transactions->save($t4);
+
+    $sheetB = $newSheet('Undecided sheet', SheetStatus::CostCenter);
+    $newTransaction($sheetB, 4500, 'CC-7F-2');
+
+    $requested = [(int) $sheetA->dbId, (int) $sheetB->dbId, 999999999];
+    $answered = (new SheetSummaryQuery($db))->stageApprovedTotalsForSheets($requested);
+
+    $rows = [];
+    foreach (['mixed' => (int) $sheetA->dbId, 'undecided' => (int) $sheetB->dbId, 'unknown' => 999999999] as $label => $sheetDbId) {
+        $entry = $answered[$sheetDbId] ?? null;
+        $rows[] = [
+            'label' => $label,
+            'sheetDbId' => $sheetDbId,
+            'present' => $entry !== null,
+            'costCenterApprovedMinor' => $entry['totals']->managerApproved ?? null,
+            'seniorApprovedMinor' => $entry['totals']->seniorApproved ?? null,
+            'financeApprovedMinor' => $entry['totals']->financeApproved ?? null,
+            'currency' => $entry['currency'] ?? null,
+            'minorUnit' => $entry['minorUnit'] ?? null,
+        ];
+    }
+
+    return [
+        'stageApprovedTotals' => [
+            'currency' => $code,
+            'configuredMinorUnit' => 2,
+            'requested' => $requested,
+            'rowCount' => count($answered),
+            'rows' => $rows,
         ],
     ];
 }

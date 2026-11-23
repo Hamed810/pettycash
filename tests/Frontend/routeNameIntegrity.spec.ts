@@ -335,6 +335,15 @@ describe('component reachability', () => {
 		// UI-PUR-002 migrated `shared/AsyncState.vue` into the sheet list. It was the last
 		// pending-migration exemption — a component whose tests were green while no view rendered it —
 		// so every component under src/components must now be reachable from a view.
+		//
+		// The interim pending-migration exemption (owner-approved 2026-11-20) came and went twice:
+		// `review/SeniorSheetModal.vue` left it at UXC-8-01 and `review/FinanceSheetModal.vue` at
+		// UXC-8-02 — both orphaned modals were deleted and their behavioral assertions run against
+		// the live role views. `TransactionReviewCard.vue` and `review/TransactionDetailDrawer.vue`
+		// left the list at UXC-5; the drawer re-entered it at UXC-V2-09/10/11 while all three role
+		// views migrated onto the Inline Expanded Transaction, and left it again at UXC-V2-13 when
+		// the zero-dependency audit deleted the file and its spec. The gate has been strict since —
+		// no component may join a pending set again.
 		const unexplained = orphans
 
 		expect(

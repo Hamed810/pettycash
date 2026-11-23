@@ -86,6 +86,32 @@ final class ManagementReviewControllerTest extends TestCase
         $this->assertOcsResponseStructure($response, 200);
     }
 
+    public function testFinanceQueueItemsCarrySheetMetadata(): void
+    {
+        ContractFixtures::prepare('finance');
+
+        $response = $this->client->request('GET', '/ocs/v2.php/apps/pettycash/api/v1/queues/finance');
+        $this->assertEquals(200, $response->getStatusCode());
+        $this->assertOcsResponseStructure($response, 200);
+
+        $data = $this->ocsData($response);
+        $items = $data['items'] ?? [];
+        $this->assertNotEmpty($items, 'The finance queue fixture must carry at least one transaction');
+
+        foreach ($items as $item) {
+            self::assertArrayHasKey('sheetTitle', $item, 'Finance queue item must carry sheet title');
+            self::assertArrayHasKey('sheetOwnerId', $item, 'Finance queue item must carry purchaser id');
+            self::assertArrayHasKey('sheetOwnerDisplayName', $item, 'Finance queue item must carry purchaser display name');
+            self::assertArrayHasKey('sheetSubmittedAt', $item, 'Finance queue item must carry submitted timestamp');
+            self::assertIsString($item['sheetTitle']);
+            self::assertNotEmpty($item['sheetTitle'], 'Sheet title must be non-empty');
+            self::assertIsString($item['sheetOwnerId']);
+            self::assertNotEmpty($item['sheetOwnerId'], 'Purchaser id must be non-empty');
+            self::assertIsString($item['sheetOwnerDisplayName']);
+            self::assertNotEmpty($item['sheetOwnerDisplayName'], 'Purchaser display name must be non-empty');
+        }
+    }
+
     public function testInvalidQueueStageReturns400Or404(): void
     {
         $response = $this->client->request('GET', '/ocs/v2.php/apps/pettycash/api/v1/queues/invalid-stage');
@@ -169,6 +195,51 @@ final class ManagementReviewControllerTest extends TestCase
         self::assertTrue($data['progress']['managerComplete']);
         self::assertSame('RETURNED_FOR_CORRECTION', $data['transactions'][0]['managerState']);
         self::assertSame('RETURN', $data['transactions'][0]['managerDecision']['decision']);
+    }
+
+    /**
+     * UXC-7F-02 (owner decision, 2026-11-20): the sheet summary carries the whole-Cost-Sheet
+     * `stageApprovedTotals` aggregate — computed server-side from the sheet's complete transaction
+     * set, aggregate monetary disclosure only.
+     */
+    public function testManagerScopedSheetCarriesWholeSheetStageApprovedTotals(): void
+    {
+        $this->assertEquals(201, $this->decide('APPROVE')->getStatusCode());
+
+        $data = $this->ocsData($this->managerSheet(ContractFixtures::sheetId()));
+
+        self::assertSame(
+            ['amountMinor' => 100000, 'currency' => 'IRR', 'minorUnit' => 0],
+            $data['sheet']['stageApprovedTotals']['costCenterApproved'],
+            'the approved fixture transaction counts toward the Cost Center stage total'
+        );
+        self::assertSame(
+            ['amountMinor' => 0, 'currency' => 'IRR', 'minorUnit' => 0],
+            $data['sheet']['stageApprovedTotals']['seniorApproved'],
+            'no Senior decision exists yet — zero is the derived answer, not a gap'
+        );
+        self::assertSame(
+            ['amountMinor' => 0, 'currency' => 'IRR', 'minorUnit' => 0],
+            $data['sheet']['stageApprovedTotals']['financeApproved']
+        );
+    }
+
+    /**
+     * Only the finance queue stamps its items (owner decision, 2026-11-20); the cost-center queue
+     * keeps the plain `TransactionSummary` — the sheet aggregate belongs to the per-sheet read.
+     */
+    public function testTheCostCenterQueueItemsDoNotCarryStageApprovedTotals(): void
+    {
+        ContractFixtures::prepare('submitted');
+
+        $data = $this->ocsData($this->client->request(
+            'GET',
+            '/ocs/v2.php/apps/pettycash/api/v1/queues/cost-center'
+        ));
+
+        foreach ($data['items'] as $item) {
+            self::assertArrayNotHasKey('stageApprovedTotals', $item);
+        }
     }
 
     public function testManagerScopedSheetHidesAnOutOfScopeSheetAndItsTransactions(): void

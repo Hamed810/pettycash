@@ -163,6 +163,42 @@ final class DbExpenseSheetRepository implements ExpenseSheetRepository
         return (int) $qb->executeQuery()->fetchOne();
     }
 
+    /**
+     * How many sheets exist in one terminal completed status (T016/T017).
+     *
+     * The completed Cost Sheet list answers `PageMeta.total` from this count rather than from the
+     * length of the page beside it: a caller with 40 completed sheets and a page size of 25 must be
+     * told 40, not 25, or every client deriving a page count from `total` stops after the first
+     * page. The two terminal statuses are counted by two calls to this same method and summed by
+     * the service, because `findByStatus()` is a single-status read and folding the two into one
+     * predicate here would give the list and the count two different definitions of "completed".
+     *
+     * `COUNT(*)` arrives as a `BIGINT`, which some drivers hand back as a string, so it is cast
+     * rather than trusted -- the same rule `countAll()` states.
+     */
+    public function countByStatus(SheetStatus $status): int
+    {
+        $qb = $this->connection->getQueryBuilder();
+        $qb->select($qb->func()->count('id', 'pettycash_completed_sheet_count'))
+            ->from('pettycash_sheets')
+            ->where($qb->expr()->eq('status', $qb->createNamedParameter($status->value)));
+
+        return (int) $qb->executeQuery()->fetchOne();
+    }
+
+    /**
+     * One sheet by its public UUID, or null (T018).
+     *
+     * `CompletedSheetHistoryService::detail()` resolves the requested sheet id through this read
+     * rather than through `findById()` on a surrogate key the caller never held: the contract's
+     * `SheetId` parameter is the public UUID, and resolving it here keeps the not-found rule in one
+     * place. An unknown id is `null`, which the service maps to 404.
+     */
+    public function findByPublicIdCompleted(string $publicId): ?ExpenseSheet
+    {
+        return $this->findByPublicId($publicId);
+    }
+
     public function save(ExpenseSheet $sheet): void
     {
         $qb = $this->connection->getQueryBuilder();

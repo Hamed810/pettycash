@@ -153,6 +153,46 @@ final class FinanceReviewControllerTest extends TestCase
     }
 
     /**
+     * UXC-7F-04 (owner decision, 2026-11-20): every finance queue item carries its owning Cost
+     * Sheet's whole-sheet `stageApprovedTotals`, and every item of one Sheet carries the identical
+     * value — the frontend consumes one consistent aggregate per Sheet and must never sum the
+     * finance-eligible transaction subset. Aggregate disclosure only: no transaction, evidence,
+     * actor, comment, or individual-decision visibility rides along.
+     */
+    public function testFinanceQueueItemsCarryTheOwningSheetStageApprovedTotals(): void
+    {
+        $items = $this->queueItems();
+        $this->assertNotEmpty($items, 'the finance state seeds transactions awaiting finance review');
+
+        $bySheet = [];
+        foreach ($items as $item) {
+            $this->assertArrayHasKey(
+                'stageApprovedTotals',
+                $item,
+                'every finance queue item carries the owning sheet whole-sheet aggregate'
+            );
+            $totals = $item['stageApprovedTotals'];
+            foreach (['costCenterApproved', 'seniorApproved', 'financeApproved'] as $stage) {
+                $this->assertIsArray($totals[$stage] ?? null, "the {$stage} total must be a Money object");
+                $this->assertIsInt($totals[$stage]['amountMinor'] ?? null);
+                $this->assertIsString($totals[$stage]['currency'] ?? null);
+                $this->assertIsInt($totals[$stage]['minorUnit'] ?? null);
+            }
+            $bySheet[$item['sheetId']][] = $totals;
+        }
+
+        foreach ($bySheet as $sheetId => $totalsList) {
+            foreach ($totalsList as $entry) {
+                $this->assertSame(
+                    $totalsList[0],
+                    $entry,
+                    "every item of Cost Sheet {$sheetId} carries the identical whole-sheet aggregate"
+                );
+            }
+        }
+    }
+
+    /**
      * FR-036: the senior decision is the last management decision, and finance acts on top of it
      * rather than changing it, so the row has to carry it. It must not present the row as settled
      * — that is the management-decided versus financially-settled distinction the finance view

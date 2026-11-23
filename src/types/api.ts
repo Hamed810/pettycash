@@ -4,6 +4,10 @@
 // and a disagreement here would let a client send `period: 'week'` past a type that no longer matches the
 // one `ReportFilters` enforces.
 import type { ReportPeriodName } from './reporting'
+// Type-only derivation source for the Feature 008 Finance projections appended at the end of this
+// file: aliasing the canonical contract's generated components keeps this file and the wire from
+// drifting apart — a contract amendment that reshapes a Finance projection fails the type-check.
+import type { components } from '../generated/api'
 
 export interface ApiErrorBody { code: string; message: string; commandId?: string; fieldErrors?: Record<string, string[]> }
 /**
@@ -167,6 +171,23 @@ export interface Money {
 	minorUnit: number
 }
 
+/**
+ * Whole-Cost-Sheet approved monetary totals per workflow stage (owner decision, 2026-11-20;
+ * contract `StageApprovedTotals`).
+ *
+ * Every figure is computed by the server (`SheetTotals`) from the sheet's **complete** transaction
+ * set over the current active revisions — a stage's total counts the active revision's amount only
+ * when that stage's authoritative decision on it is Approved. A Cost Sheet is single-currency, so
+ * each total is one `Money` in the sheet's own currency: zero is a real derived answer, distinct
+ * from a stage the responding surface cannot prove. Aggregate disclosure only: these totals widen
+ * no transaction, evidence, actor, comment, or individual-decision visibility.
+ */
+export interface StageApprovedTotals {
+	costCenterApproved: Money
+	seniorApproved: Money
+	financeApproved: Money
+}
+
 // Transaction types
 export interface TransactionDraftWrite {
 	expenseDate: string
@@ -192,6 +213,28 @@ export interface TransactionSummary {
 	 * decision yet" belongs.
 	 */
 	latestDecision?: Decision
+	/**
+	 * The owning Cost Sheet's whole-sheet stage-approved aggregate (owner decision, 2026-11-20).
+	 *
+	 * Emitted ONLY on `GET /queues/finance` items: every item of one Cost Sheet carries the identical
+	 * sheet-level aggregate computed by the server from the sheet's complete transaction set. Deliberately
+	 * absent from cost-center/senior queue items and from owner-facing transaction surfaces, so optionality
+	 * here mirrors the contract exactly — a `undefined` value is "this surface does not disclose it", never
+	 * a client-side reason to derive one.
+	 */
+	stageApprovedTotals?: StageApprovedTotals
+	/**
+	 * Owning Cost Sheet metadata, emitted ONLY on `GET /queues/finance` items (owner decision,
+	 * 2026-11-22). The finance queue's transaction-scoped projection previously dropped these
+	 * values, forcing `Purchaser unavailable` / `Date unavailable` fallbacks; they are reattached
+	 * batched by sheet so no per-row lookup is needed. Absent from cost-center/senior queue items
+	 * and from owner-facing transaction surfaces.
+	 */
+	sheetTitle?: string
+	sheetOwnerId?: string
+	sheetOwnerDisplayName?: string
+	/** The genuine first-submission instant (`ExpenseSheet::firstSubmittedAt`), not the sheet's creation time. */
+	sheetSubmittedAt?: string | null
 	/**
 	 * The active expense type's current receipt rule, as resolved by the server (FR-092).
 	 *
@@ -235,6 +278,14 @@ export interface ManagerSheetSummary {
 	/** The genuine first-submission instant, not the sheet's creation time. */
 	submittedAt: string | null
 	version: number
+	/**
+	 * The sheet's whole-Cost-Sheet stage-approved aggregate (owner decision, 2026-11-20), computed
+	 * from the sheet's complete transaction set — not the manager-scoped subset in this response's
+	 * `transactions`. Required on this per-sheet read per the contract; readers still validate the
+	 * runtime shape before presenting it, so an old/malformed payload renders honestly unavailable
+	 * instead of a fabricated total.
+	 */
+	stageApprovedTotals: StageApprovedTotals
 }
 
 /**
@@ -346,7 +397,14 @@ export interface SeniorSheetListRow extends SeniorSheetSummary {
 }
 
 export interface SeniorManagerSheetReview {
-	sheet: SeniorSheetSummary
+	/**
+	 * The per-sheet read's sheet header, extended with the whole-sheet stage-approved aggregate
+	 * (owner decision, 2026-11-20). The extension lives here — not on `SeniorSheetSummary` —
+	 * exactly as the contract requires: the senior queue's list rows reuse that shared schema and
+	 * must not pay a per-sheet aggregate computation for a list page, so the aggregate arrives only
+	 * through this per-sheet read.
+	 */
+	sheet: SeniorSheetSummary & { stageApprovedTotals: StageApprovedTotals }
 	progress: SeniorSheetProgress
 	transactions: Array<TransactionSummary & {
 		seniorState: SeniorManagerTransactionState
@@ -386,7 +444,7 @@ export interface SeniorSheetQueueItem {
 	 * The server's sheet summary when this row came from `GET /queues/senior/sheets`.
 	 *
 	 * The list row already carries the complete `SeniorSheetSummary`; keeping it on the presentation
-	 * row lets the modal/drawer render real identity even when the per-sheet transaction read is
+	 * row lets the modal render real identity even when the per-sheet transaction read is
 	 * unavailable. Absent on legacy transaction-derived rows.
 	 */
 	sheet?: SeniorSheetSummary
@@ -409,7 +467,7 @@ export interface SeniorSheetQueueItem {
 	totals: Array<{ currency: string; minorUnit: number; amountMinor: number }>
 	/** The server's latest authoritative activity instant; `null` when none exists. */
 	latestActivityAt: string | null
-	costCenters: Array<{ id: string; name: string }>
+	costCenters: Array<{ id: string; name: string; code: string }>
 	// Additive, server-supplied identity (Feature 007 UX-007-07): the queue rows now come from
 	// `GET /queues/senior/sheets`, which carries these directly, so the queue surface no longer
 	// needs a per-sheet detail read to render a title, owner, status or submitted instant. Absent
@@ -816,4 +874,90 @@ export interface ExportResult {
 	resolvedTimeZone?: string
 	data: string
 	artifactRemoved: boolean
+}
+// ---------------------------------------------------------------------------
+// Finance Manager Account Management (Feature 008) — T023.
+//
+// The wire schemas below are **aliases of the canonical contract's generated
+// types**, not restatements: `check:openapi` is what holds the generated file
+// to `specs/001-pettycash-v1-core/contracts/ocs-api.yaml`, and deriving these
+// names from it means a contract amendment that reshapes a Finance projection
+// fails the frontend type-check instead of silently disagreeing with the wire.
+// The only application-specific shapes are the two page envelopes that carry a
+// sidecar object (`holder` / `account`) beside the items — the canonical
+// `responses` render those arrays optional, and a page whose items list is
+// optional would push `?? []` defensive fallbacks into every view.
+// The plain paged reads reuse the established `Page<T>` envelope.
+// ---------------------------------------------------------------------------
+
+type FinanceSchemas = components['schemas']
+
+/** A Finance-visible user identity: holder rows and completed-sheet purchasers. */
+export type FinanceUserRef = FinanceSchemas['FinanceUserRef']
+
+/** One row of `GET /finance/holders`: a user owning at least one petty-cash account. */
+export type HolderSummary = FinanceSchemas['HolderSummary']
+
+/**
+ * One Finance-scoped holder account row of `GET /finance/holders/{holderUid}/accounts`.
+ *
+ * `version` is the optimistic-lock value the recharge write must send — it is not display-only —
+ * and `balance` may be negative, which the owed-aware balance component presents, never clamps.
+ */
+export type HolderAccountSummary = FinanceSchemas['HolderAccountSummary']
+
+/** The originating Cost Sheet of a consumption ledger row (public UUID reference + title). */
+export type FinanceSheetRef = FinanceSchemas['FinanceSheetRef']
+
+/** A sheet's approved-transaction count relative to its total; `null` on the wire for a recharge. */
+export type ApprovalCounts = FinanceSchemas['ApprovalCounts']
+
+/**
+ * One authoritative row of `GET /finance/accounts/{accountId}/ledger`.
+ *
+ * Exactly one of `recharge`/`expense` is non-null, `occurredAt` is the persisted movement posting
+ * timestamp, and `balanceAfter` is the persisted resulting balance — the client never derives
+ * either (FR-008-014/018/019/023). There is deliberately no rejected-count field (FR-008-020).
+ */
+export type FinanceLedgerRow = FinanceSchemas['FinanceLedgerRow']
+
+/** One row of `GET /finance/completed-sheets`: a terminal-only completed Cost Sheet summary. */
+export type CompletedSheetSummary = FinanceSchemas['CompletedSheetSummary']
+
+/** The actual financial posting of one completed transaction; `null` for a rejected transaction. */
+export type FinancePosting = FinanceSchemas['FinancePosting']
+
+/** The latest decision per stage (Cost Center, Senior, final Finance) of a completed transaction. */
+export type FinanceDecisionStages = FinanceSchemas['FinanceDecisionStages']
+
+/** Evidence metadata without content, URL, or token — content stays on the existing evidence endpoint. */
+export type FinanceEvidenceMetadata = FinanceSchemas['FinanceEvidenceMetadata']
+
+/** One terminal transaction of a completed Cost Sheet detail. */
+export type CompletedSheetTransaction = FinanceSchemas['CompletedSheetTransaction']
+
+/**
+ * The read-only detail of `GET /finance/completed-sheets/{sheetId}`.
+ *
+ * Served only for a terminal sheet whose every transaction is terminal; the payload carries no
+ * decision or mutation capability (FR-008-036/038).
+ */
+export type CompletedSheetDetail = FinanceSchemas['CompletedSheetDetail']
+
+/** `GET /finance/holders/{holderUid}/accounts` — the holder identity beside the paged accounts. */
+export interface FinanceHolderAccountsPage {
+	holder: FinanceUserRef
+	items: HolderAccountSummary[]
+	page: number
+	pageSize: number
+	total: number
+}
+
+/** `GET /finance/accounts/{accountId}/ledger` — the account summary beside the paged ledger rows. */
+export interface FinanceLedgerPage {
+	account: HolderAccountSummary
+	items: FinanceLedgerRow[]
+	page: number
+	pageSize: number
+	total: number
 }

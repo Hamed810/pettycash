@@ -86,6 +86,36 @@ interface ExpenseTransactionRepository
      */
     public function countAll(): int;
 
+    /**
+     * Every transaction of a set of sheets, in one batched read.
+     *
+     * Added for T016/T018. `CompletedSheetHistoryService` loads the transactions of a completed
+     * sheet to validate terminality and to render the detail table; a per-sheet `findBySheetId()`
+     * read per listed sheet would make the list endpoint N+1. The rows are ordered by sheet id
+     * and then transaction id so a caller can page or sort without a second read, and an empty
+     * input returns an empty list without issuing a query.
+     *
+     * @param list<int> $sheetDbIds surrogate `pettycash_sheets.id` values
+     * @return list<ExpenseTransaction>
+     */
+    public function findBySheetIds(array $sheetDbIds): array;
+
+    /**
+     * The transaction-status projection for a set of sheets, in one grouped read.
+     *
+     * Added for T016/T017. The completed list needs, per sheet, the total, approved and rejected
+     * transaction counts — and `approved + rejected = total` is an invariant the list must hold, so
+     * all three come from one grouped read over `final_outcome` rather than from three separate
+     * predicates that could drift. The approved count is the current count of transactions whose
+     * authoritative `final_outcome` is `APPROVED`; it is the sheet fact, not a posting-time
+     * snapshot, and is never stored as a second aggregate. A sheet with no rows is absent from the
+     * map; the caller must not invent a count for it.
+     *
+     * @param list<int> $sheetDbIds
+     * @return array<int, array{total: int, approved: int, rejected: int}>
+     */
+    public function transactionStatusProjectionFor(array $sheetDbIds): array;
+
     public function save(ExpenseTransaction $transaction): void;
     /**
      * Remove a transaction and its revisions outright.

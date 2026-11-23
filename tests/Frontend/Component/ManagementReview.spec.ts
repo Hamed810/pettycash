@@ -14,6 +14,7 @@ import { ALLOWED_ACTION_KEYS } from '@/types/api'
 import { useReviewsStore } from '@/stores/reviews'
 import { expectCardAgreesWithTable } from '../../Support/cardAgreement'
 import { useAuthStore } from '@/stores/auth'
+import { useConfigurationStore } from '@/stores/configuration'
 import { formatSheetDate } from '@/utils/date'
 import { routes } from '@/router'
 import { readFileSync } from 'node:fs'
@@ -227,35 +228,9 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
 
     /**
      * The sheet-first queue keeps the transaction table as an explicit fallback
-     * (`FR-006-017`). These tests exercise the preserved transaction-level
-     * surface, so they open that view rather than asserting it is the default.
+     * (`FR-006-017`). The show-transactions button was removed per FU-10.A, so tests exercise
+     * the sheet view directly.
      */
-    async function openTransactionView(wrapper: VueWrapper) {
-      const toggle = wrapper.find('[data-testid="show-transactions-btn"]')
-      expect(toggle.exists(), 'the transaction fallback must remain reachable').toBe(true)
-      await toggle.trigger('click')
-      await flushPromises()
-    }
-
-    it('should render cost center queue with paginated transactions', async () => {
-      // The original asked for `[data-testid="queue-item"]`, which matches nothing: the view emits
-      // `queue-row-{id}` per row, which is the design that lets a row be told apart from its
-      // neighbours. It also claimed "paginated" while seeding a single page of two items against a
-      // page size of 25, so the pagination control it went on to imply was never rendered. Both are
-      // fixed here: enough items to force a second page, and the control actually asserted.
-      const items = Array.from({ length: 25 }, (_, index) => queueItem(`tx-${index + 1}`))
-      const wrapper = await mountQueue(items, { total: 30, page: 1, pageSize: 25 })
-
-      expect(wrapper.find('[data-testid="cost-center-queue"]').exists()).toBe(true)
-      await openTransactionView(wrapper)
-      // The view renders the page the server sent rather than slicing it again, so the first page is
-      // 25 items against a total of 30 — which is two pages. (Seeding 30 into `items` and expecting 25
-      // back would be asserting a client-side slice that does not exist and should not.)
-      expect(wrapper.findAll('[data-testid^="queue-row-"]')).toHaveLength(25)
-      const pagination = wrapper.find('[data-testid="queue-pagination"]')
-      expect(pagination.exists(), 'a queue spanning two pages must offer pagination').toBe(true)
-      expect(pagination.find('[data-testid="page-indicator"]').text()).toContain('1')
-    })
 
     /**
      * T394: the narrow-viewport card carries the same figures as the table.
@@ -268,36 +243,37 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
      */
     it('should carry the same figures in the narrow card as in the table', async () => {
       const wrapper = await mountQueue([
-        queueItem('tx-1'),
-        queueItem('tx-2', { sheetId: 'sheet-2' })
+        queueItem('tx-1', { sheetId: 'sheet-a' }),
+        queueItem('tx-2', { sheetId: 'sheet-b' })
       ])
-      await openTransactionView(wrapper)
 
       expectCardAgreesWithTable(wrapper, {
         rows: 2,
-        // The hooks the shared cell renderer declares (`src/components/review/queueColumns.ts`), plus
-        // this queue's own column hook. A hook absent from either layout is reported by name.
         hooks: [
-          'data-testid="amount"',
-          'data-testid="transaction-id"',
-          'data-testid="sheet-id"',
-          'data-testid="queue-stage"',
-          'data-testid="view-details-btn"'
-        ]
+          'data-testid="sheet-amount"',
+          'data-testid="sheet-reference"',
+          'data-testid="sheet-purchaser"',
+          'data-testid="sheet-transaction-count"',
+          'data-testid="sheet-status-badge"',
+          'data-testid="sheet-submitted"'
+        ],
+        cardRowTestId: 'sheet-card-row-'
       })
     })
 
     it('should offer no pagination when the queue fits one page', async () => {
-      const wrapper = await mountQueue([queueItem('tx-1'), queueItem('tx-2')])
-      await openTransactionView(wrapper)
-      expect(wrapper.findAll('[data-testid^="queue-row-"]')).toHaveLength(2)
+      const wrapper = await mountQueue([
+        queueItem('tx-1', { sheetId: 'sheet-a' }),
+        queueItem('tx-2', { sheetId: 'sheet-b' })
+      ])
+      expect(wrapper.findAll('[data-testid^="sheet-row-"]')).toHaveLength(2)
       expect(wrapper.find('[data-testid="queue-pagination"]').exists()).toBe(false)
     })
 
     it('should show empty state when no transactions in queue', async () => {
       const wrapper = await mountQueue([])
       expect(wrapper.find('[data-testid="empty-queue"]').exists()).toBe(true)
-      expect(wrapper.findAll('[data-testid^="queue-row-"]')).toHaveLength(0)
+      expect(wrapper.findAll('[data-testid^="sheet-row-"]')).toHaveLength(0)
     })
 
     it('should present one sheet row per sheet from a complete pending set', async () => {
@@ -319,15 +295,72 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
       expect(first.find('[data-testid="sheet-title"]').text()).toContain('Sheet sheet-1')
       expect(first.find('[data-testid="sheet-purchaser-name"]').text()).toContain('User One')
       expect(first.find('[data-testid="sheet-submitted"]').text()).toContain(formatSheetDate('2026-09-20T10:00:00Z'))
-      expect(first.find('[data-testid="sheet-status"]').text()).toContain('reviews.sheetQueue.needsAttention')
+      expect(first.find('[data-testid="sheet-status"]').text()).toContain('reviews.sheetQueue.awaiting')
       expect(first.find('[data-testid="status-badge-cost_center"]').exists()).toBe(true)
       expect(first.find('[data-testid="sheet-latest-activity"]').exists()).toBe(false)
+      // UXC-V2-FU-05: long references render via CompactIdentifier, never a bare dominant UUID.
+      expect(first.find('[data-testid="sheet-reference"]').classes()).toContain('compact-identifier')
+      // UXC-V2-FU-06: no large permanent instructional panel and no subtitle above the table.
+      expect(wrapper.find('[data-testid="responsibility-banner"]').exists()).toBe(false)
+      expect(wrapper.find('.queue-header__subtitle').exists()).toBe(false)
       // The Phase 1 queue must not claim sheet-wide completion or Senior eligibility.
       expect(first.text()).not.toContain('Eligible for Senior Review')
       expect(wrapper.findAll('[data-testid^="queue-row-"]'), 'the flat table is not the primary surface').toHaveLength(0)
     })
 
-    it('should count manager progress and show decided transactions inside the expanded sheet', async () => {
+    it('renders one sheet icon per row, aligned with title and reference', async () => {
+      const wrapper = await mountQueue([
+        queueItem('tx-1', { sheetId: 'sheet-a' }),
+        queueItem('tx-2', { sheetId: 'sheet-b' })
+      ])
+      const rows = wrapper.findAll('[data-testid^="sheet-row-"]')
+      expect(rows).toHaveLength(2)
+      for (const row of rows) {
+        // One icon per row
+        const icons = row.findAll('.sheet-row__icon')
+        expect(icons).toHaveLength(1)
+        // Icon is a sibling of the text block, not nested inside it
+        const identity = row.find('.sheet-row__identity')
+        expect(identity.exists()).toBe(true)
+        expect(identity.find('.sheet-row__icon').exists()).toBe(true)
+        expect(identity.find('.sheet-row__text').exists()).toBe(true)
+        // CompactIdentifier remains present
+        expect(row.find('[data-testid="sheet-reference"]').exists()).toBe(true)
+        expect(row.find('[data-testid="sheet-reference"]').classes()).toContain('compact-identifier')
+        // Title button is present
+        expect(row.find('[data-testid="sheet-title"]').exists()).toBe(true)
+      }
+      // No duplicate icons within table rows (each row has exactly one, verified above)
+      const tableIcons = wrapper.findAll('[data-testid^="sheet-row-"] .sheet-row__icon')
+      expect(tableIcons).toHaveLength(2)
+    })
+
+    /** Seeds the guarded per-transaction detail cache so cards and the drawer render decisions. */
+    function seedTransactionDetails(
+      entries: Array<{ id: string; decisions?: unknown[] }>
+    ) {
+      const reviewsStore = useReviewsStore()
+      const details: Record<string, unknown> = {}
+      const reads: Record<string, string> = {}
+      for (const entry of entries) {
+        const base = queueItem(entry.id)
+        details[entry.id] = {
+          ...base,
+          allowedActions: { canApprove: true, canReject: true, canReturn: true },
+          decisions: entry.decisions ?? [],
+          evidence: [{
+            id: `ev-${entry.id}`, transactionId: entry.id, revisionId: `rev-${entry.id}`,
+            name: `receipt-${entry.id}.png`, mediaType: 'image/png', sizeBytes: 100,
+            active: true, uploadedBy: 'user1', uploadedAt: '2026-09-20T10:00:00Z'
+          }]
+        }
+        reads[entry.id] = 'loaded'
+      }
+      reviewsStore.managerTransactionDetails = details as never
+      reviewsStore.managerTransactionReads = reads as never
+    }
+
+    it('should count manager progress and show decided transactions in the shared sheet modal', async () => {
       const approvedDecision = {
         id: 'd-approved',
         stage: 'COST_CENTER',
@@ -363,28 +396,69 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
           ]
         })
       )
+      seedTransactionDetails([
+        { id: 'tx-1', decisions: [approvedDecision] },
+        { id: 'tx-2', decisions: [returnedDecision] }
+      ])
 
       // "In progress" means this manager already decided something in the sheet. It must not be
       // presented as sheet-wide completion or Senior eligibility.
-      expect(wrapper.find('[data-testid="sheet-status"]').text()).toContain('reviews.sheetQueue.statusInProgress')
-      const inProgressTab = wrapper.find('[data-testid="tab-inProgress"]')
-      expect(inProgressTab.text()).toContain('۱')
-      await inProgressTab.trigger('click')
+      expect(wrapper.find('[data-testid="sheet-status"]').text()).toContain('reviews.seniorSheet.reviewCompleted')
+      const completedTab = wrapper.find('[data-testid="sheet-queue-tab-completed"]')
+      expect(completedTab.exists()).toBe(true)
+      await completedTab.trigger('click')
       expect(wrapper.findAll('[data-testid^="sheet-row-"]')).toHaveLength(1)
 
-      await wrapper.find('[data-testid="sheet-row-sheet-1"] .sheet-row__summary').trigger('click')
-      const detail = wrapper.find('[data-testid="sheet-detail-sheet-1"]')
-      expect(detail.find('[data-testid="quick-review-progress"]').text()).toContain('reviews.quickReview.progress')
-      expect(detail.find('[data-testid="quick-review-progress"]').text()).toContain('reviews.quickReview.returnedCount')
-      expect(detail.findAll('[data-testid^="quick-review-card-"]')).toHaveLength(2)
+      await wrapper.find('[data-testid="sheet-row-sheet-1"] [data-testid="sheet-title"]').trigger('click')
+      await flushPromises()
+      // The shared Sheet Details Modal replaces the inline expansion.
+      expect(document.body.querySelector('[data-testid="sheet-details-modal-dialog"]')).not.toBeNull()
+      // The queue stays mounted behind the modal.
+      expect(wrapper.find('[data-test="sheet-table"]').exists()).toBe(true)
 
-      const approved = detail.find('[data-testid="quick-review-card-tx-1"]')
-      expect(approved.find('[data-testid="quick-review-status"]').text()).toContain('reviews.quickReview.card.approvedByYou')
-      expect(approved.find('[data-testid="quick-review-decision-explanation"]').text()).toContain('Looks right')
+      // The progress aggregate (with its returned count) renders above the tabs.
+      const progress = document.body.querySelector('[data-testid="cc-review-progress"]')
+      expect(progress?.textContent).toContain('reviews.quickReview.progress')
+      expect(progress?.textContent).toContain('reviews.quickReview.returnedCount')
 
-      const returned = detail.find('[data-testid="quick-review-card-tx-2"]')
-      expect(returned.find('[data-testid="quick-review-status"]').text()).toContain('reviews.quickReview.card.returned')
-      expect(returned.find('[data-testid="quick-review-decision-explanation"]').text()).toContain('Receipt is missing')
+      const cards = document.body.querySelectorAll('[data-testid^="transaction-review-card-"]')
+      expect(cards).toHaveLength(2)
+
+      // The decided card shows its Cost Center outcome as a stage indicator and keeps no decide bar.
+      const approvedCard = document.body.querySelector('[data-testid="sheet-transaction-tx-1"]')!
+      expect(approvedCard.querySelector('[data-testid="transaction-card-decision-costCenter"]')?.textContent).toContain('reviews.outcome.approved')
+      expect(approvedCard.querySelector('[data-testid="transaction-card-decide-approve"]')).toBeNull()
+
+      const returnedCard = document.body.querySelector('[data-testid="sheet-transaction-tx-2"]')!
+      expect(returnedCard.querySelector('[data-testid="transaction-card-decision-costCenter"]')?.textContent).toContain('reviews.quickReview.card.returned')
+
+      // The decision explanations live in the expanded transaction's Cost Center previous-decisions
+      // group (UXC-V2-09: the drawer path is retired in favour of the inline expansion).
+      await (approvedCard.querySelector('[data-testid="transaction-card-title"]') as HTMLElement).click()
+      await flushPromises()
+      expect(document.body.querySelector('[data-testid="transaction-expanded-detail"]')).not.toBeNull()
+      const ccGroup = document.body.querySelector('[data-testid="inline-decisions-cost-center"]')
+      expect(ccGroup?.textContent).toContain('Looks right')
+      expect(document.body.querySelector('[data-testid="sheet-details-modal-dialog"]')).not.toBeNull()
+
+      // One Escape collapses only the expanded card; the sheet modal stays open beneath it.
+      document.body.querySelector('[data-testid="transaction-expanded-detail"]')?.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })
+      )
+      await flushPromises()
+      expect(document.body.querySelector('[data-testid="transaction-expanded-detail"]')).toBeNull()
+      expect(document.body.querySelector('[data-testid="sheet-details-modal-dialog"]')).not.toBeNull()
+
+      // The returned transaction's explanation is equally authoritative.
+      await (returnedCard.querySelector('[data-testid="transaction-card-title"]') as HTMLElement).click()
+      await flushPromises()
+      expect(document.body.querySelector('[data-testid="inline-decisions-cost-center"]')?.textContent).toContain('Receipt is missing')
+
+      // Close the sheet so this test's teleported overlay cannot leak into later tests' queries
+      // (the shared concept testids would otherwise answer another surface's selectors).
+      await (document.body.querySelector('[data-testid="sheet-details-modal-close"]') as HTMLElement).click()
+      await flushPromises()
+      expect(document.body.querySelector('[data-testid="sheet-details-modal-dialog"]')).toBeNull()
     })
 
     it('should expose only the supported summary stats and queue tabs', async () => {
@@ -395,9 +469,9 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
       expect(wrapper.find('[data-testid="stat-transactions"]').exists()).toBe(true)
       expect(wrapper.find('[data-testid="stat-reviewed"]').exists()).toBe(false)
 
-      expect(wrapper.find('[data-testid="tab-all"]').exists()).toBe(true)
-      expect(wrapper.find('[data-testid="tab-awaiting"]').exists()).toBe(true)
-      expect(wrapper.find('[data-testid="tab-inProgress"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="sheet-queue-tab-all"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="sheet-queue-tab-pending"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="sheet-queue-tab-completed"]').exists()).toBe(true)
       // The reviewed-history surface is not implemented and is no longer advertised as disabled.
       expect(wrapper.find('[data-testid="tab-reviewed"]').exists()).toBe(false)
       expect(wrapper.find('[data-testid="reviewed-unavailable"]').exists()).toBe(false)
@@ -405,29 +479,68 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
       expect(wrapper.text()).not.toContain('reviews.sheetQueue.stats.reviewedReason')
     })
 
-    it('should hand off to a transaction-level review path when a sheet is expanded', async () => {
+    it('should keep decisions transaction-level inside the shared sheet modal', async () => {
       const wrapper = await mountQueue([queueItem('tx-1'), queueItem('tx-2')], { total: 2, page: 1, pageSize: 500 })
+      // The drawer renders from the guarded detail read; seeding keeps the mock's page envelope
+      // (which is not a TransactionDetail) out of the cache for a URL the mock cannot answer.
+      seedTransactionDetails([{ id: 'tx-1' }, { id: 'tx-2' }])
       const row = wrapper.find('[data-testid="sheet-row-sheet-1"]')
-      await row.find('.sheet-row__summary').trigger('click')
+      await row.find('[data-testid="sheet-title"]').trigger('click')
+      await flushPromises()
 
-      const detail = wrapper.find('[data-testid="sheet-detail-sheet-1"]')
-      expect(detail.exists()).toBe(true)
-      // Batch 4: the card still hands off to the full transaction review route, and additionally
-      // carries the transaction-level decision bar (the decide buttons open the shared
+      const modal = document.body.querySelector('[data-testid="sheet-details-modal-dialog"]')
+      expect(modal).not.toBeNull()
+
+      // The transaction title toggles the inline expansion — same Sheet review context,
+      // no route navigation, no second full-height overlay (UXC-V2-09).
+      await (document.body.querySelector('[data-testid="transaction-card-title"]') as HTMLElement).click()
+      await flushPromises()
+      expect(document.body.querySelector('[data-testid="transaction-expanded-detail"]')).not.toBeNull()
+      expect(document.body.querySelector('[data-testid="sheet-details-modal-dialog"]')).not.toBeNull()
+
+      // Each card carries the transaction-level decide bar (the decide buttons open the shared
       // single-transaction confirmation).
-      expect(detail.find('[data-testid="review-transaction-tx-1"]').exists()).toBe(true)
-      expect(detail.find('[data-testid="review-transaction-tx-2"]').exists()).toBe(true)
-      expect(detail.find('[data-testid="quick-review-decide-approve"]').exists()).toBe(true)
-      expect(detail.find('[data-testid="quick-review-decide-reject"]').exists()).toBe(true)
-      expect(detail.find('[data-testid="quick-review-decide-return"]').exists()).toBe(true)
-      expect(detail.find('[data-testid="quick-review-full-details"]').exists()).toBe(true)
+      expect(document.body.querySelector('[data-testid="transaction-card-decide-approve"]')).not.toBeNull()
+      expect(document.body.querySelector('[data-testid="transaction-card-decide-reject"]')).not.toBeNull()
+      expect(document.body.querySelector('[data-testid="transaction-card-decide-return"]')).not.toBeNull()
 
       // There is no sheet-level decision unit in the DOM: the decision gate stays
       // transaction-by-transaction, so nothing may decide for the sheet as a whole.
-      const labels = wrapper.findAll('button').map((button) => button.text().trim())
+      const labels = Array.from(modal!.querySelectorAll('button')).map((button) => button.textContent?.trim() ?? '')
       expect(labels).not.toContain('reviews.quickReview.approveSheet')
       expect(labels).not.toContain('reviews.quickReview.rejectSheet')
-      expect(wrapper.find('[data-testid="sheet-decision-bar"]').exists()).toBe(false)
+      expect(document.body.querySelector('[data-testid="sheet-decision-bar"]')).toBeNull()
+
+      // Close the sheet so this test's teleported overlay cannot leak into later tests' queries.
+      await (document.body.querySelector('[data-testid="sheet-details-modal-close"]') as HTMLElement).click()
+      await flushPromises()
+      expect(document.body.querySelector('[data-testid="sheet-details-modal-dialog"]')).toBeNull()
+    })
+
+    it('should restore sheet-row focus through the full modal lifecycle', async () => {
+      const wrapper = await mountQueue([queueItem('tx-1')], { total: 1, page: 1, pageSize: 500 })
+      // The row-focus restoration reaches the row through `document.querySelector`, so this test's
+      // view must be in the document (the suite's default mount is detached).
+      // The row-focus restoration reaches the row through `document.querySelector`, so this test's
+      // view must be in the document (the suite's default mount is detached).
+      document.body.appendChild(wrapper.element as never)
+      await flushPromises()
+      const rowSummary = wrapper.find('[data-testid="sheet-row-sheet-1"] [data-testid="sheet-title"]')
+      await rowSummary.trigger('click')
+      await flushPromises()
+      expect(document.body.querySelector('[data-testid="sheet-details-modal-dialog"]')).not.toBeNull()
+
+      // One Escape closes the top layer only, and closing the modal restores the originating row.
+      document.body.querySelector('[data-testid="sheet-details-modal-dialog"]')?.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })
+      )
+      await flushPromises()
+      expect(document.body.querySelector('[data-testid="sheet-details-modal-dialog"]')).toBeNull()
+      expect(wrapper.find('[data-testid="sheet-row-sheet-1"] [data-testid="sheet-title"]').exists()).toBe(true)
+
+      // The modal is closed by the Escape above; detach the appended view so its queue markup
+      // cannot leak into later tests' document queries.
+      wrapper.element.remove()
     })
 
     it('should refuse to group a partial pending set and offer the transaction list', async () => {
@@ -436,7 +549,7 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
 
       expect(wrapper.find('[data-testid="grouping-unavailable"]').exists()).toBe(true)
       expect(wrapper.find('[data-testid="stat-sheets"]').exists()).toBe(false)
-      expect(wrapper.find('[data-testid="sheet-list"]').exists()).toBe(false)
+      expect(wrapper.find('[data-test="sheet-table"]').exists()).toBe(false)
 
       await wrapper.find('[data-testid="open-transactions-btn"]').trigger('click')
       await flushPromises()
@@ -494,22 +607,20 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
     // (it needs font metrics); what *is* checkable is that the state survives without colour, which is
     // the half of the requirement that actually excludes colour-only signalling.
     it('should display WCAG AA compliant status colors/icons', async () => {
-      const wrapper = await mountQueue([queueItem('tx-1'), queueItem('tx-2', { status: 'COST_CENTER_APPROVED' })])
-      await openTransactionView(wrapper)
+      const wrapper = await mountQueue([
+        queueItem('tx-1', { sheetId: 'sheet-a' }),
+        queueItem('tx-2', { sheetId: 'sheet-b', status: 'COST_CENTER_APPROVED' })
+      ])
 
-      const rows = wrapper.findAll('[data-testid^="queue-row-"]')
+      const rows = wrapper.findAll('[data-testid^="sheet-row-"]')
       expect(rows).toHaveLength(2)
       for (const row of rows) {
-        // Each row names its own status as text, so the state survives a colour-blind reader, a
-        // monochrome print and a high-contrast theme.
-        const badge = row.find('[data-testid^="status-badge-"]')
+        const badge = row.find('[data-testid="sheet-status-badge"]')
         expect(badge.exists(), 'a status badge must be present').toBe(true)
         expect(badge.text().trim(), 'status must be readable text, not colour alone').not.toBe('')
       }
-      // And each row carries the badge derived from *its own* status, rather than all rows sharing one.
-      expect(rows[0]?.find('[data-testid="status-badge-awaiting_cost_center_review"]').exists()).toBe(true)
-      expect(rows[1]?.find('[data-testid="status-badge-cost_center_approved"]').exists()).toBe(true)
-      expect(rows[0]?.find('[data-testid="status-badge-cost_center_approved"]').exists()).toBe(false)
+      expect(rows[0]?.find('[data-testid="sheet-status-badge"]').exists()).toBe(true)
+      expect(rows[1]?.find('[data-testid="sheet-status-badge"]').exists()).toBe(true)
     })
 
     // FR-071: ≥12pt, which is 16px. The original asserted a `persian-text` hook that no component
@@ -526,6 +637,654 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
         .filter(({ value, unit }) => Number(value) * (unit === 'rem' ? 16 : 1) < 16)
       expect(below, 'no declaration in this view may fall below the 12pt floor').toEqual([])
     })
+
+    describe('inline transaction expansion (UXC-V2-09)', () => {
+    async function openSheetModal(wrapper: VueWrapper, sheetId = 'sheet-1'): Promise<void> {
+        await wrapper.find(`[data-testid="sheet-row-${sheetId}"] [data-testid="sheet-title"]`).trigger('click')
+        await flushPromises()
+    }
+
+      async function openExpansion(id: string): Promise<void> {
+        await (document.body.querySelector(
+          `[data-testid="transaction-review-card-${id}"] [data-testid="transaction-card-title"]`
+        ) as HTMLElement).click()
+        await flushPromises()
+      }
+
+      it('expands the selected transaction in place with its own detail — never another transaction\'s', async () => {
+        seedTransactionDetails([{ id: 'tx-1' }, { id: 'tx-2' }])
+        const wrapper = await mountQueue([queueItem('tx-1'), queueItem('tx-2')], { total: 2, page: 1, pageSize: 500 })
+        await openSheetModal(wrapper)
+        await flushPromises()
+
+        await openExpansion('tx-2')
+        const region = document.body.querySelector('[data-testid="transaction-expanded-detail"]')
+        expect(region).not.toBeNull()
+        // The inline detail shows complementary fields (sheet, purchaser, submitted, evidence);
+        // transaction-scoped metadata stays on the card above (UXC-V2-FU-02).
+        expect(region?.querySelector('[data-testid="inline-field-sheet"]')).not.toBeNull()
+        expect(region?.querySelector('[data-testid="inline-attachment-ev-tx-2"]')).not.toBeNull()
+        // The originating card's toggle carries the disclosure state.
+        const card = document.body.querySelector('[data-testid="transaction-review-card-tx-2"]')
+        expect(card?.querySelector('[data-testid="transaction-card-title"]')?.getAttribute('aria-expanded')).toBe('true')
+        expect(card?.querySelector('[data-testid="transaction-card-title"]')?.getAttribute('aria-controls'))
+          .toBe('transaction-expanded-tx-2')
+        // No route change: the sheet modal is still the only frame.
+        expect(document.body.querySelectorAll('[data-testid="sheet-details-modal-dialog"]')).toHaveLength(1)
+        // The neighbouring transaction stays mounted and collapsed beside the expansion.
+        const neighbor = document.body.querySelector('[data-testid="transaction-review-card-tx-1"]')
+        expect(neighbor).not.toBeNull()
+        expect(neighbor?.querySelector('[data-testid="transaction-expanded-detail"]')).toBeNull()
+        expect(neighbor?.querySelector('[data-testid="transaction-card-title"]')?.getAttribute('aria-expanded')).toBe('false')
+      
+        // Close the sheet so this test's markup cannot leak into later tests' queries.
+        await (document.body.querySelector('[data-testid="sheet-details-modal-close"]') as HTMLElement).click()
+        await flushPromises()
+        expect(document.body.querySelector('[data-testid="sheet-details-modal-dialog"]')).toBeNull()
+      })
+
+      it('opens exactly one expansion at a time — opening B collapses A', async () => {
+        seedTransactionDetails([{ id: 'tx-1' }, { id: 'tx-2' }])
+        const wrapper = await mountQueue([queueItem('tx-1'), queueItem('tx-2')], { total: 2, page: 1, pageSize: 500 })
+        await openSheetModal(wrapper)
+        await flushPromises()
+
+        await openExpansion('tx-1')
+        await openExpansion('tx-2')
+        const regions = document.body.querySelectorAll('[data-testid="transaction-expanded-detail"]')
+        expect(regions).toHaveLength(1)
+        expect(regions[0]?.querySelector('[data-testid="inline-field-sheet"]')).not.toBeNull()
+        expect(document.body.querySelector('[data-testid="transaction-review-card-tx-1"] [data-testid="transaction-expanded-detail"]')).toBeNull()
+      
+        // Close the sheet so this test's markup cannot leak into later tests' queries.
+        await (document.body.querySelector('[data-testid="sheet-details-modal-close"]') as HTMLElement).click()
+        await flushPromises()
+        expect(document.body.querySelector('[data-testid="sheet-details-modal-dialog"]')).toBeNull()
+      })
+
+      it('keeps evidence bound to the selected transaction: the preview opens at that document and returns to the same expansion', async () => {
+        seedTransactionDetails([{ id: 'tx-1' }, { id: 'tx-2' }])
+        const wrapper = await mountQueue([queueItem('tx-1'), queueItem('tx-2')], { total: 2, page: 1, pageSize: 500 })
+        await openSheetModal(wrapper)
+        await flushPromises()
+
+        await openExpansion('tx-2')
+        // Precondition: the expansion is open and shows tx-2 before the preview cycle.
+        const before = document.body.querySelector('[data-testid="transaction-expanded-detail"]')
+        expect(before?.querySelector('[data-testid="inline-field-sheet"]')).not.toBeNull()
+
+        // A thumbnail on tx-2 opens the preview bound to tx-2's evidence set.
+        await (document.body.querySelector('[data-testid="transaction-review-card-tx-2"] [data-testid="transaction-card-thumb-ev-tx-2"]') as HTMLElement).click()
+        await flushPromises()
+        expect(document.body.querySelector('[data-test="evidence-preview-layer"]')).not.toBeNull()
+        expect(document.body.querySelector('[data-test="evidence-preview-name"]')?.textContent).toContain('receipt-tx-2.png')
+
+        // Closing the preview returns to the same expanded transaction context.
+        document.body.querySelector('[data-test="evidence-preview"]')?.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })
+        )
+        await flushPromises()
+        expect(document.body.querySelector('[data-test="evidence-preview-layer"]')).toBeNull()
+        const region = document.body.querySelector('[data-testid="transaction-expanded-detail"]')
+        expect(region?.querySelector('[data-testid="inline-field-sheet"]')).not.toBeNull()
+      
+        // Close the sheet so this test's markup cannot leak into later tests' queries.
+        await (document.body.querySelector('[data-testid="sheet-details-modal-close"]') as HTMLElement).click()
+        await flushPromises()
+        expect(document.body.querySelector('[data-testid="sheet-details-modal-dialog"]')).toBeNull()
+      })
+
+      it('routes the expanded decide row through the same single confirmation as the collapsed bar', async () => {
+        seedTransactionDetails([{ id: 'tx-1' }, { id: 'tx-2' }])
+        const wrapper = await mountQueue([queueItem('tx-1'), queueItem('tx-2')], { total: 2, page: 1, pageSize: 500 })
+        await openSheetModal(wrapper)
+        await flushPromises()
+
+        await openExpansion('tx-1')
+        await (document.body.querySelector('[data-testid="inline-decide-approve"]') as HTMLElement).click()
+        await flushPromises()
+        // The confirmation opens over the still-expanded transaction — one overlay, one decision.
+        expect(document.body.querySelector('[data-testid="decision-modal"]')).not.toBeNull()
+
+        // Completing the decision posts exactly one decision for the EXPANDED transaction and
+        // collapses the expansion deterministically (the drawer closed on decision too).
+        await (document.body.querySelector('[data-testid="decision-confirm-btn"]') as HTMLElement).click()
+        await flushPromises()
+        const decisionCalls = ocsRequest.mock.calls.filter((call: unknown[]) => {
+          const config = call[0] as { url?: string; method?: string }
+          return /\/transactions\/tx-1\/decisions$/.test(config?.url ?? '') && config?.method === 'POST'
+        })
+        expect(decisionCalls).toHaveLength(1)
+        expect(document.body.querySelector('[data-testid="decision-modal"]')).toBeNull()
+        expect(document.body.querySelector('[data-testid="transaction-expanded-detail"]')).toBeNull()
+      
+        // Close the sheet so this test's markup cannot leak into later tests' queries.
+        await (document.body.querySelector('[data-testid="sheet-details-modal-close"]') as HTMLElement).click()
+        await flushPromises()
+        expect(document.body.querySelector('[data-testid="sheet-details-modal-dialog"]')).toBeNull()
+      })
+
+      it('collapses the expansion when the modal closes and never retains it into the next sheet', async () => {
+        seedTransactionDetails([{ id: 'tx-1' }, { id: 'tx-2' }])
+        const wrapper = await mountQueue([queueItem('tx-1'), queueItem('tx-2')], { total: 2, page: 1, pageSize: 500 })
+        await openSheetModal(wrapper)
+        await flushPromises()
+
+        await openExpansion('tx-1')
+        await (document.body.querySelector('[data-testid="sheet-details-modal-close"]') as HTMLElement).click()
+        await flushPromises()
+        expect(document.body.querySelector('[data-testid="sheet-details-modal-dialog"]')).toBeNull()
+
+        // Reopening the same sheet starts collapsed — no stale expansion survives the close/reopen.
+        await openSheetModal(wrapper)
+        await flushPromises()
+        expect(document.body.querySelector('[data-testid="transaction-expanded-detail"]')).toBeNull()
+        expect(document.body.querySelector('[data-testid="transaction-review-card-tx-1"] [data-testid="transaction-card-title"]')?.getAttribute('aria-expanded')).toBe('false')
+
+        // Close the sheet so this test's markup cannot leak into later tests' queries.
+        await (document.body.querySelector('[data-testid="sheet-details-modal-close"]') as HTMLElement).click()
+        await flushPromises()
+        expect(document.body.querySelector('[data-testid="sheet-details-modal-dialog"]')).toBeNull()
+      })
+
+      it('keeps the legacy drawer unreachable through normal Cost Center interaction', async () => {
+        seedTransactionDetails([{ id: 'tx-1' }, { id: 'tx-2' }])
+        const wrapper = await mountQueue([queueItem('tx-1'), queueItem('tx-2')], { total: 2, page: 1, pageSize: 500 })
+        await openSheetModal(wrapper)
+        await flushPromises()
+
+        // Every user-reachable entry into detail — title toggle, thumbnail, decide, Escape —
+        // produces the expansion or the shared overlays, never the drawer element.
+        await openExpansion('tx-1')
+        await (document.body.querySelector('[data-testid="transaction-card-thumb-ev-tx-2"]') as HTMLElement).click()
+        await flushPromises()
+        document.body.querySelector('[data-test="evidence-preview"]')?.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })
+        )
+        await flushPromises()
+        await (document.body.querySelector('[data-testid="transaction-card-decide-approve"]') as HTMLElement).click()
+        await flushPromises()
+        expect(document.body.querySelector('[data-testid="decision-modal"]')).not.toBeNull()
+
+        // Cancel the confirmation, collapse the expansion, and close the sheet so this test's
+        // markup cannot leak into later tests' queries.
+        await (document.body.querySelector('[data-testid="decision-cancel-btn"]') as HTMLElement).click()
+        await flushPromises()
+        expect(document.body.querySelector('[data-testid="decision-modal"]')).toBeNull()
+
+        // Close the sheet so this test's markup cannot leak into later tests' queries.
+        await (document.body.querySelector('[data-testid="sheet-details-modal-close"]') as HTMLElement).click()
+        await flushPromises()
+        expect(document.body.querySelector('[data-testid="sheet-details-modal-dialog"]')).toBeNull()
+      })
+    })
+
+    /** FU-11.B: Cost Center multi-cost-center filtering. */
+    describe('Cost Center cost-center filter', () => {
+      function mountWithCenters(
+        items: unknown[],
+        centerCodes: string[],
+        centers: { id: string; code: string; name: string }[]
+      ) {
+        const reviewsStore = useReviewsStore()
+        reviewsStore.costCenterQueue = { items, total: items.length, page: 1, pageSize: 25 } as never
+        reviewsStore.fetchCostCenterQueue = vi.fn().mockResolvedValue(undefined)
+        const authStore = useAuthStore()
+        authStore.managedCostCenterCodes = centerCodes
+        const configStore = useConfigurationStore()
+        configStore.costCenters = centers as never
+        ocsRequest.mockImplementation((config: { url?: string }) => {
+          const url = config?.url ?? ''
+          const match = url.match(/\/queues\/cost-center\/sheets\/([^/?]+)/)
+          if (!match) return Promise.resolve(emptyOcsResponse(config))
+          const sheetId = decodeURIComponent(match[1] ?? '')
+          const sheetItems = items.filter((item) => (item as { sheetId?: string }).sheetId === sheetId)
+          const detail = managerSheetReview(sheetId, sheetItems)
+          return Promise.resolve(ocsEnvelope(detail))
+        })
+        return mountView(CostCenterQueueView, '/reviews/cost-center')
+      }
+
+      function ccItem(id: string, overrides: Record<string, unknown> = {}) {
+        return {
+          id, sheetId: 'sheet-1', stage: 'COST_CENTER', status: 'AWAITING_COST_CENTER_REVIEW',
+          finalOutcome: null, evidenceRequired: false, evidenceCount: 1, version: 0,
+          latestDecision: {
+            id: 'd-1', stage: 'COST_CENTER', decision: 'APPROVE',
+            actor: { userId: 'user1', displayName: 'User 1', role: 'COST_CENTER_MANAGER' },
+            decidedAt: '2026-09-20T10:00:00Z'
+          },
+          activeRevision: {
+            id: 'rev-1', number: 1, expenseDate: '2026-09-20',
+            amount: { amountMinor: 50000, currency: 'IRR', minorUnit: 0 },
+            description: 'Expense',
+            costCenter: { id: 'cc-1', code: 'CC001', name: 'Cost Center 1' },
+            expenseType: { id: 'et-1', name: 'Travel' },
+            createdBy: 'user1', createdAt: '2026-09-20T10:00:00Z', active: true
+          },
+          ...overrides
+        }
+      }
+
+      it('renders filter chips for assigned cost centers only', async () => {
+        const wrapper = await mountWithCenters(
+          [ccItem('tx-1')],
+          ['CC001', 'CC002'],
+          [
+            { id: 'c1', code: 'CC001', name: 'Cost Center 1' },
+            { id: 'c2', code: 'CC002', name: 'Cost Center 2' },
+            { id: 'c3', code: 'CC003', name: 'Cost Center 3' },
+          ]
+        )
+        // Only assigned centers appear as chips
+        expect(wrapper.find('[data-testid="center-filter-chip-CC001"]').exists()).toBe(true)
+        expect(wrapper.find('[data-testid="center-filter-chip-CC002"]').exists()).toBe(true)
+        expect(wrapper.find('[data-testid="center-filter-chip-CC003"]').exists()).toBe(false)
+      })
+
+      it('renders the All cost centers chip', async () => {
+        const wrapper = await mountWithCenters(
+          [ccItem('tx-1')],
+          ['CC001'],
+          [{ id: 'c1', code: 'CC001', name: 'Cost Center 1' }]
+        )
+        // All cost centers chip is present
+        expect(wrapper.find('[data-testid="center-filter-chip-all"]').exists()).toBe(true)
+        // All cost centers is active by default when no specific center is selected
+        const allChip = wrapper.find('[data-testid="center-filter-chip-all"]')
+        expect(allChip.classes()).toContain('center-filter__chip--active')
+        expect(allChip.attributes('aria-pressed')).toBe('true')
+      })
+
+      it('activates a specific center chip and deactivates All cost centers', async () => {
+        const wrapper = await mountWithCenters(
+          [ccItem('tx-1')],
+          ['CC001', 'CC002'],
+          [
+            { id: 'c1', code: 'CC001', name: 'Cost Center 1' },
+            { id: 'c2', code: 'CC002', name: 'Cost Center 2' },
+          ]
+        )
+        // All cost centers active by default
+        expect(wrapper.find('[data-testid="center-filter-chip-all"]').classes()).toContain('center-filter__chip--active')
+        // Select CC001
+        await wrapper.find('[data-testid="center-filter-chip-CC001"]').trigger('click')
+        await flushPromises()
+        // CC001 chip is active
+        expect(wrapper.find('[data-testid="center-filter-chip-CC001"]').classes()).toContain('center-filter__chip--active')
+        // All cost centers is no longer active
+        expect(wrapper.find('[data-testid="center-filter-chip-all"]').classes()).not.toContain('center-filter__chip--active')
+      })
+
+      it('restores unrestricted results when All cost centers is reselected', async () => {
+        const wrapper = await mountWithCenters(
+          [
+            ccItem('tx-1', {
+              activeRevision: {
+                costCenter: { id: 'cc-1', code: 'CC001', name: 'Cost Center 1' },
+              },
+            }),
+            ccItem('tx-2', {
+              sheetId: 'sheet-2',
+              activeRevision: {
+                costCenter: { id: 'cc-2', code: 'CC002', name: 'Cost Center 2' },
+              },
+            }),
+          ],
+          ['CC001', 'CC002'],
+          [
+            { id: 'c1', code: 'CC001', name: 'Cost Center 1' },
+            { id: 'c2', code: 'CC002', name: 'Cost Center 2' },
+          ]
+        )
+        // Both sheets visible when All selected (default)
+        expect(wrapper.findAll('[data-testid^="sheet-row-"]')).toHaveLength(2)
+        // Select CC001 → only sheet-1 remains
+        await wrapper.find('[data-testid="center-filter-chip-CC001"]').trigger('click')
+        await flushPromises()
+        expect(wrapper.findAll('[data-testid^="sheet-row-"]')).toHaveLength(1)
+        // Reselect All cost centers → both sheets back
+        await wrapper.find('[data-testid="center-filter-chip-all"]').trigger('click')
+        await flushPromises()
+        expect(wrapper.findAll('[data-testid^="sheet-row-"]')).toHaveLength(2)
+      })
+
+      it('shows all sheets when no center is selected', async () => {
+        const wrapper = await mountWithCenters(
+          [ccItem('tx-1')],
+          ['CC001'],
+          [{ id: 'c1', code: 'CC001', name: 'Cost Center 1' }]
+        )
+        expect(wrapper.findAll('[data-testid^="sheet-row-"]')).toHaveLength(1)
+      })
+
+      it('filters sheets to the selected cost center', async () => {
+        const wrapper = await mountWithCenters(
+          [
+            ccItem('tx-1', {
+              activeRevision: {
+                costCenter: { id: 'cc-1', code: 'CC001', name: 'Cost Center 1' },
+              },
+            }),
+            ccItem('tx-2', {
+              sheetId: 'sheet-2',
+              activeRevision: {
+                costCenter: { id: 'cc-2', code: 'CC002', name: 'Cost Center 2' },
+              },
+            }),
+          ],
+          ['CC001', 'CC002'],
+          [
+            { id: 'c1', code: 'CC001', name: 'Cost Center 1' },
+            { id: 'c2', code: 'CC002', name: 'Cost Center 2' },
+          ]
+        )
+        // Both sheets visible when "All" selected
+        expect(wrapper.findAll('[data-testid^="sheet-row-"]')).toHaveLength(2)
+
+        // Select CC001 → only sheet-1 remains
+        await wrapper.find('[data-testid="center-filter-chip-CC001"]').trigger('click')
+        await flushPromises()
+        expect(wrapper.findAll('[data-testid^="sheet-row-"]')).toHaveLength(1)
+        expect(wrapper.find('[data-testid="sheet-row-sheet-1"]').exists()).toBe(true)
+      })
+
+      it('scopes transaction count to the selected cost center', async () => {
+        const wrapper = await mountWithCenters(
+          [
+            ccItem('tx-1', {
+              activeRevision: {
+                costCenter: { id: 'cc-1', code: 'CC001', name: 'Cost Center 1' },
+              },
+            }),
+            ccItem('tx-2', {
+              sheetId: 'sheet-2',
+              activeRevision: {
+                costCenter: { id: 'cc-2', code: 'CC002', name: 'Cost Center 2' },
+              },
+            }),
+          ],
+          ['CC001', 'CC002'],
+          [
+            { id: 'c1', code: 'CC001', name: 'Cost Center 1' },
+            { id: 'c2', code: 'CC002', name: 'Cost Center 2' },
+          ]
+        )
+        await wrapper.find('[data-testid="center-filter-chip-CC001"]').trigger('click')
+        await flushPromises()
+        // sheet-1 has one CC001 transaction → count = 1 (Persian digit in fa locale)
+        expect(wrapper.find('[data-testid="sheet-row-sheet-1"] [data-testid="sheet-transaction-count"]').text()).toContain('۱')
+      })
+
+      it('scopes amount total to the selected cost center', async () => {
+        const wrapper = await mountWithCenters(
+          [
+            ccItem('tx-1', {
+              activeRevision: {
+                costCenter: { id: 'cc-1', code: 'CC001', name: 'Cost Center 1' },
+                amount: { amountMinor: 300000, currency: 'IRR', minorUnit: 0 },
+              },
+            }),
+            ccItem('tx-2', {
+              sheetId: 'sheet-2',
+              activeRevision: {
+                costCenter: { id: 'cc-2', code: 'CC002', name: 'Cost Center 2' },
+                amount: { amountMinor: 200000, currency: 'IRR', minorUnit: 0 },
+              },
+            }),
+          ],
+          ['CC001', 'CC002'],
+          [
+            { id: 'c1', code: 'CC001', name: 'Cost Center 1' },
+            { id: 'c2', code: 'CC002', name: 'Cost Center 2' },
+          ]
+        )
+        await wrapper.find('[data-testid="center-filter-chip-CC001"]').trigger('click')
+        await flushPromises()
+        // sheet-1 shows only CC001 amount: 300,000 IRR (Persian digits in fa locale)
+        const amountCell = wrapper.find('[data-testid="sheet-row-sheet-1"] [data-testid="sheet-amount"]')
+        expect(amountCell.text()).toContain('۳۰۰٬۰۰۰')
+        expect(amountCell.text()).not.toContain('۵۰۰٬۰۰۰')
+      })
+
+      it('shows each sheet only once when filtered', async () => {
+        const wrapper = await mountWithCenters(
+          [
+            ccItem('tx-1', {
+              activeRevision: {
+                costCenter: { id: 'cc-1', code: 'CC001', name: 'Cost Center 1' },
+              },
+            }),
+            ccItem('tx-2', {
+              sheetId: 'sheet-2',
+              activeRevision: {
+                costCenter: { id: 'cc-1', code: 'CC001', name: 'Cost Center 1' },
+              },
+            }),
+          ],
+          ['CC001'],
+          [{ id: 'c1', code: 'CC001', name: 'Cost Center 1' }]
+        )
+        expect(wrapper.findAll('[data-testid^="sheet-row-"]')).toHaveLength(2)
+        expect(wrapper.find('[data-testid="sheet-row-sheet-1"]').exists()).toBe(true)
+        expect(wrapper.find('[data-testid="sheet-row-sheet-2"]').exists()).toBe(true)
+      })
+    })
+
+  describe('Cost Center cross-role tab semantics — Approvals is sheet-level (UXC-7-01/02/03)', () => {
+    beforeEach(() => {
+      // Teleported modals are attached to document.body; a modal a prior test left behind would
+      // answer this describe's document-level queries instead of this test's own.
+      document.body.innerHTML = ''
+    })
+
+    afterEach(() => {
+      document.body.innerHTML = ''
+    })
+
+    const managerDecision = (id: string, decision: 'APPROVE' | 'REJECT' | 'RETURN') => ({
+      id,
+      stage: 'COST_CENTER',
+      decision,
+      actor: { userId: 'user1', displayName: 'User 1', role: 'COST_CENTER_MANAGER' },
+      decidedAt: '2026-09-20T10:00:00Z'
+    })
+
+    async function openSheetModal(wrapper: VueWrapper, sheetId = 'sheet-1'): Promise<void> {
+      await wrapper.find(`[data-testid="sheet-row-${sheetId}"] [data-testid="sheet-title"]`).trigger('click')
+      await flushPromises()
+    }
+
+    async function openTab(key: 'transactions' | 'approvals' | 'overview' | 'history'): Promise<void> {
+      await document.body.querySelector<HTMLElement>(`[data-testid="sheet-details-modal-tab-${key}"]`)!.click()
+      await flushPromises()
+    }
+
+    it('exposes the same four canonical tabs as Senior and Finance (UXC-7-03)', async () => {
+      const wrapper = await mountQueue([queueItem('tx-1')])
+      await openSheetModal(wrapper)
+      for (const key of ['transactions', 'approvals', 'overview', 'history'] as const) {
+        expect(document.body.querySelector(`[data-testid="sheet-details-modal-tab-${key}"]`)).not.toBeNull()
+      }
+    })
+
+    /**
+     * UXC-7F-05: the Approvals tab consumes the manager read's server-authoritative whole-sheet
+     * `stageApprovedTotals`. This seeds it into the mocked per-sheet read's sheet header; passing
+     * `null` leaves the payload without the field (the old/malformed-payload case).
+     */
+    async function mountQueueWithSheetTotals(
+      items: unknown[],
+      totals: Record<string, unknown> | null
+    ): Promise<VueWrapper> {
+      return mountQueue(items, {}, 'ok', (sheetId, sheetItems) => {
+        const sheet = managerSheetReview(sheetId, sheetItems).sheet as Record<string, unknown>
+        return { sheet: totals === null ? sheet : { ...sheet, stageApprovedTotals: totals } }
+      })
+    }
+
+    function stageTotals(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+      return {
+        costCenterApproved: { amountMinor: 150000, currency: 'IRR', minorUnit: 0 },
+        seniorApproved: { amountMinor: 100000, currency: 'IRR', minorUnit: 0 },
+        financeApproved: { amountMinor: 50000, currency: 'IRR', minorUnit: 0 },
+        ...overrides,
+      }
+    }
+
+    /**
+     * This file renders the FA locale, so `formatMoney` emits Persian digits and the Persian
+     * thousands separator. Amount assertions normalize to ASCII digits first — the value itself,
+     * not its script, is what proves the server's figure was rendered.
+     */
+    function asciiDigits(text: string | null | undefined): string {
+      return (text ?? '')
+        .replace(/[۰-۹]/g, (digit) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)))
+        .replace(/٬/g, ',')
+    }
+
+    it('renders the server whole-sheet stageApprovedTotals for all three stages (UXC-7F-05)', async () => {
+      const wrapper = await mountQueueWithSheetTotals(
+        [
+          // The visible scoped set proves only tx-1's IRR 50,000 as CC-approved; the server's
+          // aggregate (150,000) also counts out-of-scope work this surface must not recompute.
+          queueItem('tx-1', { managerState: 'DECIDED_BY_MANAGER', managerDecision: managerDecision('d-1', 'APPROVE') }),
+          queueItem('tx-2'),
+        ],
+        stageTotals()
+      )
+      await openSheetModal(wrapper)
+      await openTab('approvals')
+
+      const panel = document.body.querySelector('[data-testid="sheet-details-modal-panel-approvals"]')
+      expect(panel).not.toBeNull()
+      expect(panel!.querySelector('[data-testid="sheet-approvals-summary"]')).not.toBeNull()
+      // Canonical stage order, shared with Senior and Finance (cross-role requirement 15).
+      const stageRows = [...panel!.querySelectorAll<HTMLElement>('[data-testid^="sheet-approvals-stage-"]')]
+        .map((el) => el.getAttribute('data-testid'))
+        .filter((id): id is string => id !== null && /^(sheet-approvals-stage-(costCenter|senior|finance))$/.test(id))
+      expect(stageRows).toEqual([
+        'sheet-approvals-stage-costCenter',
+        'sheet-approvals-stage-senior',
+        'sheet-approvals-stage-finance',
+      ])
+      // Each stage renders exactly one single-currency Money: the server's whole-sheet figure,
+      // which no client-side sum over the manager-scoped transaction set can reproduce.
+      const stageTotal = (key: string) => panel!.querySelector(`[data-testid="sheet-approvals-stage-${key}-total"]`)
+      const expected: Array<[string, string]> = [
+        ['costCenter', '150,000'],
+        ['senior', '100,000'],
+        ['finance', '50,000'],
+      ]
+      for (const [key, amount] of expected) {
+        expect(stageTotal(key)).not.toBeNull()
+        expect(stageTotal(key)!.textContent).toContain('IRR')
+        expect(asciiDigits(stageTotal(key)!.textContent)).toContain(amount)
+        expect(panel!.querySelector(`[data-testid="sheet-approvals-stage-${key}-unavailable"]`)).toBeNull()
+      }
+      // Out-of-scope transactions remain absent: the tab names no transaction, and no
+      // per-transaction decision history or actor/comment data enters it (cross-role 17/18).
+      expect(panel!.querySelector('[data-testid^="transaction-review-card-"]')).toBeNull()
+      expect(panel!.querySelector('[data-testid^="sheet-transaction-"]')).toBeNull()
+      expect(panel!.querySelector('[data-testid^="inline-decisions-"]')).toBeNull()
+      expect(panel!.textContent).not.toContain('User 1')
+    })
+
+    it('renders every stage unavailable when the manager read answers without stageApprovedTotals (UXC-7F-05)', async () => {
+      // The read itself succeeded, but the payload carries no aggregate (old/malformed server
+      // response). The pre-7F fallback would have derived the CC stage from the scoped set — that
+      // partial sum must never be presented as a whole-sheet total, so every stage stays honestly
+      // unavailable.
+      const wrapper = await mountQueueWithSheetTotals(
+        [queueItem('tx-1', { managerState: 'DECIDED_BY_MANAGER', managerDecision: managerDecision('d-1', 'APPROVE') })],
+        null
+      )
+      await openSheetModal(wrapper)
+      await openTab('approvals')
+
+      for (const stage of ['costCenter', 'senior', 'finance'] as const) {
+        expect(document.body.querySelector(`[data-testid="sheet-approvals-stage-${stage}-unavailable"]`)).not.toBeNull()
+        expect(document.body.querySelector(`[data-testid="sheet-approvals-stage-${stage}-total"]`)).toBeNull()
+      }
+    })
+
+    it('renders zero server totals as known zeros, distinct from unavailable and from "none yet" (UXC-7F-05)', async () => {
+      const wrapper = await mountQueueWithSheetTotals(
+        [queueItem('tx-1')],
+        stageTotals({
+          costCenterApproved: { amountMinor: 0, currency: 'IRR', minorUnit: 0 },
+          seniorApproved: { amountMinor: 0, currency: 'IRR', minorUnit: 0 },
+          financeApproved: { amountMinor: 0, currency: 'IRR', minorUnit: 0 },
+        })
+      )
+      await openSheetModal(wrapper)
+      await openTab('approvals')
+
+      for (const stage of ['costCenter', 'senior', 'finance'] as const) {
+        const total = document.body.querySelector(`[data-testid="sheet-approvals-stage-${stage}-total"]`)
+        expect(total, `a zero ${stage} total is a real answer`).not.toBeNull()
+        expect(total!.textContent).toContain('IRR')
+        expect(asciiDigits(total!.textContent)).toContain('0')
+        expect(document.body.querySelector(`[data-testid="sheet-approvals-stage-${stage}-unavailable"]`)).toBeNull()
+        expect(document.body.querySelector(`[data-testid="sheet-approvals-stage-${stage}-none"]`)).toBeNull()
+      }
+    })
+
+    it('does not re-derive stage totals from per-transaction detail reads (UXC-7F-05)', async () => {
+      // Both scoped transactions carry Senior approvals proven by detail reads — under the pre-7F
+      // derivation this produced a Senior stage total. The Approvals aggregate now comes only
+      // from the manager read's whole-sheet field; with that field absent, every stage stays
+      // honestly unavailable even though the detail reads answered.
+      const wrapper = await mountQueueWithSheetTotals(
+        [
+          queueItem('tx-1', { managerState: 'DECIDED_BY_MANAGER', managerDecision: managerDecision('d-1', 'APPROVE') }),
+          queueItem('tx-2', { managerState: 'DECIDED_BY_MANAGER', managerDecision: managerDecision('d-2', 'APPROVE') }),
+        ],
+        null
+      )
+      seedTransactionDetails([
+        { id: 'tx-1', decisions: [{ ...managerDecision('d-sen-1', 'APPROVE'), stage: 'SENIOR' }] },
+        { id: 'tx-2', decisions: [{ ...managerDecision('d-sen-2', 'APPROVE'), stage: 'SENIOR' }] }
+      ])
+      await openSheetModal(wrapper)
+      await openTab('approvals')
+
+      for (const stage of ['costCenter', 'senior', 'finance'] as const) {
+        expect(document.body.querySelector(`[data-testid="sheet-approvals-stage-${stage}-unavailable"]`)).not.toBeNull()
+        expect(document.body.querySelector(`[data-testid="sheet-approvals-stage-${stage}-total"]`)).toBeNull()
+      }
+    })
+
+    it('renders every stage honestly unavailable when neither the manager read nor queue rows prove the set', async () => {
+      const wrapper = await mountQueue([queueItem('tx-1')], {}, 'fail')
+      await openSheetModal(wrapper)
+      await openTab('approvals')
+
+      for (const stage of ['costCenter', 'senior', 'finance'] as const) {
+        expect(document.body.querySelector(`[data-testid="sheet-approvals-stage-${stage}-unavailable"]`)).not.toBeNull()
+        expect(document.body.querySelector(`[data-testid="sheet-approvals-stage-${stage}-total"]`)).toBeNull()
+      }
+    })
+
+    it('Overview stays sheet-level and History stays an honest sheet-level empty state', async () => {
+      const wrapper = await mountQueue([queueItem('tx-1')])
+      await openSheetModal(wrapper)
+
+      await openTab('overview')
+      const overview = document.body.querySelector('[data-testid="cc-tab-overview"]')
+      expect(overview).not.toBeNull()
+      expect(overview!.textContent).toContain('Sheet sheet-1')
+      expect(overview!.textContent).toContain('User One')
+      expect(overview!.querySelector('[data-testid^="transaction-review-card-"]')).toBeNull()
+
+      await openTab('history')
+      expect(document.body.querySelector('[data-testid="cc-tab-history-empty"]')).not.toBeNull()
+      expect(document.body.querySelector('[data-testid="cc-tab-history-empty"]')!.textContent)
+        .toContain('reviews.sheetHistory.unavailable')
+      expect(document.body.querySelector('[data-testid="cc-tab-history-empty"]')!.textContent)
+        .not.toContain('reviews.noTransactionsInQueue')
+    })
+  })
   })
 
   describe('SeniorQueueView', () => {
@@ -607,7 +1366,7 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
 
       expect(wrapper.find('[data-testid="senior-queue"]').exists()).toBe(true)
       // FR-007-001: one sheet row per sheet — no flat transaction rows on the queue surface.
-      expect(wrapper.findAll('[data-testid^="senior-sheet-row-"]')).toHaveLength(1)
+      expect(wrapper.findAll('[data-testid^="sheet-row-"]')).toHaveLength(1)
       expect(wrapper.find('[data-testid="sheet-pending-count"]').text().trim()).not.toBe('')
 
       // Opening the sheet shows the modal over the still-mounted queue (FR-007-002), and the Cost
@@ -617,11 +1376,13 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
       mockSeniorSheetRead([seniorTransaction(), seniorTransaction({ id: 'tx-2' })])
       await wrapper.find('[data-testid="sheet-title"]').trigger('click')
       await flushPromises()
-      const dialog = document.body.querySelector('[data-testid="senior-sheet-modal"]')
+      const dialog = document.body.querySelector('[data-testid="sheet-details-modal"]')
       expect(dialog).not.toBeNull()
-      const advisories = dialog?.querySelectorAll('[data-testid="senior-transaction-advisory"]')
-      expect(advisories?.length).toBe(2)
-      expect(advisories?.[0]?.textContent?.trim() ?? '').not.toBe('')
+      // UXC-8-03: the Cost Center decision renders in the shared card's stage indicator row — one
+      // Cost Center indicator per transaction, never a sheet verdict.
+      const ccIndicators = dialog?.querySelectorAll('[data-testid="transaction-card-decision-costCenter"]')
+      expect(ccIndicators?.length).toBe(2)
+      expect(ccIndicators?.[0]?.textContent ?? '').toContain('reviews.outcome.approved')
     })
 
     // FR-034 / FR-035: the senior may decide independently, without being forced to acknowledge or
@@ -637,16 +1398,15 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
         seniorSheetRow('sheet-1', { title: 'Travel sheet' })
       ])
 
-      expect(wrapper.findAll('[data-testid^="senior-sheet-row-"]')).toHaveLength(1)
-      expect(wrapper.find('[data-testid="review-pending-badge"]').exists()).toBe(true)
-      expect(wrapper.find('[data-testid="review-completed-badge"]').exists()).toBe(false)
+      expect(wrapper.findAll('[data-testid^="sheet-row-"]')).toHaveLength(1)
+      expect(wrapper.find('[data-testid="sheet-status-badge"]').exists()).toBe(true)
 
       // Identity comes from the list row itself, so the modal can render it even when the
       // per-sheet transaction read is unavailable.
       await wrapper.find('[data-testid="sheet-title"]').trigger('click')
       await flushPromises()
-      const dialog = document.body.querySelector('[data-testid="senior-sheet-modal"]')
-      expect(dialog?.querySelector('[data-testid="senior-modal-title"]')?.textContent)
+      const dialog = document.body.querySelector('[data-testid="sheet-details-modal"]')
+      expect(dialog?.querySelector('[data-testid="sheet-details-modal-title"]')?.textContent)
         .toBe('Travel sheet')
     })
 
@@ -1296,27 +2056,24 @@ describe('Management Review - Vue Component Tests (RED: behavior not implemented
       const wrapper = await mountView(CostCenterQueueView, '/reviews/cost-center')
 
       // The sheet-first queue is the default; the transaction-level row this test
-      // describes lives in the preserved transaction fallback.
-      const toggle = wrapper.find('[data-testid="show-transactions-btn"]')
-      expect(toggle.exists(), 'the transaction fallback must remain reachable').toBe(true)
-      await toggle.trigger('click')
-      await flushPromises()
+      // describes lives in the preserved transaction fallback. The show-transactions button was
+      // removed per FU-10.A, so this test exercises the sheet view instead. The transaction-level
+      // surface is preserved in code but no longer reachable through the queue header.
 
       // FR-002/FR-008 permit a multi-role user to review their own transaction when scope and stage
       // match. The original asserted `[data-testid="queue-item"]`, which matches nothing (the view
-      // emits `queue-row-{id}`), and `[data-testid="decision-button"]`, which no component has ever
-      // emitted — the row's action is `view-details-btn`, and it leads to the page the decision is
+      // emits `sheet-row-{id}` in the sheet view), and `[data-testid="decision-button"]`, which no component has ever
+      // emitted — the row's action is `sheet-title`, and it leads to the page the decision is
       // taken on.
       //
       // What the *client* owns is narrow and is what is asserted here: the row is rendered and its
       // review action is present and usable. Whether the decision is permitted is the server's call —
       // T045 covers that authorization — so a client-side assertion that the view "allows" the review
       // would be claiming an enforcement the interface does not perform.
-      const row = wrapper.find('[data-testid="queue-row-tx-1"]')
-      expect(row.exists(), 'the multi-role user sees their own transaction in the queue').toBe(true)
-      const action = row.find('[data-testid="view-details-btn"]')
+      const row = wrapper.find('[data-testid="sheet-row-sheet-1"]')
+      expect(row.exists(), 'the multi-role user sees their own sheet in the queue').toBe(true)
+      const action = row.find('[data-testid="sheet-title"]')
       expect(action.exists(), 'and can open it to decide').toBe(true)
-      expect(action.attributes('disabled')).toBeUndefined()
       // The action is named, so it is not announced as a bare button.
       expect(action.text().trim()).not.toBe('')
     })

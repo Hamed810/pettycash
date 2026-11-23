@@ -94,6 +94,41 @@ export async function fetchAllSeniorSheets(pageSize = SENIOR_SHEET_PAGE_SIZE): P
 }
 
 /**
+ * The largest single page the Finance queue requests before it stops claiming completeness.
+ *
+ * `GET /queues/finance` returns a paginated flat transaction collection. A Finance manager may be
+ * reachable through more than one assignment, so the same transaction can appear across pages;
+ * de-duplication happens client-side after the complete set is proven (see `useFinanceQueue.ts`).
+ */
+export const FINANCE_SHEET_PAGE_SIZE = 100
+
+/** Bounded cap on the all-pages loop: at `pageSize = 100` this covers 10 000 transactions. */
+const MAX_FINANCE_SHEET_PAGES = 100
+
+/**
+ * Fetch every page of `GET /queues/finance` so no finance-eligible transaction is silently
+ * truncated on a later page. The loop stops once the accumulated rows cover the server's `total`,
+ * or when the server returns a short page, or when the page cap is hit; the returned page always
+ * carries the server's own `total` so the completeness guard can tell an honest "we got
+ * everything" from a truncated fetch.
+ */
+export async function fetchAllFinanceQueues(pageSize = FINANCE_SHEET_PAGE_SIZE): Promise<TransactionPage> {
+  const items: TransactionSummary[] = []
+  let page = 1
+  let total = 0
+  for (;;) {
+    const res = await fetchQueue({ stage: 'finance', page, pageSize })
+    items.push(...res.items)
+    total = res.total
+    if (items.length >= total) break
+    if (res.items.length < pageSize) break
+    if (page >= MAX_FINANCE_SHEET_PAGES) break
+    page += 1
+  }
+  return { items, page: 1, pageSize, total }
+}
+
+/**
  * One sheet as the acting Cost Center manager may see it (Batch 1, B001–B004).
  *
  * This is the manager-scoped read, not the owner-only `GET /sheets/{sheetId}`. It supplies the

@@ -26,6 +26,9 @@ const FundingView = () => import('../views/admin/FundingView.vue')
 // and evidence state. Reachable by URL and linked from the transaction detail;
 // like the admin views there is no navigation shell to extend.
 const AuditView = () => import('../views/audit/AuditView.vue')
+const FinanceAccountsView = () => import('../views/finance/FinanceAccountsView.vue')
+const CompletedSheetsView = () => import('../views/finance/CompletedSheetsView.vue')
+const CompletedSheetDetailView = () => import('../views/finance/CompletedSheetDetailView.vue')
 
 /**
  * A route that renders nothing, for a path this app has no view for.
@@ -96,6 +99,13 @@ export const routes: RouteRecordRaw[] = [
 	// the server still enforces every role the interface does not show.
 	{ path: '/admin/configuration', name: 'admin-configuration', component: ConfigurationView },
 	{ path: '/admin/funding', name: 'admin-funding', component: FundingView },
+
+	// Finance Manager (Feature 008, T028). Read-only holder directory, accounts, ledger,
+	// and completed-history surfaces. Recharge is an entry point on the account list; the
+	// completed-history views are stubs filled in by T033/T034.
+	{ path: '/finance/holders', name: 'finance-holders', component: FinanceAccountsView },
+	{ path: '/finance/completed-sheets', name: 'finance-completed-sheets', component: CompletedSheetsView },
+	{ path: '/finance/completed-sheets/:sheetId', name: 'finance-completed-sheet-detail', component: CompletedSheetDetailView },
 
 	{ path: '/:pathMatch(.*)*', name: 'not-found', component: NotFoundView }
 ]

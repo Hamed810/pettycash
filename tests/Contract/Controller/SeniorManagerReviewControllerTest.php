@@ -128,6 +128,58 @@ final class SeniorManagerReviewControllerTest extends TestCase
         self::assertSame(getenv('PETTYCASH_TEST_USER'), $transaction['seniorDecision']['actor']['userId']);
     }
 
+    /**
+     * UXC-7F-03 (owner decision, 2026-11-20): the per-sheet read's sheet summary carries the
+     * whole-Cost-Sheet `stageApprovedTotals` aggregate. The fixture transaction was Cost Center
+     * approved and then Senior approved through the decision endpoint, so both stage totals count
+     * it; aggregate monetary disclosure only — no transaction, evidence, or individual-decision
+     * visibility is widened.
+     */
+    public function testSeniorSheetCarriesWholeSheetStageApprovedTotals(): void
+    {
+        $this->decide(ContractFixtures::transactionId(), 'APPROVE', null, ContractFixtures::transactionVersion());
+        $this->decide(ContractFixtures::transactionId(), 'APPROVE', null, $this->currentVersion());
+
+        $data = $this->ocsData($this->client->request(
+            'GET',
+            '/ocs/v2.php/apps/pettycash/api/v1/queues/senior/sheets/' . ContractFixtures::sheetId()
+        ));
+
+        self::assertSame(
+            ['amountMinor' => 100000, 'currency' => 'IRR', 'minorUnit' => 0],
+            $data['sheet']['stageApprovedTotals']['costCenterApproved'],
+            'the Cost Center approval on the current revision counts'
+        );
+        self::assertSame(
+            ['amountMinor' => 100000, 'currency' => 'IRR', 'minorUnit' => 0],
+            $data['sheet']['stageApprovedTotals']['seniorApproved'],
+            'the recorded Senior approval counts'
+        );
+        self::assertSame(
+            ['amountMinor' => 0, 'currency' => 'IRR', 'minorUnit' => 0],
+            $data['sheet']['stageApprovedTotals']['financeApproved']
+        );
+    }
+
+    /**
+     * The senior LIST rows reuse `SeniorSheetSummary`; the aggregate lives on the per-sheet read
+     * only, so a list page never pays a per-sheet computation and never carries the field.
+     */
+    public function testTheSeniorQueueListRowsDoNotCarryStageApprovedTotals(): void
+    {
+        $this->decide(ContractFixtures::transactionId(), 'APPROVE', null, ContractFixtures::transactionVersion());
+
+        $data = $this->ocsData($this->client->request(
+            'GET',
+            '/ocs/v2.php/apps/pettycash/api/v1/queues/senior/sheets'
+        ));
+
+        self::assertNotEmpty($data['items'], 'the Cost Center-approved sheet must appear in the senior list');
+        foreach ($data['items'] as $row) {
+            self::assertArrayNotHasKey('stageApprovedTotals', $row);
+        }
+    }
+
     public function testUnknownAndOutOfScopeSheetsAnswerTheSame404(): void
     {
         ContractFixtures::prepare('scope');

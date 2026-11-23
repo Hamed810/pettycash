@@ -79,6 +79,7 @@ export const NAVIGATION_ENTRIES: NavigationEntry[] = [
 	{ name: 'reports', labelKey: 'navigation.reports', testId: 'nav-reports', visibleFor: authenticated },
 	{ name: 'admin-configuration', labelKey: 'navigation.administration', testId: 'nav-admin-configuration', visibleFor: adminOnly },
 	{ name: 'admin-funding', labelKey: 'navigation.funding', testId: 'nav-admin-funding', visibleFor: adminOnly },
+	{ name: 'finance-holders', labelKey: 'navigation.financeHolders', testId: 'nav-finance-holders', visibleFor: (s) => hasRole(s, 'FINANCE') },
 ]
 
 export function visibleEntries(session: NavigationSession): NavigationEntry[] {

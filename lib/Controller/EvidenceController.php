@@ -7,6 +7,7 @@ namespace OCA\PettyCash\Controller;
 use OCA\PettyCash\Infrastructure\Http\CommandId;
 use Exception;
 use InvalidArgumentException;
+use OCA\PettyCash\Application\Evidence\EvidenceContentAccess;
 use OCA\PettyCash\Application\Evidence\EvidenceService;
 use OCA\PettyCash\Application\Evidence\EvidenceLinkService;
 use OCA\PettyCash\Application\Evidence\EvidenceVisibility;
@@ -43,6 +44,7 @@ class EvidenceController extends OCSController
         private CurrentUser $currentUser,
         private OcsErrorMapper $ocsErrorMapper,
         private EvidenceVisibility $evidenceVisibility,
+        private EvidenceContentAccess $evidenceContentAccess,
         private EvidenceContentPolicy $contentPolicy,
         private IURLGenerator $urlGenerator
     ) {
@@ -477,7 +479,7 @@ public function destroy(string $evidenceId): DataResponse
                 );
             }
 
-            if (!$this->evidenceVisibility->mayRead($actorUid, $transaction)) {
+            if (!$this->evidenceContentAccess->mayRead($actorUid, $transaction)) {
                 return $this->ocsErrorMapper->notFound('Evidence not found');
             }
 

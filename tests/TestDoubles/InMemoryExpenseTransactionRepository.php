@@ -401,6 +401,98 @@ final class InMemoryExpenseTransactionRepository implements \OCA\PettyCash\Domai
         return count($this->transactions);
     }
 
+    /**
+     * Every transaction of a set of sheets, in one batched read (T016/T018).
+     *
+     * Mirrors `DbExpenseTransactionRepository::findBySheetIds()`, including the sheet-id-then-created_at-
+     * then-id ordering, so the in-memory suite asks the same question the database adapter answers.
+     */
+    public function findBySheetIds(array $sheetDbIds): array
+    {
+        $ids = [];
+        foreach ($sheetDbIds as $sheetDbId) {
+            if (is_int($sheetDbId)) {
+                $ids[$sheetDbId] = true;
+            }
+        }
+
+        if ($ids === []) {
+            return [];
+        }
+
+        $result = array_values(array_filter(
+            $this->transactions,
+            fn (ExpenseTransaction $t): bool => $t->sheetId !== null && isset($ids[$t->sheetId])
+        ));
+
+        usort($result, static function (ExpenseTransaction $a, ExpenseTransaction $b): int {
+            $bySheet = ($a->sheetId ?? 0) <=> ($b->sheetId ?? 0);
+            if ($bySheet !== 0) {
+                return $bySheet;
+            }
+            $aCreatedAt = $a->createdAt;
+            $bCreatedAt = $b->createdAt;
+            if ($aCreatedAt === null && $bCreatedAt !== null) {
+                return 1;
+            }
+            if ($aCreatedAt !== null && $bCreatedAt === null) {
+                return -1;
+            }
+            if ($aCreatedAt !== null && $bCreatedAt !== null) {
+                $comparison = $aCreatedAt <=> $bCreatedAt;
+                if ($comparison !== 0) {
+                    return $comparison;
+                }
+            }
+
+            return ($a->dbId ?? 0) <=> ($b->dbId ?? 0);
+        });
+
+        return $result;
+    }
+
+    /**
+     * The transaction-status projection for a set of sheets, in one grouped read (T016/T017).
+     *
+     * Mirrors `DbExpenseTransactionRepository::transactionStatusProjectionFor()`: total, approved and
+     * rejected come from one pass over `final_outcome`, so `approved + rejected = total` is an
+     * invariant the double holds by construction rather than by three separate filters that could
+     * drift. A sheet with no rows is absent from the map.
+     *
+     * @return array<int, array{total: int, approved: int, rejected: int}>
+     */
+    public function transactionStatusProjectionFor(array $sheetDbIds): array
+    {
+        $ids = [];
+        foreach ($sheetDbIds as $sheetDbId) {
+            if (is_int($sheetDbId)) {
+                $ids[$sheetDbId] = true;
+            }
+        }
+
+        if ($ids === []) {
+            return [];
+        }
+
+        $projection = [];
+        foreach ($this->transactions as $transaction) {
+            if ($transaction->sheetId === null || !isset($ids[$transaction->sheetId])) {
+                continue;
+            }
+            $sheetDbId = $transaction->sheetId;
+            $entry = $projection[$sheetDbId] ?? ['total' => 0, 'approved' => 0, 'rejected' => 0];
+            $entry['total']++;
+            if ($transaction->finalOutcome === 'APPROVED') {
+                $entry['approved']++;
+            } elseif ($transaction->finalOutcome === 'REJECTED') {
+                $entry['rejected']++;
+            }
+            $projection[$sheetDbId] = $entry;
+        }
+
+        return $projection;
+    }
+
     public function save(ExpenseTransaction $transaction): void
     {
         if ($transaction->dbId === null) {

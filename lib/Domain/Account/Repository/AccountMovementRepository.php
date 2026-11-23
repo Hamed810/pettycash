@@ -31,7 +31,28 @@ interface AccountMovementRepository
 
     /** @return list<AccountMovement> */
     public function findByAccountId(int $accountId, ?DateTimeImmutable $from = null, ?DateTimeImmutable $to = null): array;
-    /** @return list<AccountMovement> */
+
+    /**
+     * One deterministic page of an account's ledger.
+     *
+     * Ordered `occurred_at DESC, id DESC`. The second key is not decoration: two movements may share an
+     * instant (a settlement and a handover entered from the same note), and an ordering that stopped at
+     * the timestamp would let the database return them in different orders on different executions —
+     * which makes a page boundary able to show the same row twice or skip one.
+     *
+     * @return list<AccountMovement>
+     */
     public function findByAccountIdPaged(int $accountId, int $offset, int $limit): array;
+
+    /**
+     * How many movements the account holds — the whole population, never the loaded page.
+     *
+     * The ledger's `total` is an independent count for the same reason the page is bounded: deriving it
+     * from the page length would report `pageSize` for every account with more movements than one page.
+     *
+     * @param int $accountId surrogate `pettycash_accounts.id`
+     */
+    public function countByAccountId(int $accountId): int;
+
     public function save(AccountMovement $movement): void;
 }

@@ -8,6 +8,7 @@ use OCA\PettyCash\Application\Port\UserDirectory;
 use OCA\PettyCash\Domain\Configuration\Repository\CurrencyRepository;
 use OCA\PettyCash\Domain\Expense\ExpenseSheet;
 use OCA\PettyCash\Domain\Expense\SheetCapabilities;
+use OCA\PettyCash\Domain\Expense\Repository\ExpenseSheetRepository;
 use OCA\PettyCash\Domain\Expense\Repository\ExpenseTransactionRepository;
 use OCA\PettyCash\Infrastructure\Persistence\Expense\SheetSummaryQuery;
 
@@ -28,6 +29,7 @@ final readonly class SheetPayloadFormatter
 {
     public function __construct(
         private SheetSummaryQuery $summaryQuery,
+        private ExpenseSheetRepository $sheetRepository,
         private ExpenseTransactionRepository $transactionRepository,
         private CurrencyRepository $currencyRepository,
         private UserDirectory $userDirectory,
@@ -365,6 +367,132 @@ final readonly class SheetPayloadFormatter
             'seniorApproved' => $this->money($totals->seniorApproved, $currency),
             'financeApproved' => $this->money($totals->financeApproved, $currency),
         ];
+    }
+
+    /**
+     * The contract's `StageApprovedTotals` schema for one sheet — the whole-Cost-Sheet approved
+     * totals per workflow stage (owner decision, 2026-11-20).
+     *
+     * Computed from the sheet's **complete** transaction set by `SheetSummaryQuery::totalsForSheet()`
+     * — the same derivation `totals()` renders for the owner-facing sheet payload — never from a
+     * reviewer-scoped subset, and never restated as a second aggregation rule. Aggregate disclosure
+     * only: no transaction, decision, evidence, actor, or comment data rides along, and nothing here
+     * touches a decision, a posting, or a balance. The sheets this serves are already legitimately
+     * visible to the caller through their per-sheet review read.
+     *
+     * Served on the Cost Center and Senior per-sheet review reads (`ReviewController::costCenterSheet`
+     * / `::seniorSheet`). It is deliberately NOT emitted from `managerSummary()`/`seniorSummary()`:
+     * those feed `seniorQueueSummary()`, and the senior list rows must not carry the aggregate.
+     *
+     * @return array<string, array{amountMinor: int, currency: string, minorUnit: int}>
+     */
+    public function stageApprovedTotals(ExpenseSheet $sheet): array
+    {
+        $totals = $this->summaryQuery->totalsForSheet($sheet->dbId);
+
+        return $this->stageApprovedTotalsPayload(
+            $totals->managerApproved,
+            $totals->seniorApproved,
+            $totals->financeApproved,
+            (string) $sheet->currency,
+            null
+        );
+    }
+
+    /**
+     * The same `StageApprovedTotals` payload for several sheets in one batched read, keyed by sheet
+     * db id — the Finance queue projection's vehicle.
+     *
+     * The batched read runs once per queue page over the page's **distinct** sheet db ids, and each
+     * entry carries the sheet's own currency scale, so no per-item currency lookup is needed and
+     * every item of one Cost Sheet is stamped with the identical value.
+     *
+     * @param list<int|null> $sheetDbIds
+     * @return array<int, array<string, array{amountMinor: int, currency: string, minorUnit: int}>>
+     */
+    public function stageApprovedTotalsForSheets(array $sheetDbIds): array
+    {
+        $bySheet = $this->summaryQuery->stageApprovedTotalsForSheets($sheetDbIds);
+
+        $payloads = [];
+        foreach ($bySheet as $sheetDbId => $entry) {
+            $payloads[$sheetDbId] = $this->stageApprovedTotalsPayload(
+                $entry['totals']->managerApproved,
+                $entry['totals']->seniorApproved,
+                $entry['totals']->financeApproved,
+                $entry['currency'],
+                $entry['minorUnit']
+            );
+        }
+
+        return $payloads;
+    }
+
+    /**
+     * Owning Cost Sheet metadata for several sheets in one bounded read, keyed by sheet db id.
+     *
+     * Used by the Finance queue projection so each queue item can carry the sheet's human-readable
+     * title, purchaser identity, and original submission timestamp without per-row sheet reads.
+     * The read is bounded by the distinct sheet count on the page, never one query per queue row.
+     *
+     * @param list<int|null> $sheetDbIds
+     * @return array<int, array{title: string, ownerId: string, ownerDisplayName: string, submittedAt: string|null}>
+     */
+    public function financeSheetMetadataBySheets(array $sheetDbIds): array
+    {
+        $metadata = [];
+        $seen = [];
+        foreach ($sheetDbIds as $sheetDbId) {
+            if ($sheetDbId === null || in_array($sheetDbId, $seen, true)) {
+                continue;
+            }
+            $seen[] = $sheetDbId;
+            $sheet = $this->sheetRepository->findById($sheetDbId);
+            if ($sheet !== null) {
+                $summary = $this->managerSummary($sheet);
+                $metadata[$sheetDbId] = [
+                    'title' => $summary['title'],
+                    'ownerId' => $summary['ownerId'],
+                    'ownerDisplayName' => $summary['ownerDisplayName'],
+                    'submittedAt' => $summary['submittedAt'],
+                ];
+            }
+        }
+
+        return $metadata;
+    }
+
+    /**
+     * Build the three-stage `StageApprovedTotals` payload.
+     *
+     * `$minorUnit` comes from the caller when the query already joined the sheet's currency row
+     * (the batched Finance path), which keeps a page-sized projection off the currency repository;
+     * `null` resolves the scale through {@see money()} exactly as `totals()` does.
+     *
+     * @return array<string, array{amountMinor: int, currency: string, minorUnit: int}>
+     */
+    private function stageApprovedTotalsPayload(
+        int $costCenterApprovedMinor,
+        int $seniorApprovedMinor,
+        int $financeApprovedMinor,
+        string $currency,
+        ?int $minorUnit
+    ): array {
+        return [
+            'costCenterApproved' => $this->stageMoney($costCenterApprovedMinor, $currency, $minorUnit),
+            'seniorApproved' => $this->stageMoney($seniorApprovedMinor, $currency, $minorUnit),
+            'financeApproved' => $this->stageMoney($financeApprovedMinor, $currency, $minorUnit),
+        ];
+    }
+
+    /** @return array{amountMinor: int, currency: string, minorUnit: int} */
+    private function stageMoney(int $amountMinor, string $currency, ?int $minorUnit): array
+    {
+        if ($minorUnit !== null) {
+            return ['amountMinor' => $amountMinor, 'currency' => $currency, 'minorUnit' => $minorUnit];
+        }
+
+        return $this->money($amountMinor, $currency);
     }
 
     /**

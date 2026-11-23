@@ -12,13 +12,14 @@
  *   T035 (mobile, 390×844, Persian RTL):   artifacts/visual-review/T035/001/
  *
  * Journey per variant (from task T034/T035):
- *   T034 queue, sheet modal, decision modal, details drawer, preview, filtering/sorting,
- *        and the export action (real senior-scoped XLSX since the backend batch landed, or an
- *        honest refusal rendering if the server refuses).
- *   T035 queue + modal + full-screen overlays (drawer, preview, decision modal), no horizontal
- *        scroll (`scrollWidth <= clientWidth`), dark-theme spot-check, honesty assertions
- *        (no client-derived eligibility claim, no fabricated amounts — amounts are read from
- *        the rendered card and cross-checked to be non-empty; the sheet reviewStatus and
+ *   T034 queue, sheet modal, decision modal, the card's inline expanded detail (formerly the
+ *        details drawer, UXC-V2-13), preview, filtering/sorting, and the export action (real
+ *        senior-scoped XLSX since the backend batch landed, or an honest refusal rendering if the
+ *        server refuses).
+ *   T035 queue + modal + inline expanded detail + full-screen overlays (preview, decision modal),
+ *        no horizontal scroll (`scrollWidth <= clientWidth`), dark-theme spot-check, honesty
+ *        assertions (no client-derived eligibility claim, no fabricated amounts — amounts are read
+ *        from the rendered card and cross-checked to be non-empty; the sheet reviewStatus and
  *        allTransactionsCostCenterDecided come only from the server-supplied response).
  *
  * Exits non-zero on the first failed check.
@@ -160,25 +161,25 @@ try {
 
 	/**
 	 * Opens the first sheet's modal. The queue's sheet rows are rendered by ResponsiveTable:
-	 * desktop table rows carry `[data-testid="senior-sheet-row-<sheetId>"]`, narrow cards carry
-	 * `[data-testid="senior-sheet-card-<sheetId>"]`. Both render an `open-sheet-btn` action, and both
+	 * desktop table rows carry `[data-testid="sheet-row-<sheetId>"]`, narrow cards carry
+	 * `[data-testid="sheet-card-row-<sheetId>"]`. Both render a `sheet-title` open action, and both
 	 * layouts stay in the DOM (the inactive one is `display:none`), so a `:visible` filter is
 	 * required to pick the layout that is actually shown at the current viewport.
 	 */
 	async function openFirstSheet() {
 		const openButton = page
-			.locator('[data-testid="open-sheet-btn"]:visible')
+			.locator('[data-testid="sheet-title"]:visible')
 			.first()
 		await expect(openButton).toBeVisible({ timeout: 15000 })
 		await openButton.click()
-		await expect(page.locator('[data-testid="senior-sheet-modal"]')).toBeVisible({ timeout: 15000 })
+		await expect(page.locator('[data-testid="sheet-details-modal"]')).toBeVisible({ timeout: 15000 })
 	}
 
 	async function closeModalIfOpen() {
-		const close = page.locator('[data-testid="senior-modal-close"]')
+		const close = page.locator('[data-testid="sheet-details-modal-close"]')
 		if (await close.count()) {
 			await close.click()
-			await expect(page.locator('[data-testid="senior-sheet-modal"]')).toHaveCount(0, { timeout: 10000 })
+			await expect(page.locator('[data-testid="sheet-details-modal"]')).toHaveCount(0, { timeout: 10000 })
 		}
 	}
 
@@ -193,7 +194,7 @@ try {
 	const queue = await openSeniorQueue()
 	const queueDir = await queue.getAttribute('dir')
 	check('en queue runs ltr', queueDir === 'ltr', { queueDir })
-	const queueSheets = await page.locator('[data-testid^="senior-sheet-row-"]:visible, [data-testid^="senior-sheet-card-"]:visible')
+	const queueSheets = await page.locator('[data-testid^="sheet-row-"]:visible, [data-testid^="sheet-card-row-"]:visible')
 		.count()
 	record.queueSheets = queueSheets
 	check('senior queue renders sheet rows', queueSheets > 0, { queueSheets })
@@ -205,12 +206,12 @@ try {
 
 	// Sheet modal.
 	await openFirstSheet()
-	await expect(page.locator('[data-testid="senior-modal-dialog"]')).toBeVisible()
+	await expect(page.locator('[data-testid="sheet-details-modal-dialog"]')).toBeVisible()
 	check('full-screen sheet modal opens over the mounted queue', true)
 	await shot(enOutDir, 'sheet-modal-desktop-en')
 
 	// Filtering + sorting within the modal, over the proven-complete set.
-	const transactionCards = page.locator('[data-testid^="senior-transaction-"]')
+	const transactionCards = page.locator('[data-testid^="sheet-transaction-"]')
 	await expect(transactionCards.first()).toBeVisible({ timeout: 15000 })
 	const countBefore = await transactionCards.count()
 	check('modal lists sheet transactions', countBefore > 0, { countBefore })
@@ -234,16 +235,16 @@ try {
 	await page.locator('[data-testid="senior-filter-clear"]').click()
 	await page.waitForTimeout(300)
 
-	// Details drawer (full-screen layer above the modal).
-	await transactionCards.first().locator('[data-testid="quick-review-full-details"]').click()
-	await expect(page.locator('[data-testid="details-drawer-layer"]')).toBeVisible()
-	await expect(page.locator('[data-testid="drawer-field-sheet"]')).toBeVisible({ timeout: 15000 })
-	await shot(enOutDir, 'details-drawer-en')
-	await page.locator('[data-testid="details-drawer-close"]').click()
-	await expect(page.locator('[data-testid="details-drawer-layer"]')).toHaveCount(0)
+	// The card's inline expanded detail (in place under the modal).
+	await transactionCards.first().locator('[data-testid="transaction-card-title"]').click()
+	await expect(page.locator('[data-testid="transaction-expanded-detail"]')).toBeVisible()
+	await expect(page.locator('[data-testid="inline-field-sheet"]')).toBeVisible({ timeout: 15000 })
+	await shot(enOutDir, 'details-expanded-en')
+	await page.keyboard.press('Escape')
+	await expect(page.locator('[data-testid="transaction-expanded-detail"]')).toHaveCount(0)
 
 	// Evidence preview overlay.
-	const firstThumb = transactionCards.first().locator('[data-testid^="quick-review-thumb-"]:not([data-testid^="quick-review-thumb-more"])').first()
+	const firstThumb = transactionCards.first().locator('[data-testid^="transaction-card-thumb-"]:not([data-testid^="transaction-card-thumb-more"])').first()
 	if (await firstThumb.count()) {
 		await firstThumb.click()
 		await expect(page.locator('[data-test="evidence-preview-layer"]')).toBeVisible({ timeout: 15000 })
@@ -255,7 +256,7 @@ try {
 	}
 
 	// Decision modal.
-	const decideApprove = transactionCards.first().locator('[data-testid="quick-review-decide-approve"]')
+	const decideApprove = transactionCards.first().locator('[data-testid="transaction-card-decide-approve"]')
 	if (await decideApprove.count()) {
 		await decideApprove.click()
 		await expect(page.locator('[data-testid="decision-modal-layer"]')).toBeVisible({ timeout: 15000 })
@@ -310,35 +311,37 @@ try {
 	const fullScreenOnMobile = (box) => box !== null && box.width >= mobileViewport.w - 1 && box.height >= mobileViewport.h - 60
 
 	await openFirstSheet()
-	await expect(page.locator('[data-testid="senior-modal-dialog"]')).toBeVisible()
-	const modalBox = await page.locator('[data-testid="senior-sheet-modal"]').boundingBox()
+	await expect(page.locator('[data-testid="sheet-details-modal-dialog"]')).toBeVisible()
+	const modalBox = await page.locator('[data-testid="sheet-details-modal"]').boundingBox()
 	check('sheet modal is a full-screen overlay on mobile', fullScreenOnMobile(modalBox), modalBox)
 	await assertNoHorizontalScroll('sheet modal (fa mobile)')
 	await shot(faOutDir, 'sheet-modal-mobile-fa')
 
-	const faCards = page.locator('[data-testid^="senior-transaction-"]')
+	const faCards = page.locator('[data-testid^="sheet-transaction-"]')
 	await expect(faCards.first()).toBeVisible({ timeout: 15000 })
 	await assertNoHorizontalScroll('sheet modal transactions (fa mobile)')
 
 	// Honesty assertion: the rendered amount on the first card is a real formatted figure
 	// (locale digits + currency code), never a fabricated placeholder.
-	const amountText = await faCards.first().locator('[data-testid="quick-review-amount"]').innerText()
+	const amountText = await faCards.first().locator('[data-testid="transaction-card-amount"]').innerText()
 	check('rendered amount is a formatted, non-empty figure', amountText !== '' && amountText.includes('IRR'), { amountText })
 
-	// Full-screen details drawer.
-	await faCards.first().locator('[data-testid="quick-review-full-details"]').click()
-	await expect(page.locator('[data-testid="details-drawer-layer"]')).toBeVisible()
-	const drawerDir = await page.locator('[data-testid="details-drawer-layer"]').getAttribute('dir')
-	check('fa drawer runs rtl', drawerDir === 'rtl', { drawerDir })
-	const drawerBox = await page.locator('[data-testid="details-drawer-layer"]').boundingBox()
-	check('drawer is a full-screen overlay on mobile', fullScreenOnMobile(drawerBox), drawerBox)
-	await assertNoHorizontalScroll('details drawer (fa mobile)')
-	await shot(faOutDir, 'drawer-mobile-fa')
-	await page.locator('[data-testid="details-drawer-close"]').click()
-	await expect(page.locator('[data-testid="details-drawer-layer"]')).toHaveCount(0)
+	// The card's inline expanded detail, rendered in place inside the modal frame.
+	await faCards.first().locator('[data-testid="transaction-card-title"]').click()
+	await expect(page.locator('[data-testid="transaction-expanded-detail"]')).toBeVisible()
+	const faCardDir = await faCards.first().getAttribute('dir')
+	check('fa expansion runs rtl', faCardDir === 'rtl', { faCardDir })
+	const expandedBox = await page.locator('[data-testid="transaction-expanded-detail"]').boundingBox()
+	check('expanded detail renders in place inside the modal on mobile',
+		expandedBox !== null && expandedBox.width >= 300 && expandedBox.x >= 0 && expandedBox.x + expandedBox.width <= 391,
+		expandedBox)
+	await assertNoHorizontalScroll('expanded detail (fa mobile)')
+	await shot(faOutDir, 'expanded-mobile-fa')
+	await page.keyboard.press('Escape')
+	await expect(page.locator('[data-testid="transaction-expanded-detail"]')).toHaveCount(0)
 
 	// Full-screen evidence preview.
-	const faThumb = faCards.first().locator('[data-testid^="quick-review-thumb-"]:not([data-testid^="quick-review-thumb-more"])').first()
+	const faThumb = faCards.first().locator('[data-testid^="transaction-card-thumb-"]:not([data-testid^="transaction-card-thumb-more"])').first()
 	if (await faThumb.count()) {
 		await faThumb.click()
 		await expect(page.locator('[data-test="evidence-preview-layer"]')).toBeVisible({ timeout: 15000 })
@@ -353,7 +356,7 @@ try {
 	}
 
 	// Full-screen decision modal.
-	const faDecide = faCards.first().locator('[data-testid="quick-review-decide-approve"]')
+	const faDecide = faCards.first().locator('[data-testid="transaction-card-decide-approve"]')
 	if (await faDecide.count()) {
 		await faDecide.click()
 		await expect(page.locator('[data-testid="decision-modal-layer"]')).toBeVisible({ timeout: 15000 })
@@ -386,7 +389,7 @@ try {
 	check('fa dark queue runs rtl', darkDir === 'rtl', { darkDir })
 	await shot(faOutDir, 'queue-mobile-fa-dark')
 	await openFirstSheet()
-	await expect(page.locator('[data-testid="senior-modal-dialog"]')).toBeVisible()
+	await expect(page.locator('[data-testid="sheet-details-modal-dialog"]')).toBeVisible()
 	await shot(faOutDir, 'sheet-modal-mobile-fa-dark')
 	await closeModalIfOpen()
 

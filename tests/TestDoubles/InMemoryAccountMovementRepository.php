@@ -101,7 +101,48 @@ final class InMemoryAccountMovementRepository implements AccountMovementReposito
      */
     public function findByAccountIdPaged(int $accountId, int $offset, int $limit): array
     {
-        return array_slice($this->findByAccountId($accountId), $offset, $limit);
+        $publicId = $this->accountIds[$accountId] ?? null;
+        if ($publicId === null) {
+            return [];
+        }
+
+        // The real adapter orders `occurred_at DESC, id DESC`; the double must answer the same
+        // question or a ledger page test would be measuring the double's ascending order. The
+        // storage key is the surrogate id: `save()` keeps a movement without a `dbId` under
+        // `$nextDbId`, so the aggregate itself cannot supply the tie-break key here.
+        $rows = [];
+        foreach ($this->movements as $dbId => $movement) {
+            if ($movement->accountPublicId === $publicId) {
+                $rows[] = ['dbId' => (int) $dbId, 'movement' => $movement];
+            }
+        }
+        usort($rows, static function (array $a, array $b): int {
+            $byTime = ($b['movement']->occurredAt?->getTimestamp() ?? 0)
+                <=> ($a['movement']->occurredAt?->getTimestamp() ?? 0);
+
+            return $byTime !== 0 ? $byTime : ($b['dbId'] <=> $a['dbId']);
+        });
+
+        return array_map(
+            static fn (array $row): AccountMovement => $row['movement'],
+            array_slice($rows, $offset, $limit)
+        );
+    }
+
+    /**
+     * The account's complete movement population, never the loaded page.
+     */
+    public function countByAccountId(int $accountId): int
+    {
+        $publicId = $this->accountIds[$accountId] ?? null;
+        if ($publicId === null) {
+            return 0;
+        }
+
+        return count(array_filter(
+            $this->movements,
+            static fn (AccountMovement $m): bool => $m->accountPublicId === $publicId
+        ));
     }
 
     public function save(AccountMovement $movement): void

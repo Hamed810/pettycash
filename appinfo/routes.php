@@ -85,6 +85,15 @@ return [
         ['name' => 'account#update', 'url' => '/api/v1/accounts/{accountId}', 'verb' => 'PATCH'],
         ['name' => 'account#movements', 'url' => '/api/v1/accounts/{accountId}/movements', 'verb' => 'GET'],
 
+        // Feature 008 T009: the additive Finance holder reads. Both are gated by `FinanceAccess`
+        // inside the controller; the ledger and completed-history paths remain unimplemented until
+        // their own authorized tasks (T014/T019) land.
+        ['name' => 'financeManagement#holders', 'url' => '/api/v1/finance/holders', 'verb' => 'GET'],
+        ['name' => 'financeManagement#holderAccounts', 'url' => '/api/v1/finance/holders/{holderUid}/accounts', 'verb' => 'GET'],
+        ['name' => 'financeManagement#ledger', 'url' => '/api/v1/finance/accounts/{accountId}/ledger', 'verb' => 'GET'],
+        ['name' => 'financeManagement#completedSheets', 'url' => '/api/v1/finance/completed-sheets', 'verb' => 'GET'],
+        ['name' => 'financeManagement#completedSheetDetail', 'url' => '/api/v1/finance/completed-sheets/{sheetId}', 'verb' => 'GET'],
+
         // Report routes
         ['name' => 'report#show', 'url' => '/api/v1/reports/{reportType}', 'verb' => 'GET'],
 

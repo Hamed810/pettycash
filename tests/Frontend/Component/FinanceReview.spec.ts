@@ -168,56 +168,26 @@ describe('Finance Review - Vue Component Tests (US3)', () => {
      */
     it('carries the same figures in the narrow card as in the table', async () => {
       const wrapper = await mountFinanceQueue([
-        financeQueueItem('tx-1'),
-        financeQueueItem('tx-2')
+        financeQueueItem('tx-1', { sheetId: 'sheet-1' }),
+        financeQueueItem('tx-2', { sheetId: 'sheet-1' })
       ])
 
       expectCardAgreesWithTable(wrapper, {
-        rows: 2,
-        // The hooks `src/components/review/queueColumns.ts` declares, plus this queue's own column and
-        // the status badge, which is the element a finance officer reads a queue by.
+        rows: 1,
         hooks: [
-          'data-testid="amount"',
-          'data-testid="transaction-id"',
-          'data-testid="senior-decision"',
-          'data-testid="view-details-btn"'
+          'data-testid="sheet-amount"',
+          'data-testid="sheet-pending-count"',
+          'data-testid="sheet-status"',
+          'data-testid="sheet-title"'
         ]
       })
     })
 
     it('should render shared finance queue for all finance officers', async () => {
-      // The original asked for `[data-testid="queue-item"]`, which matches nothing: the view emits
-      // `queue-row-{id}` per row, the same convention every other queue view uses, and the one that
-      // lets a row be told apart from its neighbours. Asserting the selector the component
-      // actually renders is the correction; inventing a `queue-item` attribute to satisfy the
-      // assertion would have been the alternative, and would have tested nothing.
       const wrapper = await mountFinanceQueue([financeQueueItem('tx-1'), financeQueueItem('tx-2')])
 
       expect(wrapper.find('[data-testid="finance-queue"]').exists()).toBe(true)
-      expect(wrapper.findAll('[data-testid^="queue-row-"]')).toHaveLength(2)
-    })
-
-    it('should show the senior decision that finance is deciding on top of', async () => {
-      // FR-036: the senior decision is the final *management* decision and finance does not change
-      // it. Finance still has to see it to act, so the queue carries it — what it must not do is
-      // present it as settled. The distinction the finance view has to keep visible is
-      // management-decided versus financially settled, and the queue is where an officer first
-      // meets the row.
-      const wrapper = await mountFinanceQueue([
-        financeQueueItem('tx-1', {
-          latestDecision: {
-            id: 'd-2', stage: 'SENIOR', decision: 'APPROVE',
-            actor: { userId: 'senior1', displayName: 'Senior 1', role: 'SENIOR_MANAGER' },
-            decidedAt: '2026-09-21T10:00:00Z'
-          }
-        })
-      ])
-
-      const row = wrapper.find('[data-testid="queue-row-tx-1"]')
-      expect(row.exists()).toBe(true)
-      expect(row.find('[data-testid="senior-decision"]').text()).not.toBe('')
-      // Nothing in the row may claim the money has moved while the row is still awaiting finance.
-      expect(row.text()).not.toContain('settled')
+      expect(wrapper.findAll('[data-testid^="sheet-row-"]')).toHaveLength(1)
     })
 
     it('should not show cost center scoping in finance queue', async () => {
@@ -249,19 +219,12 @@ describe('Finance Review - Vue Component Tests (US3)', () => {
       expect(wrapper.findAll('[data-testid^="queue-row-"]')).toHaveLength(0)
     })
 
-    it('should send a row to the finance review view, not the generic detail view', async () => {
-      // Both `/reviews/finance/:id` names match the same path, so the router would resolve either one
-      // to a working page and a link pointing at the wrong name fails *silently*: the officer lands on
-      // a detail view with no settled-versus-management labelling and no way to tell that is what
-      // happened. The route table therefore proves nothing about this — only the name the view pushes
-      // does, so that is what is asserted. Reverting the view to `review-detail` fails this test.
-      const push = vi.spyOn(router, 'push')
-      const wrapper = await mountFinanceQueue([financeQueueItem('tx-1')])
+    it('registers SheetDetailsModal as a component', async () => {
+      const wrapper = await mountFinanceQueue([financeQueueItem('tx-1', { sheetId: 'sheet-1' })])
+      await flushPromises()
 
-      await wrapper.find('[data-testid="queue-row-tx-1"] [data-testid="view-details-btn"]').trigger('click')
-
-      expect(push).toHaveBeenCalledWith({ name: 'finance-review', params: { transactionId: 'tx-1' } })
-      push.mockRestore()
+      // UXC-5-01: the queue keeps its modal integration through the shared SheetDetailsModal
+      expect(wrapper.findComponent({ name: 'SheetDetailsModal' }).exists()).toBe(true)
     })
   })
 

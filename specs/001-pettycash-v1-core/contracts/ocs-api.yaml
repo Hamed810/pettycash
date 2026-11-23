@@ -21,6 +21,7 @@ tags:
   - name: Audit
   - name: Reports
   - name: Exports
+  - name: Finance
 
 paths:
   /me:
@@ -694,6 +695,13 @@ paths:
     get:
       tags: [Workflow]
       summary: Return the caller's cost-center, senior, or shared finance queue
+      description: >
+        Paged transaction summaries for the caller's stage queue. For `stage=finance` only, each
+        item additionally carries `stageApprovedTotals` (owner decision, 2026-11-20): the owning
+        Cost Sheet's whole-sheet approved totals per workflow stage, computed by the server from
+        the complete sheet transaction set, identical for every item of the same Sheet. Aggregate
+        disclosure only — no transaction, evidence, actor, comment, or individual-decision
+        visibility is widened, and the finance queue's eligibility and authorization are unchanged.
       parameters:
         - name: stage
           in: path
@@ -719,7 +727,11 @@ paths:
         that await this manager, were decided by this manager, or were returned by this manager.
         Transactions decided by another manager are never included. `progress.managerComplete` means only that no
         transaction in this manager's scope still awaits their decision; it is not whole-sheet
-        cost-centre completion and says nothing about Senior eligibility (FR-006-047/048).
+        cost-centre completion and says nothing about Senior eligibility (FR-006-047/048). The
+        response also carries `sheet.stageApprovedTotals` (owner decision, 2026-11-20): the
+        sheet's whole-Cost-Sheet approved totals per workflow stage, computed from the complete
+        sheet transaction set — aggregate monetary disclosure only, widening no transaction,
+        evidence, or individual-decision visibility.
       parameters:
         - $ref: '#/components/parameters/SheetId'
       responses:
@@ -778,7 +790,11 @@ paths:
         true only when every transaction on the sheet has a final Cost Center decision (Approve,
         Reject, or a Return corrected and then re-decided); a pending Return does not satisfy it.
         `sheet.reviewStatus` is a presentation-only `PENDING_REVIEW`/`REVIEW_COMPLETED` value (owner
-        D5, FR-007-017) — never the domain `SheetStatus` and never derived client-side.
+        D5, FR-007-017) — never the domain `SheetStatus` and never derived client-side. The response
+        also carries `sheet.stageApprovedTotals` (owner decision, 2026-11-20): the sheet's
+        whole-Cost-Sheet approved totals per workflow stage, computed from the complete sheet
+        transaction set — aggregate monetary disclosure only, widening no transaction, evidence, or
+        individual-decision visibility.
       parameters:
         - $ref: '#/components/parameters/SheetId'
       responses:
@@ -787,6 +803,177 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/SeniorManagerSheetReview' }
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # -------------------------------------------------------------------------
+  # Feature 008 — Finance Manager Account Management (additive read surface).
+  # Five read-only operations gated by an effective FINANCE role assignment
+  # (FR-008-005); the actor uid always comes from the authenticated session,
+  # never from a request parameter. The recharge write is NOT redefined here:
+  # POST /accounts/{accountId}/charges remains the single financial write this
+  # module uses, unchanged. No operation below mutates anything, and none
+  # widens the purchaser-owned reads.
+  # -------------------------------------------------------------------------
+  /finance/holders:
+    get:
+      tags: [Finance]
+      summary: List petty-cash holders (users owning at least one account)
+      description: >
+        Feature 008 additive read (FR-008-008/009). Authorization is an effective
+        FINANCE role assignment; a caller without it receives 403 and no holder
+        data (FR-008-005). The candidate population is exactly the distinct
+        petty-cash account owners — never the unrestricted Nextcloud user
+        directory (FR-008-006). `search` is trimmed, bounded to 64 characters,
+        and matched case-insensitively as a substring against the holder's
+        `userId` or `displayName`, server-side over the complete holder
+        population before pagination — never a page-local filter and never a
+        Nextcloud directory search or enumeration. Display names are resolved
+        server-side only for account-owning uids. `total` counts all matching
+        holders, not the page length; an empty result is 200 with `items: []`
+        and `total: 0`, never 404.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: search
+          in: query
+          description: >-
+            Case-insensitive substring matched against the holder `userId` or
+            `displayName` within the account-owning holder population only;
+            trimmed, at most 64 characters; empty means no filter.
+          schema: { type: string, maxLength: 64 }
+      responses:
+        '200':
+          $ref: '#/components/responses/FinanceHolderPage'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /finance/holders/{holderUid}/accounts:
+    get:
+      tags: [Finance]
+      summary: List one holder's petty-cash accounts, active and inactive
+      description: >
+        Feature 008 additive read (FR-008-010/011). Authorization is an
+        effective FINANCE role assignment. Every account of the holder is
+        listed, including inactive ones; the payload is read-only and carries
+        no mutation capability. `version` is the optimistic-lock value the
+        existing recharge write must send; `movementCount`/`lastMovementAt`
+        are presentation facts batched from the movement table. A uid owning
+        no account and an unknown uid both answer 404, so the endpoint is not
+        an account-ownership oracle. The purchaser-owned reads
+        (GET /accounts, GET /accounts/{accountId}/movements) are unchanged.
+      parameters:
+        - $ref: '#/components/parameters/HolderUid'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          $ref: '#/components/responses/FinanceHolderAccountPage'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /finance/accounts/{accountId}/ledger:
+    get:
+      tags: [Finance]
+      summary: Return the unified six-column ledger projection for one account
+      description: >
+        Feature 008 additive read (FR-008-012..025). Authorization is an
+        effective FINANCE role assignment. The row order is
+        `occurredAt DESC, id DESC` and `total` is a count of all movements for
+        the account, not the page length. Invariants carried by
+        `FinanceLedgerRow`: `occurredAt` is the authoritative persisted
+        movement posting timestamp — never the Cost Sheet creation date or the
+        transaction expense date (FR-008-014); `balanceAfter` is the
+        authoritative persisted resulting balance and the client never derives
+        a balance by summing the page (FR-008-019/023/024); exactly one of
+        `recharge`/`expense` is non-null per row (FR-008-018); `approved` is
+        the Cost Sheet's approved/total transaction count pair for a
+        consumption and null — rendered as not applicable — for a recharge
+        (FR-008-016/017); the schema has no rejected-count field (FR-008-020)
+        and no mutation capability (FR-008-025). Every authoritative movement
+        stays individually represented — no consolidated Cost Sheet financial
+        row exists in this projection (FR-008-021). A consumption whose
+        revision→transaction→sheet chain cannot be resolved is a data fault
+        (`DATA_FAULT`), not an `approved: null` row.
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          $ref: '#/components/responses/FinanceLedgerPage'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /finance/completed-sheets:
+    get:
+      tags: [Finance]
+      summary: List completed Cost Sheets with terminal Finance outcomes
+      description: >
+        Feature 008 additive read (FR-008-032/033/035). Authorization is an
+        effective FINANCE role assignment. Only sheets whose status is
+        COMPLETED or COMPLETED_WITH_REJECTIONS are listed — a sheet with any
+        transaction still awaiting a Finance decision is absent, and a
+        completion with rejections is included with its honest zero or partial
+        counts and posted amount (FR-008-036). `postedAmount` is the sum of
+        the consumption movements actually linked to the sheet and
+        `postingCount` their count — never a projection assuming every
+        approved transaction posted (FR-008-035); `approved + rejected =
+        total` for every listed sheet. `reference` is the authoritative public
+        sheet UUID; no other reference format exists. The list is strictly
+        read-only (FR-008-038), ordered `completedAt DESC, id DESC`, and
+        paginated with `total` counting all matching sheets.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          $ref: '#/components/responses/CompletedSheetPage'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /finance/completed-sheets/{sheetId}:
+    get:
+      tags: [Finance]
+      summary: Return one completed Cost Sheet as read-only history
+      description: >
+        Feature 008 additive read (FR-008-034/036/038). Authorization is an
+        effective FINANCE role assignment. The detail is returned only when
+        the sheet is terminal and every transaction is COMPLETED_APPROVED or
+        COMPLETED_REJECTED — otherwise 404, so a pending Finance-review state
+        can never appear as history (FR-008-036). `expenseDate` is the
+        transaction's business expense date and `posting.occurredAt` the
+        accounting posting timestamp; they may differ and are never conflated.
+        `posting` is null for a rejected transaction; `postedAmount` sums the
+        actual postings across the response, with `postingCount` matching the
+        non-null postings. Evidence is metadata only — content is read through
+        GET /evidence/{evidenceId}/content under the read-only
+        completed-history authorization documented on that operation
+        (FR-008-037); this response embeds no content, URL, or token. The
+        response contains no decision, mutation, or capability field
+        (FR-008-038).
+      parameters:
+        - $ref: '#/components/parameters/SheetId'
+      responses:
+        '200':
+          description: Read-only completed Cost Sheet detail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CompletedSheetDetail' }
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
 
@@ -846,6 +1033,20 @@ paths:
     get:
       tags: [Evidence]
       summary: Stream authorized evidence content or preview
+      description: >
+        Feature 008 authorization extension (FR-008-037), documentation only — the
+        request and response shapes of this operation are unchanged. Beyond the
+        existing authorization rule, an actor with an effective FINANCE role
+        assignment is admitted read-only when the evidence belongs to a transaction
+        that is terminal (COMPLETED_APPROVED or COMPLETED_REJECTED at the Final
+        stage) in a sheet whose status is COMPLETED or COMPLETED_WITH_REJECTIONS
+        and whose every transaction is terminal — the same completed-history scope
+        that gates GET /finance/completed-sheets/{sheetId}. The extension is
+        content-only: it grants no upload, replacement, deletion, deactivation,
+        link creation, or any other evidence mutation, and it does not widen
+        audit or revision visibility or any existing purchaser, Cost Center
+        Manager, or Senior Manager evidence result. Out-of-scope callers keep the
+        existing non-disclosure answers; deactivated evidence keeps its 403.
       parameters:
         - $ref: '#/components/parameters/EvidenceId'
         - name: disposition
@@ -1132,6 +1333,12 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    HolderUid:
+      name: holderUid
+      in: path
+      required: true
+      description: A user who owns at least one petty-cash account
+      schema: { type: string, minLength: 1 }
 
   responses:
     # Every response below carries `ocs.data.error` — the `ErrorEnvelope` wrapper, not `Error`
@@ -1269,6 +1476,50 @@ components:
               - type: object
                 properties:
                   items: { type: array, items: { $ref: '#/components/schemas/AuditEvent' } }
+    FinanceHolderPage:
+      description: Paged petty-cash holders (Feature 008)
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/PageMeta'
+              - type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/HolderSummary' } }
+    FinanceHolderAccountPage:
+      description: Paged Finance-scoped holder accounts, active and inactive (Feature 008)
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/PageMeta'
+              - type: object
+                required: [holder]
+                properties:
+                  holder: { $ref: '#/components/schemas/FinanceUserRef' }
+                  items: { type: array, items: { $ref: '#/components/schemas/HolderAccountSummary' } }
+    FinanceLedgerPage:
+      description: Paged authoritative ledger rows for one holder account (Feature 008)
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/PageMeta'
+              - type: object
+                required: [account]
+                properties:
+                  account: { $ref: '#/components/schemas/HolderAccountSummary' }
+                  items: { type: array, items: { $ref: '#/components/schemas/FinanceLedgerRow' } }
+    CompletedSheetPage:
+      description: Paged completed Cost Sheet history entries (Feature 008)
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/PageMeta'
+              - type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/CompletedSheetSummary' } }
 
   schemas:
     ExpectedVersion:
@@ -1503,6 +1754,261 @@ components:
       properties:
         account: { $ref: '#/components/schemas/Account' }
         movement: { $ref: '#/components/schemas/Movement' }
+    # ---------------------------------------------------------------------------
+    # Feature 008 — Finance Manager Account Management projection schemas.
+    # Read-only projections over existing authoritative records; no schema
+    # carries a mutation capability, and no field is client-derivable (FR-008-051).
+    # ---------------------------------------------------------------------------
+    FinanceUserRef:
+      type: object
+      required: [userId, displayName]
+      properties:
+        userId: { type: string }
+        displayName: { type: string }
+    HolderSummary:
+      type: object
+      required: [userId, displayName, accountCount, activeAccountCount, status]
+      properties:
+        userId: { type: string }
+        displayName:
+          type: string
+          description: Resolved server-side only for account-owning uids; falls back to the uid
+        accountCount: { type: integer, minimum: 1 }
+        activeAccountCount: { type: integer, minimum: 0 }
+        status:
+          type: string
+          enum: [ACTIVE, INACTIVE, MIXED]
+          description: >-
+            Derived from the holder's accounts only: ACTIVE = every account
+            active, INACTIVE = none active, MIXED = both.
+    HolderAccountSummary:
+      type: object
+      required: [id, userId, currency, minorUnit, balance, active, version, movementCount, lastMovementAt]
+      properties:
+        id: { type: string, format: uuid }
+        userId: { type: string }
+        currency: { type: string, minLength: 3, maxLength: 3 }
+        minorUnit: { type: integer, minimum: 0, maximum: 4 }
+        balance: { $ref: '#/components/schemas/Money' }
+        active: { type: boolean }
+        version:
+          type: integer
+          minimum: 0
+          description: Optimistic-lock value the existing recharge write must send
+        movementCount: { type: integer, minimum: 0 }
+        lastMovementAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Batched MAX(occurred_at); null for an unused account
+    FinanceSheetRef:
+      type: object
+      required: [id, reference, title]
+      properties:
+        id: { type: string, format: uuid }
+        reference:
+          type: string
+          format: uuid
+          description: The authoritative public sheet UUID; no other reference format exists
+        title: { type: string }
+    ApprovalCounts:
+      type: object
+      required: [approvedCount, totalCount]
+      properties:
+        approvedCount: { type: integer, minimum: 0 }
+        totalCount: { type: integer, minimum: 0 }
+    FinanceLedgerRow:
+      type: object
+      required: [id, type, occurredAt, description, sheet, approved, recharge, expense, balanceAfter, sourceRevisionId]
+      properties:
+        id: { type: string, format: uuid }
+        type:
+          type: string
+          enum: [CHARGE, CONSUMPTION]
+          description: Movement semantics/styling, not a user-visible column
+        occurredAt:
+          type: string
+          format: date-time
+          description: >-
+            The authoritative persisted movement posting timestamp (the ledger
+            Date). Never the Cost Sheet creation date, the transaction expense
+            date, or any other substituted date (FR-008-014).
+        description:
+          type: string
+          description: >-
+            Consumption: the resolved Cost Sheet title (the sheet reference
+            travels in `sheet`). Charge: the stored charge description
+            (FR-008-015).
+        sheet:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/FinanceSheetRef'
+          description: The originating Cost Sheet; null for a charge
+        approved:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/ApprovalCounts'
+          description: >-
+            The Cost Sheet's approved transaction count relative to its total
+            for a consumption; null for a recharge (rendered as not
+            applicable). There is no rejected-count field (FR-008-016/017/020).
+        recharge:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/Money'
+          description: The recharge amount; non-null only when `type` is CHARGE (FR-008-018)
+        expense:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/Money'
+          description: The expense amount; non-null only when `type` is CONSUMPTION (FR-008-018)
+        balanceAfter:
+          allOf:
+            - $ref: '#/components/schemas/Money'
+          description: >-
+            The authoritative persisted resulting balance for this movement;
+            the client never derives a balance from the page
+            (FR-008-019/023/024).
+        sourceRevisionId:
+          type: string
+          format: uuid
+          nullable: true
+          description: The consumption revision link; null for a charge
+    CompletedSheetSummary:
+      type: object
+      required: [id, reference, title, purchaser, totalTransactionCount, approvedTransactionCount, rejectedTransactionCount, postedAmount, postingCount, completedAt, status]
+      properties:
+        id: { type: string, format: uuid }
+        reference:
+          type: string
+          format: uuid
+          description: The authoritative public sheet UUID; no other reference format exists
+        title: { type: string }
+        purchaser: { $ref: '#/components/schemas/FinanceUserRef' }
+        totalTransactionCount: { type: integer, minimum: 0 }
+        approvedTransactionCount: { type: integer, minimum: 0 }
+        rejectedTransactionCount: { type: integer, minimum: 0 }
+        postedAmount:
+          allOf:
+            - $ref: '#/components/schemas/Money'
+          description: >-
+            The sum of the consumption movements actually linked to the sheet —
+            never a projection assuming every approved transaction posted
+            (FR-008-035).
+        postingCount: { type: integer, minimum: 0 }
+        completedAt: { type: string, format: date-time }
+        status:
+          type: string
+          enum: [COMPLETED, COMPLETED_WITH_REJECTIONS]
+          description: >-
+            Terminal completed states only; a sheet with any pending Finance
+            decision is never listed (FR-008-032/036).
+    FinancePosting:
+      type: object
+      required: [occurredAt, amount, balanceAfter]
+      properties:
+        occurredAt:
+          type: string
+          format: date-time
+          description: The accounting posting timestamp; distinct from the expense date
+        amount: { $ref: '#/components/schemas/Money' }
+        balanceAfter: { $ref: '#/components/schemas/Money' }
+    FinanceDecisionStages:
+      type: object
+      required: [costCenter, senior, finance]
+      properties:
+        costCenter:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/Decision'
+        senior:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/Decision'
+        finance:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/Decision'
+          description: The final Finance Manager decision; terminal for every listed transaction
+    FinanceEvidenceMetadata:
+      type: object
+      required: [id, name, mediaType, sizeBytes, active, uploadedBy, uploadedAt]
+      description: >-
+        Metadata only; content is read through GET /evidence/{evidenceId}/content
+        under the read-only completed-history authorization documented there
+        (FR-008-037). No content, URL, or token is embedded in this schema.
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        mediaType: { type: string }
+        sizeBytes: { type: integer, format: int64, minimum: 0 }
+        active: { type: boolean }
+        uploadedBy: { type: string }
+        uploadedAt: { type: string, format: date-time }
+    CompletedSheetTransaction:
+      type: object
+      required: [id, reference, revisionNumber, description, expenseDate, amount, finalOutcome, status, decisions, decisionHistory, evidence, posting]
+      properties:
+        id: { type: string, format: uuid }
+        reference:
+          type: string
+          format: uuid
+          description: The transaction public UUID
+        revisionNumber: { type: integer, minimum: 1 }
+        description: { type: string }
+        expenseDate:
+          type: string
+          format: date
+          description: >-
+            The business expense date, labelled as such — never presented as
+            the posting timestamp.
+        amount: { $ref: '#/components/schemas/Money' }
+        finalOutcome:
+          type: string
+          enum: [APPROVED, REJECTED]
+        status:
+          type: string
+          enum: [COMPLETED_APPROVED, COMPLETED_REJECTED]
+          description: Terminal only; a pending Finance-review state never appears (FR-008-036)
+        decisions: { $ref: '#/components/schemas/FinanceDecisionStages' }
+        decisionHistory:
+          type: array
+          items: { $ref: '#/components/schemas/Decision' }
+          description: Full chronological decision history for audit-grade display
+        evidence:
+          type: array
+          items: { $ref: '#/components/schemas/FinanceEvidenceMetadata' }
+        posting:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/FinancePosting'
+          description: The consumption movement actually linked to this transaction's revision; null for a rejected transaction
+    CompletedSheetDetail:
+      allOf:
+        - $ref: '#/components/schemas/CompletedSheetSummary'
+        - type: object
+          required: [accountId, currency, minorUnit, createdAt, firstSubmittedAt, financeStartedAt, transactions]
+          properties:
+            accountId: { type: string, format: uuid }
+            currency: { type: string, minLength: 3, maxLength: 3 }
+            minorUnit: { type: integer, minimum: 0, maximum: 4 }
+            createdAt: { type: string, format: date-time }
+            firstSubmittedAt:
+              type: string
+              format: date-time
+              nullable: true
+            financeStartedAt:
+              type: string
+              format: date-time
+              nullable: true
+            transactions:
+              type: array
+              items: { $ref: '#/components/schemas/CompletedSheetTransaction' }
+              description: >-
+                Every transaction of the sheet; the detail is served only when
+                each of them is terminal (FR-008-034/036). Strictly read-only —
+                no capability, decision-form, or mutation field exists
+                (FR-008-038).
     SheetStatus:
       type: string
       # The domain's `SheetStatus` values, not the transaction `AWAITING_*` names this list carried
@@ -1557,6 +2063,24 @@ components:
         costCenterApproved: { $ref: '#/components/schemas/Money' }
         seniorApproved: { $ref: '#/components/schemas/Money' }
         financeApproved: { $ref: '#/components/schemas/Money' }
+    StageApprovedTotals:
+      type: object
+      required: [costCenterApproved, seniorApproved, financeApproved]
+      properties:
+        costCenterApproved: { $ref: '#/components/schemas/Money' }
+        seniorApproved: { $ref: '#/components/schemas/Money' }
+        financeApproved: { $ref: '#/components/schemas/Money' }
+      description: >
+        Whole-Cost-Sheet approved monetary totals, one per workflow stage, as the reviewer-facing
+        subset of `SheetTotals` (FR-062). Every figure is computed by the server from the sheet's
+        **complete** transaction set — the active revision's amount counts toward a stage total only
+        when that stage's authoritative decision on the current active revision is Approved; Rejected,
+        Returned, undecided, and superseded-revision approvals do not contribute. A Cost Sheet is
+        single-currency by domain invariant, so each total is one `Money` in the sheet's own currency:
+        there is no conversion and no per-currency array. Zero is a real derived answer, distinct from
+        a stage the responding surface cannot prove. Aggregate disclosure only (owner decision,
+        2026-11-20): the totals never widen transaction-level visibility, evidence visibility,
+        individual decision-history visibility, or any mutation/authorization surface.
     SheetSummary:
       type: object
       required: [id, title, ownerId, currency, status, transactionCount, totals, version]
@@ -1642,6 +2166,29 @@ components:
         # the authoritative refusal remains the submit/resubmit 422 (FR-091).
         evidenceRequired: { type: boolean }
         version: { type: integer }
+        # Owner decision (2026-11-20): whole-sheet stage-approved aggregate disclosure. Emitted ONLY
+        # on `GET /queues/finance` items — the shared-queue finance projection stamps each item with
+        # its owning Cost Sheet's whole-sheet aggregate, computed by the server from the sheet's
+        # complete transaction set (`SheetTotals`), so every item of one Sheet carries the identical
+        # value. It is deliberately absent from cost-center/senior queue items and from owner-facing
+        # transaction surfaces (where the sheet summary's `SheetTotals` is the vehicle), and no other
+        # per-transaction data — decisions, actors, comments, evidence — is widened to support it.
+        stageApprovedTotals: { $ref: '#/components/schemas/StageApprovedTotals' }
+        # Owner decision (2026-11-22): owning Cost Sheet metadata, emitted ONLY on `GET /queues/finance`
+        # items. The finance queue's transaction-scoped projection previously dropped these values,
+        # forcing `Purchaser unavailable` / `Date unavailable` fallbacks; they are reattached here
+        # batched by sheet so no per-row lookup is needed. Absent from cost-center/senior queue items
+        # and from owner-facing transaction surfaces.
+        sheetTitle: { type: string }
+        sheetOwnerId: { type: string }
+        sheetOwnerDisplayName: { type: string }
+        sheetSubmittedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: >
+            The genuine first-submission instant (`ExpenseSheet::firstSubmittedAt`), not the sheet's
+            creation time and not a later correction's timestamp.
     TransactionDetail:
       allOf:
         - $ref: '#/components/schemas/TransactionSummary'
@@ -1652,7 +2199,7 @@ components:
             evidence: { type: array, items: { $ref: '#/components/schemas/Evidence' } }
     ManagerSheetSummary:
       type: object
-      required: [id, title, ownerId, ownerDisplayName, currency, status, submittedTotalMinor, submittedTotal, submittedAt, version]
+      required: [id, title, ownerId, ownerDisplayName, currency, status, submittedTotalMinor, submittedTotal, submittedAt, version, stageApprovedTotals]
       properties:
         id: { type: string, format: uuid }
         title: { type: string }
@@ -1685,6 +2232,12 @@ components:
             The genuine first-submission instant (`ExpenseSheet::firstSubmittedAt`), not the sheet's
             creation time and not a later correction's timestamp.
         version: { type: integer }
+        # Owner decision (2026-11-20): whole-sheet stage-approved aggregate disclosure. This summary
+        # is served only by the per-sheet Cost Center review read, so the aggregate is always
+        # present here. It is computed from the sheet's complete transaction set — NOT the
+        # manager-scoped subset in `transactions` — and discloses no transaction, actor, comment,
+        # evidence, or individual decision outside the manager's scope.
+        stageApprovedTotals: { $ref: '#/components/schemas/StageApprovedTotals' }
     ManagerSheetProgress:
       type: object
       required: [awaitingManager, decidedByManager, returnedForCorrection, total, managerComplete]
@@ -1828,7 +2381,19 @@ components:
       type: object
       required: [sheet, progress, transactions]
       properties:
-        sheet: { $ref: '#/components/schemas/SeniorSheetSummary' }
+        # Owner decision (2026-11-20): the per-sheet read's sheet summary requires the whole-sheet
+        # `stageApprovedTotals` aggregate. `SeniorSheetSummary` is deliberately left without the
+        # property: the senior queue list rows reuse that shared schema and must not pay a
+        # per-sheet aggregate computation for a list page, so the requiredness lives on the
+        # per-sheet read only. Aggregate disclosure widens no transaction, evidence, or
+        # individual-decision visibility.
+        sheet:
+          allOf:
+            - $ref: '#/components/schemas/SeniorSheetSummary'
+            - type: object
+              required: [stageApprovedTotals]
+              properties:
+                stageApprovedTotals: { $ref: '#/components/schemas/StageApprovedTotals' }
         progress: { $ref: '#/components/schemas/SeniorSheetProgress' }
         transactions:
           type: array
