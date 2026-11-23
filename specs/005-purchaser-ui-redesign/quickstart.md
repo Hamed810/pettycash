@@ -93,7 +93,14 @@ Prerequisites: the pettycash lab is running (`/home/ubuntu/projects/nextcloud-la
    - `fa` → RTL, Jalali by default, Persian digits;
    - `en` → LTR, Gregorian by default, Latin digits;
    - a calendar preference change re-renders dates with no reload and no request.
-   - **Outstanding**: a visible way to change the preference while mounted (card AC2), and a payload-diff under both preferences (card AC5).
+2. **Settings route and calendar control** — open the personal Settings destination (desktop gear entry in the lower navigation section; mobile integrated into the existing navigation model):
+   - Verify the Settings route loads for an authenticated purchaser.
+   - Select Gregorian, then Persian; each change applies reactively with no reload and no network request.
+   - Verify the current selection reflects the existing `pettycash.calendarPreference` value.
+   - Verify no Pettycash language selector, profile management, or unrelated setting is present.
+3. **Four language/calendar combinations** — repeat the date re-render check under English UI + Gregorian, English UI + Persian, Persian UI + Gregorian, and Persian UI + Persian calendar. Calendar choice is independent of Nextcloud UI language.
+4. **Representative review dates** — confirm management-review date surfaces consume the shared calendar-aware formatter under each combination.
+5. **Mutation-payload equality (`T018`)** — submit the same transaction form under Gregorian and Persian preferences and diff the request payloads; they must be identical. Calendar selection changes display only and must not alter persisted dates or mutation payloads.
 2. **Sheet list** — six columns in the accepted order, title above the ID, `—` for a never-submitted sheet, `0` for a genuine zero, `0` transactions for an empty sheet, one accessible action menu per row; no horizontal scroll at 390px.
    - **Outstanding**: English labels (blocked by `REC-01` — raw keys will render); the date-filter labels do not yet name the creation date (`REC-06`); owner visual acceptance.
 3. **Row actions** — an `OPEN` row offers View/Edit/Delete; a submitted row offers View only; Delete opens a confirmation that names the sheet; **cancel issues no request**.

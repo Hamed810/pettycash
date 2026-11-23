@@ -101,6 +101,7 @@ const ENTRY_ICONS: Record<string, string> = {
 	'admin-configuration': mdiCogOutline,
 	'admin-funding': mdiCashPlus,
 	'finance-holders': mdiAccountGroupOutline,
+	'personal-settings': mdiCogOutline,
 }
 
 function iconFor(name: string): string {
@@ -116,17 +117,25 @@ function iconFor(name: string): string {
 		data-test="app-navigation"
 	>
 		<ul class="pettycash-nav__list">
-			<li v-for="entry in barEntries" :key="entry.name" class="pettycash-nav__item">
-				<RouterLink :to="{ name: entry.name }" :data-test="entry.testId" class="pettycash-nav__link">
-					<NcIconSvgWrapper
-						:path="iconFor(entry.name)"
-						:size="20"
-						class="pettycash-nav__icon"
-						aria-hidden="true"
-					/>
-					<span>{{ t('pettycash', entry.labelKey) }}</span>
-				</RouterLink>
-			</li>
+			<template v-for="entry in barEntries" :key="entry.name">
+				<li
+					v-if="!showOverflow && entry.name === 'personal-settings'"
+					class="pettycash-nav__section"
+				>
+					<hr class="pettycash-nav__divider">
+				</li>
+				<li class="pettycash-nav__item">
+					<RouterLink :to="{ name: entry.name }" :data-test="entry.testId" class="pettycash-nav__link">
+						<NcIconSvgWrapper
+							:path="iconFor(entry.name)"
+							:size="20"
+							class="pettycash-nav__icon"
+							aria-hidden="true"
+						/>
+						<span>{{ t('pettycash', entry.labelKey) }}</span>
+					</RouterLink>
+				</li>
+			</template>
 			<li v-if="showOverflow" class="pettycash-nav__item pettycash-nav__item--more">
 				<details ref="moreDetails" class="pettycash-nav__more" @keydown.esc="closeOverflow">
 					<summary class="pettycash-nav__link pettycash-nav__more-summary" data-test="nav-more">
@@ -170,6 +179,18 @@ function iconFor(name: string): string {
 	list-style: none;
 	margin: 0;
 	padding: 0;
+}
+
+.pettycash-nav__section {
+	margin-block: 0.5rem 0.2rem;
+	padding-block-start: 0.5rem;
+	border-block-start: 1px solid var(--color-border);
+}
+
+.pettycash-nav__divider {
+	border: none;
+	border-block-start: 1px solid var(--color-border);
+	margin: 0;
 }
 
 .pettycash-nav__link {

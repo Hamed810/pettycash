@@ -127,7 +127,7 @@ The modal's Transactions tab shows only that manager's pending transactions in t
 
 ### D5 — Visual language
 
-Use the established Pettycash/Purchaser tokens: Nextcloud shell, `--font-size-*` scale, `--color-*` tokens, `StatusBadge`, card surfaces, tabular rows, and the approved pill palette. The Manus reference supplies hierarchy (eyebrow, title, scope banner, summary cards, sheet panel, search/filter/sort, rows), not typography or branding.
+Use the established Pettycash/Purchaser tokens: Nextcloud shell, `--font-size-*` scale, `--color-*` tokens, `StatusBadge`, card surfaces, tabular rows, and the approved pill palette. The owner-approved Management Review information architecture supplies hierarchy (eyebrow, title, scope banner, summary cards, sheet panel, search/filter/sort, rows), not typography or branding.
 
 Mobile: one column, summary cards 2×2, filter tabs wrap, sheet rows become stacked cards with the disclosure control occupying the full row. No horizontal scroll at 390px.
 
@@ -201,7 +201,7 @@ No constitution violations. The only added complexity — a completeness guard a
 
 ## Phase 2 — Shared Sheet Review Workspace (canonical UX)
 
-**Spec**: `spec.md` §"Phase 2 — Sheet Review Workspace (Canonical Sheet UX)". **Design authority**: `docs/frontend-redesign/proposals/006-management-review-quick-review/UX_SPEC.md` + `mockups/`. **Gate**: no implementation before `T022` and the Phase 2 visual gate. **Compatibility constraint**: the mockup is a static harness with invented data; its `mockup.js` renderers MUST NOT be copied into production. Production reuses the shared frontend primitives `SheetDetailsModal`, `TransactionReviewCard`, `TransactionDetailDrawer`, `PriorDecisionHistory`, `EvidencePreview`, and `DecisionConfirmation` (generalized from the existing `QuickReviewCard`, `TransactionDetailsDrawer`, `QuickDecisionModal`, `EvidencePreview`), the existing Vue components, `TransactionDetail` reads, the `DecisionForm` decision semantic, and the evidence preview overlay, adapting the design's interactions to the real data model and the honesty rules (`FR-006-011/015`, `FR-006-036…046`).
+**Spec**: `spec.md` §"Phase 2 — Sheet Review Workspace (Canonical Sheet UX)". **Requirements authority**: `spec.md` and this plan; no external UX proposal or mockup is retained or authoritative. **Gate**: no implementation before `T022` and the Phase 2 visual gate. **Compatibility constraint**: no prototype renderer may be copied into production. Production reuses the shared frontend primitives `SheetDetailsModal`, `TransactionReviewCard`, `TransactionDetailDrawer`, `PriorDecisionHistory`, `EvidencePreview`, and `DecisionConfirmation` (generalized from the existing `QuickReviewCard`, `TransactionDetailsDrawer`, `QuickDecisionModal`, `EvidencePreview`), the existing Vue components, `TransactionDetail` reads, the `DecisionForm` decision semantic, and the evidence preview overlay, adapting the design's interactions to the real data model and the honesty rules (`FR-006-011/015`, `FR-006-036…046`).
 
 ### 2.1 Data model and backend boundary (verified)
 

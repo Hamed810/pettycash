@@ -4,7 +4,7 @@
 - **Date**: 2026-10-23
 - **Decides**: How a receipt can be selected before the first save, and when the receipt rule is enforced
 - **Traces to**: 001 FR-022, FR-023, FR-025, FR-047, FR-089–FR-092, SC-017; 005 FR-005-022,
-  FR-005-027, FR-005-031, FR-005-035–FR-005-038; `docs/frontend-redesign/DECISIONS.md` D-022
+  FR-005-027, FR-005-031, FR-005-035–FR-005-038
 
 ## Context
 
@@ -101,7 +101,7 @@ rule from expense type names, local configuration, or a second copy of the rule.
 - Verification: four browser runs (`fa`/`en` × desktop/390px), 46/46 checks and 11 screenshots each with
   zero page errors; targeted Vitest 4 files / 190 tests; container PHPUnit 5 files / 51 tests / 765
   assertions; `npm run check` 26 files / 536 tests, lint 0 errors / 261 warnings, build and notices green.
-- `docs/frontend-redesign/DECISIONS.md` D-022 records the owner directive and its verified implementation;
-  P-009 shows `BE-CR-004` approved and implemented/verified, and P-006 the bounded backend exception.
+- The owner directive and its verified implementation are recorded in this ADR and in the feature records cited above;
+  `BE-CR-004` is approved and implemented/verified, and the bounded backend exception is recorded here.
 - No production seed data is introduced. The 25/30/35/40-transaction sheets are debug-gated verification
   data only.

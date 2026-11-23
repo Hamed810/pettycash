@@ -1,0 +1,39 @@
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "mcp": {
+    "codegraphcontext": {
+      "type": "local",
+      "command": [
+        "docker",
+        "run",
+        "-i",
+        "--rm",
+        "--cpus=2",
+        "-v",
+        "/home/ubuntu/projects/pettycash:/workspace:ro",
+        "-v",
+        "/home/ubuntu/projects/pettycash/.cgc-data:/home/cgc/.codegraphcontext",
+        "-w",
+        "/workspace",
+        "pettycash-cgc:current",
+        "cgc",
+        "mcp",
+        "start"
+      ],
+      "enabled": true
+    },
+    "serena": {
+      "type": "remote",
+      "url": "http://127.0.0.1:9121/mcp",
+      "enabled": true,
+      "timeout": 90000,
+      "oauth": false
+    },
+    "context7": {
+      "type": "remote",
+      "url": "https://mcp.context7.com/mcp",
+      "enabled": true,
+      "timeout": 15000
+    }
+  }
+}

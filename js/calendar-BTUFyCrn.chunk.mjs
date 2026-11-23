@@ -1,0 +1,2 @@
+import{c as a,D as n,z as c}from"./pettycash-main.mjs";const r="pettycash.calendarPreference",e=c(s());function o(t){return t==="persian"||t==="gregory"}function s(){try{const t=globalThis.localStorage?.getItem(r);return o(t)?t:null}catch{return null}}function l(t){return/^fa\b/i.test(t)?"persian":"gregory"}const i=a(()=>e.value??l(n()));function g(t){e.value=t;try{globalThis.localStorage?.setItem(r,t)}catch{}}export{i as c,g as s};
+//# sourceMappingURL=calendar-BTUFyCrn.chunk.mjs.map

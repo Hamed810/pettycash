@@ -170,8 +170,8 @@ OC.L10N.register(
 		"navigation.reviewFinance": "Finance queue",
 		"navigation.reviewSenior": "Senior queue",
 		"navigation.sheets": "Sheets",
+		"navigation.settings": "Settings",
 		"navigation.title": "Navigation",
-		"readiness.blocked": "Complete the following before submitting:",
 		"readiness.missingCostCenter": "Cost center",
 		"readiness.missingDescription": "Description",
 		"readiness.missingExpenseType": "Expense type",
@@ -181,6 +181,7 @@ OC.L10N.register(
 		"readiness.submissionEvidenceBlocked": "The server requires receipts for these transactions:",
 		"readiness.submitHint": "The server validates the submission. If anything is incomplete, its message is shown.",
 		"readiness.title": "Ready to submit",
+		"readiness.blocked": "Complete the following before submitting:",
 		"readiness.transactionLabel": "Transaction {label}",
 		"reports.empty": "No reports",
 		"reports.export.format": "Export format",
@@ -852,7 +853,11 @@ OC.L10N.register(
 		"completedSheetDetail.noTransaction": "No transactions",
 		"completedSheetDetail.evidence.none": "No evidence",
 		"completedSheetDetail.openEvidence": "Open evidence",
-		"completedSheetDetail.closeDetail": "Close detail"
+		"completedSheetDetail.closeDetail": "Close detail",
+		"settings.calendar": "Calendar",
+		"settings.gregory": "Gregorian",
+		"settings.persian": "Persian",
+		"settings.title": "Settings"
 	},
 	"nplurals=2; plural=(n != 1);"
 );

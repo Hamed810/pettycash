@@ -44,7 +44,7 @@ Everything else is **supported reuse**: the transaction detail read, the decisio
 
 **Performance Goals**: one queue request per refresh; no per-row network calls for the sheet list; filtered/sorted views operate on a proven-complete loaded set without per-action requests; per-transaction detail reads only when a card's actions/details are actually opened (guarded, cached).
 
-**Constraints**: Cost Center workflow MUST NOT change (006 `FR-006-030/031`); no new dependencies; no Vuetify; backend/contract changes only through a separate authorization; no sheet-level decisions; no fabricated values; existing working-tree changes preserved; no Git writes; `docs/frontend-redesign/` has no Senior reference — the visual baseline is `CostCenterQueueView.vue`.
+**Constraints**: Cost Center workflow MUST NOT change (006 `FR-006-030/031`); no new dependencies; no Vuetify; backend/contract changes only through a separate authorization; no sheet-level decisions; no fabricated values; existing working-tree changes preserved; no Git writes; the visual baseline is `CostCenterQueueView.vue`.
 
 **Scale/Scope**: one review view (Senior) + one modal + shared review components + (authorized) additive backend capability + one additive export surface, catalogue keys, component tests, screenshot evidence.
 
@@ -547,7 +547,6 @@ No constitution violations (compatibility baseline now states the registered PHP
 - `useSheetQueue.ts`, `QuickReviewCard.vue`, `QuickDecisionModal.vue`, `TransactionDetailsDrawer.vue`, `EvidencePreview.vue`, and `evidencePreview.ts` are all reusable for the Senior surface; `CostCenterQueueView.vue` is the visual baseline.
 - `POST /exports` row sources (`transactionRows`/`sheetRows`) are **owner-scoped** (`ReportScope::coversOwned`) and will refuse a Senior Manager; `transactionRows` resolves ids in the **client-supplied order** (a per-id loop, not a `WHERE IN`), so the existing ID-selection mechanism already preserves selection order — only a Senior-scoped row source is missing.
 - No vendor/merchant field exists anywhere in the domain or `data-model.md`; per owner **D7**, vendor is **out of scope** for Feature 007 (no filter, column, placeholder, or disabled control).
-- No Senior design reference exists under `docs/frontend-redesign/`.
 
 ## Missing Capabilities
 

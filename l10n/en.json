@@ -169,6 +169,7 @@
 		"navigation.reviewFinance": "Finance queue",
 		"navigation.reviewSenior": "Senior queue",
 		"navigation.sheets": "Sheets",
+		"navigation.settings": "Settings",
 		"navigation.title": "Navigation",
 		"readiness.blocked": "Complete the following before submitting:",
 		"readiness.missingCostCenter": "Cost center",
@@ -851,7 +852,11 @@
 		"completedSheetDetail.noTransaction": "No transactions",
 		"completedSheetDetail.evidence.none": "No evidence",
 		"completedSheetDetail.openEvidence": "Open evidence",
-		"completedSheetDetail.closeDetail": "Close detail"
+		"completedSheetDetail.closeDetail": "Close detail",
+		"settings.calendar": "Calendar",
+		"settings.gregory": "Gregorian",
+		"settings.persian": "Persian",
+		"settings.title": "Settings"
 	},
 	"pluralForm": "nplurals=2; plural=(n != 1);"
 }

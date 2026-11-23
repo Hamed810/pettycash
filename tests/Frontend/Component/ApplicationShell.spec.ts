@@ -45,7 +45,7 @@ const EXPECTED_ROUTE_NAMES = [
 	'transactions', 'transaction-create', 'transaction-detail', 'transaction-edit',
 	'transaction-audit', 'review-queue-cost-center', 'review-queue-senior',
 	'review-queue-finance', 'review-queue-returns', 'review-detail', 'finance-review',
-	'accounts', 'admin-configuration', 'admin-funding', 'not-found',
+	'accounts', 'admin-configuration', 'admin-funding', 'not-found', 'personal-settings',
 ]
 
 function signInAs(roles: Role[], canAdminister: boolean) {

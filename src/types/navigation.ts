@@ -77,6 +77,7 @@ export const NAVIGATION_ENTRIES: NavigationEntry[] = [
 	{ name: 'review-queue-returns', labelKey: 'navigation.returns', testId: 'nav-returns', visibleFor: authenticated },
 	{ name: 'accounts', labelKey: 'navigation.accounts', testId: 'nav-accounts', visibleFor: authenticated },
 	{ name: 'reports', labelKey: 'navigation.reports', testId: 'nav-reports', visibleFor: authenticated },
+	{ name: 'personal-settings', labelKey: 'navigation.settings', testId: 'nav-settings', visibleFor: authenticated },
 	{ name: 'admin-configuration', labelKey: 'navigation.administration', testId: 'nav-admin-configuration', visibleFor: adminOnly },
 	{ name: 'admin-funding', labelKey: 'navigation.funding', testId: 'nav-admin-funding', visibleFor: adminOnly },
 	{ name: 'finance-holders', labelKey: 'navigation.financeHolders', testId: 'nav-finance-holders', visibleFor: (s) => hasRole(s, 'FINANCE') },

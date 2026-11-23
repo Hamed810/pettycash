@@ -475,17 +475,16 @@ scope without explicit approval and the required specification/plan.
   can inspect the required screenshots or browser state. If visual
   comparison is unavailable, record the exact evidence gap and route it
   to the owner-controlled visual gate defined in the feature contract
-  and approved frontend-redesign acceptance process.
+  and the applicable Spec Kit acceptance criteria.
 - Never claim or simulate pixel-level verification that was not
   performed.
 
-### 8.3 Frontend redesign references
+### 8.3 Frontend change authority
 
-For frontend redesign work, respect the approved scope, design
-decisions, and acceptance gates in `docs/frontend-redesign/` when those
-documents exist in the current Git state. Confirm that the referenced
-proposal is approved and applicable before treating it as an
-implementation requirement.
+For frontend work, Spec Kit artifacts and the applicable approved
+feature contract are the authority for product requirements and
+acceptance criteria. Confirm that any referenced proposal is approved
+and applicable before treating it as an implementation requirement.
 
 ------------------------------------------------------------------------
 
@@ -599,9 +598,8 @@ user-owned unless explicitly identified otherwise.
 - Do not create ADRs for routine bug fixes, ordinary refactors,
   temporary implementation details, or routine agent-workflow changes.
 - Do not create process-heavy reports for trivial work.
-- Record owner-approved material decisions in `DECISION_REGISTER.md`
-  when required by project governance. An ADR does not replace the
-  decision register or an approved specification.
+Owner-approved product and requirement decisions must be incorporated into the applicable Spec Kit artifacts. Do not maintain a parallel product-decision register.
+Durable architecture decisions may be recorded as ADRs when appropriate.
 
 ------------------------------------------------------------------------
 

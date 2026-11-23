@@ -624,7 +624,8 @@ describe('US7 Role-aware Dashboard — Vue Component Tests', () => {
 				'dashboard-link-sheets',
 				'dashboard-link-review-queue-returns',
 				'dashboard-link-accounts',
-				'dashboard-link-reports'
+				'dashboard-link-reports',
+				'dashboard-link-personal-settings'
 			])
 			expect(wrapper.find('[data-testid="dashboard-link-review-queue-finance"]').exists()).toBe(false)
 		})

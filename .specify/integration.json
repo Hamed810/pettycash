@@ -2,12 +2,22 @@
   "version": "1.2.3",
   "integration_state_schema": 1,
   "installed_integrations": [
-    "opencode"
+    "opencode",
+    "kilocode",
+    "zcode"
   ],
   "integration_settings": {
     "opencode": {
       "script": "sh",
       "invoke_separator": "."
+    },
+    "kilocode": {
+      "script": "sh",
+      "invoke_separator": "."
+    },
+    "zcode": {
+      "script": "sh",
+      "invoke_separator": "-"
     }
   },
   "integration": "opencode",

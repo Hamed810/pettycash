@@ -110,6 +110,17 @@ describe('AppNavigation', () => {
 		expect(wrapper.find('[data-test="nav-admin-configuration"]').exists()).toBe(true)
 	})
 
+	it('shows the personal Settings entry to every authenticated user', async () => {
+		signInAs(['PURCHASER'], false)
+		const purchaser = await mountNav()
+		expect(purchaser.find('[data-test="nav-settings"]').exists()).toBe(true)
+
+		setActivePinia(createPinia())
+		signInAs(['PURCHASER', 'FINANCE'], false)
+		const finance = await mountNav()
+		expect(finance.find('[data-test="nav-settings"]').exists()).toBe(true)
+	})
+
 	it('falls back to dashboard and sheets with no usable session (T004/T022)', async () => {
 		// No signed-in user: the mount-time session load fails, so per T004 the
 		// nav degrades to dashboard+sheets only — never role-gated entries.

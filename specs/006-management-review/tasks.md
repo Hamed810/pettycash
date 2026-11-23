@@ -44,7 +44,7 @@
 - [x] T018 Build and deploy into the running `pettycash-lab` Nextcloud (`npm run build`) — app loads at `http://localhost:8081` without a build error.
 - [x] T019 Capture desktop evidence (1440×1237, English LTR) with official Chrome, including the default sheet list, rows, sort, expanded transaction handoff and transaction fallback — `artifacts/visual-review/T019/001/`.
 - [x] T020 Capture mobile evidence (390×844, Persian RTL) with official Chrome, including no horizontal scroll, sort control and the expanded handoff — `artifacts/visual-review/T020/001/`.
-- [x] T021 Compare the fresh screenshots to `docs/frontend-redesign/references/managment/cost-center/01-queue-desktop-en.png` and `01-queue-mobile-en.png`; record matches, deliberate deviations and unsupported fields — comparison section in the delivery report.
+- [x] T021 Compare the fresh screenshots to the then-current Cost Center visual references; record matches, deliberate deviations and unsupported fields — comparison section in the delivery report. *(The reference files were deleted with the design-governance directory on 2026-11-23; this entry is historical.)*
 - [ ] T022 Stop for owner visual approval and report the review URL, screenshots, supported/unavailable functionality, Spec Kit progress and blockers — **gate reached 2026-10-29; awaiting owner decision.** No Phase 2 implementation begins before approval.
 
 ## Dependencies
@@ -56,7 +56,7 @@
 
 ## Phase 2 — Inline Quick Review (Sheet Review Workspace) — planned, gated
 
-**Not started.** Gate: `T022` (Phase 1 owner visual approval) then the Phase 2 visual gate (`FR-006-025/026`). Design authority: `docs/frontend-redesign/proposals/006-management-review-quick-review/UX_SPEC.md` + `mockups/`. The mockup's `mockup.js` renderers are a static reference with invented data and must NOT be copied into production; every surface is built on the existing Vue components, the `TransactionDetail` read, the `DecisionForm` decision semantic, and the evidence preview overlay.
+**Not started.** Gate: `T022` (Phase 1 owner visual approval) then the Phase 2 visual gate (`FR-006-025/026`). Requirements authority: this specification and `plan.md`; no external UX proposal or mockup is retained or authoritative. No prototype renderer may be copied into production; every surface is built on the existing Vue components, the `TransactionDetail` read, the `DecisionForm` decision semantic, and the evidence preview overlay.
 
 **Organization**: Phase 2 is organized into **five bounded batches** (`spec.md` §2.4, `plan.md` §2.3). Task tags: `[BI]` = backend-independent (builds/works on connected data without Batch 1); `[BD←B0xx]` = reconnects/requires the named Batch 1 backend capability. The **queue duplicate/pagination defect is a separate bug-workflow item (Batch 2), not a Feature 006 task.**
 
@@ -105,7 +105,7 @@ Core surface on connected data. Field/card reconnects are tagged `[BD]` and wait
 - [ ] T039 `[BI]` Build and deploy into `pettycash-lab` (`npm run build`) — app loads at `http://localhost:8081` without a build error.
 - [ ] T040 Capture desktop evidence (1440, English LTR) with official Chrome: expanded panel, cards, details drawer, document preview, return confirmation, decision completion — `artifacts/visual-review/T040/001/` (when Batch 1 has landed, connected fields appear; otherwise show the unavailable states).
 - [ ] T041 Capture mobile evidence (390, Persian RTL) with official Chrome: expanded panel, full-screen overlays, no horizontal scroll — `artifacts/visual-review/T041/001/`.
-- [ ] T042 Compare fresh screenshots to the approved design captures under `docs/frontend-redesign/proposals/006-management-review-quick-review/mockups/screenshots/`; record matches, deliberate deviations and unavailable fields — comparison section in the delivery report.
+- [ ] T042 Compare fresh screenshots to the presentation requirements in `spec.md`; record matches, deliberate deviations and unavailable fields — comparison section in the delivery report.
 - [ ] T043 Stop for owner visual approval and report the review URL, screenshots, supported/unavailable functionality (including which Batch 1 capabilities have landed and which remain unavailable), Spec Kit progress and blockers — the Phase 2 visual gate.
 
 ## Phase 2 dependencies

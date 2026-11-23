@@ -884,7 +884,7 @@ UXC-V3-01
 
 ## Phase UXC-V2 — Management Review UX v2 (owner-approved Manus v2 baseline, 2026-11-21)
 
-**Status**: Active. This phase supersedes Phase UXC-V3 **before any implementation**: the owner reviewed both versions again and explicitly selected **Manus Management Review v2** as the final visual baseline (cleaner, less visually dense transaction rows). Design references: `docs/frontend-redesign/proposals/management-review-v2/` (`management-review-ux-proposal-v2.html`, `management-review-ux-proposal-v2.pdf`, `Pettycash Management Review UX — Second Design Pass.md`) — **visual references only**; the feature specifications remain the authoritative executable requirements. `UXC-V2-01`–`UXC-V2-15` are implemented and verified (2026-11-21/22, status notes on the tasks below); `UXC-V2-16 [x]` is complete on real-Chrome evidence in `artifacts/visual-review/UXC-V2-16/002/`.
+**Status**: Active. This phase supersedes Phase UXC-V3 **before any implementation**: the owner reviewed both versions again and explicitly selected the final presentation baseline (cleaner, less visually dense transaction rows). The former external design-reference package was deleted with the design-governance directory on 2026-11-23; no external design file is retained or authoritative, and the feature specifications remain the authoritative executable requirements. `UXC-V2-01`–`UXC-V2-15` are implemented and verified (2026-11-21/22, status notes on the tasks below); `UXC-V2-16 [x]` is complete on real-Chrome evidence in `artifacts/visual-review/UXC-V2-16/002/`.
 
 **Goal**: Implement the approved v2 presentation across the three shared review surfaces: stable-modal-geometry `SheetDetailsModal`, first-view transaction cards with a visible transaction date, always-visible reviewer actions, an evidence summary, the compact **stage identity + state marker** review-progress component (v2 — not the superseded v3 Review Ledger), and the **Inline Expanded Transaction** (replacing the `TransactionDetailDrawer` interaction). Specification alignment is recorded (2026-11-21) in `specs/006-management-review/spec.md` (reworded `FR-006-038/039/040/041/043/044/045`; `FR-006-049`–`FR-006-052` retained), `specs/007-senior-manager-cost-sheet-review/spec.md` (reworded `FR-007-003/019/020/020a/031/057`; `FR-007-058` retained), and `specs/009-finance-manager-expense-review/spec.md` (reworded `FR-009-003/011a/011b/011c/019/020/020a/022/028`; `FR-009-029` retained).
 
@@ -1357,7 +1357,6 @@ Phase UXC-V2 (Management Review UX v2, owner-approved Manus v2 baseline 2026-11-
 - `l10n/en.json`, `l10n/en.js`, `l10n/fa.json`, `l10n/fa.js` (additive keys only)
 - affected component specs, role suites, and E2E specs/visual-evidence scripts (retargeted from drawer interactions to the inline expansion)
 - deleted in `UXC-V2-13` only: `src/components/review/TransactionDetailDrawer.vue` + its dedicated spec (after the zero-dependency proof)
-- design references (visual only, not executable requirements): `docs/frontend-redesign/proposals/management-review-v2/`
 
 Not touched (boundary — outside Phase 7F and its recorded contract exception):
 - `appinfo/`, database schema/migrations, persistence, authorization, financial/settlement rules, evidence permissions; for Phases 1–7 and 8–12, `lib/` and the OpenAPI contract also remain untouched.

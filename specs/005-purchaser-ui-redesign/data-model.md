@@ -28,7 +28,7 @@ No new persisted entity and no change to any persisted domain entity. The entiti
 | Field / function | Type | Rule |
 |---|---|---|
 | `CalendarPreference` | `'persian' \| 'gregory'` | Display-only. Never participates in a stored date value |
-| storage key | `'pettycash.calendarPreference'` | Device-scoped (localStorage). Not an account setting — that would require a new server field, an OCS contract change, and a migration, all out of scope (`FR-005-004`) |
+| storage key | `'pettycash.calendarPreference'` | Device-scoped (localStorage). A Pettycash personal UI preference; not a server-backed or cross-device/account-synchronized setting. Not a reason to add an API, field, or migration (`FR-005-004`). |
 | default | lazy | `persian` for `fa*` languages, `gregory` otherwise; independent of the current rendering language |
 | `setCalendarPreference()` / `clearCalendarPreference()` | setters | Reactive: every mounted formatter re-renders. No reload, no network request |
 | `stored` | `Ref<CalendarPreference \| null>` | `null` = "no explicit choice yet" → the language default applies |

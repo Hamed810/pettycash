@@ -147,6 +147,7 @@ OC.L10N.register(
 		"navigation.reports": "گزارش‌ها",
 		"navigation.administration": "مدیریت",
 		"navigation.funding": "تأمین اعتبار",
+		"navigation.settings": "تنظیمات",
 		"navigation.title": "ناوبری",
 		"navigation.more": "بیشتر",
 		"reports.empty": "گزارشی وجود ندارد",
@@ -852,7 +853,11 @@ OC.L10N.register(
 		"completedSheetDetail.noTransaction": "تراکنشی ثبت نشده است",
 		"completedSheetDetail.evidence.none": "مدرکی وجود ندارد",
 		"completedSheetDetail.openEvidence": "باز کردن مدرک",
-		"completedSheetDetail.closeDetail": "بستن جزئیات"
+		"completedSheetDetail.closeDetail": "بستن جزئیات",
+		"settings.calendar": "تقویم",
+		"settings.gregory": "میلادی",
+		"settings.persian": "شمسی",
+		"settings.title": "تنظیمات"
 	},
 	"nplurals=2; plural=(n > 1);"
 );

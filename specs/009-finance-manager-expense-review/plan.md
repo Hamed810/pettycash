@@ -51,7 +51,7 @@ Option B (additive Finance Cost Sheet read model) is **not chosen** at this stag
 
 **Performance Goals**: bounded all-pages fetch of `GET /queues/finance` per refresh; no per-row network calls for the sheet list; filtered/sorted views operate on a proven-complete loaded set without per-action requests; per-transaction detail reads only when a card's actions/details are opened (guarded, cached).
 
-**Constraints**: Cost Center and Senior Manager workflows MUST NOT change (006 `FR-006-030/031`, 007 `FR-007-051`); no new dependencies; no Vuetify; no backend/contract changes at this stage; no sheet-level decisions; no fabricated values; existing working-tree changes preserved; no Git writes; `docs/frontend-redesign/` has no Finance reference — the visual baseline is `CostCenterQueueView.vue` and `FinanceReviewView.vue`.
+**Constraints**: Cost Center and Senior Manager workflows MUST NOT change (006 `FR-006-030/031`, 007 `FR-007-051`); no new dependencies; no Vuetify; no backend/contract changes at this stage; no sheet-level decisions; no fabricated values; existing working-tree changes preserved; no Git writes; the visual baseline is `CostCenterQueueView.vue` and `FinanceReviewView.vue`.
 
 **Scale/Scope**: one review view (Finance) + one modal + shared review components + (no backend at this stage) + l10n keys + component tests + screenshot evidence.
 
@@ -490,7 +490,7 @@ No remaining genuine ambiguity. The only outstanding item before implementation 
 
 - Consent to proceed from planning to task generation (`/speckit-tasks`) and to create `tasks.md` under this feature directory.
 - Confirmation that the current working-tree user changes (modified review/evidence components) are to be preserved and reused as the baseline for the Finance surfaces.
-- Confirmation that `CostCenterQueueView.vue` + `FinanceReviewView.vue` are the agreed visual baseline (no Finance-specific design reference exists under `docs/frontend-redesign/`).
+- Confirmation that `CostCenterQueueView.vue` + `FinanceReviewView.vue` are the agreed visual baseline.
 
 ## Follow-up — server-authoritative whole-sheet stage totals on the Finance queue (owner-authorized 2026-11-20, not yet implemented)
 

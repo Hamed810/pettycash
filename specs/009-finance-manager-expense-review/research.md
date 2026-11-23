@@ -78,8 +78,6 @@
 | `FinanceReviewView.vue` | `src/views/reviews/FinanceReviewView.vue` | Per-transaction Finance decision surface; `approveForbiddenReason` for senior-rejected; prior-decision history |
 | `SeniorSheetModal.vue` | `src/components/review/SeniorSheetModal.vue` | Modal shell + focus-restore pattern (adapted, simplified for Finance: no export toolbar) |
 
-No Finance-specific design reference exists under `docs/frontend-redesign/`.
-
 ---
 
 ## 8. Open Research Items (planning notes, not owner decisions)
