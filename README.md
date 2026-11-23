@@ -1,7 +1,5 @@
 # PettyCash Nextcloud App V1
 
-# PettyCash Nextcloud App V1
-
 PettyCash is a Nextcloud-native petty-cash capture, review, settlement, audit, and reporting
 application. The application is implemented as one modular monolith and preserves the existing
 `pettycash` app ID and `OCA\\PettyCash` namespace.
