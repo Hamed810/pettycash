@@ -1561,6 +1561,18 @@ of all primary workflow actions.
   the active expense type and the existing active `evidenceCount`, so a purchaser can identify each
   transaction missing a required receipt before submission. The client MUST NOT infer the receipt
   requirement from expense type names, local configuration, or a second copy of the rule.
+- **FR-093**: Cancelling the creation of a new transaction MUST return the purchaser to the detail
+  view of the owning sheet, preserving the sheet identifier. When a purchaser opens the CREATE form
+  from a sheet (`transaction-create`) and presses `Cancel`, the application MUST navigate back to the
+  same `sheet-detail` route of that sheet. If the CREATE form holds unsaved changes and the purchaser
+  chooses `Cancel` then `Discard`, navigation MUST still return to the same owning `sheet-detail` and
+  MUST NOT create or save the transaction or upload any staged receipt/evidence. Choosing `Save`
+  instead of `Discard` continues to follow the existing post-save requirement (FR-088) and returns to
+  the owning sheet detail. This requirement governs transaction creation (CREATE mode) only; existing
+  full-page transaction EDIT cancellation behavior is unchanged and remains governed by its current
+  requirements and tests. Embedded OPEN-sheet transaction workflows are not altered by this
+  requirement. This requirement does not alter authorization, financial rules, workflow state
+  transitions, API contracts, or database schema.
 - **FR-077**: PettyCash MUST remain database-portable across the declared V1 database backends:
   MySQL/MariaDB, PostgreSQL, and SQLite. The MariaDB development environment is not an
   application-level dependency, and behavior MUST remain equivalent across the declared backends.

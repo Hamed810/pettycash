@@ -361,11 +361,14 @@ const {
 } = useUnsavedChangesGuard({
 	isDirty: () => isDirty.value,
 	save: saveForGuard,
-	// T075: the embedded form returns to the workspace that hosts it. The full-page form keeps its
-	// existing transactions-list fallback.
+	// T075: the embedded form returns to the workspace that hosts it.
+	// FR-093: full-page CREATE Cancel returns to the owning sheet-detail; full-page EDIT keeps
+	// its existing transactions-list fallback.
 	fallback: () => props.embedded
 		? { name: 'sheet-detail', params: { id: sheetId.value } }
-		: { name: 'transactions', params: { sheetId: sheetId.value } },
+		: isEditing.value
+			? { name: 'transactions', params: { sheetId: sheetId.value } }
+			: { name: 'sheet-detail', params: { id: sheetId.value } },
 	isBlocked: () => deleteDialogOpen.value,
 })
 

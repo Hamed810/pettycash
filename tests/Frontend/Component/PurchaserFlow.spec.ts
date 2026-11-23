@@ -2534,6 +2534,51 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 			expect(router.currentRoute.value.name).toBe('transactions')
 		})
 
+		// FR-093: full-page CREATE Cancel returns to the owning sheet-detail, preserving the sheet id.
+		it('returns a clean CREATE form to the owning sheet detail', async () => {
+			const { wrapper, router } = await createWrapperWithRouter(TransactionFormView, '/sheets/sh-1/transactions/create')
+
+			await wrapper.find('[data-test="transaction-cancel"]').trigger('click')
+			await flushPromises()
+
+			expect(router.currentRoute.value.name).toBe('sheet-detail')
+			expect(router.currentRoute.value.params.id).toBe('sh-1')
+			expect(ocsRequest.mock.calls.filter((call: unknown[]) =>
+				(call[0] as { method?: string })?.method === 'POST')).toHaveLength(0)
+		})
+
+		it('returns a dirty CREATE form to the owning sheet detail on Discard', async () => {
+			const { wrapper, router } = await createWrapperWithRouter(TransactionFormView, '/sheets/sh-1/transactions/create')
+			await wrapper.find('[data-test="description-input"]').setValue('Throw this away')
+
+			await wrapper.find('[data-test="transaction-cancel"]').trigger('click')
+			await flushPromises()
+			await wrapper.find('[data-test="unsaved-discard"]').trigger('click')
+			await flushPromises()
+
+			expect(router.currentRoute.value.name).toBe('sheet-detail')
+			expect(router.currentRoute.value.params.id).toBe('sh-1')
+			expect(ocsRequest.mock.calls.filter((call: unknown[]) =>
+				(call[0] as { method?: string })?.method === 'POST')).toHaveLength(0)
+		})
+
+		it('saves then returns a dirty CREATE form to the owning sheet detail', async () => {
+			const { wrapper, router } = await createWrapperWithRouter(TransactionFormView, '/sheets/sh-1/transactions/create')
+			await wrapper.find('[data-test="description-input"]').setValue('Save me')
+			await wrapper.find('[data-test="amount-input"]').setValue('1000')
+
+			await wrapper.find('[data-test="transaction-cancel"]').trigger('click')
+			await flushPromises()
+			await wrapper.find('[data-test="unsaved-save"]').trigger('click')
+			await flushPromises()
+
+			const posts = ocsRequest.mock.calls.filter((call: unknown[]) =>
+				(call[0] as { method?: string })?.method === 'POST')
+			expect(posts).toHaveLength(1)
+			expect(router.currentRoute.value.name).toBe('sheet-detail')
+			expect(router.currentRoute.value.params.id).toBe('sh-1')
+		})
+
 		// UI-PUR-012's conflict rule: refetch the stored record and repopulate the form from it; do not
 		// merge the other writer's fields into what is still on screen, and do not retry the PATCH.
 		it('refetches and replaces the draft on 409 instead of merging or retrying', async () => {
