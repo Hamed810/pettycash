@@ -594,6 +594,10 @@ function describeDecisionError(e: unknown): string {
 	color: #fff;
 }
 
+html[data-theme-dark] .decision-modal__footer-group :deep(.decision-modal__confirm--return.button-vue) {
+	color: #222;
+}
+
 .decision-modal__footer-group :deep(.decision-modal__confirm--return.button-vue:hover:not(:disabled)) {
 	background-color: color-mix(in srgb, var(--pettycash-review) 85%, black);
 }
@@ -601,7 +605,7 @@ function describeDecisionError(e: unknown): string {
 .decision-modal__footer-group :deep(.decision-modal__confirm--danger.button-vue) {
 	background-color: var(--color-error);
 	border-color: var(--color-error);
-	color: #fff;
+	color: var(--color-error-text, #fff);
 }
 
 @media (width <= 640px) {

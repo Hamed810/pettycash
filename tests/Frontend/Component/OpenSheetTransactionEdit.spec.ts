@@ -329,7 +329,8 @@ describe('OPEN-sheet transaction editing (T075)', () => {
 		expect(wrapper.find('[data-test="transaction-surface-title"]').text()).toBe('transactions.editTitle')
 		expect(controlValue(wrapper, 'amount-input')).toBe('125000')
 		expect(controlValue(wrapper, 'description-input')).toBe('Airport taxi')
-		expect(controlValue(wrapper, 'expense-date-input')).toBe('2026-09-20')
+		// The visible picker value is the approved YYYY/MM/DD presentation; the model value stays canonical.
+		expect(controlValue(wrapper, 'expense-date-input')).toBe('2026/09/20')
 	})
 
 	it('falls back to read-only inspection when the server does not grant edit', async () => {

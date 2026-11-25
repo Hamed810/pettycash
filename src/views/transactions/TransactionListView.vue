@@ -195,6 +195,11 @@ function transactionCell(item: TransactionSummary, column: { key: string }): VNo
 	gap: 0.5rem;
 }
 
+/* FR-005-066: the expense-date cell is one token, at desktop and in the narrow card. */
+.transaction-list-view :deep([data-test="transaction-expense-date"]) {
+	white-space: nowrap;
+}
+
 .nc-table {
 	width: 100%;
 	border-collapse: collapse;

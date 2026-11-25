@@ -1,6 +1,6 @@
 # Contracts: Purchaser UI Redesign
 
-**Feature**: `005-purchaser-ui-redesign` | **Date**: 2026-10-19 | **Amended**: 2026-10-24 (findings A–E), 2026-10-25 (UI freeze / OPEN-sheet edit; evidence-status presentation implemented; compact uploader owner-authorized), 2026-10-26 (T075 save-action refinement: single footer `submit-btn`; correction keeps `transaction-save-draft`; shared Create/Edit Sheet modal C-23 authorized; T079 F1–F8 documentation findings resolved and not implemented, T080 blocked on the `BE-CR-001` backend delivery); 2026-10-27 (T079 B1/B2 acceptance corrected: authoritative post-create list with preserved store semantics; read-only/disabled currency visual sequence; T079 implemented, minimally verified, and `DONE_VERIFIED` under explicit owner visual approval; `BE-CR-001` immutable-account policy decided by the owner — documentation only, backend delivery outstanding and `T080` still `BLOCKED_BY_BACKEND`); 2026-10-28 (`BE-CR-001` `T438`–`T441` delivered and verified, `T041` closed; `T080` still not implemented and awaiting its own implementation authorization and owner visual gate); 2026-10-29 (`T080` implemented and minimally verified, then explicitly owner-approved the same day and `DONE_VERIFIED`) | **Implemented**: 2026-10-25 (`G-11`/`G-12`; `T076` owner-approved; `T075` refined, reviewed in `iteration-2`, and owner-approved 2026-10-26); `T079` implemented and owner-approved 2026-10-27; `BE-CR-001` `T438`–`T441` delivered and verified 2026-10-28; `T080` implemented and owner-approved 2026-10-29, `DONE_VERIFIED`
+**Feature**: `005-purchaser-ui-redesign` | **Date**: 2026-10-19 | **Amended**: 2026-10-24 (findings A–E), 2026-10-25 (UI freeze / OPEN-sheet edit; evidence-status presentation implemented; compact uploader owner-authorized), 2026-10-26 (T075 save-action refinement: single footer `submit-btn`; correction keeps `transaction-save-draft`; shared Create/Edit Sheet modal C-23 authorized; T079 F1–F8 documentation findings resolved and not implemented, T080 blocked on the `BE-CR-001` backend delivery); 2026-10-27 (T079 B1/B2 acceptance corrected: authoritative post-create list with preserved store semantics; read-only/disabled currency visual sequence; T079 implemented, minimally verified, and `DONE_VERIFIED` under explicit owner visual approval; `BE-CR-001` immutable-account policy decided by the owner — documentation only, backend delivery outstanding and `T080` still `BLOCKED_BY_BACKEND`); 2026-10-28 (`BE-CR-001` `T438`–`T441` delivered and verified, `T041` closed; `T080` still not implemented and awaiting its own implementation authorization and owner visual gate); 2026-10-29 (`T080` implemented and minimally verified, then explicitly owner-approved the same day and `DONE_VERIFIED`) | **Implemented**: 2026-10-25 (`G-11`/`G-12`; `T076` owner-approved; `T075` refined, reviewed in `iteration-2`, and owner-approved 2026-10-26); `T079` implemented and owner-approved 2026-10-27; `BE-CR-001` `T438`–`T441` delivered and verified 2026-10-28; `T080` implemented and owner-approved 2026-10-29, `DONE_VERIFIED` | 2026-11-24 (transaction CREATE modal C-26 authorized; fourth element-scoped freeze exception; specification/planning/contract/task-ledger alignment only; implementation awaits a separate bounded implementation assignment)
 
 The management baseline changes **no** OCS operation, no OpenAPI schema, no workflow contract, no authorization rule, and no persisted structure. The owner directive 2026-10-23 adds a bounded exception for `BE-CR-004`: the `TransactionSummary.evidenceRequired` field, the conditional submit/resubmit receipt rule, the per-transaction `422` field errors, and a debug-gated fixture command. The 001 contracts (`specs/001-pettycash-v1-core/contracts/ocs-api.yaml`, `contracts/workflow.md`) remain the authoritative API/workflow documents; those specific amendments are recorded there and are not restated as new domain rules here.
 
@@ -39,10 +39,11 @@ The contracts below are between the **redesigned purchaser surfaces** and the **
 
 ### C-03 — The calendar preference is display-only and inert
 
-1. The preference (`pettycash.calendarPreference`) MUST NOT be read by any store, API module, or type that builds a request payload.
+1. The preference (`pettycash.calendarPreference`) MUST NOT be read by any store, API module, or type that builds a request payload. It is payload-inert under all calendar states.
 2. Changing it MUST re-render every mounted formatter without a reload and without a network request.
-3. The approved Pettycash personal Settings surface uses the existing preference mechanism (`FR-005-004`); a visible calendar control is authorized for the Settings page only.
-4. A mutating negative test (identical payloads under both preferences) is required before the card can be called complete (`T018`, outstanding).
+3. It additionally governs the calendar system used by the transaction expense-date input in CREATE and EDIT (`src/components/common/CalendarDatePicker.vue`), through `src/utils/calendar.ts` (`calendarPreference`), mapped to the library's `system` prop (`'jalali'` for `persian`, `'gregorian'` for `gregory`). No store, API, or mutation module reads it.
+4. The approved Pettycash personal Settings surface uses the existing preference mechanism (`FR-005-004`); a visible calendar control is authorized for the Settings page only.
+5. A mutating negative test (identical payloads under both preferences) is required before the card can be called complete (`T018`, outstanding).
 
 *Guard*: `localeFormatting.spec.ts` for (1)–(2); the live Settings surface and the negative test are **not** covered yet.
 
@@ -223,7 +224,7 @@ The contracts below are between the **redesigned purchaser surfaces** and the **
 3. A change to any frozen aspect requires a separately authorized Spec Kit task. It MUST NOT be made under a freeze task, a refactor, a test fix, or an unrelated task.
 4. The freeze is scope protection, not a security or correctness exemption. It MUST NOT be used to preserve a security defect, bypass server enforcement, or refuse an explicitly authorized defect fix.
 5. `T074` records the baseline; it changes no application behavior and introduces no new status vocabulary. Completed tasks remain completed and are not renumbered or re-opened.
-6. Three element-scoped, explicitly owner-authorized exception **groups** exist (four tasks): `T075` (C-20, the `OPEN`-sheet eye-icon interaction and its save/delete/prefill behavior), `T077` (C-22, the evidence-uploader presentation inside the existing transaction editing form), and `T079`/`T080` (C-23, the Create/Edit Sheet modal interaction and presentation plus the shared sheet-form modal infrastructure). None is a general exception; none authorizes any other frozen aspect, and the existence of one does not broaden another.
+6. Three element-scoped, explicitly owner-authorized exception **groups** exist (four tasks): `T075` (C-20, the `OPEN`-sheet eye-icon interaction and its save/delete/prefill behavior), `T077` (C-22, the evidence-uploader presentation inside the existing transaction editing form), `T079`/`T080` (C-23, the Create/Edit Sheet modal interaction and presentation plus the shared sheet-form modal infrastructure), and `T085`–`T088` (C-26, the transaction CREATE modal presentation and interaction over the mounted sheet workspace). None is a general exception; none authorizes any other frozen aspect, and the existence of one does not broaden another.
 
 *Guard*: source review of `T074`; `T075` is limited to C-20, `T077` is limited to C-22, and `T079`/`T080` are limited to C-23. The existing list/workspace regression guards stay in service but are not re-baselined by this contract.
 
@@ -283,19 +284,75 @@ The contracts below are between the **redesigned purchaser surfaces** and the **
 
 *Guard*: focused `SheetFormDialog.spec.ts` (new) plus the existing sheet-form and route assertions in `PurchaserFlow.spec.ts`/`ApplicationShell.spec.ts`; exactly one dialog and one form across the whole dismissal/confirmation flow; the `sheets.create` heading/action and non-empty accessible name; the `sheets.name` field label; the multi-account account-selector sequence with no `undefined` labels and a read-only/disabled currency control; preserved validation; route-synchronized visibility; the pristine/dirty close state machine with Stay/Discard/Save and no second dialog; post-create refetch in filtered and paginated states with filter/page preservation, the final list matching the server response rather than the temporary insertion, and the polite success notification; `T079` official-Chrome desktop + 390px `fa`-RTL evidence, six-artifact same-change completion record, and owner approval before acceptance; `T080` official-Chrome populated-desktop + 390px `fa`-RTL evidence and owner approval after the `BE-CR-001` backend delivery and separate implementation authorization, all satisfied before the 2026-10-29 implementation, with the owner's explicit approval recorded on 2026-10-29. Neither task may close on jsdom-only evidence.
 
----
+### C-24 — Calendar-aware transaction expense-date picker (`FR-005-056…065`)
 
-## 2. Stack contract
+1. **Calendar input.** Transaction CREATE and EDIT use `src/components/common/CalendarDatePicker.vue` (a thin wrapper over `@jalali-js/vue@0.4.3`) for the expense-date field, replacing `NcDateTimePickerNative`. The wrapper's `system` prop maps `persian` → `'jalali'` and `gregory` → `'gregorian'` from `calendarPreference`; the `locale` prop comes from `activeLocale()` independently of the calendar system (`FR-005-059`).
+2. **Value contract.** The wrapper's public value is always canonical Gregorian `YYYY-MM-DD` (`value-format="gregorian-iso"`, `precision="date"`). No Jalali-formatted string, calendar flag, or calendar-specific metadata enters any API payload or mutation (`FR-005-063`). The store and API layer never read `calendarPreference` (`FR-005-062`).
+3. **No silent drift.** Opening, closing, initializing, or switching the calendar preference MUST NOT change the existing date, mark a clean draft dirty, or emit an unintended model change; today's date is never substituted for an existing or empty value (`FR-005-061`).
+4. **Preserved behavior.** Required, disabled, read-only, validation, error-display, and accessibility behavior on the expense-date field are unchanged (`FR-005-064`). The wrapper follows Nextcloud theme variables, typography, border/focus states, error presentation, light/dark themes, RTL/LTR layouts, and keyboard accessibility.
+5. **Correctness.** Calendar calculations handle Jalali/Gregorian leap years, month boundaries, year transitions, and timezone differences without calendar-day shift for date-only values (`FR-005-065`).
+6. **Dependency exception.** `@jalali-js/vue@0.4.3` (exact pinned version) and its necessary reviewed transitive dependencies (`jalali-js`, `@jalali-js/i18n`, `@jalali-js/holidays`, MIT-licensed, same monorepo) are permitted solely for this wrapper, exclusively for the transaction expense-date field in CREATE and EDIT, per the FR-005-029 narrow exception. No second UI framework is introduced; any dependency outside the reviewed closure requires separate owner approval (`FR-005-029`).
+7. **Scope.** The wrapper's use is not authorized for any other application surface (funding date picker, sheet date filters, personal Settings view).
+
+*Guard*: a new focused `CalendarDatePicker` component spec; updated `tests/Frontend/Component/PurchaserFlow.spec.ts`, `tests/Frontend/Component/MutationPayloadCalendar.spec.ts`, `tests/Frontend/calendarMutation.spec.ts` for calendar switching and canonical payload equality; official-Chrome (`{ browserName: 'chromium', channel: 'chrome' }`) browser evidence under `artifacts/visual-review/t084/` for `en`/`fa` × Gregorian/Jalali at desktop and 390px; no repository dependency manifest or lockfile change in this planning batch.
+
+### C-25 — Human-readable date presentation (`FR-005-066`)
+
+1. **Fixed shape.** Every human-readable date produced by the shared formatter is
+   `YYYY/MM/DD`: four-digit year, two-digit zero-padded month and day, with `/` separators.
+   No era prefix or suffix (`AP`/`AD`) and no locale-dependent field order. Gregorian
+   `2026-11-01` renders `2026/11/01`; Jalali renders `1405/08/10`.
+2. **Locale and calendar independence.** The locale chooses numeral shape (for example
+   Persian digits under `fa-IR`); the calendar preference chooses the date system. Neither
+   changes the field order, and all four language/calendar combinations follow this shape.
+3. **Date-time displays.** Only the date portion is standardized. The time information
+   remains present and its existing timezone semantics are preserved; a date-time field is
+   never converted to date-only. A date-only field is never given a fabricated time.
+4. **Canonical values unchanged.** Stored values, API payloads, exports, and
+   machine-readable dates remain Gregorian `YYYY-MM-DD` or full timestamps as already
+   contracted. This presentation rule changes no field, request, response, database value,
+   financial rule, authorization rule, or workflow transition.
+5. **Presentation scope.** Date-only canonical values are interpreted without a timezone
+   day shift. Table date cells remain single-line through narrowly scoped date-cell rules;
+   no global `nowrap`, table redesign, or column change is authorized. The
+   `CalendarDatePicker`'s existing `YYYY/MM/DD` visible value and approved picker behavior
+   are preserved.
+
+*Guard*: `tests/Frontend/localeFormatting.spec.ts` for all four combinations and the four
+required equivalences, absence/invalid handling, and date-time retention;
+`tests/Frontend/Component/CalendarDatePicker.spec.ts` for the preserved picker;
+`tests/Frontend/calendarMutation.spec.ts` and
+`tests/Frontend/Component/MutationPayloadCalendar.spec.ts` for canonical payload equality;
+official-Chrome desktop evidence for a transaction table and a representative review queue
+under `artifacts/visual-review/`.
 
 1. `@nextcloud/vue` 9.x and existing project utilities remain the approved stack.
 2. No new UI framework, Vuetify component, icon set, focus-trap library, or other dependency (`FR-005-029`).
 3. All colours come from existing Nextcloud theme variables; no hardcoded hex, local radius constant, or new `font-family` declaration.
 4. `prefers-reduced-motion: reduce` disables animation; no information is conveyed only by motion.
 5. Invalid controls expose `aria-invalid="true"` and a resolving `aria-describedby`.
-
 *Guards*: `tests/Frontend/Component/NextcloudVueContract.spec.ts`, `tests/Frontend/typography.spec.ts`, `tests/Frontend/keyboard-accessibility.spec.ts`, `tests/Frontend/fr071NarrowViewport.spec.ts`.
 
+### C-26 — Transaction CREATE modal over the mounted sheet workspace (`FR-005-067…072`, `SC-005-032`)
+
+1. **Authorization and scope.** The product owner explicitly authorized, on 2026-11-24, one bounded interaction/presentation change: **adding a new transaction opens a modal over the owning Cost Sheet workspace instead of navigating to a standalone full-page transaction creation page**. The existing transaction EDIT modal (`TransactionSurface` hosting `TransactionFormView` in embedded mode) is the visual and interaction reference. The owning sheet workspace remains mounted behind the CREATE modal. This is the fourth element-scoped exception to C-19, not a general exception. It authorizes transaction-creation presentation and interaction only; it does not authorize a redesign of the transaction form or the sheet workspace, any backend/API/authorization/financial change, or any change to the existing EDIT experience beyond the explicit CREATE/EDIT mode identity the shared form requires.
+
+2. **Single form implementation.** The CREATE and EDIT experiences MUST reuse `TransactionFormView`. No duplicated form state, validation, persistence logic, or receipt-upload logic may be introduced. The form runs in an explicit CREATE mode: no existing transaction ID is required, no `GET /transactions/{id}` detail request is issued before creation, and the owning sheet identity is supplied explicitly (from the route or workspace context) — never misinterpreted from a sheet route's `id` parameter as an existing transaction identifier.
+
+3. **Modal presentation.** The modal heading uses the existing localized `transactions.createTitle` ("Add transaction"). The existing form fields (expense date, amount, description, cost center, expense type) and validation (FR-022 draft minimum: expense date and positive amount) are preserved. Cancel and Save draft actions are provided. EDIT-only controls — Delete draft, transaction history, revision surfaces, persisted-transaction identifiers — are NOT rendered before a transaction exists. Staged receipt selection and post-create upload (FR-090) and the calendar-aware expense-date picker (FR-005-056…065) are preserved.
+
+4. **Save lifecycle.** After successful creation and completion of the existing save/upload sequence, the modal closes, the purchaser returns to the owning sheet detail, authoritative sheet and transaction data are refreshed, the newly created transaction is displayed, and transaction counts and displayed amounts are refreshed. FR-088 is preserved. If creation succeeds but a staged receipt upload fails, the existing recovery and retry behavior is preserved and no duplicate transaction is created on retry.
+
+5. **Cancellation and dismissal.** Cancel, dialog close, Escape, and applicable outside-click dismissal use the existing controlled unsaved-changes workflow. A pristine form closes without a confirmation. A dirty form preserves the existing Save / Discard / Stay behavior. Discard creates no transaction and uploads no staged evidence. Stay preserves the entered form data. FR-093 and the owning sheet identifier are preserved.
+
+6. **Routing.** The existing `transaction-create` route (`/sheets/:sheetId/transactions/create`) remains addressable. Direct navigation to the creation route, opening from the sheet workspace, opening from the transaction list entry point, browser Back/Forward, correct behavior after refresh, and correct owning sheet identity are all supported. The existing save and cancellation destinations are preserved. The route is not silently redefined.
+
+7. **Modal accessibility.** The established transaction modal layering and focus-management conventions are reused. One active accessible dialog at a time; an inert background where required; correct focus containment; focus restoration after dismissal; correct Escape handling for nested calendar controls; LTR and RTL compatibility; existing responsive functional requirements.
+
+8. **No new dependencies.** `@nextcloud/vue` 9.x and existing project utilities remain the approved stack; no Vuetify, no `v-*` components, no second UI framework, no focus-trap library.
+
 ---
+
 
 ## 3. Management contract (this feature's own ledger)
 

@@ -67,7 +67,7 @@ export const routes: RouteRecordRaw[] = [
 	{ path: '/sheets/:id', name: 'sheet-detail', component: SheetListView },
 	{ path: '/sheets/:id/edit', name: 'sheet-edit', component: SheetListView },
 	{ path: '/sheets/:sheetId/transactions', name: 'transactions', component: TransactionListView },
-	{ path: '/sheets/:sheetId/transactions/create', name: 'transaction-create', component: TransactionFormView },
+	{ path: '/sheets/:sheetId/transactions/create', name: 'transaction-create', component: SheetListView },
 	{ path: '/transactions/:id', name: 'transaction-detail', component: TransactionDetailView },
 	{ path: '/transactions/:id/edit', name: 'transaction-edit', component: TransactionFormView },
 	{ path: '/audit/:transactionId', name: 'transaction-audit', component: AuditView },

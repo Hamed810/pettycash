@@ -27,13 +27,13 @@ No new persisted entity and no change to any persisted domain entity. The entiti
 
 | Field / function | Type | Rule |
 |---|---|---|
-| `CalendarPreference` | `'persian' \| 'gregory'` | Display-only. Never participates in a stored date value |
+| `CalendarPreference` | `'persian' \| 'gregory'` | Display-only. Never participates in a stored date value. Now also governs the calendar system used by the transaction expense-date input in CREATE and EDIT through `src/components/common/CalendarDatePicker.vue`, mapped to the library's `system` prop (`'jalali'` for `persian`, `'gregorian'` for `gregory`). |
 | storage key | `'pettycash.calendarPreference'` | Device-scoped (localStorage). A Pettycash personal UI preference; not a server-backed or cross-device/account-synchronized setting. Not a reason to add an API, field, or migration (`FR-005-004`). |
 | default | lazy | `persian` for `fa*` languages, `gregory` otherwise; independent of the current rendering language |
-| `setCalendarPreference()` / `clearCalendarPreference()` | setters | Reactive: every mounted formatter re-renders. No reload, no network request |
+| `setCalendarPreference()` / `clearCalendarPreference()` | setters | Reactive: every mounted formatter and the transaction expense-date picker re-render. No reload, no network request |
 | `stored` | `Ref<CalendarPreference \| null>` | `null` = "no explicit choice yet" → the language default applies |
 
-**Invariant (card AC5)**: changing the preference MUST NOT change any payload a form submits. The card's mutating negative test (submit the same form under both preferences and diff the payloads) is **outstanding** and is tracked as `T018`.
+**Invariant (card AC5)**: changing the preference MUST NOT change any payload a form submits. The card's mutating negative test (submit the same form under both preferences and diff the payloads) is **outstanding** and is tracked as `T018`. **Extended invariant**: the preference MUST NOT enter any API payload or mutation; canonical Gregorian `YYYY-MM-DD` is transmitted regardless of the active calendar (`FR-005-062`, `FR-005-063`).
 
 **State transitions**: `null` → `'persian'`/`'gregory'` on an explicit choice; back to `null` on clear. No other transition exists.
 

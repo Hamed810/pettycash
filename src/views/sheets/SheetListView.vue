@@ -60,6 +60,9 @@ const isWorkspaceOpen = computed(() =>
 const isCreateOpen = computed(() => route.name === 'sheet-create')
 /** T080: the edit route is the same list with the shared edit modal open. */
 const isEditOpen = computed(() => route.name === 'sheet-edit')
+
+/** T086: `transaction-create` is the list with the transaction CREATE modal open over the owned sheet workspace. */
+const isTransactionCreateOpen = computed(() => route.name === 'transaction-create')
 const createButton = ref<InstanceType<typeof NcButton> | null>(null)
 const listHeading = ref<HTMLElement | null>(null)
 /**
@@ -977,8 +980,12 @@ async function confirmDelete() {
 		/>
 
 		<!-- UI-PUR-005: the sheet detail is a large workspace over this list. T080's route-name
-		     check above keeps it unmounted while the edit modal is open. -->
-		<SheetDetailView v-if="isWorkspaceOpen" />
+		     check above keeps it unmounted while the edit modal is open. T086 mounts it for the
+		     transaction-create route so the CREATE modal opens over the owned sheet workspace. -->
+		<SheetDetailView
+			v-if="isWorkspaceOpen || isTransactionCreateOpen"
+			:sheet-id="isTransactionCreateOpen ? (route.params.sheetId as string) : undefined"
+		/>
 	</div>
 </template>
 
@@ -1394,6 +1401,11 @@ async function confirmDelete() {
 	text-align: start;
 	vertical-align: middle;
 	border-block-start: 1px solid var(--color-border);
+}
+
+/* FR-005-066: the submitted date cell is one token. */
+.sheet-list-panel :deep([data-test="sheet-list-submitted-at"]) {
+	white-space: nowrap;
 }
 
 .sheet-list-panel :deep(.responsive-table__desktop tbody tr:hover) {

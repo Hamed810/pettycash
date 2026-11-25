@@ -30,11 +30,17 @@ const evidenceApi = vi.hoisted(() => ({
 	deleteEvidence: vi.fn()
 }))
 
+const configurationApi = vi.hoisted(() => ({
+	listCostCenters: vi.fn(),
+	listActiveExpenseTypes: vi.fn()
+}))
+
 vi.mock('@/services/transactionsApi', () => transactionsApi)
 vi.mock('@/services/evidenceApi', () => ({
 	getEvidenceContent: evidenceApi.getEvidenceContent,
 	deleteEvidence: evidenceApi.deleteEvidence
 }))
+vi.mock('@/services/configurationApi', () => configurationApi)
 
 vi.mock('@nextcloud/l10n', () => ({
 	t: vi.fn((_app: string, text: string, params?: Record<string, string | number>) =>
@@ -70,6 +76,7 @@ vi.mock('@nextcloud/vue', () => ({
 }))
 
 import TransactionSurface from '@/components/transactions/TransactionSurface.vue'
+import TransactionFormView from '@/views/transactions/TransactionFormView.vue'
 
 const COST_CENTER = { id: 'cc-1', code: 'OPS', name: 'Operations' }
 const EXPENSE_TYPE = { id: 'et-1', code: 'TAXI', name: 'Taxi' }
@@ -155,6 +162,7 @@ describe('TransactionSurface (T066–T069)', () => {
 		setActivePinia(createPinia())
 		for (const fn of Object.values(transactionsApi)) fn.mockReset()
 		for (const fn of Object.values(evidenceApi)) fn.mockReset()
+		for (const fn of Object.values(configurationApi)) fn.mockReset()
 	})
 
 	it('reads the transaction and its revisions on open, and writes nothing', async () => {
@@ -415,5 +423,102 @@ describe('TransactionSurface (T066–T069)', () => {
 
 		await wrapper.find('[data-test="transaction-surface"]').trigger('keydown', { key: 'Escape' })
 		expect(wrapper.emitted('close')).toHaveLength(1)
+	})
+})
+
+describe('TransactionSurface CREATE mode (T085–T087)', () => {
+	beforeEach(() => {
+		setActivePinia(createPinia())
+		for (const fn of Object.values(transactionsApi)) fn.mockReset()
+		for (const fn of Object.values(evidenceApi)) fn.mockReset()
+		for (const fn of Object.values(configurationApi)) fn.mockReset()
+	})
+
+	it('mounts in CREATE mode without requesting any existing transaction detail', async () => {
+		configurationApi.listCostCenters.mockResolvedValue({ items: [], page: 1, pageSize: 25, total: 0 })
+		configurationApi.listActiveExpenseTypes.mockResolvedValue({ items: [], page: 1, pageSize: 25, total: 0 })
+
+		const router = createRouter({ history: createWebHashHistory(), routes })
+		await router.push('/sheets/sh-1')
+		await router.isReady()
+
+		const wrapper = mount(TransactionSurface, {
+			props: { sheetId: 'sh-1', createMode: true },
+			global: { plugins: [router, createPinia()] },
+			attachTo: document.body
+		})
+		await flushPromises()
+
+		expect(transactionsApi.getTransaction).not.toHaveBeenCalled()
+		expect(transactionsApi.listRevisions).not.toHaveBeenCalled()
+		expect(wrapper.find('[data-test="transaction-surface-title"]').text()).toBe('transactions.createTitle')
+		expect(wrapper.findComponent(TransactionFormView).exists()).toBe(true)
+		// No EDIT-only controls before a transaction exists
+		expect(wrapper.find('[data-test="edit-transaction-btn"]').exists()).toBe(false)
+		expect(wrapper.find('[data-test="delete-transaction-btn"]').exists()).toBe(false)
+	})
+
+	it('shows no transaction identifier, revision, or history blocks before creation', async () => {
+		configurationApi.listCostCenters.mockResolvedValue({ items: [], page: 1, pageSize: 25, total: 0 })
+		configurationApi.listActiveExpenseTypes.mockResolvedValue({ items: [], page: 1, pageSize: 25, total: 0 })
+
+		const router = createRouter({ history: createWebHashHistory(), routes })
+		await router.push('/sheets/sh-1')
+		await router.isReady()
+
+		const wrapper = mount(TransactionSurface, {
+			props: { sheetId: 'sh-1', createMode: true },
+			global: { plugins: [router, createPinia()] },
+			attachTo: document.body
+		})
+		await flushPromises()
+
+		expect(wrapper.find('.transaction-surface__id').exists()).toBe(false)
+		expect(wrapper.find('[data-test="transaction-surface-active-revision"]').exists()).toBe(false)
+		expect(wrapper.find('[data-test="transaction-surface-readonly"]').exists()).toBe(false)
+	})
+
+	it('forwards a form save as refresh with saved', async () => {
+		configurationApi.listCostCenters.mockResolvedValue({ items: [COST_CENTER], page: 1, pageSize: 25, total: 1 })
+		configurationApi.listActiveExpenseTypes.mockResolvedValue({ items: [EXPENSE_TYPE], page: 1, pageSize: 25, total: 1 })
+
+		const router = createRouter({ history: createWebHashHistory(), routes })
+		await router.push('/sheets/sh-1')
+		await router.isReady()
+
+		const wrapper = mount(TransactionSurface, {
+			props: { sheetId: 'sh-1', createMode: true },
+			global: { plugins: [router, createPinia()] },
+			attachTo: document.body
+		})
+		await flushPromises()
+
+		const form = wrapper.findComponent(TransactionFormView)
+		await form.vm.$emit('saved')
+		await flushPromises()
+
+		expect(wrapper.emitted('refresh')).toEqual([['saved']])
+	})
+
+	it('a pristine CREATE close navigates away without creating anything', async () => {
+		configurationApi.listCostCenters.mockResolvedValue({ items: [], page: 1, pageSize: 25, total: 0 })
+		configurationApi.listActiveExpenseTypes.mockResolvedValue({ items: [], page: 1, pageSize: 25, total: 0 })
+
+		const router = createRouter({ history: createWebHashHistory(), routes })
+		await router.push('/sheets/sh-1')
+		await router.isReady()
+
+		const wrapper = mount(TransactionSurface, {
+			props: { sheetId: 'sh-1', createMode: true },
+			global: { plugins: [router, createPinia()] },
+			attachTo: document.body
+		})
+		await flushPromises()
+
+		await wrapper.find('[data-test="close-transaction-surface"]').trigger('click')
+		await flushPromises()
+
+		expect(transactionsApi.createTransaction).not.toHaveBeenCalled()
+		expect(router.currentRoute.value.name).toBe('sheet-detail')
 	})
 })

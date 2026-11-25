@@ -100,6 +100,25 @@ Prerequisites: the pettycash lab is running (`/home/ubuntu/projects/nextcloud-la
    - Verify no Pettycash language selector, profile management, or unrelated setting is present.
 3. **Four language/calendar combinations** — repeat the date re-render check under English UI + Gregorian, English UI + Persian, Persian UI + Gregorian, and Persian UI + Persian calendar. Calendar choice is independent of Nextcloud UI language.
 4. **Representative review dates** — confirm management-review date surfaces consume the shared calendar-aware formatter under each combination.
+5. **Calendar-aware expense-date input (`T081–T084`, approved dependency exception)** — open the transaction create form under Gregorian preference and verify the expense-date input shows a Gregorian calendar; switch to Persian preference and verify the same input shows a genuine Jalali calendar with correct Jalali year/month/day navigation (not translated Gregorian month labels). Repeat under `en` UI + Persian calendar and `fa` UI + Gregorian calendar to confirm language ⊥ calendar independence. Select a date under each calendar and confirm the outgoing mutation payload always carries canonical Gregorian `YYYY-MM-DD`. Confirm no date is silently changed when opening, closing, initializing, or switching calendars. Verify disabled/read-only states, validation, and keyboard accessibility. Light/dark themes and no horizontal scroll at 390px are checked in official Google Chrome (`channel: 'chrome'`) at desktop and 390px mobile.
+
+   - **Not executable before `T082` implementation; this step is recorded as future work, not a current gate.**
+
+   **Transaction CREATE modal (`T085`–`T088`, 2026-11-24 owner authorization)** — from any sheet detail, click "Add transaction" and verify a modal opens over the mounted sheet workspace (the workspace is NOT unmounted or replaced):
+    - The modal matches the existing transaction EDIT modal's visual conventions; heading is the localized "Add transaction" (`transactions.createTitle`).
+    - Existing form fields and validation (expense date + positive amount minimum) are preserved; calendar-aware expense-date picker works under Gregorian and Jalali preferences.
+    - Cancel and Save draft actions are present; no EDIT-only controls (Delete draft, history, transaction ID) appear before a transaction exists.
+    - Pristine Cancel closes without confirmation; dirty Cancel → Stay preserves entered data with zero writes; dirty Cancel → Discard performs no writes and creates no transaction.
+    - Save draft creates exactly one transaction; on successful save the modal closes, the owning sheet detail returns, sheet and transaction data are refreshed, the new transaction is displayed, and counts/amounts refresh (FR-088 preserved).
+    - A forced staged-receipt upload failure leaves the transaction saved and offers retry without duplicating the transaction.
+    - Direct navigation to `/sheets/:sheetId/transactions/create`, browser Back/Forward, and refresh all preserve the owning sheet identity and reopen/open the modal correctly.
+    - Modal accessibility: exactly one `[role="dialog"]`, inert background, focus containment, focus restoration after dismissal, Escape handling for nested calendar controls, LTR/RTL compatibility, no horizontal scroll at 390px.
+    - Record screenshots under `artifacts/visual-review/<task-id>/<iteration>/`; owner-controlled desktop visual acceptance is explicit; mobile visual review remains deferred.
+
+    - **Verified 2026-11-25**: all twelve journeys pass in official Google Chrome (`channel: 'chrome'`) at en-desktop, fa-desktop (RTL), and en-mobile (390px). 49 checks per configuration, 0 failures. Screenshots under `artifacts/visual-review/t088/iteration-1/`. Network evidence recorded in `artifacts/visual-review/t088/iteration-1/*/evidence.json`.
+    - **Owner visual acceptance (desktop)**: ACCEPTED 2026-11-25. Product owner explicit statement: "تایید هست". CREATE modal presentation and interaction accepted. Phase 19 implementation and desktop visual acceptance: COMPLETE.
+    - **Deferred**: additional owner mobile visual review remains deferred. `UXC-V2-GATE` remains OPEN. Sheet total refresh was not explicitly documented in the browser report; no verification evidence is claimed for it.
+
 5. **Mutation-payload equality (`T018`)** — submit the same transaction form under Gregorian and Persian preferences and diff the request payloads; they must be identical. Calendar selection changes display only and must not alter persisted dates or mutation payloads.
 2. **Sheet list** — six columns in the accepted order, title above the ID, `—` for a never-submitted sheet, `0` for a genuine zero, `0` transactions for an empty sheet, one accessible action menu per row; no horizontal scroll at 390px.
    - **Outstanding**: English labels (blocked by `REC-01` — raw keys will render); the date-filter labels do not yet name the creation date (`REC-06`); owner visual acceptance.
@@ -122,7 +141,7 @@ Prerequisites: the pettycash lab is running (`/home/ubuntu/projects/nextcloud-la
 - No Batch B card started without per-card owner approval, except the approved `T053`–`T063` slice.
 - No edit to `lib/`, `appinfo/`, `specs/001-*`, the OpenAPI contract, or the workflow contract outside the 2026-10-23 `BE-CR-004` allowlist (receipt enforcement, `evidenceRequired`, per-transaction `422` field errors, and the debug-gated fixture command).
 - No English catalog authored (`REC-01` is an owner decision, not an agent task).
-- No new dependency, no Vuetify, no UI framework change.
+- No new dependency, no Vuetify, no UI framework change, except the narrowly scoped FR-005-029 exception permitting `@jalali-js/vue@0.4.3` (exact pinned version) and its necessary reviewed transitive dependencies solely for the transaction expense-date calendar picker wrapper (`src/components/common/CalendarDatePicker.vue`), used exclusively in CREATE and EDIT flows.
 - No host PHP, no manual `docker exec`, no container-side frontend tooling.
 - No staging outside an approved `GIT-PLAN-*` allowlist. `GIT-PLAN-001-R1` isolates generated `js/`/`css/` output in its build-sync commit (C6), includes only inspected design references and the bounded Manus prototype subset, and excludes `_archives/`, `review/bunny/screenshots/`, `test-results/`, `.env.testing`, and pre-existing user changes (`AGENTS.md`, `CLAUDE.md`, `.claude/`, `.env*`, `docs/Review uploaded pasted content.zip`, Feature 004 files).
 

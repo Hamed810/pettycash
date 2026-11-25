@@ -26,6 +26,7 @@
     "notices:write": "node scripts/generate-third-party-notices.mjs --write"
   },
   "dependencies": {
+    "@jalali-js/vue": "0.4.3",
     "@nextcloud/axios": "2.6.0",
     "@nextcloud/dialogs": "7.5.0",
     "@nextcloud/initial-state": "3.0.0",

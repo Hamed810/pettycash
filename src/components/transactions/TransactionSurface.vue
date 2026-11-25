@@ -29,14 +29,18 @@ import type { Evidence, SheetStatus, TransactionStatus } from '@/types/api'
  * becomes inert.
  */
 const props = withDefaults(defineProps<{
-	transactionId: string
+	transactionId?: string
 	sheetId: string
 	sheetStatus?: SheetStatus | null
 	/** T075: the OPEN-sheet eye action enters the existing edit form directly. */
 	startInEdit?: boolean
+	/** T085: explicit CREATE mode; no existing transaction ID, no detail request before creation. */
+	createMode?: boolean
 }>(), {
 	sheetStatus: null,
-	startInEdit: false
+	startInEdit: false,
+	createMode: false,
+	transactionId: ''
 })
 
 const emit = defineEmits<{
@@ -62,18 +66,20 @@ let previewOpener: HTMLElement | null = null
 // T075: `startInEdit` is the OPEN-sheet eye path. The surface still reads the transaction and its
 // capability set first; the editor is only rendered once `canEdit` is true, so a stale or
 // unauthorized row falls back to the existing read-only inspection instead of offering an edit.
-const editing = ref(props.startInEdit)
+const editing = ref(props.startInEdit || props.createMode)
 /**
  * The editor stays mounted while its own delete request completes. The store clears
  * `currentTransaction` on a successful DELETE, and without this latch the `canEdit` projection
  * would unmount the form before it could emit `deleted` back to the host.
  */
 const editorMounted = ref(false)
+const isCreating = computed(() => props.createMode)
 
 watch(() => props.startInEdit, (value) => {
 	if (value) editing.value = true
 })
 watch(() => props.transactionId, () => {
+	if (isCreating.value) return
 	editing.value = props.startInEdit
 	editorMounted.value = false
 })
@@ -105,17 +111,17 @@ const showReadOnly = computed(() => isSubmitted.value && !isCorrection.value)
  * Edit/Delete additionally require the transaction itself to be a draft — `canEdit` alone must not
  * offer an edit on a submitted row.
  */
-const canEdit = computed(() => transaction.value?.allowedActions.canEdit === true
+const canEdit = computed(() => !isCreating.value && transaction.value?.allowedActions.canEdit === true
 	&& isDraft.value
 	&& props.sheetStatus === 'OPEN')
-const canDelete = computed(() => transaction.value?.allowedActions.canDelete === true
+const canDelete = computed(() => !isCreating.value && transaction.value?.allowedActions.canDelete === true
 	&& isDraft.value
 	&& props.sheetStatus === 'OPEN')
-const canCorrect = computed(() => transaction.value?.allowedActions.canCorrect === true
+const canCorrect = computed(() => !isCreating.value && transaction.value?.allowedActions.canCorrect === true
 	&& isCorrection.value)
 
-/** The editable host is only valid for an authorized OPEN-sheet draft. */
-const showsEditor = computed(() => editing.value && canEdit.value)
+/** The editable host is only valid for an authorized OPEN-sheet draft, or for CREATE mode. */
+const showsEditor = computed(() => isCreating.value || (editing.value && canEdit.value))
 
 // Once the form has been legitimately mounted, keep it mounted through its own delete request so
 // the successful `deleted` outcome can reach the host after the store clears the detail.
@@ -172,6 +178,7 @@ const workingCorrectionLabel = computed(() => {
 })
 
 async function loadData(): Promise<void> {
+	if (isCreating.value) return
 	const id = props.transactionId
 	await transactionStore.loadTransaction(id).catch(() => undefined)
 	if (transactionStore.currentTransaction?.id !== id) return
@@ -179,8 +186,12 @@ async function loadData(): Promise<void> {
 	await transactionStore.loadRevisions(id).catch(() => undefined)
 }
 
-onMounted(loadData)
+onMounted(() => {
+	if (isCreating.value) return
+	loadData()
+})
 watch(() => props.transactionId, () => {
+	if (isCreating.value) return
 	confirmingDelete.value = false
 	deleteNotice.value = null
 	selectedEvidence.value = null
@@ -335,9 +346,9 @@ function closePreview(): void {
 			<header class="transaction-surface__header">
 				<div class="transaction-surface__identity">
 					<h2 :id="TITLE_ID" class="transaction-surface__title" data-test="transaction-surface-title">
-						{{ editorMounted ? t('pettycash', 'transactions.editTitle') : t('pettycash', 'transactions.surfaceTitle') }}
+						{{ isCreating ? t('pettycash', 'transactions.createTitle') : (editorMounted ? t('pettycash', 'transactions.editTitle') : t('pettycash', 'transactions.surfaceTitle')) }}
 					</h2>
-					<span class="transaction-surface__id">{{ transactionId }}</span>
+					<span v-if="!isCreating" class="transaction-surface__id">{{ transactionId }}</span>
 				</div>
 				<div class="transaction-surface__header-actions">
 					<NcChip v-if="showReadOnly && !editorMounted" no-close data-test="transaction-surface-readonly">
@@ -380,16 +391,17 @@ function closePreview(): void {
 			<template v-else>
 				<!-- T075: the OPEN-sheet eye click enters the existing form inside this dialog. The
 				     read-only inspection below remains the fallback for every non-editable state. -->
-				<TransactionFormView
-					v-if="editorMounted"
-					ref="editForm"
-					embedded
-					:edit-transaction-id="transactionId"
-					:edit-sheet-id="sheetId"
-					@preview="openPreview"
-					@saved="handleSaved"
-					@deleted="handleDeleted"
-				/>
+		<TransactionFormView
+			v-if="editorMounted"
+			ref="editForm"
+			embedded
+			:edit-transaction-id="transactionId"
+			:edit-sheet-id="sheetId"
+			:create-mode="isCreating"
+			@preview="openPreview"
+			@saved="handleSaved"
+			@deleted="handleDeleted"
+		/>
 
 				<template v-else-if="transaction">
 					<div v-if="confirmingDelete" class="transaction-surface__confirm" role="group" aria-labelledby="delete-transaction-confirm-title" data-test="delete-transaction-confirm">

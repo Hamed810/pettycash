@@ -4,6 +4,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createWebHashHistory, type Router } from 'vue-router'
 import { t } from '@nextcloud/l10n'
 import { nextTick } from 'vue'
+import CalendarDatePicker from '@/components/common/CalendarDatePicker.vue'
 import {
 	installSheetListReturnTracking,
 	resetSheetListSession,
@@ -617,7 +618,7 @@ function selectOptions(wrapper: VueWrapper, testId?: string): Array<{ label: str
  * through a rendered option.
  */
 async function fillTransactionForm(wrapper: VueWrapper, values: { expenseTypeId?: string; costCenterId?: string } = {}) {
-	await wrapper.find('[data-test="expense-date-input"]').setValue('2026-01-15')
+	await wrapper.findComponent(CalendarDatePicker).vm.$emit('update:modelValue', '2026-01-15')
 	await wrapper.find('[data-test="amount-input"]').setValue('1000')
 	await wrapper.find('[data-test="description-input"]').setValue('Taxi to the airport')
 	if (values.costCenterId !== undefined) {
@@ -2059,7 +2060,7 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 
 		it('should require expense date and positive amount as minimum draft data', async () => {
 			const wrapper = await createWrapperAtRoute(TransactionFormView, '/sheets/sh-1/transactions/create')
-			await wrapper.find('[data-test="expense-date-input"]').setValue('2026-01-15')
+			await wrapper.findComponent(CalendarDatePicker).vm.$emit('update:modelValue', '2026-01-15')
 			await wrapper.find('[data-test="amount-input"]').setValue('1000')
 			await submitTransactionForm(wrapper)
 			await flushPromises()
@@ -2082,11 +2083,11 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 		it('should refuse to save a draft without an expense date and a positive amount', async () => {
 			const wrapper = await createWrapperAtRoute(TransactionFormView, '/sheets/sh-1/transactions/create')
 			// The date is pre-filled with today, so the amount is what has to fail the draft rules.
-			await wrapper.find('[data-test="expense-date-input"]').setValue('')
+			await wrapper.findComponent(CalendarDatePicker).vm.$emit('update:modelValue', '')
 			await wrapper.find('[data-test="amount-input"]').setValue('1000')
 			expect(wrapper.find('[data-test="submit-btn"]').attributes('disabled')).toBeDefined()
 
-			await wrapper.find('[data-test="expense-date-input"]').setValue('2026-01-15')
+			await wrapper.findComponent(CalendarDatePicker).vm.$emit('update:modelValue', '2026-01-15')
 			await wrapper.find('[data-test="amount-input"]').setValue('0')
 			expect(wrapper.find('[data-test="submit-btn"]').attributes('disabled')).toBeDefined()
 
@@ -2101,7 +2102,7 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 		// which is exactly the behavior the owner directive reversed for UI-PUR-010.
 		it('saves through the primary action with only the expense date and a positive amount', async () => {
 			const wrapper = await createWrapperAtRoute(TransactionFormView, '/sheets/sh-1/transactions/create')
-			await wrapper.find('[data-test="expense-date-input"]').setValue('2026-01-15')
+			await wrapper.findComponent(CalendarDatePicker).vm.$emit('update:modelValue', '2026-01-15')
 			await wrapper.find('[data-test="amount-input"]').setValue('1000')
 
 			await submitTransactionForm(wrapper)
@@ -2187,7 +2188,7 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 
 		it('should allow saving draft with only expense date and amount', async () => {
 			const wrapper = createWrapper(TransactionFormView)
-			await wrapper.find('[data-test="expense-date-input"]').setValue('2026-01-15')
+			await wrapper.findComponent(CalendarDatePicker).vm.$emit('update:modelValue', '2026-01-15')
 			await wrapper.find('[data-test="amount-input"]').setValue('500')
 			expect(wrapper.find('[data-test="submit-btn"]').attributes('disabled')).toBeUndefined()
 		})
@@ -2205,7 +2206,7 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 			setTransactionDetail(transactionFixture({ status: 'AWAITING_COST_CENTER_REVIEW' }))
 			const wrapper = await createWrapperAtRoute(TransactionFormView, '/transactions/tx-1/edit')
 
-			await wrapper.find('[data-test="expense-date-input"]').setValue('2026-01-15')
+			await wrapper.findComponent(CalendarDatePicker).vm.$emit('update:modelValue', '2026-01-15')
 			await wrapper.find('[data-test="amount-input"]').setValue('1000')
 			await wrapper.vm.$nextTick()
 			for (const control of ['expense-date-input', 'amount-input', 'description-input']) {
@@ -2321,7 +2322,7 @@ describe('Purchaser Flow - Vue Component Tests', () => {
 			})
 
 			const wrapper = await createWrapperAtRoute(TransactionFormView, '/sheets/sh-1/transactions/create')
-			await wrapper.find('[data-test="expense-date-input"]').setValue('2026-01-15')
+			await wrapper.findComponent(CalendarDatePicker).vm.$emit('update:modelValue', '2026-01-15')
 			await wrapper.find('[data-test="amount-input"]').setValue('1000')
 
 			await submitTransactionForm(wrapper)

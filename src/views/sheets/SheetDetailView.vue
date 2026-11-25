@@ -39,7 +39,14 @@ const route = useRoute()
 const router = useRouter()
 const sheetStore = useSheetStore()
 
-const sheetId = computed(() => route.params.id as string)
+const props = withDefaults(defineProps<{
+	/** T086: owning sheet identity when mounted from the transaction-create route. */
+	sheetId?: string
+}>(), {
+	sheetId: undefined
+})
+
+const sheetId = computed(() => props.sheetId ?? (route.params.id as string))
 const sheet = computed(() => sheetStore.currentSheet)
 
 /**
@@ -61,6 +68,8 @@ const surfaceOpen = computed(() => surfaceTransactionId.value !== null)
  * existing read-only inspection rather than exposing an edit the server would refuse.
  */
 const surfaceEdit = computed(() => route.query.edit === '1')
+/** T086: CREATE mode is signalled by the route, not by a redundant query parameter. The `:sheetId` path param is the authoritative sheet identity. */
+const createMode = computed(() => route.name === 'transaction-create')
 const lastSurfaceTransactionId = ref<string | null>(null)
 
 /**
@@ -70,7 +79,7 @@ const lastSurfaceTransactionId = ref<string | null>(null)
  * active it is a background layer: inert, without a dialog role or `aria-modal`, and the edit dialog is
  * the only `[role="dialog"]`. A list-row or direct edit never mounts it at all.
  */
-const backgrounded = computed(() => route.name === 'sheet-edit')
+const backgrounded = computed(() => route.name === 'sheet-edit' || createMode.value)
 const nonModal = computed(() => surfaceOpen.value || backgrounded.value)
 
 // The domain's `SheetStatus` values (FR-037).
@@ -1105,11 +1114,12 @@ function decisionFrom(event: AuditEvent): string | null {
 			section. The page still exposes exactly one dialog.
 		-->
 		<TransactionSurface
-			v-if="surfaceOpen"
+			v-if="surfaceOpen || createMode"
 			:transaction-id="surfaceTransactionId ?? ''"
 			:sheet-id="sheetId"
 			:sheet-status="sheet?.status ?? null"
 			:start-in-edit="surfaceEdit"
+			:create-mode="createMode"
 			@close="closeTransaction"
 			@refresh="handleSurfaceRefresh"
 		/>
@@ -1628,6 +1638,11 @@ function decisionFrom(event: AuditEvent): string | null {
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
+}
+
+/* FR-005-066: the date cell is one token, in the desktop table and the narrow card alike. */
+.workspace-table :deep([data-test="transaction-expense-date"]) {
+	white-space: nowrap;
 }
 
 .workspace-table :deep(.entity-cell) {

@@ -1411,6 +1411,11 @@ onMounted(() => {
 	font-variant-numeric: tabular-nums;
 }
 
+/* FR-005-066: the submitted date cell stays on one line. */
+:deep(.responsive-table__desktop .sheet-row__submitted) {
+	white-space: nowrap;
+}
+
 :deep(.sheet-row__activity) {
 	font-size: var(--font-size-floor);
 	color: var(--color-text-maxcontrast);

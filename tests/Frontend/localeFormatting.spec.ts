@@ -148,3 +148,74 @@ describe('UI-PUR-001: absence and totality', () => {
 		expect(whole).toBe('۱٬۰۰۰ IRR')
 	})
 })
+
+/**
+ * FR-005-066 — one fixed human-readable shape in every language/calendar combination.
+ *
+ * The era assertion is deliberate: `Intl` appends `AP` to a Persian date under `en-US`, and the
+ * approved presentation must not carry it. The exact strings also pin zero-padding, ordering and
+ * the locale-specific zero digit; `toContain` assertions would let `11/1/2026` pass.
+ */
+describe('FR-005-066: fixed YYYY/MM/DD date presentation', () => {
+	const cases = [
+		{ iso: '2026-03-21', gregory: '2026/03/21', persian: '1405/01/01' },
+		{ iso: '2026-11-01', gregory: '2026/11/01', persian: '1405/08/10' },
+		{ iso: '2026-11-22', gregory: '2026/11/22', persian: '1405/09/01' },
+		{ iso: '2026-12-02', gregory: '2026/12/02', persian: '1405/09/11' },
+	]
+
+	it('renders the approved Gregorian and Jalali values for en-US', () => {
+		for (const { iso, gregory, persian } of cases) {
+			expect(formatSheetDate(iso, { locale: 'en-US', calendar: 'gregory' })).toBe(gregory)
+			expect(formatSheetDate(iso, { locale: 'en-US', calendar: 'persian' })).toBe(persian)
+		}
+	})
+
+	it('keeps the field order for en-GB instead of switching to day/month/year', () => {
+		expect(formatSheetDate('2026-11-01', { locale: 'en-GB', calendar: 'gregory' })).toBe('2026/11/01')
+		expect(formatSheetDate('2026-11-01', { locale: 'en-GB', calendar: 'persian' })).toBe('1405/08/10')
+	})
+
+	const toPersianDigits = (value: string): string =>
+		value.replace(/\d/g, (digit) => '۰۱۲۳۴۵۶۷۸۹'.charAt(Number(digit)))
+
+	it('keeps Persian digits and zero-padding under fa-IR', () => {
+		for (const { iso, gregory, persian } of cases) {
+			expect(formatSheetDate(iso, { locale: 'fa-IR', calendar: 'gregory' }))
+				.toBe(toPersianDigits(gregory))
+			expect(formatSheetDate(iso, { locale: 'fa-IR', calendar: 'persian' }))
+				.toBe(toPersianDigits(persian))
+		}
+	})
+
+	it('never emits an era marker in any combination', () => {
+		for (const locale of ['en-US', 'en-GB', 'fa-IR']) {
+			for (const calendar of ['gregory', 'persian'] as const) {
+				for (const { iso } of cases) {
+					expect(formatSheetDate(iso, { locale, calendar })).not.toMatch(/\b(?:AP|AD|BC|BP)\b/)
+				}
+			}
+		}
+	})
+
+	it('standardizes the date portion of a date-time but keeps the time', () => {
+		const formatted = formatSheetDateTime('2024-03-20T12:00:00', {
+			locale: 'en-US',
+			calendar: 'gregory',
+		})
+		expect(formatted).toMatch(/^2024\/03\/20 \d{2}:\d{2}:\d{2}/)
+		expect(formatted).toContain('12:00:00')
+
+		const persian = formatSheetDateTime('2024-03-20T12:00:00', {
+			locale: 'fa-IR',
+			calendar: 'persian',
+		})
+		expect(persian).toMatch(/^۱۴۰۳\/۰۱\/۰۱ [۰-۹]{2}:[۰-۹]{2}:[۰-۹]{2}$/)
+	})
+
+	it('does not shift a canonical date-only value across timezones', () => {
+		// The fixture is canonical, so the rendered day must be the same one the server stored.
+		expect(formatSheetDate('2026-11-01', { locale: 'en-US', calendar: 'gregory' })).toBe('2026/11/01')
+		expect(formatSheetDate('2026-03-21', { locale: 'fa-IR', calendar: 'persian' })).toBe('۱۴۰۵/۰۱/۰۱')
+	})
+})

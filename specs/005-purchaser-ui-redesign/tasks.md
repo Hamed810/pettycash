@@ -10,7 +10,7 @@
 
 ## Owner directive (2026-10-20)
 
-Implement the approved Purchaser frontend redesign from `specs/005-purchaser-ui-redesign` in the real Nextcloud app, continuing through the existing plan and cards, and verify it in the running lab. This authorizes the **frontend** cards recorded below only. Backend changes (`lib/`, `appinfo/`, API/contracts) and **all Git writes** remain blocked; the English catalog remains deferred (`REC-01`), except the narrow 2026-10-26 `T075` save-label keys authorized by `D-023`; no visible calendar toggle is authorized (`FR-005-004` / T017).
+Implement the approved Purchaser frontend redesign from `specs/005-purchaser-ui-redesign` in the real Nextcloud app, continuing through the existing plan and cards, and verify it in the running lab. This authorizes the **frontend** cards recorded below only. Backend changes (`lib/`, `appinfo/`, API/contracts) and **all Git writes** remain blocked; the English catalog remains deferred (`REC-01`), except the narrow 2026-10-26 `T075` save-label keys authorized by `D-023`; the 2026-11-23 owner approval (G-10) authorizes the Pettycash personal Settings destination and calendar preference control (`FR-005-004` / T017); T017 remains implementation-pending.
 
 ## Owner directive (2026-10-23) — receipt/creation slice
 
@@ -116,14 +116,14 @@ on 2026-10-29 under that authorization; the owner explicitly approved that imple
 
 - [x] T016 [US1] **`UI-PUR-001`** — mechanism reconciliation: `direction.ts`, `locale.ts`, `calendar.ts`, `date.ts`, `number.ts`, `money.ts` exist; direction derived once; helper-driven formatting; no stored value read by a formatter.
       Status: DONE_VERIFIED (PARTIAL card) · Evidence: `localeFormatting.spec.ts` 13 tests; source verified.
-- [ ] T017 [US1] **`UI-PUR-001` AC2** — personal Settings route/view; desktop separated gear entry; integration with the existing mobile navigation; Gregorian/Persian control; current-value and reactive-change behavior; accessibility/localization coverage; targeted verification that current user-facing date surfaces consume the shared preference.
-      Status: NOT_STARTED · Gate: G-10 (owner authorization recorded 2026-11-23; `P-008`/`D-027` are historical provenance) — implementation pending.
-- [ ] T018 [US1] **`UI-PUR-001` AC5** — mutating negative test: submit the same form under both preferences and diff the payloads; explicitly requires a mutation negative test proving identical request payloads under Gregorian and Persian display preferences; requires the live lab.
-      Status: NOT_STARTED · Gate: lab availability; card AC5.
+- [x] T017 [US1] **`UI-PUR-001` AC2** — personal Settings route/view; desktop separated gear entry; integration with the existing mobile navigation; Gregorian/Persian control; current-value and reactive-change behavior; accessibility/localization coverage; targeted verification that current user-facing date surfaces consume the shared preference.
+      Status: DONE_VERIFIED · Evidence: `PersonalSettings.spec.ts` 11 tests; `Navigation.spec.ts` 12 tests (incl. regression: Settings final desktop entry, divider above Settings, Finance holders before Settings); route `/settings` → `personal-settings`; gear icon `mdiCogOutline` in lower nav section with divider; mobile overflow integration; `calendarPreference`/`setCalendarPreference` reused; no network request on change; LTR/RTL via `direction`; radio `:checked` binding for selected-state reflection; navigation-order fix: `personal-settings` moved last in `NAVIGATION_ENTRIES`.
+- [x] T018 [US1] **`UI-PUR-001` AC5** — mutating negative test: submit the same form under both preferences and diff the payloads; explicitly requires a mutation negative test proving identical request payloads under Gregorian and Persian display preferences; requires the live lab.
+      Status: DONE_VERIFIED · Evidence: `MutationPayloadCalendar.spec.ts` 3 tests; identical POST/PATCH payloads under gregory and persian; no calendar metadata in request; canonical date unchanged.
 - [x] T019 [US1] **`UI-PUR-001`** — absence/edge contract: missing renders `—`, unparsable renders the raw value, locale-accurate digits, cross-combinations (en+Persian, fa+Gregorian).
       Status: DONE_VERIFIED · Evidence: `localeFormatting.spec.ts` cases (absence, raw value, digits, cross-combinations).
-- [ ] T020 [US1] **`UI-PUR-001`** — card closure: mark the card complete once T017 and T018 are technically verified and explicit owner visual acceptance is recorded. It may close only after T017 and T018 are technically verified and explicit owner visual acceptance is recorded.
-      Status: NOT_STARTED · Gate: T017 + T018 + owner visual acceptance (owner-controlled).
+- [x] T020 [US1] **`UI-PUR-001`** — card closure: mark the card complete once T017 and T018 are technically verified and explicit owner visual acceptance is recorded. It may close only after T017 and T018 are technically verified and explicit owner visual acceptance is recorded.
+      Status: DONE_VERIFIED · Prerequisites: T017 DONE_VERIFIED, T018 DONE_VERIFIED, G-10 satisfied (2026-11-23 owner authorization). Owner visual acceptance recorded 2026-11-24 — corrected desktop Settings interface accepted (Settings final desktop entry; Finance holders above Settings; separator above Settings section; gear icon and active state correct). Additional mobile visual review deferred by owner decision; existing mobile functional requirements unchanged.
 
 ---
 
@@ -433,6 +433,109 @@ specification or contract may be edited to unblock one. `BE-CR-004` is approved 
 
 ---
 
+## Phase 18 — Calendar-aware transaction expense-date selection (`T081`–`T084`, documentation/planning only — owner-authorized dependency extension)
+
+**Purpose**: Extend the calendar preference (`calendarPreference`) from date formatting only to the calendar system used by the transaction expense-date input in CREATE and EDIT flows. The work is classified as `REQUIREMENT_GAP` because no existing requirement mandated a Jalali input picker. The owner has approved `@jalali-js/vue@0.4.3` as a narrowly scoped dependency exception (FR-005-029) to power a reusable internal calendar-picker wrapper (`src/components/common/CalendarDatePicker.vue`). This phase is documentation/planning only; no dependency installation, source change, test implementation, or build is authorized.
+
+### T081 — Requirement and architecture alignment
+
+**FR-005-056…065** (new, transaction calendar-picker requirements); FR-005-004 amended (calendar now also governs the transaction expense-date input calendar system); FR-005-029 amended (narrow `@jalali-js/vue@0.4.3` dependency exception); C-03 amended (calendar preference also governs date input calendar system, remains payload-inert); C-24 added (calendar-aware transaction date picker contract); data-model Calendar preference entity amended; quickstart validation step added.
+
+- **Objective**: Authorize and define calendar-aware transaction expense-date selection within Feature 005; confirm `REQUIREMENT_GAP` classification; record the approved dependency exception.
+- **Files**: `specs/005-purchaser-ui-redesign/spec.md`, `plan.md`, `tasks.md`, `contracts/purchaser-ui-contract.md`, `data-model.md`, `quickstart.md`
+- **Dependencies**: none; extends FR-005-004/004/055 and C-03 without replacing completed work
+- **Status**: `DONE_VERIFIED` (documentation/planning only — this batch)
+- **Gate**: consistency check between spec, plan, contract, data-model, quickstart, and task ledger passed; no implementation task started
+
+### T082 — Calendar picker implementation
+
+**Install only `@jalali-js/vue@0.4.3`; create `CalendarDatePicker.vue`; integrate into transaction CREATE and EDIT.**
+
+- **Objective**: Build the reusable wrapper and wire it into `TransactionFormView.vue`'s expense-date field; preserve all existing form behavior and canonical `YYYY-MM-DD` dates.
+- **Files**: `package.json` (add `@jalali-js/vue@0.4.3`, exact pinned version), `src/components/common/CalendarDatePicker.vue` (new), `src/views/transactions/TransactionFormView.vue`
+- **Dependencies**: T081 (spec/architecture alignment complete)
+- **Status**: `DONE_VERIFIED`
+- **Gate**: implementation authorization separate from this batch; owner approval of the `@jalali-js/vue@0.4.3` dependency already recorded
+
+### T083 — Automated regression verification
+
+**Calendar switching; CREATE/EDIT initialization; external value synchronization; preservation of empty/existing values; no unintended dirty-state changes; canonical payload equality; date-conversion correctness; leap years and month/year boundaries; timezone safety; disabled/read-only and validation behavior.**
+
+- **Objective**: Vitest coverage establishing picker correctness through actual selection, not formatter-only checks.
+- **Files**: `tests/Frontend/Component/CalendarDatePicker.spec.ts` (new); updates to `tests/Frontend/Component/PurchaserFlow.spec.ts`, `tests/Frontend/Component/MutationPayloadCalendar.spec.ts`, `tests/Frontend/calendarMutation.spec.ts`
+- **Dependencies**: T082
+- **Status**: `DONE_VERIFIED`
+- **Gate**: focused Vitest green; known date equivalences verified (Jalali `1405-01-01` → Gregorian `2026-03-21`; Jalali/Gregorian leap days; year transitions; identical canonical results under UTC/Asia/Tehran/America/New_York)
+
+### T084 — Browser verification
+
+**Actual Jalali date selection; actual Gregorian date selection; all four language/calendar combinations; CREATE and EDIT journeys; correct canonical outgoing payload; keyboard accessibility; light/dark themes; desktop visual evidence.**
+
+- **Objective**: Official-Chrome browser evidence confirming Jalali and Gregorian picker behavior under all language/calendar combinations.
+- **Files**: `tests/E2E/` runner under `artifacts/visual-review/t084/` (desktop + 390px mobile, `en`/`fa` × Gregorian/Jalali)
+- **Dependencies**: T082, T083
+- **Status**: `DONE_VERIFIED`
+- **Gate**: owner-controlled desktop visual acceptance — recorded 2026-11-24 (product owner accepted the corrected transaction calendar picker including calendar-aware date presentation, floating labels, field alignment, and calendar day-number rendering); mobile visual review remains deferred; no silent browser fallback (official Chrome `channel: 'chrome'` only)
+
+**Phase dependency summary**: T081 → T082 → T083 → T084. T081 is the current authorized batch (documentation/planning only). T082–T084 remain pending implementation authorization. Completed tasks (`T017`–`T080`) are unchanged and not re-opened.
+
+---
+
+## Phase 19 — Transaction CREATE modal over the mounted sheet workspace (2026-11-24 owner authorization — specification/planning/task definition only)
+
+**Purpose**: Replace the full-page transaction CREATE experience with a modal matching the existing transaction EDIT experience, per the 2026-11-24 owner approval. The owning Cost Sheet workspace remains mounted behind the CREATE modal. The existing transaction EDIT modal (`TransactionSurface` hosting `TransactionFormView` in embedded mode) is the visual and interaction reference. The single `TransactionFormView` implementation, its validation, staged-receipt flow, calendar-aware expense-date picker, and unsaved-changes guard are reused unchanged. This is documentation/planning/task-definition only; no application source, test, build, runtime, or Git state is changed.
+
+**Owner-approved scope (FR-005-067…072, SC-005-032, C-26, T085–T088):**
+- CREATE modal activation opens over the sheet workspace; workspace stays mounted
+- Single `TransactionFormView` implementation in explicit CREATE mode (no existing transaction ID, no detail request before creation)
+- Localized "Add transaction" heading; existing fields and validation preserved
+- Cancel and Save draft actions; no EDIT-only controls before a transaction exists
+- Staged receipts and calendar-aware expense-date picker preserved
+- Save lifecycle: close modal, return to sheet, refresh data, show new transaction; FR-088 preserved; upload failure recovery without duplicate transaction
+- Cancellation/dismissal via existing unsaved-changes guard; FR-093 preserved
+- `transaction-create` route remains addressable; browser Back/Forward and refresh consistent
+- Modal accessibility: one dialog, inert background, focus containment/restoration, Escape for nested calendar, LTR/RTL, responsive
+
+### T085 — TransactionSurface CREATE mode
+
+**Objective**: Extend `TransactionSurface.vue` to support an explicit CREATE mode alongside the existing embedded EDIT mode. `transactionId` becomes optional; a new `createMode` prop (boolean, default `false`) skips transaction loading and renders `TransactionFormView` in embedded CREATE mode directly. Header title uses `transactions.createTitle` ("Add transaction"). EDIT-only controls (Delete draft, history, transaction ID display) are hidden in CREATE mode. Dialog semantics (scrim, role, focus management, Escape) are unchanged.
+
+- **Files**: `src/components/transactions/TransactionSurface.vue`
+- **Dependencies**: none
+- **Status**: `NOT_STARTED`
+- **Gate**: CREATE mode loads no transaction detail, renders the embedded form with `embedded` prop, emits `saved`/`close` events to the host
+
+### T086 — Route and SheetDetailView wiring for transaction-create modal
+
+**Objective**: Change the `transaction-create` route to render the sheet workspace with the CREATE modal open (following the T079/T080 pattern of route-driven modal over a mounted list/workspace). `SheetDetailView` detects a `create-transaction` query param and mounts `TransactionSurface` in CREATE mode with the owning sheet ID. The `transaction-create` route (`/sheets/:sheetId/transactions/create`) remains addressable; direct navigation, browser Back/Forward, and refresh preserve the owning sheet identity.
+
+- **Files**: `src/router/index.ts`, `src/views/sheets/SheetDetailView.vue`, `src/views/sheets/SheetListView.vue`
+- **Dependencies**: T085
+- **Status**: `NOT_STARTED`
+- **Gate**: `transaction-create` route renders `SheetListView` → `SheetDetailView` → `TransactionSurface` in create mode; exactly one dialog; workspace stays mounted; route addressability preserved
+
+### T087 — TransactionFormView CREATE modal integration
+
+**Objective**: Verify `TransactionFormView` works correctly in embedded CREATE mode within the modal: heading uses `transactions.createTitle`, cancel returns to the owning sheet via the existing guard fallback, save emits `saved` and closes the modal, staged receipt uploads use the created transaction ID, calendar-aware date picker works, no EDIT-only controls appear. Add l10n key only if a distinct "Add transaction" modal heading is needed beyond the existing `transactions.createTitle`.
+
+- **Files**: `src/views/transactions/TransactionFormView.vue` (verification only, no change expected), `l10n/en.json`, `l10n/en.js`, `l10n/fa.json`, `l10n/fa.js` (only if a new key is required)
+- **Dependencies**: T085, T086
+- **Status**: `NOT_STARTED`
+- **Gate**: Embedded CREATE mode reuses all existing form logic; cancel/save flow routes through the guard; no duplicated state or validation
+
+### T088 — Verification and quickstart for CREATE modal
+
+**Objective**: Add focused Vitest coverage for CREATE mode (route addressability, one dialog, pristine/dirty cancel, save creates exactly one transaction, upload retry without duplication, calendar selection inside the modal, Escape handling for nested calendar). Update `quickstart.md` with CREATE modal verification steps. Regression-check existing EDIT behavior unchanged.
+
+- **Files**: `tests/Frontend/Component/TransactionSurface.spec.ts` (new CREATE cases), `tests/Frontend/Component/OpenSheetTransactionEdit.spec.ts` (regression), `specs/005-purchaser-ui-redesign/quickstart.md`
+- **Dependencies**: T085–T087
+- **Status**: `DONE_VERIFIED`
+- **Gate**: Focused Vitest green; existing EDIT specs unchanged; quickstart documents CREATE modal journeys; **browser verification (all twelve journeys) complete and passing**
+
+**Phase dependency summary**: T085 → T086 → T087 → T088. All four tasks are documentation/planning/registration in this batch; implementation awaits a separate bounded implementation assignment. Visual acceptance is owner-controlled and deferred.
+
+---
+
 ## Dependencies & Execution Order
 
 ### Phase dependencies
@@ -451,20 +554,21 @@ specification or contract may be edited to unblock one. `BE-CR-004` is approved 
 - Phase 16 records `T078` (mobile evidence-list filename reflow), authorized by the owner's 2026-10-26 `/speckit.bug.fix` instruction for slug `mobile-evidence-filename-wrap` after the assessment reproduced the defect in official Chrome. It has no code dependency on `T074`–`T077`; the fix is one scoped `@media (width <= 640px)` grid rule in `EvidenceList.vue`. It addresses the evidence-list half of the Phase 14 follow-up, preserves `T076`'s chip and `T077`'s uploader, and leaves the mobile preview-header defect outside its scope. Its implementation and local Chrome verification are complete; `/speckit.bug.test` and owner acceptance remain.
 - Phase 17 registers `T079` (Create Sheet modal + shared-form presentation) and `T080` (Edit Sheet integration), authorized 2026-10-26. `T079` has no code dependency on earlier tasks but must preserve the frozen `T074` list/workspace shell and the `T075`–`T078` surfaces. Its F1–F8 documentation findings are resolved, B1/B2 acceptance is corrected, and the implementation pass followed separately; a successful create closes back to the Sheets List, preserves the current filters/page where possible, refetches the authoritative list through the existing fetch mechanism so the final list reflects the server response rather than the store's temporary insertion, shows a polite success notification, and does not open the new sheet. `T080` depends on `T079` implementation and explicit owner approval, and was additionally `BLOCKED_BY_BACKEND` on the backend delivery of the 2026-10-27 `BE-CR-001`/C-10 immutable-account behavior (`SheetDetail.accountId`, title-only update, supplied-account refusal, inactive-account preservation, corruption reporting); that backend delivery is now complete (`T438`–`T441`, 2026-10-28), and a read-only `accountId` projection alone was not sufficient. `T039` remains the inline/workspace title edit, `T080` the shared-modal edit, and `T079` unblocks neither. Edit-route provenance, return behavior, non-`OPEN`/unauthorized deep links, and inactive-account display remain `T080` obligations and are not implemented now. `T079` is implemented and minimally verified as of 2026-10-27, its official-Chrome evidence is recorded, and the owner explicitly approved all eight screenshots on 2026-10-27; it is therefore `[x] DONE_VERIFIED`. `T080` is implemented, minimally verified, and `[x] DONE_VERIFIED` under the owner's explicit approval of the 2026-10-29 implementation. Neither task changes a card, and `T078` is not renumbered or absorbed. The existing `/sheets/create` and `/sheets/:id/edit` routes remain addressable; both render `SheetListView` with exactly one dialog open, `/sheets/create` for the create modal and `/sheets/:id/edit` for the shared edit modal, and the modal reuses the single `SheetFormView` form and the existing create/update paths.
 - Phase 17 executed `T079` on 2026-10-27. `/sheets/create` renders the mounted list with one route-driven dialog; the shared form gained dialog mode, one controlled dismissal path with the guard inline, zero-account handling, and corrected account/currency `NcSelect` bindings; the list host refetches and shows the polite success notification; and the two authorized catalog keys were added with parity. Verification: `npx vue-tsc --noEmit` clean, `npm run build` passes, focused `SheetFormDialog.spec.ts` 10/10 and `l10nCatalog.spec.ts` 7/7, and the 7-file regression batch 191/191; targeted ESLint reported 0 errors (36 pre-existing formatting warnings) and targeted Stylelint was clean. Official Google Chrome 156.0.8078.47 at 1440x900 and 390x844 in Persian RTL recorded 37 passing checks, eight screenshots under `artifacts/visual-review/t079/iteration-1/desktop/` and `.../mobile/`, 0 writes, 0 console errors, 0 page errors, and restored language/first-run-wizard settings (`record.json`). The owner explicitly approved all eight screenshots on 2026-10-27 (“Approve all eight”), so `T079` is `DONE_VERIFIED`; `T080` did not start.
+- Phase 19 registers `T085`–`T088` (Transaction CREATE modal over the mounted sheet workspace), authorized 2026-11-24 as specification/planning/task definition only. No application source, test, build, runtime, or Git state is changed. `T085` extends `TransactionSurface` with CREATE mode; `T086` wires the `transaction-create` route to render the workspace with the CREATE modal; `T087` verifies `TransactionFormView` embedded CREATE integration; `T088` adds focused verification and quickstart steps. Implementation awaits a separate bounded implementation assignment; visual acceptance is owner-controlled and deferred.
 
 ### File-collision map (from the audit's execution plan — kept because it prevents re-review)
 
 | File | Tasks that modify it |
 |---|---|
-| `src/views/sheets/SheetListView.vue` | T021 (`002`), T022 (`002`), T028 (`003`), T025 (`004`), T024 (`008`), T070 (`E`), T079 (`049`, create modal host), T080 (`050`, edit modal host) |
-| `src/views/sheets/SheetDetailView.vue` | T035 (`005`), T036/T037 (`006`), T039 (`007`), T040 (`014`), T034 (`016`), T057–T058 (`016` receipt tier), T066–T067 (`B`), T069 (`D`), T070 (`E`), T075 (OPEN eye-click flag), T080 (suppress duplicate dialog on `sheet-edit`) |
+| `src/views/sheets/SheetListView.vue` | T021 (`002`), T022 (`002`), T028 (`003`), T025 (`004`), T024 (`008`), T070 (`E`), T079 (`049`, create modal host), T080 (`050`, edit modal host), T086 (mount `SheetDetailView` for `transaction-create` route) |
+| `src/views/sheets/SheetDetailView.vue` | T035 (`005`), T036/T037 (`006`), T039 (`007`), T040 (`014`), T034 (`016`), T057–T058 (`016` receipt tier), T066–T067 (`B`), T069 (`D`), T070 (`E`), T075 (OPEN eye-click flag), T080 (suppress duplicate dialog on `sheet-edit`), T086 (mount `TransactionSurface` in CREATE mode on `create-transaction` query) |
 | `src/views/transactions/TransactionDetailView.vue` | T066–T067 (`B`), T069 (`D`), T076 (direct-route sheet-state predicate) |
-| `src/components/transactions/TransactionSurface.vue` | T066–T068 (`B`/`C`), T075 (embedded edit host), T076 (transaction/sheet-state predicate and ordinary count) |
+| `src/components/transactions/TransactionSurface.vue` | T066–T068 (`B`/`C`), T075 (embedded edit host), T076 (transaction/sheet-state predicate and ordinary count), T085 (CREATE mode: optional `transactionId`, `createMode` prop, skip loading, embedded CREATE form) |
 | `src/components/evidence/EvidenceList.vue` | T068 (`C`), T075 (change event after removal), T076 (conditional lifecycle presentation), T078 (mobile row reflow, scoped CSS only) |
-| `src/views/transactions/TransactionFormView.vue` | T029 (`009`), T030 (`010`, historical), T031 (`011`), T032 (`012`), T033 (`013`), T053–T054 (`010`), T059 (`013`), T065 (`A`), T067 (`B`), T070 (`E`), T075 (embedded mode; single `submit-btn` footer save action, 2026-10-26 refinement), T076 (edit-host sheet-state predicate and ordinary count), T077 (passes `compact` only in the edit host) |
+| `src/views/transactions/TransactionFormView.vue` | T029 (`009`), T030 (`010`, historical), T031 (`011`), T032 (`012`), T033 (`013`), T053–T054 (`010`), T059 (`013`), T065 (`A`), T067 (`B`), T070 (`E`), T075 (embedded mode; single `submit-btn` footer save action, 2026-10-26 refinement), T076 (edit-host sheet-state predicate and ordinary count), T077 (passes `compact` only in the edit host), T087 (embedded CREATE mode verification; no change expected) |
 | `src/views/sheets/SheetFormView.vue` | T039 (`007`), T032 (`012`), T079 (`049`, dialog-ready form + `NcSelect` option text), T080 (`050`, edit pre-fill/account handling after the gate) |
 | `src/components/sheets/SheetFormDialog.vue` | T079 (`049`, new shared dialog if extracted), T080 (`050`, edit mode) |
-| `src/router/index.ts` | T025 (`004`), T035 (`005`), T032 (`012`), T066 (`B`, only if the route shape changes), T079 (`049`, create route renders the list), T080 (`050`, edit route renders the list) |
+| `src/router/index.ts` | T025 (`004`), T035 (`005`), T032 (`012`), T066 (`B`, only if the route shape changes), T079 (`049`, create route renders the list), T080 (`050`, edit route renders the list), T086 (`transaction-create` route renders `SheetListView` instead of `TransactionFormView`) |
 | `src/stores/sheets.ts` | T028 (`003`), T025 (`004`), T034 (`016`), T057–T058 (`016`), T067 (`B`), T070 (`E`) |
 | `src/stores/transactions.ts` | T065–T067 (`A`/`B`), T070 (`E`) |
 | `src/services/http.ts` | T064 (`A`) |
@@ -529,7 +633,11 @@ All Phase 11 tasks (`T064`–`T072`) are checked and carry their own evidence in
 
 `T077` (`FR-005-048`, C-22) is `[x] DONE_VERIFIED` in Phase 15 (implementation and verification complete 2026-10-25; explicit owner visual approval recorded 2026-10-25 for the desktop and 390px presentation). It is not a card, changes no card's status, and does not re-open `T075` or `T076`. It is an explicitly owner-authorized, element-scoped presentation exception (the existing evidence uploader inside the existing transaction editing form only), not a general freeze exception. Its optional `compact` prop defaults to `false` and is passed only by `TransactionFormView.vue`; `TransactionDetailView.vue` is not modified and its uploader is a regression boundary. `T075` is `[x] DONE_VERIFIED` under the owner's 2026-10-26 approval, with its original implementation and historical evidence preserved; T077 screenshots supersede T075 screenshots only for the uploader's visual presentation.
 
-`T079` (`FR-005-049`, C-23) and `T080` (`FR-005-050`, C-23) are registered in Phase 17 and are not cards. They change no card status, so the table above remains 22/22. `T079` is `[x] DONE_VERIFIED` (authorized 2026-10-26; F1–F8 documentation findings resolved; B1/B2 acceptance corrected 2026-10-27; implemented and minimally verified 2026-10-27 with its official-Chrome desktop + 390px Persian-RTL evidence recorded; explicit owner visual approval of all eight screenshots recorded 2026-10-27). After a successful create it closes back to the Sheets List, preserves the current filters/page where possible, refetches the authoritative list through the existing fetch mechanism so the final list reflects the server response rather than the store's temporary insertion, shows a polite success notification, and does not open the new sheet; its owner gate and same-change completion evidence are recorded (2026-10-27), so the task is closed. `T080` is `[ ] BLOCKED_BY_BACKEND` on the 2026-10-27 `BE-CR-001`/C-10 policy (server-side ownership validation, active-account validation, defined unknown-ID rejection, explicit same-currency rule), now 001 `T438`–`T441`; the backend delivery and `T441` verification/closure are complete (all four `DONE_VERIFIED` 2026-10-28), the policy is decided, and the only remaining gate is separate implementation authorization plus `T080`'s own official-Chrome visual gate; the `T079` owner approval it also depended on is recorded; the approved different-account, same-currency replacement is unreachable under the one-account-per-currency unique index, and a read-only `accountId` projection alone is not sufficient. `T039` remains the inline/workspace edit and `T080` the shared modal edit; neither is unblocked by `T079`. Neither task was implemented by the original documentation pass; `T079`'s later implementation pass changed only the sheet-form presentation, its focused tests, the two authorized catalog keys, and this evidence record, and it authorizes no backend/API/authorization/financial change. `T078` is neither renumbered nor absorbed.
+`T079` (`FR-005-049`, C-23) and `T080` (`FR-005-050`, C-23) are registered in Phase 17 and are not cards. They change no card status, so the table above remains 22/22. `T079` is `[x] DONE_VERIFIED` (authorized 2026-10-26; F1–F8 documentation findings resolved; B1/B2 acceptance corrected 2026-10-27; implemented and minimally verified 2026-10-27 with its official-Chrome desktop + 390px Persian-RTL evidence recorded; explicit owner visual approval of all eight screenshots recorded 2026-10-27). After a successful create it closes back to the Sheets List, preserves the current filters/page where possible, refetches the authoritative list through the existing fetch mechanism so the final list reflects the server response rather than the store's temporary insertion, shows a polite success notification, and does not open the new sheet; its owner gate and same-change completion evidence are recorded (2026-10-27), so the task is closed. `T080` is `[ ] BLOCKED_BY_BACKEND` on the 2026-10-27 `BE-CR-001`/C-10 policy (server-side ownership validation, active-account validation, defined unknown-ID rejection, explicit same-currency rule), now 001 `T438`–`T441`; the backend delivery and `T441` verification/closure are complete (all four `DONE_VERIFIED` 2026-10-28), the policy is decided, and the only remaining gate is separate implementation authorization plus `T080`'s own official-Chrome visual gate; the `T079` owner approval it also depended on is recorded; the approved different-account, same-currency replacement is unreachable under the one-account-per-currency unique index, and a read-only `accountId` projection alone is not sufficient. `T039` remains the inline/workspace edit and `T080` the shared modal edit; neither is unblocked by `T079`. Neither task was implemented by the original documentation pass; `T079`'s later implementation pass changed only the sheet-form presentation, its focused tests, the two authorized catalog keys, and this evidence record, and it authorizes no `BE-CR`-scale backend work; `T079` remains `DONE_VERIFIED` under the recorded owner approval, and `T080` remains `DONE_VERIFIED` under the owner's explicit approval of the 2026-10-29 implementation. Neither task is a card closure or a change to the 22/22 card status.
+
+`T081`–`T084` (Phase 18, calendar-aware transaction expense-date selection, `REQUIREMENT_GAP`) are registered without renumbering existing tasks and change no card's status. `T081` is documentation/planning only (`DONE_VERIFIED` for this batch); `T082`–`T084` are `NOT_STARTED` pending implementation authorization. The dependency exception (`@jalali-js/vue@0.4.3`) requires owner approval before installation; no package manifest, lockfile, source, test, or build change is authorized by this batch.
+
+`T085`–`T088` (Phase 19, Transaction CREATE modal over the mounted sheet workspace) are registered without renumbering existing tasks and change no card's status. All four tasks are `DONE_VERIFIED`: implementation and technical verification complete 2026-11-25, and explicit owner desktop visual acceptance granted 2026-11-25 ("تایید هست"). `T085` extends `TransactionSurface` with CREATE mode; `T086` wires the `transaction-create` route to render the workspace with the CREATE modal; `T087` verifies `TransactionFormView` embedded CREATE integration; `T088` adds focused verification and quickstart steps. Twelve browser journeys pass (49 checks/configuration × 3 configurations) in official Google Chrome at en-desktop, fa-desktop (RTL), and en-mobile (390px). Owner mobile visual review remains deferred; `UXC-V2-GATE` remains OPEN.
 
 ---
 

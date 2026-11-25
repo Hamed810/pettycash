@@ -35,6 +35,7 @@ const selectedCalendar = computed<CalendarPreference>({
 						type="radio"
 						name="calendar"
 						:value="o.value"
+						:checked="selectedCalendar === o.value"
 						class="settings__radio"
 						@change="selectedCalendar = o.value"
 					>

@@ -60,24 +60,15 @@ interface Props {
 defineProps<Props>()
 
 /**
- * UI-PUR-001: only the field set is local. The shared helpers own the locale, the calendar and
- * the absence rule, so this component cannot drift from the other surfaces.
+ * UI-PUR-001 / FR-005-066: the shared helpers own the shape, locale, calendar and absence rule,
+ * so this component cannot drift from the other surfaces.
  */
-const LONG_DATE: Intl.DateTimeFormatOptions = { year: 'numeric', month: 'long', day: 'numeric' }
-const SHORT_DATE_TIME: Intl.DateTimeFormatOptions = {
-	year: 'numeric',
-	month: 'short',
-	day: 'numeric',
-	hour: '2-digit',
-	minute: '2-digit',
-}
-
 function formatDate(dateStr: string): string {
-	return formatSheetDate(dateStr, { options: LONG_DATE })
+	return formatSheetDate(dateStr)
 }
 
 function formatDateTime(dateStr: string): string {
-	return formatSheetDateTime(dateStr, { options: SHORT_DATE_TIME })
+	return formatSheetDateTime(dateStr)
 }
 </script>
 

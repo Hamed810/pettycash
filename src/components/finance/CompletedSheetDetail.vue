@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { t } from '@nextcloud/l10n'
 import { useRoute, useRouter } from 'vue-router'
-import { formatSheetDateTime } from '@/utils/date'
+import { formatSheetDate, formatSheetDateTime } from '@/utils/date'
 import { useFinanceStore } from '@/stores/finance'
 import BalanceAmount from './BalanceAmount.vue'
 import EvidencePreview from '@/components/evidence/EvidencePreview.vue'
@@ -226,7 +226,7 @@ const outcomeLabel = (value: string): string => {
 						<td class="completed-sheet-detail__cell--reference">{{ tx.reference }}</td>
 						<td class="completed-sheet-detail__cell--revision">{{ tx.revisionNumber }}</td>
 						<td class="completed-sheet-detail__cell--description">{{ tx.description }}</td>
-						<td class="completed-sheet-detail__cell--expense-date">{{ formatSheetDateTime(tx.expenseDate) }}</td>
+						<td class="completed-sheet-detail__cell--expense-date">{{ formatSheetDate(tx.expenseDate) }}</td>
 						<td class="completed-sheet-detail__cell--amount">
 							<BalanceAmount :balance="tx.amount" :minor-unit="tx.amount.minorUnit" />
 						</td>
@@ -391,6 +391,11 @@ const outcomeLabel = (value: string): string => {
 
 .completed-sheet-detail__col--expense-date {
 	min-width: 120px;
+}
+
+/* FR-005-066: the expense-date cell is one token. */
+.completed-sheet-detail__cell--expense-date {
+	white-space: nowrap;
 }
 
 .completed-sheet-detail__col--amount {

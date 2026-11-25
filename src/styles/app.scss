@@ -32,21 +32,34 @@
  * component's scoped style block cannot see a SCSS variable declared in another file without an
  * `@use`, and a scale that each component has to import individually is not one scale.
  */
+/*
+ * The approved surfaces give the "in review" statuses their own hue (the Senior/Finance
+ * stages in the approved sheets list and the "returned for correction" chip in the approved
+ * workspace). Nextcloud ships no token for it, so it is declared here -- once -- beside the
+ * type scale, instead of hardcoded into each badge, and re-keyed for the dark theme the same
+ * way the host re-keys its own status colours.
+ *
+ * Declared on :root (and re-keyed under html[data-theme-dark]) rather than only on
+ * .pettycash-shell, because the management-review confirmation modal is rendered through
+ * SheetDetailsModal's <Teleport to="body"> and therefore leaves the .pettycash-shell
+ * subtree. Custom properties inherit through the DOM, not across a Teleport boundary, so
+ * :root is the narrowest reliable home for the token available without changing the modal's
+ * Teleport target. All shell-descendant consumers (status badges, chips) still inherit it.
+ */
+:root {
+	--pettycash-review: #6f43c9;
+}
+
+html[data-theme-dark] {
+	--pettycash-review: #b18cff;
+}
+
 .pettycash-shell {
 	--pettycash-scrim: color-mix(in srgb, black 55%, transparent);
 	--font-size-floor: 16px;
 	--font-size-emphasis: 18px;
 	--font-size-section: 20px;
 	--font-size-title: 24px;
-
-	/*
-	 * The approved surfaces give the "in review" statuses their own hue (the Senior/Finance
-	 * stages in the approved sheets list and the "returned for correction" chip in the approved
-	 * workspace). Nextcloud ships no token for it, so it is declared here -- once, on the shell,
-	 * beside the type scale -- instead of hardcoded into each badge, and re-keyed for the dark
-	 * theme the same way the host re-keys its own status colours.
-	 */
-	--pettycash-review: #6f43c9;
 
 	box-sizing: border-box;
 	display: grid;
@@ -59,13 +72,6 @@
 	color: var(--color-main-text);
 	background: var(--color-main-background);
 	font-size: var(--font-size-floor);
-}
-
-/*
- * The dark theme re-keys the review hue the same way the host re-keys its own colours.
- */
-html[data-theme-dark] .pettycash-shell {
-	--pettycash-review: #b18cff;
 }
 
 /*

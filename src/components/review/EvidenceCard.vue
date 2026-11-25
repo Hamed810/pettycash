@@ -232,11 +232,9 @@ function formatFileSize(bytes: number): string {
 	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-/** UI-PUR-001: field set only; the shared helper owns locale, calendar and absence. */
+/** UI-PUR-001 / FR-005-066: the shared helper owns the shape, locale, calendar and absence. */
 function formatDate(dateStr: string): string {
-	return formatSheetDate(dateStr, {
-		options: { year: 'numeric', month: 'short', day: 'numeric' },
-	})
+	return formatSheetDate(dateStr)
 }
 </script>
 

@@ -3,6 +3,7 @@ import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createWebHashHistory, type Router } from 'vue-router'
 import TransactionFormView from '@/views/transactions/TransactionFormView.vue'
+import CalendarDatePicker from '@/components/common/CalendarDatePicker.vue'
 import { routes } from '@/router'
 import type { SheetDetail, TransactionDetail } from '@/types/api'
 
@@ -179,7 +180,7 @@ async function mountCreate(): Promise<{ wrapper: VueWrapper; router: Router }> {
 }
 
 async function save(wrapper: VueWrapper): Promise<void> {
-	await wrapper.find('[data-test="expense-date-input"]').setValue('2026-01-15')
+	await wrapper.findComponent(CalendarDatePicker).vm.$emit('update:modelValue', '2026-01-15')
 	await wrapper.find('[data-test="amount-input"]').setValue('1000')
 	await wrapper.find('form').trigger('submit.prevent')
 	await flushPromises()

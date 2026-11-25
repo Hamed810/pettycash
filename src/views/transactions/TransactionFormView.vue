@@ -4,11 +4,11 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { t } from '@nextcloud/l10n'
 import NcButton from '@nextcloud/vue/components/NcButton'
-import NcDateTimePickerNative from '@nextcloud/vue/components/NcDateTimePickerNative'
 import NcNoteCard from '@nextcloud/vue/components/NcNoteCard'
 import NcSelect from '@nextcloud/vue/components/NcSelect'
 import NcTextArea from '@nextcloud/vue/components/NcTextArea'
 import NcTextField from '@nextcloud/vue/components/NcTextField'
+import CalendarDatePicker from '@/components/common/CalendarDatePicker.vue'
 import EvidenceList from '@/components/evidence/EvidenceList.vue'
 import EvidencePreview from '@/components/evidence/EvidencePreview.vue'
 import EvidenceUploader from '@/components/evidence/EvidenceUploader.vue'
@@ -20,14 +20,9 @@ import { listActiveExpenseTypes, listCostCenters } from '@/services/configuratio
 import { uploadEvidence } from '@/services/evidenceApi'
 import { useSheetStore } from '@/stores/sheets'
 import { useTransactionStore } from '@/stores/transactions'
-import {
-	ApiError,
-	type CostCenter,
-	type Evidence,
-	type ExpenseType,
-	type TransactionDetail,
-	type TransactionDraftWrite
-} from '@/types/api'
+import { calendarPreference } from '@/utils/calendar'
+import { activeLocale } from '@/utils/locale'
+import { ApiError, type CostCenter, type Evidence, type ExpenseType, type TransactionDetail, type TransactionDraftWrite } from '@/types/api'
 import { parseEvidenceFieldErrors, type EvidenceFieldError } from '@/utils/evidenceFieldErrors'
 import { selectOptionKey, selectOptionValue } from '@/utils/selectOption'
 import { restoreScrollOffset } from '@/utils/sheetListSession'
@@ -44,10 +39,13 @@ const props = withDefaults(defineProps<{
 	embedded?: boolean
 	editTransactionId?: string
 	editSheetId?: string
+	/** T087: explicit CREATE mode; route params must never be mistaken for an existing transaction ID. */
+	createMode?: boolean
 }>(), {
 	embedded: false,
 	editTransactionId: '',
-	editSheetId: ''
+	editSheetId: '',
+	createMode: false
 })
 
 const emit = defineEmits<{
@@ -62,7 +60,9 @@ const router = useRouter()
 const transactionStore = useTransactionStore()
 const sheetStore = useSheetStore()
 
-const isEditing = computed(() => !!props.editTransactionId || !!route.params.id)
+const isEditing = computed(() =>
+    !props.createMode && (!!props.editTransactionId || !!route.params.id)
+)
 const transactionId = computed(() => props.editTransactionId || ((route.params.id as string | undefined) ?? ''))
 
 const draft = ref<TransactionDraftWrite>({
@@ -101,12 +101,15 @@ const lastPersistedTransaction = ref<TransactionDetail | null>(null)
 const correctionEvidenceErrors = ref<EvidenceFieldError[]>([])
 const correctionEvidenceSummary = ref<HTMLElement | null>(null)
 
-const expenseDateModel = computed<Date | null>({
-	get: () => (draft.value.expenseDate ? new Date(draft.value.expenseDate) : null),
-	set: (value: Date | null) => {
-		draft.value.expenseDate = value ? value.toISOString().split('T')[0] ?? '' : ''
+const expenseDateModel = computed<string | null>({
+	get: () => (draft.value.expenseDate ? draft.value.expenseDate : null),
+	set: (value: string | null) => {
+		draft.value.expenseDate = value ?? ''
 	},
 })
+
+/** Maps the calendar preference to the picker's calendar system. */
+const calendarSystem = computed(() => (calendarPreference.value === 'persian' ? 'jalali' : 'gregorian'))
 
 /**
  * FR-021: a transaction inherits its sheet's currency and defines none of its own, so the form
@@ -784,18 +787,17 @@ onMounted(() => {
 							data-test="transaction-currency"
 						/>
 					</div>
-					<!-- `NcDateTimePickerNative` names the control through its visible `label`, which it
-					     associates with the input by `for`/`id`; it forwards `error`/`helper-text` to the
-					     input field but drops an `aria-label` while the label is shown. -->
-					<NcDateTimePickerNative
-						v-model="expenseDateModel"
-						:label="t('pettycash', 'transactions.expenseDate')"
-						:error="!!errors.expenseDate"
-						:helper-text="errors.expenseDate || ''"
-						:disabled="!editable"
-						required
-						data-test="expense-date-input"
-					/>
+				<CalendarDatePicker
+					v-model="expenseDateModel"
+					:system="calendarSystem"
+					:locale="activeLocale()"
+					:label="t('pettycash', 'transactions.expenseDate')"
+					:error="!!errors.expenseDate"
+					:helper-text="errors.expenseDate || ''"
+					:disabled="!editable"
+					required
+					data-test="expense-date-input"
+				/>
 					<!-- `step="1"`: the value is minor units, so a fraction of one is not a representable
 					     amount and must not be offered by the control in the first place. -->
 					<NcTextField

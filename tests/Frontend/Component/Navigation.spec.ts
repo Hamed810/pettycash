@@ -121,6 +121,33 @@ describe('AppNavigation', () => {
 		expect(finance.find('[data-test="nav-settings"]').exists()).toBe(true)
 	})
 
+	it('renders personal Settings as the final desktop entry, after every ordinary entry', async () => {
+		// Purchaser: no finance-holders, no admin entries.
+		signInAs(['PURCHASER'], false)
+		const purchaser = await mountNav()
+		const purchaserLinks = purchaser.findAll('a[data-test^="nav-"]').map((l) => l.attributes('data-test'))
+		expect(purchaserLinks.at(-1)).toBe('nav-settings')
+		expect(purchaserLinks).not.toContain('nav-finance-holders')
+
+		// Finance + admin: finance-holders and admin entries appear, but Settings stays last.
+		setActivePinia(createPinia())
+		signInAs(['PURCHASER', 'FINANCE', 'ADMINISTRATOR'], true)
+		const finance = await mountNav()
+		const financeLinks = finance.findAll('a[data-test^="nav-"]').map((l) => l.attributes('data-test'))
+		expect(financeLinks.at(-1)).toBe('nav-settings')
+		const holdersIndex = financeLinks.indexOf('nav-finance-holders')
+		const settingsIndex = financeLinks.indexOf('nav-settings')
+		expect(holdersIndex).toBeGreaterThanOrEqual(0)
+		expect(settingsIndex).toBeGreaterThan(holdersIndex)
+
+		// The divider section renders immediately above Settings on desktop.
+		const divider = finance.find('.pettycash-nav__section .pettycash-nav__divider')
+		expect(divider.exists()).toBe(true)
+		const dividerLi = divider.element.parentElement as HTMLElement
+		const nextLi = dividerLi.nextElementSibling as HTMLElement
+		expect(nextLi.querySelector('a[data-test="nav-settings"]')).not.toBeNull()
+	})
+
 	it('falls back to dashboard and sheets with no usable session (T004/T022)', async () => {
 		// No signed-in user: the mount-time session load fails, so per T004 the
 		// nav degrades to dashboard+sheets only — never role-gated entries.

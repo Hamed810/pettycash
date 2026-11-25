@@ -250,8 +250,8 @@ describe('Previous Decisions section (UXC-V2-08)', () => {
 		const group = wrapper.find('[data-testid="inline-decisions-cost-center"]')
 		expect(group.text()).toContain('Manager One')
 		expect(group.text()).toContain('Receipts match.')
-		// The decided instant renders through the shared date helper; assert the locale-stable date part.
-		expect(group.text()).toContain('Sep 21, 2026')
+		// The decided instant renders through the shared date helper; assert the fixed date part.
+		expect(group.text()).toContain('2026/09/21')
 		wrapper.unmount()
 	})
 
@@ -276,7 +276,7 @@ describe('Previous Decisions section (UXC-V2-08)', () => {
 		const actorLine = item.find('.decision-actor--compact')
 		expect(actorLine.exists()).toBe(true)
 		expect(actorLine.text()).toContain('Manager One')
-		expect(actorLine.text()).toContain('Sep 21, 2026')
+		expect(actorLine.text()).toContain('2026/09/21')
 		// The per-item stage chip is dropped in compact — the group heading already names the stage.
 		expect(item.find('[data-testid="decision-stage"]').exists()).toBe(false)
 		// Explanation present only because the fixture carries one.

@@ -170,17 +170,9 @@ function isAdvisory(decision: Props['decisions'][number]): boolean {
 	return normalizeStage(decision.stage) === 'COST_CENTER' && normalizeStage(props.currentStage) === 'SENIOR'
 }
 
-/** UI-PUR-001: field set only; the shared helper owns locale, calendar and absence. */
-const SHORT_DATE_TIME: Intl.DateTimeFormatOptions = {
-	year: 'numeric',
-	month: 'short',
-	day: 'numeric',
-	hour: '2-digit',
-	minute: '2-digit',
-}
-
+/** UI-PUR-001 / FR-005-066: the shared helper owns shape, locale, calendar and absence. */
 function formatDateTime(dateStr: string): string {
-	return formatSheetDateTime(dateStr, { options: SHORT_DATE_TIME })
+	return formatSheetDateTime(dateStr)
 }
 </script>
 

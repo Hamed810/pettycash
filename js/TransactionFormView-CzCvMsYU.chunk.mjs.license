@@ -1,0 +1,18 @@
+SPDX-License-Identifier: MIT
+SPDX-License-Identifier: undefined
+SPDX-FileCopyrightText: Yanovian LLC
+SPDX-FileCopyrightText: pettycash developers
+
+This file is generated from multiple sources. Included packages:
+- @jalali-js/i18n
+	- version: 0.4.3
+	- license: MIT
+- @jalali-js/vue
+	- version: 0.4.3
+	- license: MIT
+- jalali-js
+	- version: 0.4.3
+	- license: MIT
+- pettycash
+	- version: 1.0.0
+	- license: undefined
